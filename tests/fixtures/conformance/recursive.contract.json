@@ -1,0 +1,34 @@
+{
+  "format": "candid-contract",
+  "format_version": 1,
+  "semantics_profile": "candid-1",
+  "canonicalization_profile": "ccr-canon-1",
+  "contract_version": 1,
+  "identities": {
+    "contract": "ccr:contract:v1:sha256:12ac4b76da45de0290be80b7d4c5cce700e5c74444a8ae9fb8245c4a1dced247",
+    "interface": "ccr:interface:v1:sha256:d27e79da8da2cc2bb0eed684523ac930f7ba4feb7b4fd3ba0b1bee384a6c50e9"
+  },
+  "fingerprint": "sha256:fb65f7aa15320074d7917f772e6d916303bc977f03c2158ff6fd8a026b06b648",
+  "producer": {
+    "name": "candid-contract-runtime",
+    "version": "0.1.0",
+    "candid_version": "0.10.30",
+    "candid_parser_version": "0.4.0"
+  },
+  "types": [
+    { "kind": "service", "methods": [
+      { "name": "get", "id": 5144726, "function": 1 }
+    ] },
+    { "kind": "func", "args": [], "results": [2], "mode": "query" },
+    { "kind": "opt", "inner": 3 },
+    { "kind": "record", "fields": [
+      { "id": 1158359328, "type": 4 },
+      { "id": 1291237008, "type": 2 }
+    ] },
+    { "kind": "primitive", "primitive": "nat" }
+  ],
+  "declarations": [
+    { "name": "List", "type": 2 }
+  ],
+  "actor": { "kind": "service", "service": 0 }
+}

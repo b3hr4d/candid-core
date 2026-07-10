@@ -18,6 +18,14 @@ pub enum Severity {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct ResourceLimitInfo {
+    pub resource: String,
+    pub limit: usize,
+    pub observed: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SourceSpan {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_name: Option<String>,
@@ -36,6 +44,8 @@ pub struct Diagnostic {
     pub span: Option<SourceSpan>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub notes: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resource_limit: Option<ResourceLimitInfo>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -57,6 +67,30 @@ impl CompileError {
                 message: message.into(),
                 span: None,
                 notes: Vec::new(),
+                resource_limit: None,
+            }],
+        }
+    }
+
+    pub(crate) fn resource_limit(
+        resource: &str,
+        limit: usize,
+        observed: usize,
+        message: impl Into<String>,
+    ) -> Self {
+        Self {
+            diagnostics: vec![Diagnostic {
+                code: "resource_limit_exceeded".to_string(),
+                phase: DiagnosticPhase::Load,
+                severity: Severity::Error,
+                message: message.into(),
+                span: None,
+                notes: Vec::new(),
+                resource_limit: Some(ResourceLimitInfo {
+                    resource: resource.to_string(),
+                    limit,
+                    observed,
+                }),
             }],
         }
     }

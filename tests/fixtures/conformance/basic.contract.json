@@ -1,0 +1,34 @@
+{
+  "format": "candid-contract",
+  "format_version": 1,
+  "semantics_profile": "candid-1",
+  "canonicalization_profile": "ccr-canon-1",
+  "contract_version": 1,
+  "identities": {
+    "contract": "ccr:contract:v1:sha256:2f324f404aebb4992f3dddd20bd26c0ad862f224776c10aaf293bd94a8e2492d",
+    "interface": "ccr:interface:v1:sha256:dd0be969e1712027d3a767b34c17d1dc8349b39fd761d19be629d8cc354c8588"
+  },
+  "fingerprint": "sha256:909b74dc8825b394f7d92e3b8b6706e4d2534aea332ddff80b013e11587fbae5",
+  "producer": {
+    "name": "candid-contract-runtime",
+    "version": "0.1.0",
+    "candid_version": "0.10.30",
+    "candid_parser_version": "0.4.0"
+  },
+  "types": [
+    { "kind": "service", "methods": [
+      { "name": "transfer", "id": 3664621355, "function": 1 }
+    ] },
+    { "kind": "func", "args": [2], "results": [], "mode": "update" },
+    { "kind": "record", "fields": [
+      { "id": 947296307, "type": 3 },
+      { "id": 3573748184, "type": 4 }
+    ] },
+    { "kind": "primitive", "primitive": "principal" },
+    { "kind": "primitive", "primitive": "nat" }
+  ],
+  "declarations": [
+    { "name": "Payload", "type": 2 }
+  ],
+  "actor": { "kind": "service", "service": 0 }
+}

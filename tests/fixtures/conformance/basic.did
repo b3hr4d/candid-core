@@ -1,0 +1,2 @@
+type Payload = record { owner: principal; amount: nat };
+service : { transfer: (Payload) -> () };

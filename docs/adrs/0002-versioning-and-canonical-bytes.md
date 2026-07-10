@@ -1,6 +1,6 @@
 # ADR 0002: Version schema, semantics, and canonical bytes independently
 
-- Status: Accepted; implementation pending
+- Status: Implemented
 - Date: 2026-07-10
 - Owners: Contract runtime maintainers
 
@@ -56,12 +56,14 @@ silently upgrades versions.
   new semantics profile or an explicit compatibility ruling.
 - Profile proliferation is controlled through ADRs and conformance fixtures.
 
-## Migration
+## Implementation
 
-The existing `contract_version: 1` and serde-generated fingerprint are accepted
-only as the legacy pre-stable profile. The stable envelope will either be
-introduced before publishing Contract v1 or through an explicit v1-to-v2
-migrator; it will not be reinterpreted in place.
+The envelope now carries all four profile fields. Domain-separated identity
+hashes use the `ccr-canon-1` graph normalization and JCS writer. Legacy JSON is
+rejected by normal decoding and accepted only through
+`migrate_legacy_v1_json`, which verifies its old fingerprint before producing a
+new artifact. Canonical Contract fixtures are checked in under
+`tests/fixtures/conformance`.
 
 ## Required verification
 
@@ -69,4 +71,3 @@ migrator; it will not be reinterpreted in place.
 - Property tests for idempotence and input-arena permutation invariance.
 - Cross-language JCS and graph-labeling conformance tests.
 - Tests that unknown format, semantics, and canonicalization profiles fail.
-

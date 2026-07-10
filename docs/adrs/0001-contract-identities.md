@@ -1,6 +1,6 @@
 # ADR 0001: Separate interface, Contract, and source-bundle identities
 
-- Status: Accepted; implementation pending
+- Status: Implemented
 - Date: 2026-07-10
 - Owners: Contract runtime maintainers
 
@@ -57,13 +57,13 @@ but do not participate in semantic IDs.
 - Compatibility is not inferred from ID inequality; structural compatibility
   is a separate analysis operation.
 
-## Migration
+## Implementation
 
-The current `fingerprint` remains readable during the pre-stable migration but
-is explicitly a legacy semantic fingerprint. Before a stable format release,
-the JSON model will gain `identities`, `SourceInfo` will bind to `contract_id`,
-and CLI output will label legacy fingerprints clearly. No registry or signing
-format may use the legacy field as its sole artifact identity.
+The Contract envelope exposes `identities.contract` and optional
+`identities.interface`; `SourceInfo` exposes `contract_id` and
+`source_bundle_id`. Contract-bound type and method selectors prevent persisted
+bare refs. The legacy `fingerprint` remains readable only for explicit migration
+and compatibility diagnostics.
 
 ## Required verification
 
@@ -72,4 +72,3 @@ format may use the legacy field as its sole artifact identity.
 - Tests proving source-only edits affect only `source_bundle_id`.
 - Cross-language conformance vectors for actorless, empty-actor, class, and
   recursive Contracts.
-

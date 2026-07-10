@@ -1,0 +1,473 @@
+use candid_contract_runtime::{
+    compile_did, compile_did_file, compile_did_with_context, compile_with_resolver,
+    migrate_legacy_v1_json, validate_host_value, Actor, Compilation, CompileOptions, Contract,
+    ContractEnvelope, Declaration, Field, HostFieldValue, HostValue, Limits, MemoryResolver,
+    PrimitiveType, RawContract, ResolveError, ResolvedSource, RuntimeContext, SourceId,
+    SourceResolver, TypeNode, CANONICALIZATION_PROFILE, CONTRACT_FORMAT, FORMAT_VERSION,
+    SEMANTICS_PROFILE,
+};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
+
+fn compile(source: &str) -> candid_contract_runtime::Compilation {
+    compile_did(source).unwrap_or_else(|error| panic!("compilation failed: {error:#?}"))
+}
+
+fn declaration(contract: &Contract, name: &str) -> u32 {
+    contract
+        .declarations()
+        .iter()
+        .find(|declaration| declaration.name == name)
+        .unwrap_or_else(|| panic!("missing declaration {name}"))
+        .ty
+}
+
+#[test]
+fn identities_make_distinct_equality_claims() {
+    let actor_only = compile("service : { ping: () -> (nat) query };");
+    let with_unused_declaration = compile(
+        r#"
+        type InternalOnly = record { note: text };
+        service : { ping: () -> (nat) query };
+        "#,
+    );
+
+    assert_eq!(
+        actor_only.contract().interface_id(),
+        with_unused_declaration.contract().interface_id()
+    );
+    assert_ne!(
+        actor_only.contract().contract_id(),
+        with_unused_declaration.contract().contract_id()
+    );
+
+    let first_source = compile("// first\nservice : { ping: () -> () };");
+    let second_source = compile("// second\nservice : { ping: () -> () };");
+    assert_eq!(
+        first_source.contract().contract_id(),
+        second_source.contract().contract_id()
+    );
+    assert_ne!(
+        first_source.source_info().unwrap().source_bundle_id(),
+        second_source.source_info().unwrap().source_bundle_id()
+    );
+}
+
+#[test]
+fn canonical_envelope_profiles_are_explicit_and_fail_closed() {
+    let contract = compile("service : {};").contract().clone();
+    assert_eq!(contract.format(), CONTRACT_FORMAT);
+    assert_eq!(contract.format_version(), FORMAT_VERSION);
+    assert_eq!(contract.semantics_profile(), SEMANTICS_PROFILE);
+    assert_eq!(
+        contract.canonicalization_profile(),
+        CANONICALIZATION_PROFILE
+    );
+    assert!(contract
+        .contract_id()
+        .starts_with("ccr:contract:v1:sha256:"));
+    assert!(contract
+        .interface_id()
+        .unwrap()
+        .starts_with("ccr:interface:v1:sha256:"));
+
+    let mut raw = RawContract::from(&contract);
+    raw.semantics_profile = "future-candid".to_string();
+    let error = Contract::try_from_raw(raw).unwrap_err();
+    assert!(error
+        .violations
+        .iter()
+        .any(|violation| violation.code == "unsupported_semantics_profile"));
+}
+
+#[test]
+fn compilation_deserialization_rejects_a_mismatched_sidecar() {
+    let compilation = compile("type Item = record { value: nat }; service : {};");
+    let mut json = serde_json::to_value(&compilation).unwrap();
+    json["source_info"]["contract_id"] = serde_json::json!(
+        "ccr:contract:v1:sha256:0000000000000000000000000000000000000000000000000000000000000000"
+    );
+    assert!(serde_json::from_value::<Compilation>(json).is_err());
+}
+
+#[test]
+fn memory_resolver_compiles_one_immutable_logical_source_bundle() {
+    let mut resolver = MemoryResolver::new();
+    resolver
+        .insert(
+            "memory:/api/root.did",
+            r#"import "types.did"; service : { read: () -> (Item) query };"#,
+        )
+        .unwrap();
+    resolver
+        .insert(
+            "memory:/api/types.did",
+            "type Item = record { id: nat64; label: text };",
+        )
+        .unwrap();
+
+    let compilation = compile_with_resolver(
+        "memory:/api/root.did",
+        &resolver,
+        CompileOptions::default(),
+        &RuntimeContext::default(),
+    )
+    .unwrap();
+    let source_info = compilation.source_info().unwrap();
+    assert_eq!(source_info.sources().len(), 2);
+    assert_eq!(source_info.imports().len(), 1);
+    assert_eq!(source_info.imports()[0].from, "memory:/api/root.did");
+    assert_eq!(source_info.imports()[0].to, "memory:/api/types.did");
+    assert!(source_info
+        .source_bundle_id()
+        .starts_with("ccr:source-bundle:v1:sha256:"));
+}
+
+#[derive(Clone)]
+struct CountingResolver {
+    inner: MemoryResolver,
+    loads: Arc<AtomicUsize>,
+}
+
+impl SourceResolver for CountingResolver {
+    fn identify(&self, from: Option<&SourceId>, import: &str) -> Result<SourceId, ResolveError> {
+        self.inner.identify(from, import)
+    }
+
+    fn load(&self, id: &SourceId, limits: &Limits) -> Result<ResolvedSource, ResolveError> {
+        self.loads.fetch_add(1, Ordering::SeqCst);
+        self.inner.load(id, limits)
+    }
+}
+
+#[test]
+fn diamond_imports_are_snapshotted_and_loaded_once() {
+    let mut inner = MemoryResolver::new();
+    inner
+        .insert(
+            "root.did",
+            r#"import "a.did"; import "b.did"; service : { get: () -> (Common) };"#,
+        )
+        .unwrap();
+    inner
+        .insert("a.did", r#"import "common.did"; type A = Common;"#)
+        .unwrap();
+    inner
+        .insert("b.did", r#"import "common.did"; type B = Common;"#)
+        .unwrap();
+    inner.insert("common.did", "type Common = nat;").unwrap();
+    let loads = Arc::new(AtomicUsize::new(0));
+    let resolver = CountingResolver {
+        inner,
+        loads: loads.clone(),
+    };
+    let compilation = compile_with_resolver(
+        "root.did",
+        &resolver,
+        CompileOptions::default(),
+        &RuntimeContext::default(),
+    )
+    .unwrap();
+    assert_eq!(compilation.source_info().unwrap().sources().len(), 4);
+    assert_eq!(loads.load(Ordering::SeqCst), 4);
+}
+
+#[test]
+fn resolver_rejects_authority_escape_and_import_cycles() {
+    let mut escape = MemoryResolver::new();
+    escape
+        .insert("root.did", "import \"../secret.did\"; service : {};")
+        .unwrap();
+    let error = compile_with_resolver(
+        "root.did",
+        &escape,
+        CompileOptions::default(),
+        &RuntimeContext::default(),
+    )
+    .unwrap_err();
+    assert_eq!(error.diagnostics[0].code, "did_import_outside_workspace");
+
+    let mut cycle = MemoryResolver::new();
+    cycle
+        .insert("a.did", "import \"b.did\"; service : {};")
+        .unwrap();
+    cycle.insert("b.did", "import \"a.did\";").unwrap();
+    let error = compile_with_resolver(
+        "a.did",
+        &cycle,
+        CompileOptions::default(),
+        &RuntimeContext::default(),
+    )
+    .unwrap_err();
+    assert_eq!(error.diagnostics[0].code, "did_import_cycle");
+}
+
+#[test]
+fn operational_limits_fail_with_machine_stable_diagnostics() {
+    let context = RuntimeContext {
+        limits: Limits {
+            max_source_bytes: 8,
+            ..Limits::default()
+        },
+    };
+    let error =
+        compile_did_with_context("service : {};", CompileOptions::default(), &context).unwrap_err();
+    assert_eq!(error.diagnostics[0].code, "resource_limit_exceeded");
+    assert_eq!(
+        error.diagnostics[0]
+            .resource_limit
+            .as_ref()
+            .unwrap()
+            .resource,
+        "source_bytes"
+    );
+
+    let json = compile("service : {};")
+        .contract()
+        .to_json_pretty()
+        .unwrap();
+    let limits = Limits {
+        max_input_bytes: json.len() - 1,
+        ..Limits::default()
+    };
+    let error = Contract::from_json_with_limits(&json, &limits).unwrap_err();
+    assert!(error.to_string().contains("validation failed"));
+}
+
+#[test]
+fn elapsed_deadlines_abort_work_without_partial_artifacts() {
+    let context = RuntimeContext {
+        limits: Limits {
+            deadline_unix_ms: Some(1),
+            ..Limits::default()
+        },
+    };
+    let error =
+        compile_did_with_context("service : {};", CompileOptions::default(), &context).unwrap_err();
+    assert_eq!(error.diagnostics[0].code, "operation_deadline_exceeded");
+}
+
+#[test]
+fn iterative_canonical_traversal_handles_deep_graphs_and_honors_work_limits() {
+    let depth = 256u32;
+    let mut types = (0..depth)
+        .map(|index| TypeNode::Opt { inner: index + 1 })
+        .collect::<Vec<_>>();
+    types.push(TypeNode::Primitive {
+        primitive: PrimitiveType::Nat,
+    });
+    let raw = RawContract::new(
+        types,
+        vec![Declaration {
+            name: "Deep".to_string(),
+            ty: 0,
+        }],
+        None,
+    );
+    let contract = Contract::build_raw(raw.clone(), &Limits::default()).unwrap();
+    assert_eq!(contract.types().len(), depth as usize + 1);
+
+    let limits = Limits {
+        max_canonicalization_work: 10,
+        ..Limits::default()
+    };
+    let error = Contract::build_raw(raw, &limits).unwrap_err();
+    assert!(error
+        .violations
+        .iter()
+        .any(|violation| violation.code == "resource_limit_exceeded"));
+}
+
+#[test]
+fn tagged_host_values_preserve_bigints_float_bits_and_wire_field_ids() {
+    let compilation = compile(
+        r#"
+        type Payload = record { big: nat; ratio: float64; owner: principal };
+        service : { submit: (Payload) -> () };
+        "#,
+    );
+    let contract = compilation.contract();
+    let selector = contract
+        .bind_type(declaration(contract, "Payload"))
+        .unwrap();
+    let value = HostValue::Record {
+        fields: vec![
+            HostFieldValue {
+                id: candid_parser::candid::idl_hash("big"),
+                value: HostValue::Nat {
+                    value: "340282366920938463463374607431768211456".to_string(),
+                },
+            },
+            HostFieldValue {
+                id: candid_parser::candid::idl_hash("ratio"),
+                value: HostValue::Float64 {
+                    bits: "7ff8000000000001".to_string(),
+                },
+            },
+            HostFieldValue {
+                id: candid_parser::candid::idl_hash("owner"),
+                value: HostValue::Principal {
+                    value: "aaaaa-aa".to_string(),
+                },
+            },
+        ],
+    };
+    validate_host_value(contract, &selector, &value, &Limits::default()).unwrap();
+
+    let json = serde_json::to_string(&value).unwrap();
+    assert_eq!(
+        HostValue::from_json_with_limits(&json, &Limits::default()).unwrap(),
+        value
+    );
+}
+
+#[test]
+fn host_values_reject_coercions_and_unbound_contract_references() {
+    let compilation = compile("type Amount = nat; service : {};");
+    let contract = compilation.contract();
+    let mut selector = contract.bind_type(declaration(contract, "Amount")).unwrap();
+    let noncanonical = HostValue::Nat {
+        value: "001".to_string(),
+    };
+    assert!(validate_host_value(contract, &selector, &noncanonical, &Limits::default()).is_err());
+
+    selector.contract_id =
+        "ccr:contract:v1:sha256:0000000000000000000000000000000000000000000000000000000000000000"
+            .to_string();
+    assert!(validate_host_value(
+        contract,
+        &selector,
+        &HostValue::Nat {
+            value: "1".to_string()
+        },
+        &Limits::default()
+    )
+    .is_err());
+}
+
+#[test]
+fn extensions_are_namespaced_and_cannot_mutate_the_core() {
+    let contract = compile("service : {};").contract().clone();
+    let mut envelope = ContractEnvelope::new(contract.clone());
+    envelope
+        .insert_extension(
+            "com.example.form/v1",
+            serde_json::json!({ "widget": "button" }),
+            &Limits::default(),
+        )
+        .unwrap();
+    envelope.validate(&Limits::default()).unwrap();
+    assert_eq!(envelope.contract().contract_id(), contract.contract_id());
+
+    assert!(envelope
+        .insert_extension("unversioned", serde_json::json!({}), &Limits::default())
+        .is_err());
+    assert_eq!(envelope.extensions().len(), 1);
+
+    let mut raw = serde_json::to_value(&envelope).unwrap();
+    raw["extensions"]["unversioned"] = serde_json::json!({});
+    assert!(serde_json::from_value::<ContractEnvelope>(raw).is_err());
+}
+
+#[test]
+fn actor_methods_are_persisted_by_contract_identity_and_name() {
+    let contract = compile("service : { ping: () -> () query };")
+        .contract()
+        .clone();
+    let selector = contract.bind_method("ping").unwrap();
+    assert_eq!(selector.contract_id, contract.contract_id());
+    assert_eq!(selector.method, "ping");
+    assert!(contract.bind_method("missing").is_err());
+    assert!(matches!(contract.actor(), Some(Actor::Service { .. })));
+}
+
+#[test]
+fn contract_id_changes_when_declaration_names_change() {
+    let first = compile("type First = record { value: nat }; service : {};");
+    let second = compile("type Second = record { value: nat }; service : {};");
+    assert_eq!(
+        first.contract().interface_id(),
+        second.contract().interface_id()
+    );
+    assert_ne!(
+        first.contract().contract_id(),
+        second.contract().contract_id()
+    );
+}
+
+#[test]
+fn jcs_identity_is_independent_of_input_object_key_order() {
+    let contract = compile("service : { ping: () -> () };").contract().clone();
+    let mut raw = serde_json::to_value(&contract).unwrap();
+    let object = raw.as_object_mut().unwrap();
+    let actor = object.remove("actor").unwrap();
+    object.insert("actor".to_string(), actor);
+    let decoded: Contract = serde_json::from_value(raw).unwrap();
+    assert_eq!(decoded.contract_id(), contract.contract_id());
+}
+
+#[test]
+fn raw_graph_builder_calculates_identities_for_producers() {
+    let raw = RawContract::new(
+        vec![
+            TypeNode::Record {
+                fields: vec![Field { id: 0, ty: 1 }],
+            },
+            TypeNode::Primitive {
+                primitive: PrimitiveType::Text,
+            },
+        ],
+        vec![Declaration {
+            name: "LibraryValue".to_string(),
+            ty: 0,
+        }],
+        None,
+    );
+    let contract = Contract::build_raw(raw, &Limits::default()).unwrap();
+    assert!(contract.interface_id().is_none());
+    assert!(contract.validate().is_ok());
+}
+
+#[test]
+fn canonical_contracts_match_checked_in_cross_language_fixtures() {
+    for name in ["basic", "recursive"] {
+        let did = format!(
+            "{}/tests/fixtures/conformance/{name}.did",
+            env!("CARGO_MANIFEST_DIR")
+        );
+        let expected = format!(
+            "{}/tests/fixtures/conformance/{name}.contract.json",
+            env!("CARGO_MANIFEST_DIR")
+        );
+        let contract = compile_did_file(did).unwrap().into_parts().0;
+        let expected = std::fs::read_to_string(expected).unwrap();
+        let expected: Contract = Contract::from_json(&expected).unwrap();
+        assert_eq!(contract, expected, "fixture {name} drifted");
+    }
+}
+
+#[test]
+fn legacy_json_requires_an_explicit_verified_migration() {
+    let current = compile("service : { ping: () -> () };").contract().clone();
+    let legacy = serde_json::json!({
+        "contract_version": current.contract_version(),
+        "fingerprint": current.fingerprint(),
+        "types": current.types(),
+        "declarations": current.declarations(),
+        "actor": current.actor(),
+    });
+    let legacy = serde_json::to_string(&legacy).unwrap();
+    assert!(Contract::from_json(&legacy).is_err());
+    let migrated = migrate_legacy_v1_json(&legacy, &Limits::default()).unwrap();
+    assert_eq!(migrated.contract_id(), current.contract_id());
+
+    let mut tampered: serde_json::Value = serde_json::from_str(&legacy).unwrap();
+    tampered["fingerprint"] = serde_json::json!(
+        "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+    );
+    assert!(migrate_legacy_v1_json(
+        &serde_json::to_string(&tampered).unwrap(),
+        &Limits::default()
+    )
+    .is_err());
+}

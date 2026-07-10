@@ -1,18 +1,46 @@
 use crate::canonical;
+use crate::limits::Limits;
 use crate::model::{
     Actor, Contract, ContractValidationError, ContractViolation, MethodMode, ServiceMethod,
-    TypeNode, TypeRef, CONTRACT_VERSION,
+    TypeNode, TypeRef, CANONICALIZATION_PROFILE, CONTRACT_FORMAT, CONTRACT_VERSION, FORMAT_VERSION,
+    SEMANTICS_PROFILE,
 };
 use std::collections::{BTreeSet, VecDeque};
 
-pub(crate) fn validate_contract(contract: &Contract) -> Result<(), ContractValidationError> {
-    validate_structure(contract)?;
-    let expected = canonical::semantic_fingerprint(contract);
-    if contract.fingerprint != expected {
+pub(crate) fn validate_contract_with_limits(
+    contract: &Contract,
+    limits: &Limits,
+) -> Result<(), ContractValidationError> {
+    validate_structure_with_limits(contract, limits)?;
+    let expected = canonical::expected_canonical(contract, limits)?;
+    if contract.fingerprint != expected.fingerprint {
         return Err(ContractValidationError::single(
             "fingerprint_mismatch",
             "$.fingerprint",
-            format!("expected {expected}, found {}", contract.fingerprint),
+            format!(
+                "expected {}, found {}",
+                expected.fingerprint, contract.fingerprint
+            ),
+        ));
+    }
+    if contract.identities.contract != expected.identities.contract {
+        return Err(ContractValidationError::single(
+            "contract_id_mismatch",
+            "$.identities.contract",
+            format!(
+                "expected {}, found {}",
+                expected.identities.contract, contract.identities.contract
+            ),
+        ));
+    }
+    if contract.identities.interface != expected.identities.interface {
+        return Err(ContractValidationError::single(
+            "interface_id_mismatch",
+            "$.identities.interface",
+            format!(
+                "expected {:?}, found {:?}",
+                expected.identities.interface, contract.identities.interface
+            ),
         ));
     }
     Ok(())
@@ -21,8 +49,60 @@ pub(crate) fn validate_contract(contract: &Contract) -> Result<(), ContractValid
 /// Checks only JSON/graph invariants. Fingerprint verification is intentionally
 /// separate so the compiler can canonicalize a newly built graph before it has
 /// a fingerprint.
-pub(crate) fn validate_structure(contract: &Contract) -> Result<(), ContractValidationError> {
+pub(crate) fn validate_structure_with_limits(
+    contract: &Contract,
+    limits: &Limits,
+) -> Result<(), ContractValidationError> {
+    if limits.deadline_exceeded() {
+        return Err(ContractValidationError::single(
+            "operation_deadline_exceeded",
+            "$",
+            "Contract validation deadline has elapsed",
+        ));
+    }
+    enforce_limits(contract, limits)?;
     let mut violations = Vec::new();
+    if contract.format != CONTRACT_FORMAT {
+        violation(
+            &mut violations,
+            "unsupported_contract_format",
+            "$.format",
+            format!("expected {CONTRACT_FORMAT:?}, found {:?}", contract.format),
+        );
+    }
+    if contract.format_version != FORMAT_VERSION {
+        violation(
+            &mut violations,
+            "unsupported_format_version",
+            "$.format_version",
+            format!(
+                "expected {FORMAT_VERSION}, found {}",
+                contract.format_version
+            ),
+        );
+    }
+    if contract.semantics_profile != SEMANTICS_PROFILE {
+        violation(
+            &mut violations,
+            "unsupported_semantics_profile",
+            "$.semantics_profile",
+            format!(
+                "expected {SEMANTICS_PROFILE:?}, found {:?}",
+                contract.semantics_profile
+            ),
+        );
+    }
+    if contract.canonicalization_profile != CANONICALIZATION_PROFILE {
+        violation(
+            &mut violations,
+            "unsupported_canonicalization_profile",
+            "$.canonicalization_profile",
+            format!(
+                "expected {CANONICALIZATION_PROFILE:?}, found {:?}",
+                contract.canonicalization_profile
+            ),
+        );
+    }
     if contract.contract_version != CONTRACT_VERSION {
         violation(
             &mut violations,
@@ -40,6 +120,44 @@ pub(crate) fn validate_structure(contract: &Contract) -> Result<(), ContractVali
             "invalid_fingerprint_format",
             "$.fingerprint",
             "fingerprint must be sha256:<64 lowercase hexadecimal characters>",
+        );
+    }
+    if !is_content_id(&contract.identities.contract, "ccr:contract:v1") {
+        violation(
+            &mut violations,
+            "invalid_contract_id_format",
+            "$.identities.contract",
+            "contract identity must use ccr:contract:v1:sha256:<64 lowercase hex>",
+        );
+    }
+    match (&contract.actor, &contract.identities.interface) {
+        (None, None) => {}
+        (None, Some(_)) => violation(
+            &mut violations,
+            "actorless_contract_has_interface_id",
+            "$.identities.interface",
+            "an actorless Contract must not declare an interface identity",
+        ),
+        (Some(_), Some(interface)) if is_content_id(interface, "ccr:interface:v1") => {}
+        (Some(_), Some(_)) => violation(
+            &mut violations,
+            "invalid_interface_id_format",
+            "$.identities.interface",
+            "interface identity must use ccr:interface:v1:sha256:<64 lowercase hex>",
+        ),
+        (Some(_), None) => violation(
+            &mut violations,
+            "actor_contract_missing_interface_id",
+            "$.identities.interface",
+            "a Contract with an actor requires an interface identity",
+        ),
+    }
+    if contract.producer.name.is_empty() || contract.producer.version.is_empty() {
+        violation(
+            &mut violations,
+            "invalid_producer",
+            "$.producer",
+            "producer name and version must not be empty",
         );
     }
 
@@ -82,6 +200,83 @@ pub(crate) fn validate_structure(contract: &Contract) -> Result<(), ContractVali
     } else {
         Err(ContractValidationError { violations })
     }
+}
+
+fn enforce_limits(contract: &Contract, limits: &Limits) -> Result<(), ContractValidationError> {
+    if contract.types.len() > limits.max_type_nodes {
+        return Err(ContractValidationError::resource_limit(
+            "type_nodes",
+            limits.max_type_nodes,
+            contract.types.len(),
+        ));
+    }
+    if contract.declarations.len() > limits.max_declarations {
+        return Err(ContractValidationError::resource_limit(
+            "declarations",
+            limits.max_declarations,
+            contract.declarations.len(),
+        ));
+    }
+
+    let mut edges = 0usize;
+    let mut fields = 0usize;
+    let mut methods = 0usize;
+    let mut function_values = 0usize;
+    let mut string_bytes = contract
+        .declarations
+        .iter()
+        .map(|declaration| declaration.name.len())
+        .sum::<usize>();
+    for node in &contract.types {
+        match node {
+            TypeNode::Primitive { .. } => {}
+            TypeNode::Opt { .. } | TypeNode::Vec { .. } => edges += 1,
+            TypeNode::Record {
+                fields: node_fields,
+            }
+            | TypeNode::Variant {
+                fields: node_fields,
+            } => {
+                fields = fields.saturating_add(node_fields.len());
+                edges = edges.saturating_add(node_fields.len());
+            }
+            TypeNode::Func { args, results, .. } => {
+                let count = args.len().saturating_add(results.len());
+                function_values = function_values.saturating_add(count);
+                edges = edges.saturating_add(count);
+            }
+            TypeNode::Service {
+                methods: node_methods,
+            } => {
+                methods = methods.saturating_add(node_methods.len());
+                edges = edges.saturating_add(node_methods.len());
+                string_bytes = string_bytes
+                    .saturating_add(node_methods.iter().map(|method| method.name.len()).sum());
+            }
+            TypeNode::Class { init, .. } => {
+                function_values = function_values.saturating_add(init.len());
+                edges = edges.saturating_add(init.len().saturating_add(1));
+            }
+        }
+    }
+    for (resource, limit, observed) in [
+        ("graph_edges", limits.max_graph_edges, edges),
+        ("fields", limits.max_fields, fields),
+        ("methods", limits.max_methods, methods),
+        (
+            "function_values",
+            limits.max_function_values,
+            function_values,
+        ),
+        ("string_bytes", limits.max_string_bytes, string_bytes),
+    ] {
+        if observed > limit {
+            return Err(ContractValidationError::resource_limit(
+                resource, limit, observed,
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn validate_node(
@@ -468,6 +663,17 @@ fn is_sha256_fingerprint(value: &str) -> bool {
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
+fn is_content_id(value: &str, domain: &str) -> bool {
+    value
+        .strip_prefix(&format!("{domain}:sha256:"))
+        .is_some_and(|hex| {
+            hex.len() == 64
+                && hex
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        })
+}
+
 fn violation(
     violations: &mut Vec<ContractViolation>,
     code: impl Into<String>,
@@ -478,5 +684,6 @@ fn violation(
         code: code.into(),
         path: path.into(),
         message: message.into(),
+        resource_limit: None,
     });
 }

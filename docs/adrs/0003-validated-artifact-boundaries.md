@@ -1,6 +1,6 @@
 # ADR 0003: Make validated artifacts and provenance binding explicit
 
-- Status: Accepted; implementation pending
+- Status: Implemented
 - Date: 2026-07-10
 - Owners: Contract runtime maintainers
 
@@ -56,12 +56,12 @@ identities unless an outer package format explicitly hashes them.
 - Plugins cannot mutate wire semantics through unknown JSON keys.
 - Callers doing editors or repair workflows work with explicit raw types.
 
-## Migration
+## Implementation
 
-Public fields remain during the pre-stable API window. New code must construct
-through validation APIs. `Compilation`'s derived `Deserialize` will be removed
-or replaced before stable publication, and SourceInfo will gain identity
-binding before it is accepted from external JSON.
+`Contract` and `Compilation` fields are private and exposed through immutable
+accessors. `RawContract` and `RawSourceInfo` are explicit DTOs. Compilation has
+a coordinated deserializer that canonicalizes the Contract, remaps provenance,
+and validates the bound sidecar. `ContractEnvelope` owns namespaced extensions.
 
 ## Required verification
 
@@ -69,4 +69,3 @@ binding before it is accepted from external JSON.
 - Adversarial tests for mismatched Contract/SourceInfo pairs.
 - Reindexing tests that prove sidecar references are remapped atomically.
 - Extension-envelope tests proving core unknown fields still fail closed.
-

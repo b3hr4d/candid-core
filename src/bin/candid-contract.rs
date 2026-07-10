@@ -26,11 +26,14 @@ fn main() -> ExitCode {
                     include_source_info,
                 },
             ) {
-                Ok(compilation) => write_json(&json!({
-                    "ok": true,
-                    "contract": compilation.contract,
-                    "source_info": compilation.source_info,
-                })),
+                Ok(compilation) => {
+                    let (contract, source_info) = compilation.into_parts();
+                    write_json(&json!({
+                        "ok": true,
+                        "contract": contract,
+                        "source_info": source_info,
+                    }))
+                }
                 Err(error) => write_error(json!({
                     "ok": false,
                     "diagnostics": error.diagnostics,

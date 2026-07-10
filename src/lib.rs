@@ -8,18 +8,39 @@
 mod canonical;
 mod compile;
 mod diagnostics;
+mod envelope;
+mod limits;
+mod migration;
 mod model;
+mod resolver;
+mod source;
 mod validate;
+mod value;
 
 pub use compile::{
-    compile_did, compile_did_file, compile_did_file_with_options, compile_did_with_options,
-    Compilation, CompileOptions,
+    compile_did, compile_did_file, compile_did_file_with_context, compile_did_file_with_options,
+    compile_did_with_context, compile_did_with_options, compile_with_resolver, Compilation,
+    CompileOptions,
 };
-pub use diagnostics::{CompileError, Diagnostic, DiagnosticPhase, Severity, SourceSpan};
+pub use diagnostics::{
+    CompileError, Diagnostic, DiagnosticPhase, ResourceLimitInfo, Severity, SourceSpan,
+};
+pub use envelope::ContractEnvelope;
+pub use limits::{Limits, RuntimeContext};
+pub use migration::migrate_legacy_v1_json;
 pub use model::{
-    Actor, Contract, ContractJsonError, ContractValidationError, ContractViolation, Declaration,
-    Field, FieldLabelProvenance, MethodMode, PrimitiveType, ServiceMethod, SourceActorInfo,
-    SourceDeclaration, SourceFileInfo, SourceFunctionArgumentDirection, SourceFunctionArgumentInfo,
-    SourceInfo, SourceLabel, SourceMethodInfo, SourceOrigin, TypeNode, TypeRef, CONTRACT_VERSION,
+    Actor, Contract, ContractIdentities, ContractJsonError, ContractValidationError,
+    ContractViolation, Declaration, Field, FieldLabelProvenance, MethodMode, PrimitiveType,
+    ProducerInfo, RawContract, RawSourceInfo, ServiceMethod, SourceActorInfo, SourceDeclaration,
+    SourceFileInfo, SourceFunctionArgumentDirection, SourceFunctionArgumentInfo, SourceImportInfo,
+    SourceImportKind, SourceInfo, SourceLabel, SourceMethodInfo, SourceOrigin, TypeNode, TypeRef,
+    CANONICALIZATION_PROFILE, CONTRACT_FORMAT, CONTRACT_VERSION, FORMAT_VERSION, SEMANTICS_PROFILE,
     SOURCE_INFO_VERSION,
+};
+pub use resolver::{
+    MemoryResolver, ResolveError, ResolvedSource, SourceId, SourceResolver, WorkspaceResolver,
+};
+pub use value::{
+    validate_host_value, ContractMethodRef, ContractTypeRef, HostFieldValue, HostValue,
+    HostValueJsonError, HostValueValidationError, HostValueViolation,
 };

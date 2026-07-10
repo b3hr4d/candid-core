@@ -3,9 +3,9 @@ use std::error::Error;
 
 fn main() -> Result<(), Box<dyn Error>> {
     let compilation = compile_did("service : { ping: () -> (nat) query };")?;
-    let canonical_json = compilation.contract.to_json_pretty()?;
+    let canonical_json = compilation.contract().to_json_pretty()?;
     let accepted = Contract::from_json(&canonical_json)?;
-    println!("validated {} type nodes", accepted.types.len());
+    println!("validated {} type nodes", accepted.types().len());
 
     let mut injected: serde_json::Value = serde_json::from_str(&canonical_json)?;
     injected["widget"] = serde_json::json!("date-picker");

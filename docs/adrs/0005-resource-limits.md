@@ -1,6 +1,6 @@
 # ADR 0005: Bound all untrusted work and avoid recursive execution
 
-- Status: Accepted; implementation pending
+- Status: Implemented
 - Date: 2026-07-10
 - Owners: Contract runtime maintainers
 
@@ -45,11 +45,13 @@ profiles without changing Contract IDs.
 - Algorithmic complexity becomes observable and benchmarkable.
 - Cancellation is a host concern and does not alter deterministic results.
 
-## Migration
+## Implementation
 
-Existing convenience functions continue to use documented defaults. New
-`*_with_context` entry points expose limits and cancellation. Recursive
-canonical traversal is replaced before external JSON is treated as untrusted.
+Existing conveniences use `Limits::default`; context-aware entry points expose
+the policy. Contract JSON, source resolution, graph structure,
+canonicalization, extensions, and HostValue traversal enforce limits. Graph
+canonicalization and value validation use explicit work stacks. Limit failures
+carry structured resource, limit, and observed values.
 
 ## Required verification
 
@@ -57,4 +59,3 @@ canonical traversal is replaced before external JSON is treated as untrusted.
 - Fuzzing for parser, validator, canonicalizer, source resolver, and codec.
 - Deep acyclic and cyclic graphs proving no stack overflow.
 - Benchmarks and regression thresholds for adversarial partition refinement.
-
