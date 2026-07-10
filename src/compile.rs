@@ -6,7 +6,7 @@ use crate::model::{
     SourceFunctionArgumentDirection, SourceFunctionArgumentInfo, SourceInfo, SourceLabel,
     SourceMethodInfo, SourceOrigin, TypeNode, TypeRef, CONTRACT_VERSION, SOURCE_INFO_VERSION,
 };
-use candid::types::{FuncMode, Label, Type, TypeEnv, TypeInner};
+use candid_parser::candid::types::{FuncMode, Label, Type, TypeEnv, TypeInner};
 use candid_parser::syntax::{Dec, IDLProg, IDLType};
 use candid_parser::typing::ast_to_type;
 use candid_parser::{check_file, check_prog};
@@ -533,7 +533,7 @@ impl<'a> Lowerer<'a> {
                     .map(|(name, function)| {
                         Ok(ServiceMethod {
                             name: name.clone(),
-                            id: candid::idl_hash(name),
+                            id: candid_parser::candid::idl_hash(name),
                             function: self.lower_type(function)?,
                         })
                     })
@@ -578,7 +578,10 @@ impl<'a> Lowerer<'a> {
         Ok(())
     }
 
-    fn lower_fields(&mut self, fields: &[candid::types::Field]) -> Result<Vec<Field>, String> {
+    fn lower_fields(
+        &mut self,
+        fields: &[candid_parser::candid::types::Field],
+    ) -> Result<Vec<Field>, String> {
         let mut lowered = Vec::with_capacity(fields.len());
         for field in fields {
             let id = field.id.get_id();

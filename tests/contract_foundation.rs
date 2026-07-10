@@ -127,7 +127,7 @@ fn labels_keep_authoritative_ids_and_source_spelling_is_sidecar_only() {
     let ids: BTreeSet<_> = fields.iter().map(|field| field.id).collect();
     assert!(ids.contains(&5_097_222));
     assert!(ids.contains(&42));
-    assert!(ids.contains(&candid::idl_hash("hyphen-name")));
+    assert!(ids.contains(&candid_parser::candid::idl_hash("hyphen-name")));
     assert_eq!(fields.iter().map(|field| field.id).collect::<Vec<_>>(), {
         let mut sorted = fields.iter().map(|field| field.id).collect::<Vec<_>>();
         sorted.sort_unstable();
@@ -341,7 +341,7 @@ fn self_and_mutual_recursion_are_direct_graph_cycles() {
     };
     let tail = fields
         .iter()
-        .find(|field| field.id == candid::idl_hash("tail"))
+        .find(|field| field.id == candid_parser::candid::idl_hash("tail"))
         .unwrap();
     assert_eq!(tail.ty, list);
     assert!(self_recursive.contract.validate().is_ok());
@@ -367,7 +367,7 @@ fn self_and_mutual_recursion_are_direct_graph_cycles() {
     };
     let more = fields
         .iter()
-        .find(|field| field.id == candid::idl_hash("more"))
+        .find(|field| field.id == candid_parser::candid::idl_hash("more"))
         .unwrap();
     assert_eq!(more.ty, a);
 }
@@ -727,7 +727,7 @@ fn graph_validator_rejects_each_constrained_edge_kind_and_duplicate_id() {
             TypeNode::Service {
                 methods: vec![ServiceMethod {
                     name: "call".to_string(),
-                    id: candid::idl_hash("call"),
+                    id: candid_parser::candid::idl_hash("call"),
                     function: 1,
                 }],
             },

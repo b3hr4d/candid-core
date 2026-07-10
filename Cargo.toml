@@ -7,12 +7,11 @@ description = "Canonical runtime Contract graph projection for Candid DID interf
 license = "Apache-2.0"
 
 [dependencies]
-candid = "=0.10.30"
 candid_parser = "=0.4.0"
 hex = "=0.4.3"
 serde = { version = "=1.0.228", features = ["derive"] }
 serde_json = "=1.0.150"
-sha2 = "=0.10.9"
+sha2 = "=0.11.0"
 
 [dev-dependencies]
 serde_json = "=1.0.150"

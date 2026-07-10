@@ -1,5 +1,9 @@
 # Candid Contract Runtime — architecture (slice 1)
 
+The accepted [foundation ADRs](adrs/README.md) define the identity, versioning,
+validation, source-resolution, resource-limit, and HostValue boundaries that
+supersede any conflicting pre-stable implementation detail in this document.
+
 This project turns Candid DID source into a small, validated, versioned
 **Contract** graph.  A Contract describes Candid's wire-level type semantics;
 it is not a UI schema, a value codec, or generated application code.
