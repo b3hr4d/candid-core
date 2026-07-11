@@ -7,6 +7,63 @@ use crate::model::{
 };
 use std::collections::{BTreeSet, VecDeque};
 
+struct ViolationCollector {
+    violations: Vec<ContractViolation>,
+    limit: usize,
+    observed: usize,
+}
+
+impl ViolationCollector {
+    fn new(limit: usize) -> Self {
+        Self {
+            violations: Vec::with_capacity(limit.min(64)),
+            limit,
+            observed: 0,
+        }
+    }
+
+    fn push(
+        &mut self,
+        code: impl Into<String>,
+        path: impl Into<String>,
+        message: impl Into<String>,
+    ) {
+        self.observed = self.observed.saturating_add(1);
+        if self.violations.len() < self.limit {
+            self.violations.push(ContractViolation {
+                code: code.into(),
+                path: path.into(),
+                message: message.into(),
+                resource_limit: None,
+            });
+        } else if let Some(last) = self.violations.last_mut() {
+            *last = ContractViolation {
+                code: "resource_limit_exceeded".to_string(),
+                path: "$".to_string(),
+                message: format!(
+                    "resource diagnostics exceeded limit {}; observed at least {}",
+                    self.limit, self.observed
+                ),
+                resource_limit: Some(crate::ResourceLimitInfo {
+                    resource: "diagnostics".to_string(),
+                    limit: self.limit,
+                    observed: self.observed,
+                }),
+            };
+        }
+    }
+
+    fn into_result(self) -> Result<(), ContractValidationError> {
+        if self.observed == 0 {
+            Ok(())
+        } else {
+            Err(ContractValidationError {
+                violations: self.violations,
+            })
+        }
+    }
+}
+
 pub(crate) fn validate_contract_with_limits(
     contract: &Contract,
     limits: &Limits,
@@ -50,7 +107,7 @@ pub(crate) fn validate_structure_with_limits(
         ));
     }
     enforce_limits(contract, limits)?;
-    let mut violations = Vec::new();
+    let mut violations = ViolationCollector::new(limits.max_diagnostics);
     if contract.format != CONTRACT_FORMAT {
         violation(
             &mut violations,
@@ -165,11 +222,7 @@ pub(crate) fn validate_structure_with_limits(
     validate_class_placement(contract, &mut violations);
     validate_reachability(contract, &mut violations);
 
-    if violations.is_empty() {
-        Ok(())
-    } else {
-        Err(ContractValidationError { violations })
-    }
+    violations.into_result()
 }
 
 fn enforce_limits(contract: &Contract, limits: &Limits) -> Result<(), ContractValidationError> {
@@ -253,7 +306,7 @@ fn validate_node(
     index: usize,
     node: &TypeNode,
     contract: &Contract,
-    violations: &mut Vec<ContractViolation>,
+    violations: &mut ViolationCollector,
 ) {
     let base = format!("$.types[{index}]");
     match node {
@@ -348,7 +401,7 @@ fn validate_service_methods(
     node_index: usize,
     methods: &[ServiceMethod],
     contract: &Contract,
-    violations: &mut Vec<ContractViolation>,
+    violations: &mut ViolationCollector,
 ) {
     let base = format!("$.types[{node_index}].methods");
     let mut names = BTreeSet::new();
@@ -402,7 +455,7 @@ fn validate_service_methods(
     }
 }
 
-fn validate_actor(contract: &Contract, violations: &mut Vec<ContractViolation>) {
+fn validate_actor(contract: &Contract, violations: &mut ViolationCollector) {
     let Some(actor) = &contract.actor else {
         return;
     };
@@ -441,7 +494,7 @@ fn validate_actor(contract: &Contract, violations: &mut Vec<ContractViolation>) 
 /// Candid's `service : (args) -> service` constructor syntax exists only for
 /// the top-level actor. A class is not a first-class Candid type and therefore
 /// must not appear under a type edge or named declaration.
-fn validate_class_placement(contract: &Contract, violations: &mut Vec<ContractViolation>) {
+fn validate_class_placement(contract: &Contract, violations: &mut ViolationCollector) {
     let class_nodes: Vec<_> = contract
         .types
         .iter()
@@ -493,7 +546,7 @@ fn validate_class_placement(contract: &Contract, violations: &mut Vec<ContractVi
     }
 }
 
-fn validate_reachability(contract: &Contract, violations: &mut Vec<ContractViolation>) {
+fn validate_reachability(contract: &Contract, violations: &mut ViolationCollector) {
     if contract.types.is_empty() {
         return;
     }
@@ -611,7 +664,7 @@ fn validate_ref(
     reference: TypeRef,
     path: &str,
     type_count: usize,
-    violations: &mut Vec<ContractViolation>,
+    violations: &mut ViolationCollector,
 ) {
     if reference as usize >= type_count {
         violation(
@@ -635,15 +688,10 @@ fn is_content_id(value: &str, domain: &str) -> bool {
 }
 
 fn violation(
-    violations: &mut Vec<ContractViolation>,
+    violations: &mut ViolationCollector,
     code: impl Into<String>,
     path: impl Into<String>,
     message: impl Into<String>,
 ) {
-    violations.push(ContractViolation {
-        code: code.into(),
-        path: path.into(),
-        message: message.into(),
-        resource_limit: None,
-    });
+    violations.push(code, path, message);
 }

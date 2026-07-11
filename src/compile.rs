@@ -9,7 +9,7 @@ use crate::model::{
     TypeNode, TypeRef, SOURCE_INFO_VERSION,
 };
 use candid_parser::candid::types::{FuncMode, Label, Type, TypeEnv, TypeInner};
-use candid_parser::syntax::{Dec, IDLProg, IDLType};
+use candid_parser::syntax::{pretty_print, Dec, IDLMergedProg, IDLProg, IDLType};
 use candid_parser::typing::ast_to_type;
 use candid_parser::{check_file, check_prog};
 use serde::{de::Error as _, Deserialize, Deserializer, Serialize, Serializer};
@@ -156,7 +156,15 @@ struct SourceUnit {
     name: String,
     source: String,
     program: IDLProg,
+    imports: Vec<ResolvedImport>,
     include_actor: bool,
+}
+
+#[derive(Debug, Clone)]
+struct ResolvedImport {
+    import: String,
+    target: crate::SourceId,
+    kind: SourceImportKind,
 }
 
 /// Compile a self-contained DID source string. DID imports require a file path
@@ -225,6 +233,7 @@ pub fn compile_did_with_context(
         name: "memory:/inline.did".to_string(),
         source: source.to_string(),
         program,
+        imports: Vec::new(),
         include_actor: true,
     }];
     lower_checked(
@@ -304,8 +313,7 @@ fn load_source_units_with_resolver(
     context: &RuntimeContext,
 ) -> Result<(Vec<SourceUnit>, crate::SourceId), CompileError> {
     struct Pending {
-        from: Option<crate::SourceId>,
-        import: String,
+        source_id: crate::SourceId,
         include_actor: bool,
         depth: usize,
         ancestors: Vec<crate::SourceId>,
@@ -314,14 +322,15 @@ fn load_source_units_with_resolver(
     let limits = &context.limits;
     let mut units = Vec::<SourceUnit>::new();
     let mut indexes = BTreeMap::<crate::SourceId, usize>::new();
+    let entry_id = resolver
+        .identify(None, entry)
+        .map_err(crate::ResolveError::into_compile_error)?;
     let mut pending = vec![Pending {
-        from: None,
-        import: entry.to_string(),
+        source_id: entry_id.clone(),
         include_actor: true,
         depth: 0,
         ancestors: Vec::new(),
     }];
-    let mut entry_id = None;
     let mut total_bytes = 0usize;
     let mut import_edges = 0usize;
 
@@ -344,18 +353,13 @@ fn load_source_units_with_resolver(
                 ),
             ));
         }
-        let source_id = resolver
-            .identify(request.from.as_ref(), &request.import)
-            .map_err(crate::ResolveError::into_compile_error)?;
+        let source_id = request.source_id;
         if request.ancestors.contains(&source_id) {
             return Err(CompileError::single(
                 "did_import_cycle",
                 DiagnosticPhase::Load,
                 format!("import cycle reached {:?}", source_id.as_str()),
             ));
-        }
-        if entry_id.is_none() {
-            entry_id = Some(source_id.clone());
         }
         if let Some(index) = indexes.get(&source_id).copied() {
             units[index].include_actor |= request.include_actor;
@@ -403,8 +407,8 @@ fn load_source_units_with_resolver(
             .decs
             .iter()
             .filter_map(|declaration| match declaration {
-                Dec::ImportType(import) => Some((import.clone(), false)),
-                Dec::ImportServ(import) => Some((import.clone(), true)),
+                Dec::ImportType(import) => Some((import.clone(), SourceImportKind::Type)),
+                Dec::ImportServ(import) => Some((import.clone(), SourceImportKind::Service)),
                 Dec::TypD(_) => None,
             })
             .collect();
@@ -417,30 +421,40 @@ fn load_source_units_with_resolver(
                 format!("import edges exceed limit {}", limits.max_import_edges),
             ));
         }
+        let resolved_imports = imports
+            .into_iter()
+            .map(|(import, kind)| {
+                let target = resolver
+                    .identify(Some(&resolved.id), &import)
+                    .map_err(crate::ResolveError::into_compile_error)?;
+                Ok(ResolvedImport {
+                    import,
+                    target,
+                    kind,
+                })
+            })
+            .collect::<Result<Vec<_>, CompileError>>()?;
         let index = units.len();
         indexes.insert(source_id.clone(), index);
         units.push(SourceUnit {
             name: resolved.id.as_str().to_string(),
             source: resolved.source,
             program,
+            imports: resolved_imports.clone(),
             include_actor: request.include_actor,
         });
         let mut ancestors = request.ancestors;
         ancestors.push(resolved.id.clone());
-        for (import, imports_actor) in imports.into_iter().rev() {
+        for import in resolved_imports.into_iter().rev() {
             pending.push(Pending {
-                from: Some(resolved.id.clone()),
-                import,
-                include_actor: imports_actor,
+                source_id: import.target,
+                include_actor: import.kind == SourceImportKind::Service,
                 depth: request.depth + 1,
                 ancestors: ancestors.clone(),
             });
         }
     }
-    Ok((
-        units,
-        entry_id.expect("entry resolution creates at least one source"),
-    ))
+    Ok((units, entry_id))
 }
 
 struct MaterializedBundle {
@@ -453,7 +467,23 @@ impl MaterializedBundle {
         static NEXT_ID: AtomicU64 = AtomicU64::new(0);
         let id = NEXT_ID.fetch_add(1, AtomicOrdering::Relaxed);
         let root = std::env::temp_dir().join(format!("candid-core-{}-{id}", std::process::id()));
-        fs::create_dir(&root).map_err(|error| {
+        let indexes = units
+            .iter()
+            .enumerate()
+            .map(|(index, unit)| {
+                let id = crate::SourceId::parse(&unit.name)
+                    .expect("resolver-produced source IDs are valid");
+                (id, index)
+            })
+            .collect::<BTreeMap<_, _>>();
+        let entry_index = indexes.get(entry).copied().ok_or_else(|| {
+            CompileError::single(
+                "did_materialize_error",
+                DiagnosticPhase::Load,
+                "entry source is missing from the resolved bundle",
+            )
+        })?;
+        create_private_dir(&root).map_err(|error| {
             CompileError::single(
                 "did_materialize_error",
                 DiagnosticPhase::Load,
@@ -461,23 +491,13 @@ impl MaterializedBundle {
             )
         })?;
         let bundle = Self {
-            entry: root.join(entry.path()),
+            entry: root.join(format!("{entry_index}.did")),
             root,
         };
-        for unit in units {
-            let id =
-                crate::SourceId::parse(&unit.name).expect("resolver-produced source IDs are valid");
-            let path = bundle.root.join(id.path());
-            if let Some(parent) = path.parent() {
-                fs::create_dir_all(parent).map_err(|error| {
-                    CompileError::single(
-                        "did_materialize_error",
-                        DiagnosticPhase::Load,
-                        format!("cannot create isolated source directory: {error}"),
-                    )
-                })?;
-            }
-            fs::write(&path, &unit.source).map_err(|error| {
+        for (index, unit) in units.iter().enumerate() {
+            let path = bundle.root.join(format!("{index}.did"));
+            let source = materialized_source(unit, &indexes)?;
+            fs::write(&path, source).map_err(|error| {
                 CompileError::single(
                     "did_materialize_error",
                     DiagnosticPhase::Load,
@@ -487,6 +507,44 @@ impl MaterializedBundle {
         }
         Ok(bundle)
     }
+}
+
+fn create_private_dir(path: &Path) -> std::io::Result<()> {
+    let mut builder = fs::DirBuilder::new();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        builder.mode(0o700);
+    }
+    builder.create(path)
+}
+
+fn materialized_source(
+    unit: &SourceUnit,
+    indexes: &BTreeMap<crate::SourceId, usize>,
+) -> Result<String, CompileError> {
+    let mut source = String::new();
+    for import in &unit.imports {
+        let target = indexes.get(&import.target).copied().ok_or_else(|| {
+            CompileError::single(
+                "did_materialize_error",
+                DiagnosticPhase::Load,
+                format!(
+                    "resolved import {:?} is missing from the source bundle",
+                    import.target.as_str()
+                ),
+            )
+        })?;
+        match import.kind {
+            SourceImportKind::Type => source.push_str(&format!("import \"{target}.did\";\n")),
+            SourceImportKind::Service => {
+                source.push_str(&format!("import service \"{target}.did\";\n"));
+            }
+        }
+    }
+    let program = parse_program(&unit.source, Some(unit.name.clone()))?;
+    source.push_str(&pretty_print(&IDLMergedProg::new(program)));
+    Ok(source)
 }
 
 impl Drop for MaterializedBundle {
@@ -670,21 +728,12 @@ fn lower_checked(
 fn source_imports(source_units: &[SourceUnit]) -> Vec<SourceImportInfo> {
     let mut imports = Vec::new();
     for unit in source_units {
-        let from = crate::SourceId::parse(&unit.name)
-            .expect("resolver-produced source IDs are already normalized");
-        for declaration in &unit.program.decs {
-            let (import, kind) = match declaration {
-                Dec::ImportType(import) => (import, SourceImportKind::Type),
-                Dec::ImportServ(import) => (import, SourceImportKind::Service),
-                Dec::TypD(_) => continue,
-            };
-            let to = crate::resolver::resolve_source_id(Some(&from), import)
-                .expect("all imports were accepted by the resolver");
+        for import in &unit.imports {
             imports.push(SourceImportInfo {
                 from: unit.name.clone(),
-                import: import.clone(),
-                to: to.as_str().to_string(),
-                kind,
+                import: import.import.clone(),
+                to: import.target.as_str().to_string(),
+                kind: import.kind,
             });
         }
     }
@@ -710,6 +759,33 @@ fn candid_file_error(error: candid_parser::Error) -> CompileError {
         }
     };
     candid_error(error, phase, None)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn materialized_bundle_root_is_private_and_self_cleaning() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let source = "service : {};";
+        let entry = crate::SourceId::parse("memory:/private.did").unwrap();
+        let unit = SourceUnit {
+            name: entry.as_str().to_string(),
+            source: source.to_string(),
+            program: parse_program(source, Some(entry.as_str().to_string())).unwrap(),
+            imports: Vec::new(),
+            include_actor: true,
+        };
+        let bundle = MaterializedBundle::new(&[unit], &entry).unwrap();
+        let root = bundle.root.clone();
+        let mode = fs::metadata(&root).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o700);
+        drop(bundle);
+        assert!(!root.exists());
+    }
 }
 
 fn candid_error(

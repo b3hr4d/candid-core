@@ -5,6 +5,8 @@ use candid_core::{
     RawContract, ResolveError, ResolvedSource, RuntimeContext, SourceId, SourceResolver, TypeNode,
     CANONICALIZATION_PROFILE, CONTRACT_FORMAT, FORMAT_VERSION, SEMANTICS_PROFILE,
 };
+use sha2::{Digest, Sha256};
+use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
@@ -122,6 +124,73 @@ fn memory_resolver_compiles_one_immutable_logical_source_bundle() {
         .starts_with("candid-core:source-bundle:v1:sha256:"));
 }
 
+struct AliasResolver {
+    sources: BTreeMap<SourceId, String>,
+}
+
+impl AliasResolver {
+    fn new() -> Self {
+        let mut sources = BTreeMap::new();
+        sources.insert(
+            SourceId::parse("registry:/entry.did").unwrap(),
+            r#"import "types.did"; service : { read: () -> (Item) query };"#.to_string(),
+        );
+        sources.insert(
+            SourceId::parse("registry:/catalog/v1/types.did").unwrap(),
+            "type Item = nat;".to_string(),
+        );
+        Self { sources }
+    }
+}
+
+impl SourceResolver for AliasResolver {
+    fn identify(&self, from: Option<&SourceId>, import: &str) -> Result<SourceId, ResolveError> {
+        match (from.map(SourceId::as_str), import) {
+            (None, "entry") => SourceId::parse("registry:/entry.did"),
+            (Some("registry:/entry.did"), "types.did") => {
+                SourceId::parse("registry:/catalog/v1/types.did")
+            }
+            _ => Err(ResolveError {
+                code: "did_source_not_found".to_string(),
+                message: format!("no alias mapping for {import:?}"),
+                resource_limit: None,
+            }),
+        }
+    }
+
+    fn load(&self, id: &SourceId, _limits: &Limits) -> Result<ResolvedSource, ResolveError> {
+        let source = self.sources.get(id).cloned().ok_or_else(|| ResolveError {
+            code: "did_source_not_found".to_string(),
+            message: format!("missing source {:?}", id.as_str()),
+            resource_limit: None,
+        })?;
+        let digest = format!("sha256:{}", hex::encode(Sha256::digest(source.as_bytes())));
+        Ok(ResolvedSource {
+            id: id.clone(),
+            source,
+            digest,
+        })
+    }
+}
+
+#[test]
+fn materialization_honors_custom_resolver_aliases() {
+    let compilation = compile_with_resolver(
+        "entry",
+        &AliasResolver::new(),
+        CompileOptions::default(),
+        &RuntimeContext::default(),
+    )
+    .unwrap();
+    let source_info = compilation.source_info().unwrap();
+    assert_eq!(source_info.imports().len(), 1);
+    assert_eq!(source_info.imports()[0].import, "types.did");
+    assert_eq!(
+        source_info.imports()[0].to,
+        "registry:/catalog/v1/types.did"
+    );
+}
+
 #[derive(Clone)]
 struct CountingResolver {
     inner: MemoryResolver,
@@ -169,6 +238,37 @@ fn diamond_imports_are_snapshotted_and_loaded_once() {
     .unwrap();
     assert_eq!(compilation.source_info().unwrap().sources().len(), 4);
     assert_eq!(loads.load(Ordering::SeqCst), 4);
+}
+
+#[test]
+fn contract_validation_caps_retained_diagnostics() {
+    let raw = RawContract::new(
+        vec![
+            TypeNode::Record {
+                fields: (0..16).map(|_| Field { id: 0, ty: 1 }).collect(),
+            },
+            TypeNode::Primitive {
+                primitive: PrimitiveType::Nat,
+            },
+        ],
+        vec![Declaration {
+            name: "Repeated".to_string(),
+            ty: 0,
+        }],
+        None,
+    );
+    let limits = Limits {
+        max_diagnostics: 3,
+        ..Limits::default()
+    };
+    let error = Contract::build_raw(raw, &limits).unwrap_err();
+    assert_eq!(error.violations.len(), limits.max_diagnostics);
+    let cap = error.violations.last().unwrap();
+    assert_eq!(cap.code, "resource_limit_exceeded");
+    let info = cap.resource_limit.as_ref().unwrap();
+    assert_eq!(info.resource, "diagnostics");
+    assert_eq!(info.limit, limits.max_diagnostics);
+    assert!(info.observed > limits.max_diagnostics);
 }
 
 #[test]

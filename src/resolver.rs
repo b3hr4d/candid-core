@@ -366,14 +366,6 @@ fn normalize_path(from: Option<&SourceId>, import: &str) -> Result<String, Resol
     Ok(components.join("/"))
 }
 
-pub(crate) fn resolve_source_id(
-    from: Option<&SourceId>,
-    import: &str,
-) -> Result<SourceId, ResolveError> {
-    let scheme = from.map_or("memory", SourceId::scheme);
-    Ok(SourceId::with_scheme(scheme, normalize_path(from, import)?))
-}
-
 fn validate_scheme(scheme: &str) -> Result<(), ResolveError> {
     if scheme.is_empty()
         || !scheme
