@@ -1,15 +1,14 @@
-use candid_contract_runtime::{
+use candid_core::{
     compile_did, compile_did_file, compile_did_with_context, compile_with_resolver,
-    migrate_legacy_v1_json, validate_host_value, Actor, Compilation, CompileOptions, Contract,
-    ContractEnvelope, Declaration, Field, HostFieldValue, HostValue, Limits, MemoryResolver,
-    PrimitiveType, RawContract, ResolveError, ResolvedSource, RuntimeContext, SourceId,
-    SourceResolver, TypeNode, CANONICALIZATION_PROFILE, CONTRACT_FORMAT, FORMAT_VERSION,
-    SEMANTICS_PROFILE,
+    validate_host_value, Actor, Compilation, CompileOptions, Contract, ContractEnvelope,
+    Declaration, Field, HostFieldValue, HostValue, Limits, MemoryResolver, PrimitiveType,
+    RawContract, ResolveError, ResolvedSource, RuntimeContext, SourceId, SourceResolver, TypeNode,
+    CANONICALIZATION_PROFILE, CONTRACT_FORMAT, FORMAT_VERSION, SEMANTICS_PROFILE,
 };
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
-fn compile(source: &str) -> candid_contract_runtime::Compilation {
+fn compile(source: &str) -> candid_core::Compilation {
     compile_did(source).unwrap_or_else(|error| panic!("compilation failed: {error:#?}"))
 }
 
@@ -65,11 +64,11 @@ fn canonical_envelope_profiles_are_explicit_and_fail_closed() {
     );
     assert!(contract
         .contract_id()
-        .starts_with("ccr:contract:v1:sha256:"));
+        .starts_with("candid-core:contract:v1:sha256:"));
     assert!(contract
         .interface_id()
         .unwrap()
-        .starts_with("ccr:interface:v1:sha256:"));
+        .starts_with("candid-core:interface:v1:sha256:"));
 
     let mut raw = RawContract::from(&contract);
     raw.semantics_profile = "future-candid".to_string();
@@ -85,7 +84,7 @@ fn compilation_deserialization_rejects_a_mismatched_sidecar() {
     let compilation = compile("type Item = record { value: nat }; service : {};");
     let mut json = serde_json::to_value(&compilation).unwrap();
     json["source_info"]["contract_id"] = serde_json::json!(
-        "ccr:contract:v1:sha256:0000000000000000000000000000000000000000000000000000000000000000"
+        "candid-core:contract:v1:sha256:0000000000000000000000000000000000000000000000000000000000000000"
     );
     assert!(serde_json::from_value::<Compilation>(json).is_err());
 }
@@ -120,7 +119,7 @@ fn memory_resolver_compiles_one_immutable_logical_source_bundle() {
     assert_eq!(source_info.imports()[0].to, "memory:/api/types.did");
     assert!(source_info
         .source_bundle_id()
-        .starts_with("ccr:source-bundle:v1:sha256:"));
+        .starts_with("candid-core:source-bundle:v1:sha256:"));
 }
 
 #[derive(Clone)]
@@ -332,7 +331,7 @@ fn host_values_reject_coercions_and_unbound_contract_references() {
     assert!(validate_host_value(contract, &selector, &noncanonical, &Limits::default()).is_err());
 
     selector.contract_id =
-        "ccr:contract:v1:sha256:0000000000000000000000000000000000000000000000000000000000000000"
+        "candid-core:contract:v1:sha256:0000000000000000000000000000000000000000000000000000000000000000"
             .to_string();
     assert!(validate_host_value(
         contract,
@@ -444,30 +443,4 @@ fn canonical_contracts_match_checked_in_cross_language_fixtures() {
         let expected: Contract = Contract::from_json(&expected).unwrap();
         assert_eq!(contract, expected, "fixture {name} drifted");
     }
-}
-
-#[test]
-fn legacy_json_requires_an_explicit_verified_migration() {
-    let current = compile("service : { ping: () -> () };").contract().clone();
-    let legacy = serde_json::json!({
-        "contract_version": current.contract_version(),
-        "fingerprint": current.fingerprint(),
-        "types": current.types(),
-        "declarations": current.declarations(),
-        "actor": current.actor(),
-    });
-    let legacy = serde_json::to_string(&legacy).unwrap();
-    assert!(Contract::from_json(&legacy).is_err());
-    let migrated = migrate_legacy_v1_json(&legacy, &Limits::default()).unwrap();
-    assert_eq!(migrated.contract_id(), current.contract_id());
-
-    let mut tampered: serde_json::Value = serde_json::from_str(&legacy).unwrap();
-    tampered["fingerprint"] = serde_json::json!(
-        "sha256:0000000000000000000000000000000000000000000000000000000000000000"
-    );
-    assert!(migrate_legacy_v1_json(
-        &serde_json::to_string(&tampered).unwrap(),
-        &Limits::default()
-    )
-    .is_err());
 }

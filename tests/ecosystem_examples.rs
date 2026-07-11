@@ -1,7 +1,7 @@
-use candid_contract_runtime::{compile_did, Actor, Contract, SourceLabel, TypeNode, TypeRef};
+use candid_core::{compile_did, Actor, Contract, SourceLabel, TypeNode, TypeRef};
 use std::collections::BTreeSet;
 
-fn compile(source: &str) -> candid_contract_runtime::Compilation {
+fn compile(source: &str) -> candid_core::Compilation {
     compile_did(source).unwrap_or_else(|error| panic!("compilation failed: {error:#?}"))
 }
 
@@ -61,8 +61,8 @@ fn equivalent_sources_share_semantic_cache_identity_but_not_provenance() {
     );
 
     assert_eq!(
-        first.contract().fingerprint(),
-        second.contract().fingerprint()
+        first.contract().interface_id(),
+        second.contract().interface_id()
     );
     assert_ne!(first.source_info(), second.source_info());
 }

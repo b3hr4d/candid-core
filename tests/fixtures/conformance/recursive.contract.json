@@ -1,16 +1,14 @@
 {
-  "format": "candid-contract",
+  "format": "candid-core",
   "format_version": 1,
   "semantics_profile": "candid-1",
-  "canonicalization_profile": "ccr-canon-1",
-  "contract_version": 1,
+  "canonicalization_profile": "candid-core-canon-1",
   "identities": {
-    "contract": "ccr:contract:v1:sha256:12ac4b76da45de0290be80b7d4c5cce700e5c74444a8ae9fb8245c4a1dced247",
-    "interface": "ccr:interface:v1:sha256:d27e79da8da2cc2bb0eed684523ac930f7ba4feb7b4fd3ba0b1bee384a6c50e9"
+    "contract": "candid-core:contract:v1:sha256:b344f6593e2a907f98f208fec77f73456fbcb798f4bb13b2e0491d6cd09cb50a",
+    "interface": "candid-core:interface:v1:sha256:6634de80c26390309e22d050608e45e75c6564d29a7bc59aec4f06467256ef57"
   },
-  "fingerprint": "sha256:fb65f7aa15320074d7917f772e6d916303bc977f03c2158ff6fd8a026b06b648",
   "producer": {
-    "name": "candid-contract-runtime",
+    "name": "candid-core",
     "version": "0.1.0",
     "candid_version": "0.10.30",
     "candid_parser_version": "0.4.0"

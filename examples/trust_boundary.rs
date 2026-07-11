@@ -1,4 +1,4 @@
-use candid_contract_runtime::{compile_did, Contract};
+use candid_core::{compile_did, Contract};
 use std::error::Error;
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -13,8 +13,8 @@ fn main() -> Result<(), Box<dyn Error>> {
     println!("unknown core metadata rejected: {rejected}");
 
     let mut tampered: serde_json::Value = serde_json::from_str(&canonical_json)?;
-    tampered["fingerprint"] = serde_json::json!(
-        "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+    tampered["identities"]["contract"] = serde_json::json!(
+        "candid-core:contract:v1:sha256:0000000000000000000000000000000000000000000000000000000000000000"
     );
     let rejected = Contract::from_json(&serde_json::to_string(&tampered)?).unwrap_err();
     println!("tampered semantic identity rejected: {rejected}");

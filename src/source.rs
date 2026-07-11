@@ -18,7 +18,7 @@ pub(crate) fn source_bundle_id(
     imports: &[SourceImportInfo],
 ) -> String {
     domain_hash(
-        "ccr:source-bundle:v1",
+        "candid-core:source-bundle:v1",
         &SourceBundlePayload { sources, imports },
     )
 }

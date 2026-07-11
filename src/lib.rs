@@ -10,7 +10,6 @@ mod compile;
 mod diagnostics;
 mod envelope;
 mod limits;
-mod migration;
 mod model;
 mod resolver;
 mod source;
@@ -27,14 +26,13 @@ pub use diagnostics::{
 };
 pub use envelope::ContractEnvelope;
 pub use limits::{Limits, RuntimeContext};
-pub use migration::migrate_legacy_v1_json;
 pub use model::{
     Actor, Contract, ContractIdentities, ContractJsonError, ContractValidationError,
     ContractViolation, Declaration, Field, FieldLabelProvenance, MethodMode, PrimitiveType,
     ProducerInfo, RawContract, RawSourceInfo, ServiceMethod, SourceActorInfo, SourceDeclaration,
     SourceFileInfo, SourceFunctionArgumentDirection, SourceFunctionArgumentInfo, SourceImportInfo,
     SourceImportKind, SourceInfo, SourceLabel, SourceMethodInfo, SourceOrigin, TypeNode, TypeRef,
-    CANONICALIZATION_PROFILE, CONTRACT_FORMAT, CONTRACT_VERSION, FORMAT_VERSION, SEMANTICS_PROFILE,
+    CANONICALIZATION_PROFILE, CONTRACT_FORMAT, FORMAT_VERSION, SEMANTICS_PROFILE,
     SOURCE_INFO_VERSION,
 };
 pub use resolver::{

@@ -1,6 +1,4 @@
-use candid_contract_runtime::{
-    compile_did_file_with_options, CompileOptions, Contract, ContractJsonError,
-};
+use candid_core::{compile_did_file_with_options, CompileOptions, Contract, ContractJsonError};
 use serde_json::json;
 use std::env;
 use std::fs;
@@ -94,6 +92,6 @@ fn write_error(value: serde_json::Value) -> ExitCode {
 }
 
 fn usage() -> ExitCode {
-    eprintln!("usage: candid-contract <compile|validate> <path> [--no-source-info]");
+    eprintln!("usage: candid-core <compile|validate> <path> [--no-source-info]");
     ExitCode::from(64)
 }

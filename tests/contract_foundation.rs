@@ -1,11 +1,11 @@
-use candid_contract_runtime::{
+use candid_core::{
     compile_did, compile_did_file, compile_did_with_options, Actor, CompileOptions, Contract,
     Declaration, Field, Limits, MethodMode, PrimitiveType, RawContract, ServiceMethod, SourceLabel,
     SourceOrigin, TypeNode,
 };
 use std::collections::{BTreeMap, BTreeSet};
 
-fn compile(source: &str) -> candid_contract_runtime::Compilation {
+fn compile(source: &str) -> candid_core::Compilation {
     compile_did(source).unwrap_or_else(|error| panic!("compilation failed: {error:#?}"))
 }
 
@@ -27,7 +27,7 @@ fn raw_declaration(contract: &RawContract, name: &str) -> u32 {
         .ty
 }
 
-fn service_methods(contract: &Contract) -> &Vec<candid_contract_runtime::ServiceMethod> {
+fn service_methods(contract: &Contract) -> &Vec<candid_core::ServiceMethod> {
     let Actor::Service { service } = contract.actor().as_ref().expect("expected actor") else {
         panic!("expected service actor")
     };
@@ -265,8 +265,8 @@ fn tuple_and_explicit_numbered_record_have_the_same_wire_contract() {
         "#,
     );
     assert_eq!(
-        tuple.contract().fingerprint(),
-        explicit.contract().fingerprint()
+        tuple.contract().interface_id(),
+        explicit.contract().interface_id()
     );
     let shape = declaration(tuple.contract(), "Shape");
     let TypeNode::Record { fields } = &tuple.contract().types()[shape as usize] else {
@@ -302,7 +302,7 @@ fn blob_is_only_vec_nat8_in_the_contract() {
         service : { get: () -> (Bytes) };
         "#,
     );
-    assert_eq!(blob.contract().fingerprint(), vec.contract().fingerprint());
+    assert_eq!(blob.contract().contract_id(), vec.contract().contract_id());
     assert!(!blob.contract().to_json_pretty().unwrap().contains("blob"));
     let bytes = declaration(blob.contract(), "Bytes");
     let TypeNode::Vec { inner } = &blob.contract().types()[bytes as usize] else {
@@ -505,12 +505,12 @@ fn no_actor_empty_actor_and_zero_arg_constructor_remain_distinct() {
         Some(Actor::Class { .. })
     ));
     assert_ne!(
-        no_actor.contract().fingerprint(),
-        empty_actor.contract().fingerprint()
+        no_actor.contract().contract_id(),
+        empty_actor.contract().contract_id()
     );
     assert_ne!(
-        empty_actor.contract().fingerprint(),
-        empty_constructor.contract().fingerprint()
+        empty_actor.contract().contract_id(),
+        empty_constructor.contract().contract_id()
     );
 }
 
@@ -518,27 +518,21 @@ fn no_actor_empty_actor_and_zero_arg_constructor_remain_distinct() {
 fn invalid_did_returns_actionable_structured_diagnostics() {
     let syntax = compile_did("service : { broken: (nat) -> ( };").unwrap_err();
     let diagnostic = &syntax.diagnostics[0];
-    assert_eq!(
-        diagnostic.phase,
-        candid_contract_runtime::DiagnosticPhase::Parse
-    );
+    assert_eq!(diagnostic.phase, candid_core::DiagnosticPhase::Parse);
     assert_eq!(diagnostic.code, "did_parse_error");
     assert!(diagnostic.span.is_some());
     assert!(!diagnostic.message.is_empty());
 
     let type_error = compile_did("service : { broken: (Missing) -> () };").unwrap_err();
     let diagnostic = &type_error.diagnostics[0];
-    assert_eq!(
-        diagnostic.phase,
-        candid_contract_runtime::DiagnosticPhase::TypeCheck
-    );
+    assert_eq!(diagnostic.phase, candid_core::DiagnosticPhase::TypeCheck);
     assert_eq!(diagnostic.code, "did_type_check_error");
     assert!(diagnostic.message.contains("Missing") || diagnostic.message.contains("Unbound"));
 
     let oneway = compile_did("service : { broken: () -> (nat) oneway };").unwrap_err();
     assert_eq!(
         oneway.diagnostics[0].phase,
-        candid_contract_runtime::DiagnosticPhase::TypeCheck
+        candid_core::DiagnosticPhase::TypeCheck
     );
 }
 
@@ -554,10 +548,10 @@ fn file_compilation_uses_the_authoritative_import_resolver() {
         .declarations()
         .iter()
         .any(|declaration| declaration.name == "Imported"));
-    assert_eq!(
-        compilation.contract().fingerprint(),
-        "sha256:d47ec631e1134df16e89a96e652eee5e020c102feef720d9f62864da2c0fc44a"
-    );
+    assert!(compilation
+        .contract()
+        .contract_id()
+        .starts_with("candid-core:contract:v1:sha256:"));
     let source_info = compilation.source_info().unwrap();
     assert_eq!(source_info.sources().len(), 2);
     assert!(source_info
@@ -579,7 +573,7 @@ fn file_compilation_uses_the_authoritative_import_resolver() {
     let error = compile_did_file(invalid).unwrap_err();
     assert_eq!(
         error.diagnostics[0].phase,
-        candid_contract_runtime::DiagnosticPhase::TypeCheck
+        candid_core::DiagnosticPhase::TypeCheck
     );
 
     let invalid_syntax = format!(
@@ -589,7 +583,7 @@ fn file_compilation_uses_the_authoritative_import_resolver() {
     let error = compile_did_file(invalid_syntax).unwrap_err();
     assert_eq!(
         error.diagnostics[0].phase,
-        candid_contract_runtime::DiagnosticPhase::Parse
+        candid_core::DiagnosticPhase::Parse
     );
     assert!(error.diagnostics[0]
         .span
@@ -636,7 +630,7 @@ fn contract_json_is_strict_validated_and_graph_invariants_are_enforced() {
     assert!(Contract::from_json(&serde_json::to_string(&with_ui_metadata).unwrap()).is_err());
 
     let mut unsupported_version: serde_json::Value = serde_json::from_str(&json).unwrap();
-    unsupported_version["contract_version"] = serde_json::json!(999);
+    unsupported_version["format_version"] = serde_json::json!(999);
     assert!(Contract::from_json(&serde_json::to_string(&unsupported_version).unwrap()).is_err());
 
     let mut invented_type_kind: serde_json::Value = serde_json::from_str(&json).unwrap();
@@ -655,11 +649,11 @@ fn contract_json_is_strict_validated_and_graph_invariants_are_enforced() {
         .iter()
         .any(|violation| violation.code == "dangling_type_ref"));
 
-    let mut wrong_fingerprint = RawContract::from(compilation.contract());
-    wrong_fingerprint.fingerprint =
-        "sha256:0000000000000000000000000000000000000000000000000000000000000000".to_string();
-    assert!(Contract::try_from_raw(wrong_fingerprint.clone()).is_err());
-    assert!(Contract::from_json(&serde_json::to_string(&wrong_fingerprint).unwrap()).is_err());
+    let mut wrong_identity = RawContract::from(compilation.contract());
+    wrong_identity.identities.contract =
+        "candid-core:contract:v1:sha256:0000000000000000000000000000000000000000000000000000000000000000".to_string();
+    assert!(Contract::try_from_raw(wrong_identity.clone()).is_err());
+    assert!(Contract::from_json(&serde_json::to_string(&wrong_identity).unwrap()).is_err());
 }
 
 #[test]
@@ -772,7 +766,7 @@ fn source_sidecar_is_optional_and_never_changes_contract_identity() {
 }
 
 #[test]
-fn fingerprints_are_deterministic_and_ignore_provenance_but_track_wire_semantics() {
+fn interface_ids_are_deterministic_and_ignore_provenance_but_track_wire_semantics() {
     let left = compile(
         r#"
         type Payload = record { foo: nat; 1: text };
@@ -793,15 +787,15 @@ fn fingerprints_are_deterministic_and_ignore_provenance_but_track_wire_semantics
         "#,
     );
     assert_eq!(
-        left.contract().fingerprint(),
-        right.contract().fingerprint()
+        left.contract().interface_id(),
+        right.contract().interface_id()
     );
     assert_eq!(
         left.contract().to_json_pretty().unwrap(),
         left.contract().to_json_pretty().unwrap()
     );
     assert_ne!(
-        left.contract().fingerprint(),
+        left.contract().interface_id(),
         compile(
             r#"
             type Payload = record { foo: nat; 2: text };
@@ -809,10 +803,10 @@ fn fingerprints_are_deterministic_and_ignore_provenance_but_track_wire_semantics
             "#
         )
         .contract()
-        .fingerprint()
+        .interface_id()
     );
     assert_ne!(
-        left.contract().fingerprint(),
+        left.contract().interface_id(),
         compile(
             r#"
             type Payload = record { foo: nat; 1: text };
@@ -820,12 +814,12 @@ fn fingerprints_are_deterministic_and_ignore_provenance_but_track_wire_semantics
             "#
         )
         .contract()
-        .fingerprint()
+        .interface_id()
     );
 }
 
 #[test]
-fn fingerprint_is_invariant_under_type_ref_reindexing_and_duplicate_semantic_nodes() {
+fn contract_id_is_invariant_under_type_ref_reindexing_and_duplicate_semantic_nodes() {
     let first_raw = RawContract::new(
         vec![
             TypeNode::Record {
@@ -889,14 +883,12 @@ fn fingerprint_is_invariant_under_type_ref_reindexing_and_duplicate_semantic_nod
     let first = Contract::build_raw(first_raw, &Limits::default()).unwrap();
     let reindexed = Contract::build_raw(reindexed_raw.clone(), &Limits::default()).unwrap();
     let mut reindexed_input = reindexed_raw;
-    reindexed_input.fingerprint = first.fingerprint().to_string();
     reindexed_input.identities = first.identities().clone();
     assert!(Contract::try_from_raw(reindexed_input.clone()).is_ok());
     assert_eq!(
         Contract::from_json(&serde_json::to_string(&reindexed_input).unwrap()).unwrap(),
         first
     );
-    assert_eq!(first.fingerprint(), reindexed.fingerprint());
     assert_eq!(first.contract_id(), reindexed.contract_id());
     assert_eq!(first.types(), reindexed.types());
 }

@@ -10,7 +10,7 @@ use std::cmp::Ordering;
 use std::collections::{BTreeMap, VecDeque};
 
 /// Validate structural rules, then minimize semantic-equivalent nodes and
-/// deterministically re-index the arena before calculating its fingerprint.
+/// deterministically re-index the arena before calculating its identities.
 pub(crate) fn canonicalize_contract_with_limits(
     contract: &Contract,
     limits: &Limits,
@@ -102,9 +102,7 @@ fn quotient_semantic_nodes(
             format_version: contract.format_version,
             semantics_profile: contract.semantics_profile.clone(),
             canonicalization_profile: contract.canonicalization_profile.clone(),
-            contract_version: contract.contract_version,
             identities: contract.identities.clone(),
-            fingerprint: contract.fingerprint.clone(),
             producer: contract.producer.clone(),
             types,
             declarations,
@@ -379,18 +377,15 @@ fn canonicalize_indexed(contract: &Contract) -> IndexedCanonical {
         format_version: contract.format_version,
         semantics_profile: contract.semantics_profile.clone(),
         canonicalization_profile: contract.canonicalization_profile.clone(),
-        contract_version: contract.contract_version,
         identities: ContractIdentities {
             contract: String::new(),
             interface: None,
         },
-        fingerprint: String::new(),
         producer: contract.producer.clone(),
         types,
         declarations,
         actor,
     };
-    contract.fingerprint = fingerprint_for_canonical(&contract);
     contract.identities = identities_for_canonical(&contract);
     IndexedCanonical {
         contract,
@@ -401,24 +396,6 @@ fn canonicalize_indexed(contract: &Contract) -> IndexedCanonical {
             })
             .collect(),
     }
-}
-
-fn fingerprint_for_canonical(contract: &Contract) -> String {
-    #[derive(Serialize)]
-    struct SemanticPayload<'a> {
-        contract_version: u32,
-        types: &'a [TypeNode],
-        actor: &'a Option<Actor>,
-    }
-
-    let payload = SemanticPayload {
-        contract_version: contract.contract_version,
-        types: &contract.types,
-        actor: &contract.actor,
-    };
-    let bytes = serde_json::to_vec(&payload)
-        .expect("the built-in semantic Contract model must always serialize to JSON");
-    format!("sha256:{}", hex::encode(Sha256::digest(bytes)))
 }
 
 fn identities_for_canonical(contract: &Contract) -> ContractIdentities {
@@ -450,7 +427,7 @@ fn identities_for_canonical(contract: &Contract) -> ContractIdentities {
         declarations: &contract.declarations,
         actor: &contract.actor,
     };
-    let contract_id = domain_hash("ccr:contract:v1", &contract_payload);
+    let contract_id = domain_hash("candid-core:contract:v1", &contract_payload);
 
     let interface = contract.actor.as_ref().map(|actor| {
         let reachable = reachable_from(actor_type_ref(actor), &contract.types);
@@ -462,7 +439,7 @@ fn identities_for_canonical(contract: &Contract) -> ContractIdentities {
             types: &contract.types[..prefix_len],
             actor,
         };
-        domain_hash("ccr:interface:v1", &payload)
+        domain_hash("candid-core:interface:v1", &payload)
     });
 
     ContractIdentities {

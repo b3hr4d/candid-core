@@ -43,16 +43,14 @@ type U32 = number;
 type TypeRef = U32;
 
 type Contract = {
-  format: "candid-contract";
+  format: "candid-core";
   format_version: 1;
   semantics_profile: "candid-1";
-  canonicalization_profile: "ccr-canon-1";
-  contract_version: 1;
+  canonicalization_profile: "candid-core-canon-1";
   identities: {
-    contract: `ccr:contract:v1:sha256:${string}`;
-    interface?: `ccr:interface:v1:sha256:${string}`;
+    contract: `candid-core:contract:v1:sha256:${string}`;
+    interface?: `candid-core:interface:v1:sha256:${string}`;
   };
-  fingerprint: `sha256:${string}`;
   producer: ProducerInfo;
   types: TypeNode[];
   declarations: Array<{ name: string; type: TypeRef }>;
@@ -94,8 +92,8 @@ Contract type above:
 ```ts
 type SourceInfo = {
   source_info_version: 1;
-  contract_id: `ccr:contract:v1:sha256:${string}`;
-  source_bundle_id: `ccr:source-bundle:v1:sha256:${string}`;
+  contract_id: `candid-core:contract:v1:sha256:${string}`;
+  source_bundle_id: `candid-core:source-bundle:v1:sha256:${string}`;
   sources: Array<{ name: string; source: string }>;
   imports: Array<{
     from: string; import: string; to: string; kind: "type" | "service";

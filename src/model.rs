@@ -2,12 +2,11 @@ use crate::limits::Limits;
 use serde::{de::Error as _, Deserialize, Deserializer, Serialize, Serializer};
 use std::fmt;
 
-pub const CONTRACT_VERSION: u32 = 1;
 pub const SOURCE_INFO_VERSION: u32 = 1;
-pub const CONTRACT_FORMAT: &str = "candid-contract";
+pub const CONTRACT_FORMAT: &str = "candid-core";
 pub const FORMAT_VERSION: u32 = 1;
 pub const SEMANTICS_PROFILE: &str = "candid-1";
-pub const CANONICALIZATION_PROFILE: &str = "ccr-canon-1";
+pub const CANONICALIZATION_PROFILE: &str = "candid-core-canon-1";
 pub type TypeRef = u32;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -40,18 +39,15 @@ impl ProducerInfo {
 
 /// The wire-semantics Contract consumed by host runtimes.
 ///
-/// `declarations` supplies named roots for the arena, but names are provenance
-/// and are deliberately excluded from the semantic fingerprint. Comments,
-/// source spelling, and raw source are kept in [`SourceInfo`], not here.
+/// `declarations` supplies named roots for the arena. Comments, source spelling,
+/// and raw source are kept in [`SourceInfo`], not here.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Contract {
     pub(crate) format: String,
     pub(crate) format_version: u32,
     pub(crate) semantics_profile: String,
     pub(crate) canonicalization_profile: String,
-    pub(crate) contract_version: u32,
     pub(crate) identities: ContractIdentities,
-    pub(crate) fingerprint: String,
     pub(crate) producer: ProducerInfo,
     pub(crate) types: Vec<TypeNode>,
     pub(crate) declarations: Vec<Declaration>,
@@ -75,10 +71,6 @@ impl Contract {
         &self.canonicalization_profile
     }
 
-    pub fn contract_version(&self) -> u32 {
-        self.contract_version
-    }
-
     pub fn identities(&self) -> &ContractIdentities {
         &self.identities
     }
@@ -89,12 +81,6 @@ impl Contract {
 
     pub fn interface_id(&self) -> Option<&str> {
         self.identities.interface.as_deref()
-    }
-
-    /// Legacy pre-stable semantic fingerprint. New integrations should choose
-    /// [`Self::contract_id`] or [`Self::interface_id`].
-    pub fn fingerprint(&self) -> &str {
-        &self.fingerprint
     }
 
     pub fn producer(&self) -> &ProducerInfo {
@@ -113,7 +99,7 @@ impl Contract {
         self.actor.as_ref()
     }
 
-    /// Validate graph structure and verify the semantic fingerprint.
+    /// Validate graph structure and verify its content identities.
     pub fn validate(&self) -> Result<(), ContractValidationError> {
         self.validate_with_limits(&Limits::default())
     }
@@ -122,8 +108,8 @@ impl Contract {
         crate::validate::validate_contract_with_limits(self, limits)
     }
 
-    /// Return a deterministically re-indexed copy with a freshly calculated
-    /// fingerprint. This is useful at JSON trust boundaries.
+    /// Return a deterministically re-indexed copy with freshly calculated
+    /// identities. This is useful at JSON trust boundaries.
     pub fn canonicalize(&self) -> Result<Self, ContractValidationError> {
         self.canonicalize_with_limits(&Limits::default())
     }
@@ -188,7 +174,6 @@ impl Contract {
         contract.format_version = raw.format_version;
         contract.semantics_profile = raw.semantics_profile;
         contract.canonicalization_profile = raw.canonicalization_profile;
-        contract.contract_version = raw.contract_version;
         contract.producer = raw.producer;
         crate::validate::validate_structure_with_limits(&contract, limits)?;
         crate::canonical::canonicalize_contract_with_limits(&contract, limits)
@@ -210,9 +195,7 @@ impl Contract {
             format_version: raw.format_version,
             semantics_profile: raw.semantics_profile,
             canonicalization_profile: raw.canonicalization_profile,
-            contract_version: raw.contract_version,
             identities: raw.identities,
-            fingerprint: raw.fingerprint,
             producer: raw.producer,
             types: raw.types,
             declarations: raw.declarations,
@@ -234,14 +217,12 @@ impl Contract {
             format_version: FORMAT_VERSION,
             semantics_profile: SEMANTICS_PROFILE.to_string(),
             canonicalization_profile: CANONICALIZATION_PROFILE.to_string(),
-            contract_version: CONTRACT_VERSION,
             identities: ContractIdentities {
-                contract: format!("ccr:contract:v1:sha256:{}", "0".repeat(64)),
+                contract: format!("candid-core:contract:v1:sha256:{}", "0".repeat(64)),
                 interface: actor
                     .as_ref()
-                    .map(|_| format!("ccr:interface:v1:sha256:{}", "0".repeat(64))),
+                    .map(|_| format!("candid-core:interface:v1:sha256:{}", "0".repeat(64))),
             },
-            fingerprint: format!("sha256:{}", "0".repeat(64)),
             producer: ProducerInfo::current(),
             types,
             declarations,
@@ -257,9 +238,7 @@ pub struct RawContract {
     pub format_version: u32,
     pub semantics_profile: String,
     pub canonicalization_profile: String,
-    pub contract_version: u32,
     pub identities: ContractIdentities,
-    pub fingerprint: String,
     pub producer: ProducerInfo,
     pub types: Vec<TypeNode>,
     #[serde(default)]
@@ -281,9 +260,7 @@ impl From<&Contract> for RawContract {
             format_version: contract.format_version,
             semantics_profile: contract.semantics_profile.clone(),
             canonicalization_profile: contract.canonicalization_profile.clone(),
-            contract_version: contract.contract_version,
             identities: contract.identities.clone(),
-            fingerprint: contract.fingerprint.clone(),
             producer: contract.producer.clone(),
             types: contract.types.clone(),
             declarations: contract.declarations.clone(),
@@ -420,7 +397,7 @@ pub struct ServiceMethod {
 }
 
 /// Optional source/provenance data returned alongside, but never embedded in,
-/// the canonical Contract. It has no effect on wire semantics or fingerprint.
+/// the canonical Contract. It has no effect on Contract or interface identity.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct SourceInfo {

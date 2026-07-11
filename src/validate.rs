@@ -2,7 +2,7 @@ use crate::canonical;
 use crate::limits::Limits;
 use crate::model::{
     Actor, Contract, ContractValidationError, ContractViolation, MethodMode, ServiceMethod,
-    TypeNode, TypeRef, CANONICALIZATION_PROFILE, CONTRACT_FORMAT, CONTRACT_VERSION, FORMAT_VERSION,
+    TypeNode, TypeRef, CANONICALIZATION_PROFILE, CONTRACT_FORMAT, FORMAT_VERSION,
     SEMANTICS_PROFILE,
 };
 use std::collections::{BTreeSet, VecDeque};
@@ -13,16 +13,6 @@ pub(crate) fn validate_contract_with_limits(
 ) -> Result<(), ContractValidationError> {
     validate_structure_with_limits(contract, limits)?;
     let expected = canonical::expected_canonical(contract, limits)?;
-    if contract.fingerprint != expected.fingerprint {
-        return Err(ContractValidationError::single(
-            "fingerprint_mismatch",
-            "$.fingerprint",
-            format!(
-                "expected {}, found {}",
-                expected.fingerprint, contract.fingerprint
-            ),
-        ));
-    }
     if contract.identities.contract != expected.identities.contract {
         return Err(ContractValidationError::single(
             "contract_id_mismatch",
@@ -46,9 +36,8 @@ pub(crate) fn validate_contract_with_limits(
     Ok(())
 }
 
-/// Checks only JSON/graph invariants. Fingerprint verification is intentionally
-/// separate so the compiler can canonicalize a newly built graph before it has
-/// a fingerprint.
+/// Checks only JSON/graph invariants. Identity verification is intentionally
+/// separate so the compiler can canonicalize a newly built graph first.
 pub(crate) fn validate_structure_with_limits(
     contract: &Contract,
     limits: &Limits,
@@ -103,31 +92,12 @@ pub(crate) fn validate_structure_with_limits(
             ),
         );
     }
-    if contract.contract_version != CONTRACT_VERSION {
-        violation(
-            &mut violations,
-            "unsupported_contract_version",
-            "$.contract_version",
-            format!(
-                "expected Contract version {CONTRACT_VERSION}, found {}",
-                contract.contract_version
-            ),
-        );
-    }
-    if !is_sha256_fingerprint(&contract.fingerprint) {
-        violation(
-            &mut violations,
-            "invalid_fingerprint_format",
-            "$.fingerprint",
-            "fingerprint must be sha256:<64 lowercase hexadecimal characters>",
-        );
-    }
-    if !is_content_id(&contract.identities.contract, "ccr:contract:v1") {
+    if !is_content_id(&contract.identities.contract, "candid-core:contract:v1") {
         violation(
             &mut violations,
             "invalid_contract_id_format",
             "$.identities.contract",
-            "contract identity must use ccr:contract:v1:sha256:<64 lowercase hex>",
+            "contract identity must use candid-core:contract:v1:sha256:<64 lowercase hex>",
         );
     }
     match (&contract.actor, &contract.identities.interface) {
@@ -138,12 +108,12 @@ pub(crate) fn validate_structure_with_limits(
             "$.identities.interface",
             "an actorless Contract must not declare an interface identity",
         ),
-        (Some(_), Some(interface)) if is_content_id(interface, "ccr:interface:v1") => {}
+        (Some(_), Some(interface)) if is_content_id(interface, "candid-core:interface:v1") => {}
         (Some(_), Some(_)) => violation(
             &mut violations,
             "invalid_interface_id_format",
             "$.identities.interface",
-            "interface identity must use ccr:interface:v1:sha256:<64 lowercase hex>",
+            "interface identity must use candid-core:interface:v1:sha256:<64 lowercase hex>",
         ),
         (Some(_), None) => violation(
             &mut violations,
@@ -651,16 +621,6 @@ fn validate_ref(
             format!("type reference {reference} is outside the arena of {type_count} node(s)"),
         );
     }
-}
-
-fn is_sha256_fingerprint(value: &str) -> bool {
-    let Some(hex) = value.strip_prefix("sha256:") else {
-        return false;
-    };
-    hex.len() == 64
-        && hex
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
 fn is_content_id(value: &str, domain: &str) -> bool {

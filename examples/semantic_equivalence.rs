@@ -1,4 +1,4 @@
-use candid_contract_runtime::compile_did;
+use candid_core::compile_did;
 use std::error::Error;
 
 fn main() -> Result<(), Box<dyn Error>> {

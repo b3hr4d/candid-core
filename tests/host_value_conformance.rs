@@ -1,6 +1,4 @@
-use candid_contract_runtime::{
-    compile_did, validate_host_value, Contract, HostFieldValue, HostValue, Limits,
-};
+use candid_core::{compile_did, validate_host_value, Contract, HostFieldValue, HostValue, Limits};
 
 fn declaration(contract: &Contract, name: &str) -> u32 {
     contract

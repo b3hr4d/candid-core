@@ -22,7 +22,7 @@ use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 #[serde(deny_unknown_fields)]
 pub struct CompileOptions {
     /// Preserve optional names, comments, raw source, and label spelling in a
-    /// sidecar. This never changes the Contract or its fingerprint.
+    /// sidecar. This never changes the Contract or its identities.
     pub include_source_info: bool,
 }
 
@@ -452,10 +452,7 @@ impl MaterializedBundle {
     fn new(units: &[SourceUnit], entry: &crate::SourceId) -> Result<Self, CompileError> {
         static NEXT_ID: AtomicU64 = AtomicU64::new(0);
         let id = NEXT_ID.fetch_add(1, AtomicOrdering::Relaxed);
-        let root = std::env::temp_dir().join(format!(
-            "candid-contract-runtime-{}-{id}",
-            std::process::id()
-        ));
+        let root = std::env::temp_dir().join(format!("candid-core-{}-{id}", std::process::id()));
         fs::create_dir(&root).map_err(|error| {
             CompileError::single(
                 "did_materialize_error",
@@ -556,7 +553,7 @@ fn lower_checked(
         .map_err(lower_error)?;
 
     // Structural validation needs a syntactically valid placeholder. The
-    // canonicalizer then computes the real fingerprint.
+    // canonicalizer then computes the real identities.
     let raw_contract = Contract::new_unchecked(types, declarations, actor);
     crate::validate::validate_structure_with_limits(&raw_contract, &context.limits)
         .map_err(|error| lower_error(format!("lowered Contract violated an invariant: {error}")))?;

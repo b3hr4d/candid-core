@@ -6,15 +6,11 @@
 
 ## Context
 
-The current `fingerprint` hashes the canonical type arena and actor but omits
-declaration names and source provenance. Because the arena also contains types
-rooted only by declarations, an unused novel declaration changes the
-fingerprint even when the actor wire interface is unchanged. Conversely, an
-additional alias can change the Contract document without changing the
-fingerprint.
-
-One identifier therefore cannot safely serve interface compatibility caches,
-artifact registries, provenance binding, and human-facing package identity.
+A single digest of the type arena and actor cannot safely serve interface
+compatibility caches, artifact registries, provenance binding, and
+human-facing package identity. Declaration-only types and declaration names
+belong to the complete Contract, while the actor wire interface and source
+bundle require narrower and broader equality claims respectively.
 
 ## Decision
 
@@ -33,9 +29,9 @@ The protocol will expose three domain-separated content identifiers:
 Identifiers use an explicit domain and profile:
 
 ```text
-ccr:interface:v1:sha256:<lowercase hex>
-ccr:contract:v1:sha256:<lowercase hex>
-ccr:source-bundle:v1:sha256:<lowercase hex>
+candid-core:interface:v1:sha256:<lowercase hex>
+candid-core:contract:v1:sha256:<lowercase hex>
+candid-core:source-bundle:v1:sha256:<lowercase hex>
 ```
 
 The hash input is the domain prefix followed by the canonical bytes selected
@@ -62,8 +58,7 @@ but do not participate in semantic IDs.
 The Contract envelope exposes `identities.contract` and optional
 `identities.interface`; `SourceInfo` exposes `contract_id` and
 `source_bundle_id`. Contract-bound type and method selectors prevent persisted
-bare refs. The legacy `fingerprint` remains readable only for explicit migration
-and compatibility diagnostics.
+bare refs.
 
 ## Required verification
 

@@ -1,4 +1,4 @@
-# Candid Contract Runtime — architecture (slice 1)
+# Candid Core — architecture (slice 1)
 
 The implemented [foundation ADRs](adrs/README.md) define the identity,
 versioning, validation, source-resolution, resource-limit, and HostValue
@@ -44,17 +44,15 @@ object keys are deterministic in its canonical representation):
 
 ```json
 {
-  "format": "candid-contract",
+  "format": "candid-core",
   "format_version": 1,
   "semantics_profile": "candid-1",
-  "canonicalization_profile": "ccr-canon-1",
-  "contract_version": 1,
+  "canonicalization_profile": "candid-core-canon-1",
   "identities": {
-    "contract": "ccr:contract:v1:sha256:<64 lowercase hex>",
-    "interface": "ccr:interface:v1:sha256:<64 lowercase hex>"
+    "contract": "candid-core:contract:v1:sha256:<64 lowercase hex>",
+    "interface": "candid-core:interface:v1:sha256:<64 lowercase hex>"
   },
-  "fingerprint": "sha256:<legacy digest>",
-  "producer": { "name": "candid-contract-runtime", "version": "..." },
+  "producer": { "name": "candid-core", "version": "..." },
   "types": [
     { "kind": "record", "fields": [
       { "id": 477006482, "type": 0 }
@@ -102,8 +100,7 @@ still represented by its graph position and edges.
 hashes the complete canonical Contract, including declaration names and
 retained declaration-only types. Both use domain-separated SHA-256 over JCS
 bytes under the named canonicalization profile. `source_bundle_id`
-independently hashes logical source URIs, bytes, and import edges. The old
-`fingerprint` is retained only for explicit legacy migration.
+independently hashes logical source URIs, bytes, and import edges.
 
 ## Provenance is a sidecar
 
@@ -176,8 +173,7 @@ an unchecked Contract by taking a normal JSON deserialization path.
 - The graph may contain cycles.  Validation tracks visited node identities and
   never requires a recursive type to be expanded into a tree.
 - Format, semantics, and canonicalization profiles are independently declared.
-  Unknown versions or profiles fail closed; legacy JSON requires an explicit
-  verified migration.
+  Unknown versions or profiles fail closed.
 - Every arena node is reachable from an actor or declaration root (unless the
   arena itself is empty).
 - The producer owns construction and identity calculation. Consumers may validate

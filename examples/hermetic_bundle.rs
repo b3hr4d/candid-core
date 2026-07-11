@@ -1,6 +1,4 @@
-use candid_contract_runtime::{
-    compile_with_resolver, CompileOptions, MemoryResolver, RuntimeContext,
-};
+use candid_core::{compile_with_resolver, CompileOptions, MemoryResolver, RuntimeContext};
 use std::error::Error;
 
 fn main() -> Result<(), Box<dyn Error>> {

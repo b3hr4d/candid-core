@@ -1,6 +1,4 @@
-use candid_contract_runtime::{
-    compile_did, validate_host_value, HostFieldValue, HostValue, Limits,
-};
+use candid_core::{compile_did, validate_host_value, HostFieldValue, HostValue, Limits};
 use std::error::Error;
 
 fn main() -> Result<(), Box<dyn Error>> {
