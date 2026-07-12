@@ -58,11 +58,16 @@ selector. Transport invocation remains outside the codec.
 
 ## Implementation
 
-`HostValue` implements the tagged JSON ABI, including canonical decimal big
+`HostValue` serializes the tagged JSON ABI, including canonical decimal big
 integers, IEEE float bits, principal/service/function values, field IDs, and
-variant IDs. `validate_host_value` is iterative, bounded, and requires a
-contract-bound selector. No binary encode/decode or lossy `serde_json::Value`
-shortcut is exposed yet.
+variant IDs. It intentionally does not implement serde `Deserialize`: callers
+must use `HostValue::from_json_with_limits`, which decodes a private raw DTO
+and exposes `HostValue` only after local canonical validation. Public Rust
+constructors enforce the same scalar canonical forms. This is a deliberate
+pre-release API break from direct enum construction. `validate_host_value`
+remains iterative, bounded, and contract-selector-directed; it is a separate
+step from local JSON validation. No binary encode/decode or lossy
+`serde_json::Value` shortcut is exposed yet.
 
 ## Required verification
 

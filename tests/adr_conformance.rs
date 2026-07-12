@@ -1,8 +1,8 @@
 use candid_core::{
     compile_did, compile_did_file, compile_did_with_context, compile_with_resolver,
     validate_host_value, Actor, Compilation, CompileOptions, Contract, ContractEnvelope,
-    Declaration, Field, HostFieldValue, HostValue, Limits, MemoryResolver, PrimitiveType,
-    RawContract, ResolveError, ResolvedSource, RuntimeContext, SourceId, SourceResolver, TypeNode,
+    Declaration, Field, HostValue, Limits, MemoryResolver, PrimitiveType, RawContract,
+    ResolveError, ResolvedSource, RuntimeContext, SourceId, SourceResolver, TypeNode,
     CANONICALIZATION_PROFILE, CONTRACT_FORMAT, FORMAT_VERSION, SEMANTICS_PROFILE,
 };
 use sha2::{Digest, Sha256};
@@ -389,28 +389,19 @@ fn tagged_host_values_preserve_bigints_float_bits_and_wire_field_ids() {
     let selector = contract
         .bind_type(declaration(contract, "Payload"))
         .unwrap();
-    let value = HostValue::Record {
-        fields: vec![
-            HostFieldValue {
-                id: candid_parser::candid::idl_hash("big"),
-                value: HostValue::Nat {
-                    value: "340282366920938463463374607431768211456".to_string(),
-                },
-            },
-            HostFieldValue {
-                id: candid_parser::candid::idl_hash("ratio"),
-                value: HostValue::Float64 {
-                    bits: "7ff8000000000001".to_string(),
-                },
-            },
-            HostFieldValue {
-                id: candid_parser::candid::idl_hash("owner"),
-                value: HostValue::Principal {
-                    value: "aaaaa-aa".to_string(),
-                },
-            },
-        ],
-    };
+    let value = HostValue::from_json_with_limits(
+        &serde_json::json!({
+            "kind": "record",
+            "fields": [
+                { "id": candid_parser::candid::idl_hash("big"), "value": { "kind": "nat", "value": "340282366920938463463374607431768211456" } },
+                { "id": candid_parser::candid::idl_hash("ratio"), "value": { "kind": "float64", "bits": "7ff8000000000001" } },
+                { "id": candid_parser::candid::idl_hash("owner"), "value": { "kind": "principal", "value": "aaaaa-aa" } },
+            ],
+        })
+        .to_string(),
+        &Limits::default(),
+    )
+    .unwrap();
     validate_host_value(contract, &selector, &value, &Limits::default()).unwrap();
 
     let json = serde_json::to_string(&value).unwrap();
@@ -425,10 +416,7 @@ fn host_values_reject_coercions_and_unbound_contract_references() {
     let compilation = compile("type Amount = nat; service : {};");
     let contract = compilation.contract();
     let mut selector = contract.bind_type(declaration(contract, "Amount")).unwrap();
-    let noncanonical = HostValue::Nat {
-        value: "001".to_string(),
-    };
-    assert!(validate_host_value(contract, &selector, &noncanonical, &Limits::default()).is_err());
+    assert!(HostValue::nat("001").is_err());
 
     selector.contract_id =
         "candid-core:contract:v1:sha256:0000000000000000000000000000000000000000000000000000000000000000"
@@ -436,9 +424,7 @@ fn host_values_reject_coercions_and_unbound_contract_references() {
     assert!(validate_host_value(
         contract,
         &selector,
-        &HostValue::Nat {
-            value: "1".to_string()
-        },
+        &HostValue::nat("1").unwrap(),
         &Limits::default()
     )
     .is_err());
