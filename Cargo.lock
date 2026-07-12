@@ -145,6 +145,7 @@ dependencies = [
 name = "candid-core"
 version = "0.1.0"
 dependencies = [
+ "candid",
  "candid_parser",
  "hex",
  "serde",

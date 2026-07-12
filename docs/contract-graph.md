@@ -62,7 +62,9 @@ type Contract = {
 type ProducerInfo = {
   name: string;
   version: string;
+  // Exact linked Candid semantic engine crate selected by this package.
   candid_version: string;
+  // Exact Candid parser front-end crate selected by this package.
   candid_parser_version: string;
 };
 
