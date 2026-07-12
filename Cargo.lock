@@ -151,7 +151,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "candid-contract-runtime"
+name = "candid-core"
 version = "0.1.0"
 dependencies = [
  "candid_parser",

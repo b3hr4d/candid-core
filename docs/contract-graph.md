@@ -6,11 +6,11 @@ duplicating a type tree or resolving names at runtime.
 
 ```mermaid
 flowchart TD
-  C["Contract v1\ncontract_version · fingerprint"]
-  D["declarations\nname → TypeRef\nnot fingerprinted"]
+  C["Contract v1\nprofiles · contract_id · interface_id"]
+  D["declarations\nname → TypeRef\nin contract_id, not interface_id"]
   A["actor (optional)\nservice ref or class ref"]
-  T["types: TypeNode[]\nsemantic payload: version + types + actor"]
-  SI["SourceInfo (optional sidecar)\nsource bundle · docs · paths · label spellings\nnot fingerprinted"]
+  T["types: TypeNode[]\ncanonical graph payload"]
+  SI["SourceInfo (optional sidecar)\ncontract binding · source_bundle_id · docs · paths"]
 
   C --> D
   C --> A
@@ -43,13 +43,27 @@ type U32 = number;
 type TypeRef = U32;
 
 type Contract = {
-  contract_version: 1;
-  fingerprint: `sha256:${string}`;
+  format: "candid-core";
+  format_version: 1;
+  semantics_profile: "candid-1";
+  canonicalization_profile: "candid-core-canon-1";
+  identities: {
+    contract: `candid-core:contract:v1:sha256:${string}`;
+    interface?: `candid-core:interface:v1:sha256:${string}`;
+  };
+  producer: ProducerInfo;
   types: TypeNode[];
   declarations: Array<{ name: string; type: TypeRef }>;
   actor?:
     | { kind: "service"; service: TypeRef }
     | { kind: "class"; class: TypeRef };
+};
+
+type ProducerInfo = {
+  name: string;
+  version: string;
+  candid_version: string;
+  candid_parser_version: string;
 };
 
 type Field = { id: U32; type: TypeRef };
@@ -78,7 +92,12 @@ Contract type above:
 ```ts
 type SourceInfo = {
   source_info_version: 1;
+  contract_id: `candid-core:contract:v1:sha256:${string}`;
+  source_bundle_id: `candid-core:source-bundle:v1:sha256:${string}`;
   sources: Array<{ name: string; source: string }>;
+  imports: Array<{
+    from: string; import: string; to: string; kind: "type" | "service";
+  }>;
   declarations: Array<{ source: string; name: string; type: TypeRef; docs?: string[] }>;
   field_labels: Array<{
     origin: SourceOrigin; path: string; container: TypeRef; id: U32;
@@ -141,9 +160,9 @@ two or more nodes.
 JSON decoding and graph validation reject a Contract when any of these are
 false:
 
-1. `contract_version` is supported and `fingerprint` matches the canonical
-   semantic payload: version + `types` + `actor`, not declarations or
-   SourceInfo.
+1. All profiles are supported; `contract_id` matches the complete canonical
+   Contract and `interface_id` matches the actor-reachable graph. SourceInfo is
+   independently bound by `contract_id` and `source_bundle_id`.
 2. Every reference is an in-range integer and each constrained reference has
    the required node kind (`func`, `service`, etc.).
 3. Field IDs and method IDs are Candid `u32` values. Aggregate field IDs and
@@ -163,8 +182,8 @@ false:
 No raw source, source locations, comments, documentation, named/numeric/
 positional label spellings, UI hints, form controls, defaults, validation
 policy, workflow state, transport settings, or encoded values live here.
-Optional `SourceInfo` is a separate sidecar and is excluded from the
-fingerprint.
+Optional `SourceInfo` is a separate, validated sidecar bound by `contract_id`
+and independently identified by `source_bundle_id`.
 
 Likewise, `blob`, `tuple`, and `Result` are interpretations that can be
 derived later from `vec nat8`, positional records, and conventional variants.

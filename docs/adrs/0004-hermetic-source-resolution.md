@@ -1,6 +1,6 @@
 # ADR 0004: Resolve imports through a hermetic capability boundary
 
-- Status: Accepted; implementation pending
+- Status: Implemented
 - Date: 2026-07-10
 - Owners: Contract runtime maintainers
 
@@ -18,12 +18,10 @@ Compilation with imports will require an explicit resolver capability:
 
 ```rust
 trait SourceResolver {
-    fn resolve(
-        &self,
-        from: &SourceId,
-        import: &str,
-        limits: &Limits,
-    ) -> Result<ResolvedSource, Diagnostic>;
+    fn identify(&self, from: Option<&SourceId>, import: &str)
+        -> Result<SourceId, ResolveError>;
+    fn load(&self, id: &SourceId, limits: &Limits)
+        -> Result<ResolvedSource, ResolveError>;
 }
 
 struct ResolvedSource {
@@ -58,11 +56,13 @@ access is never implicit in `contract-core` or `candid-frontend`.
 - Hosts can present explicit filesystem/network permission prompts.
 - Filesystem convenience remains available through an opt-in adapter.
 
-## Migration
+## Implementation
 
-`compile_did` remains the convenience for self-contained text.
-`compile_did_file` becomes a thin `WorkspaceResolver` convenience and documents
-its authority. The lower-level resolver API becomes the platform primitive.
+`compile_did` remains the self-contained convenience. `compile_did_file` is a
+thin `WorkspaceResolver` adapter, while `compile_with_resolver` is the platform
+primitive. `MemoryResolver` and `WorkspaceResolver` produce one immutable
+logical-URI bundle which is materialized into an isolated temporary root for
+the authoritative checker.
 
 ## Required verification
 
@@ -70,4 +70,3 @@ its authority. The lower-level resolver API becomes the platform primitive.
 - Path traversal, absolute path, symlink escape, cycle, and duplicate-ID tests.
 - A test that mutating workspace files after snapshot creation has no effect.
 - Identical bundle IDs and Contracts across operating systems.
-

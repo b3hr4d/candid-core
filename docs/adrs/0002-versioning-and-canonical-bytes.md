@@ -1,16 +1,16 @@
 # ADR 0002: Version schema, semantics, and canonical bytes independently
 
-- Status: Accepted; implementation pending
+- Status: Implemented
 - Date: 2026-07-10
 - Owners: Contract runtime maintainers
 
 ## Context
 
-`contract_version` currently selects the JSON shape, graph normalization, and
-fingerprint behavior together. The hash is produced from Rust struct
-serialization after canonical graph traversal. That is deterministic inside
-this crate, but it is not yet a complete, language-independent protocol
-specification.
+Schema shape, Candid semantics, graph normalization, and canonical-byte rules
+evolve for different reasons. Coupling them to one version would force a large
+ecosystem to treat every change as the same kind of break. Identity bytes also
+need a complete, language-independent protocol specification rather than an
+implementation-specific serialization convention.
 
 A large ecosystem needs to upgrade syntax, Candid semantics, canonicalization,
 and hash algorithms without treating every change as the same kind of break.
@@ -21,10 +21,10 @@ Every persisted Contract envelope will declare:
 
 ```json
 {
-  "format": "candid-contract",
+  "format": "candid-core",
   "format_version": 1,
   "semantics_profile": "candid-1",
-  "canonicalization_profile": "ccr-canon-1"
+  "canonicalization_profile": "candid-core-canon-1"
 }
 ```
 
@@ -36,7 +36,7 @@ Every persisted Contract envelope will declare:
 - `producer` metadata records implementation and dependency versions without
   changing semantic IDs.
 
-For profile `ccr-canon-1`, the semantic graph is bisimulation-minimized,
+For profile `candid-core-canon-1`, the semantic graph is bisimulation-minimized,
 collections are ordered by the rules in the Contract graph specification, and
 nodes are deterministically traversed from defined roots. The resulting payload
 is serialized with RFC 8785 JSON Canonicalization Scheme (JCS). Identity hashes
@@ -44,9 +44,9 @@ are calculated over a UTF-8 domain prefix, a zero byte, and those JCS bytes.
 
 The canonicalization specification and its golden fixtures are normative. The
 Rust implementation is a reference implementation, not the specification.
-Unknown versions or profiles fail closed. Explicit migration functions produce
-a new artifact and report any information loss; ordinary deserialization never
-silently upgrades versions.
+Unknown versions or profiles fail closed. Because no earlier format was
+released, this envelope is adopted directly without compatibility fields or
+upgrade paths.
 
 ## Consequences
 
@@ -56,12 +56,11 @@ silently upgrades versions.
   new semantics profile or an explicit compatibility ruling.
 - Profile proliferation is controlled through ADRs and conformance fixtures.
 
-## Migration
+## Implementation
 
-The existing `contract_version: 1` and serde-generated fingerprint are accepted
-only as the legacy pre-stable profile. The stable envelope will either be
-introduced before publishing Contract v1 or through an explicit v1-to-v2
-migrator; it will not be reinterpreted in place.
+The envelope carries all four profile fields. Domain-separated identity hashes
+use the `candid-core-canon-1` graph normalization and JCS writer. Canonical
+Contract fixtures are checked in under `tests/fixtures/conformance`.
 
 ## Required verification
 
@@ -69,4 +68,3 @@ migrator; it will not be reinterpreted in place.
 - Property tests for idempotence and input-arena permutation invariance.
 - Cross-language JCS and graph-labeling conformance tests.
 - Tests that unknown format, semantics, and canonicalization profiles fail.
-

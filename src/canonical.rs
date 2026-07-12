@@ -1,19 +1,22 @@
+use crate::limits::Limits;
 use crate::model::{
-    Actor, Contract, ContractValidationError, Declaration, Field, MethodMode, PrimitiveType,
-    ServiceMethod, TypeNode, TypeRef,
+    Actor, Contract, ContractIdentities, ContractValidationError, Declaration, Field, MethodMode,
+    PrimitiveType, ServiceMethod, TypeNode, TypeRef,
 };
 use serde::Serialize;
+use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::cmp::Ordering;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 
 /// Validate structural rules, then minimize semantic-equivalent nodes and
-/// deterministically re-index the arena before calculating its fingerprint.
-pub(crate) fn canonicalize_contract(
+/// deterministically re-index the arena before calculating its identities.
+pub(crate) fn canonicalize_contract_with_limits(
     contract: &Contract,
+    limits: &Limits,
 ) -> Result<Contract, ContractValidationError> {
-    crate::validate::validate_structure(contract)?;
-    Ok(canonicalize_with_mapping_unchecked(contract).contract)
+    crate::validate::validate_structure_with_limits(contract, limits)?;
+    Ok(canonicalize_with_mapping_unchecked_and_limits(contract, limits)?.contract)
 }
 
 pub(crate) struct Canonicalized {
@@ -23,21 +26,27 @@ pub(crate) struct Canonicalized {
     pub old_to_new: Vec<TypeRef>,
 }
 
-pub(crate) fn canonicalize_with_mapping_unchecked(contract: &Contract) -> Canonicalized {
-    let quotient = quotient_semantic_nodes(contract);
+pub(crate) fn canonicalize_with_mapping_unchecked_and_limits(
+    contract: &Contract,
+    limits: &Limits,
+) -> Result<Canonicalized, ContractValidationError> {
+    let quotient = quotient_semantic_nodes(contract, limits)?;
     let indexed = canonicalize_indexed(&quotient.contract);
-    Canonicalized {
+    Ok(Canonicalized {
         contract: indexed.contract,
         old_to_new: quotient
             .old_to_quotient
             .into_iter()
             .map(|reference| indexed.old_to_new[reference as usize])
             .collect(),
-    }
+    })
 }
 
-pub(crate) fn semantic_fingerprint(contract: &Contract) -> String {
-    fingerprint_for_canonical(&canonicalize_with_mapping_unchecked(contract).contract)
+pub(crate) fn expected_canonical(
+    contract: &Contract,
+    limits: &Limits,
+) -> Result<Contract, ContractValidationError> {
+    Ok(canonicalize_with_mapping_unchecked_and_limits(contract, limits)?.contract)
 }
 
 struct QuotientGraph {
@@ -49,8 +58,11 @@ struct QuotientGraph {
 /// definitions do not create a new semantic wire type. Partition refinement
 /// computes the finite graph's greatest labelled bisimulation, which gives a
 /// stable quotient before any numeric TypeRef ordering is considered.
-fn quotient_semantic_nodes(contract: &Contract) -> QuotientGraph {
-    let classes = semantic_classes(&contract.types);
+fn quotient_semantic_nodes(
+    contract: &Contract,
+    limits: &Limits,
+) -> Result<QuotientGraph, ContractValidationError> {
+    let classes = semantic_classes(&contract.types, limits)?;
     let class_count = classes.iter().copied().max().map_or(0, |class| class + 1);
     let mut representatives = vec![None; class_count];
     for (index, class) in classes.iter().copied().enumerate() {
@@ -84,23 +96,46 @@ fn quotient_semantic_nodes(contract: &Contract) -> QuotientGraph {
         },
     });
 
-    QuotientGraph {
+    Ok(QuotientGraph {
         contract: Contract {
-            contract_version: contract.contract_version,
-            fingerprint: contract.fingerprint.clone(),
+            format: contract.format.clone(),
+            format_version: contract.format_version,
+            semantics_profile: contract.semantics_profile.clone(),
+            canonicalization_profile: contract.canonicalization_profile.clone(),
+            identities: contract.identities.clone(),
+            producer: contract.producer.clone(),
             types,
             declarations,
             actor,
         },
         old_to_quotient,
-    }
+    })
 }
 
-fn semantic_classes(types: &[TypeNode]) -> Vec<usize> {
+fn semantic_classes(
+    types: &[TypeNode],
+    limits: &Limits,
+) -> Result<Vec<usize>, ContractValidationError> {
+    let mut work = types.len();
     let mut classes =
         assign_partition_ids(types.iter().map(local_signature).collect::<Vec<Vec<u8>>>());
 
     loop {
+        if limits.deadline_exceeded() {
+            return Err(ContractValidationError::single(
+                "operation_deadline_exceeded",
+                "$",
+                "canonicalization deadline has elapsed",
+            ));
+        }
+        work = work.saturating_add(types.len());
+        if work > limits.max_canonicalization_work {
+            return Err(ContractValidationError::resource_limit(
+                "canonicalization_work",
+                limits.max_canonicalization_work,
+                work,
+            ));
+        }
         let next = assign_partition_ids(
             types
                 .iter()
@@ -109,7 +144,7 @@ fn semantic_classes(types: &[TypeNode]) -> Vec<usize> {
                 .collect(),
         );
         if !partition_was_split(&classes, &next) {
-            return next;
+            return Ok(next);
         }
         classes = next;
     }
@@ -287,14 +322,14 @@ struct IndexedCanonical {
 /// input arena's TypeRef assignment.
 fn canonicalize_indexed(contract: &Contract) -> IndexedCanonical {
     let mut old_to_new = vec![None; contract.types.len()];
-    let mut output = Vec::<Option<TypeNode>>::new();
+    let mut new_to_old = Vec::<TypeRef>::new();
 
     if let Some(actor) = &contract.actor {
-        visit(
+        visit_iterative(
             actor_type_ref(actor),
             &contract.types,
             &mut old_to_new,
-            &mut output,
+            &mut new_to_old,
         );
     }
 
@@ -302,12 +337,12 @@ fn canonicalize_indexed(contract: &Contract) -> IndexedCanonical {
     declaration_roots.sort_unstable();
     declaration_roots.dedup();
     for root in declaration_roots {
-        visit(root, &contract.types, &mut old_to_new, &mut output);
+        visit_iterative(root, &contract.types, &mut old_to_new, &mut new_to_old);
     }
 
     for root in (0..contract.types.len()).map(|index| index as TypeRef) {
         if old_to_new[root as usize].is_none() {
-            visit(root, &contract.types, &mut old_to_new, &mut output);
+            visit_iterative(root, &contract.types, &mut old_to_new, &mut new_to_old);
         }
     }
 
@@ -333,18 +368,25 @@ fn canonicalize_indexed(contract: &Contract) -> IndexedCanonical {
             class: remap(*class),
         },
     });
-    let types = output
+    let types = new_to_old
         .into_iter()
-        .map(|node| node.expect("canonical traversal fills every reserved node"))
+        .map(|old| rewrite_node_with(old, &contract.types, &remap))
         .collect();
     let mut contract = Contract {
-        contract_version: contract.contract_version,
-        fingerprint: String::new(),
+        format: contract.format.clone(),
+        format_version: contract.format_version,
+        semantics_profile: contract.semantics_profile.clone(),
+        canonicalization_profile: contract.canonicalization_profile.clone(),
+        identities: ContractIdentities {
+            contract: String::new(),
+            interface: None,
+        },
+        producer: contract.producer.clone(),
         types,
         declarations,
         actor,
     };
-    contract.fingerprint = fingerprint_for_canonical(&contract);
+    contract.identities = identities_for_canonical(&contract);
     IndexedCanonical {
         contract,
         old_to_new: old_to_new
@@ -356,22 +398,113 @@ fn canonicalize_indexed(contract: &Contract) -> IndexedCanonical {
     }
 }
 
-fn fingerprint_for_canonical(contract: &Contract) -> String {
+fn identities_for_canonical(contract: &Contract) -> ContractIdentities {
     #[derive(Serialize)]
-    struct SemanticPayload<'a> {
-        contract_version: u32,
+    struct ContractPayload<'a> {
+        format: &'a str,
+        format_version: u32,
+        semantics_profile: &'a str,
+        canonicalization_profile: &'a str,
         types: &'a [TypeNode],
+        declarations: &'a [Declaration],
         actor: &'a Option<Actor>,
     }
 
-    let payload = SemanticPayload {
-        contract_version: contract.contract_version,
+    #[derive(Serialize)]
+    struct InterfacePayload<'a> {
+        semantics_profile: &'a str,
+        canonicalization_profile: &'a str,
+        types: &'a [TypeNode],
+        actor: &'a Actor,
+    }
+
+    let contract_payload = ContractPayload {
+        format: &contract.format,
+        format_version: contract.format_version,
+        semantics_profile: &contract.semantics_profile,
+        canonicalization_profile: &contract.canonicalization_profile,
         types: &contract.types,
+        declarations: &contract.declarations,
         actor: &contract.actor,
     };
-    let bytes = serde_json::to_vec(&payload)
-        .expect("the built-in semantic Contract model must always serialize to JSON");
-    format!("sha256:{}", hex::encode(Sha256::digest(bytes)))
+    let contract_id = domain_hash("candid-core:contract:v1", &contract_payload);
+
+    let interface = contract.actor.as_ref().map(|actor| {
+        let reachable = reachable_from(actor_type_ref(actor), &contract.types);
+        let prefix_len = reachable.iter().take_while(|reached| **reached).count();
+        debug_assert!(reachable[prefix_len..].iter().all(|reached| !reached));
+        let payload = InterfacePayload {
+            semantics_profile: &contract.semantics_profile,
+            canonicalization_profile: &contract.canonicalization_profile,
+            types: &contract.types[..prefix_len],
+            actor,
+        };
+        domain_hash("candid-core:interface:v1", &payload)
+    });
+
+    ContractIdentities {
+        contract: contract_id,
+        interface,
+    }
+}
+
+pub(crate) fn domain_hash(domain: &str, payload: &impl Serialize) -> String {
+    let value = serde_json::to_value(payload)
+        .expect("built-in Contract identity payloads must serialize to JSON");
+    let canonical = jcs_bytes(&value);
+    let mut hasher = Sha256::new();
+    hasher.update(domain.as_bytes());
+    hasher.update([0]);
+    hasher.update(canonical);
+    format!("{domain}:sha256:{}", hex::encode(hasher.finalize()))
+}
+
+fn jcs_bytes(value: &Value) -> Vec<u8> {
+    fn write(value: &Value, output: &mut Vec<u8>) {
+        match value {
+            Value::Null => output.extend_from_slice(b"null"),
+            Value::Bool(true) => output.extend_from_slice(b"true"),
+            Value::Bool(false) => output.extend_from_slice(b"false"),
+            Value::Number(number) => output.extend_from_slice(number.to_string().as_bytes()),
+            Value::String(string) => output.extend_from_slice(
+                serde_json::to_string(string)
+                    .expect("JSON strings always serialize")
+                    .as_bytes(),
+            ),
+            Value::Array(values) => {
+                output.push(b'[');
+                for (index, value) in values.iter().enumerate() {
+                    if index > 0 {
+                        output.push(b',');
+                    }
+                    write(value, output);
+                }
+                output.push(b']');
+            }
+            Value::Object(object) => {
+                output.push(b'{');
+                let mut entries: Vec<_> = object.iter().collect();
+                entries.sort_by(|(left, _), (right, _)| left.cmp(right));
+                for (index, (key, value)) in entries.into_iter().enumerate() {
+                    if index > 0 {
+                        output.push(b',');
+                    }
+                    output.extend_from_slice(
+                        serde_json::to_string(key)
+                            .expect("JSON object keys always serialize")
+                            .as_bytes(),
+                    );
+                    output.push(b':');
+                    write(value, output);
+                }
+                output.push(b'}');
+            }
+        }
+    }
+
+    let mut output = Vec::new();
+    write(value, &mut output);
+    output
 }
 
 fn actor_type_ref(actor: &Actor) -> TypeRef {
@@ -381,62 +514,53 @@ fn actor_type_ref(actor: &Actor) -> TypeRef {
     }
 }
 
-fn visit(
+fn visit_iterative(
     old: TypeRef,
     types: &[TypeNode],
     old_to_new: &mut [Option<TypeRef>],
-    output: &mut Vec<Option<TypeNode>>,
-) -> TypeRef {
-    if let Some(mapped) = old_to_new[old as usize] {
-        return mapped;
+    new_to_old: &mut Vec<TypeRef>,
+) {
+    let mut stack = vec![old];
+    while let Some(reference) = stack.pop() {
+        if old_to_new[reference as usize].is_some() {
+            continue;
+        }
+        let new = new_to_old.len() as TypeRef;
+        old_to_new[reference as usize] = Some(new);
+        new_to_old.push(reference);
+        let children = sorted_children(&types[reference as usize]);
+        stack.extend(children.into_iter().rev());
     }
-    let new = output.len() as TypeRef;
-    old_to_new[old as usize] = Some(new);
-    output.push(None);
-    let node = rewrite_node(old, types, old_to_new, output);
-    output[new as usize] = Some(node);
-    new
 }
 
-fn rewrite_node(
+fn rewrite_node_with(
     old: TypeRef,
     types: &[TypeNode],
-    old_to_new: &mut [Option<TypeRef>],
-    output: &mut Vec<Option<TypeNode>>,
+    remap: &impl Fn(TypeRef) -> TypeRef,
 ) -> TypeNode {
-    let map =
-        |reference, old_to_new: &mut [Option<TypeRef>], output: &mut Vec<Option<TypeNode>>| {
-            visit(reference, types, old_to_new, output)
-        };
     match &types[old as usize] {
         TypeNode::Primitive { primitive } => TypeNode::Primitive {
             primitive: *primitive,
         },
         TypeNode::Opt { inner } => TypeNode::Opt {
-            inner: map(*inner, old_to_new, output),
+            inner: remap(*inner),
         },
         TypeNode::Vec { inner } => TypeNode::Vec {
-            inner: map(*inner, old_to_new, output),
+            inner: remap(*inner),
         },
         TypeNode::Record { fields } => TypeNode::Record {
-            fields: remap_fields(fields, &map, old_to_new, output),
+            fields: remap_fields_with(fields, remap),
         },
         TypeNode::Variant { fields } => TypeNode::Variant {
-            fields: remap_fields(fields, &map, old_to_new, output),
+            fields: remap_fields_with(fields, remap),
         },
         TypeNode::Func {
             args,
             results,
             mode,
         } => TypeNode::Func {
-            args: args
-                .iter()
-                .map(|reference| map(*reference, old_to_new, output))
-                .collect(),
-            results: results
-                .iter()
-                .map(|reference| map(*reference, old_to_new, output))
-                .collect(),
+            args: args.iter().map(|reference| remap(*reference)).collect(),
+            results: results.iter().map(|reference| remap(*reference)).collect(),
             mode: *mode,
         },
         TypeNode::Service { methods } => {
@@ -448,36 +572,29 @@ fn rewrite_node(
                     .map(|method| ServiceMethod {
                         name: method.name,
                         id: method.id,
-                        function: map(method.function, old_to_new, output),
+                        function: remap(method.function),
                     })
                     .collect(),
             }
         }
         TypeNode::Class { init, service } => TypeNode::Class {
-            init: init
-                .iter()
-                .map(|reference| map(*reference, old_to_new, output))
-                .collect(),
-            service: map(*service, old_to_new, output),
+            init: init.iter().map(|reference| remap(*reference)).collect(),
+            service: remap(*service),
         },
     }
 }
 
-fn remap_fields(
-    fields: &[Field],
-    map: &impl Fn(TypeRef, &mut [Option<TypeRef>], &mut Vec<Option<TypeNode>>) -> TypeRef,
-    old_to_new: &mut [Option<TypeRef>],
-    output: &mut Vec<Option<TypeNode>>,
-) -> Vec<Field> {
-    let mut fields = fields.to_vec();
-    fields.sort_by(field_order);
-    fields
-        .into_iter()
-        .map(|field| Field {
-            id: field.id,
-            ty: map(field.ty, old_to_new, output),
-        })
-        .collect()
+fn reachable_from(root: TypeRef, types: &[TypeNode]) -> Vec<bool> {
+    let mut reached = vec![false; types.len()];
+    let mut work = VecDeque::from([root]);
+    while let Some(reference) = work.pop_front() {
+        if reached[reference as usize] {
+            continue;
+        }
+        reached[reference as usize] = true;
+        work.extend(sorted_children(&types[reference as usize]));
+    }
+    reached
 }
 
 fn remap_fields_with(fields: &[Field], remap: impl Fn(TypeRef) -> TypeRef) -> Vec<Field> {

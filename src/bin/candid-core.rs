@@ -1,6 +1,4 @@
-use candid_contract_runtime::{
-    compile_did_file_with_options, CompileOptions, Contract, ContractJsonError,
-};
+use candid_core::{compile_did_file_with_options, CompileOptions, Contract, ContractJsonError};
 use serde_json::json;
 use std::env;
 use std::fs;
@@ -26,11 +24,14 @@ fn main() -> ExitCode {
                     include_source_info,
                 },
             ) {
-                Ok(compilation) => write_json(&json!({
-                    "ok": true,
-                    "contract": compilation.contract,
-                    "source_info": compilation.source_info,
-                })),
+                Ok(compilation) => {
+                    let (contract, source_info) = compilation.into_parts();
+                    write_json(&json!({
+                        "ok": true,
+                        "contract": contract,
+                        "source_info": source_info,
+                    }))
+                }
                 Err(error) => write_error(json!({
                     "ok": false,
                     "diagnostics": error.diagnostics,
@@ -91,6 +92,6 @@ fn write_error(value: serde_json::Value) -> ExitCode {
 }
 
 fn usage() -> ExitCode {
-    eprintln!("usage: candid-contract <compile|validate> <path> [--no-source-info]");
+    eprintln!("usage: candid-core <compile|validate> <path> [--no-source-info]");
     ExitCode::from(64)
 }

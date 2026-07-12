@@ -1,6 +1,6 @@
 # ADR 0006: Use a lossless tagged HostValue ABI
 
-- Status: Accepted; implementation pending
+- Status: Implemented
 - Date: 2026-07-10
 - Owners: Contract runtime maintainers
 
@@ -56,10 +56,13 @@ selector. Transport invocation remains outside the codec.
 - Core validation errors can use stable value paths and expected/actual kinds.
 - Derived conveniences cannot silently change wire semantics.
 
-## Migration
+## Implementation
 
-The HostValue ABI and conformance fixtures are completed before exposing any
-public encode/decode API. No interim `serde_json::Value` codec is published.
+`HostValue` implements the tagged JSON ABI, including canonical decimal big
+integers, IEEE float bits, principal/service/function values, field IDs, and
+variant IDs. `validate_host_value` is iterative, bounded, and requires a
+contract-bound selector. No binary encode/decode or lossy `serde_json::Value`
+shortcut is exposed yet.
 
 ## Required verification
 
@@ -68,4 +71,3 @@ public encode/decode API. No interim `serde_json::Value` codec is published.
 - Recursive Contract validation with bounded HostValue depth.
 - Cross-language Rust/WASM/TypeScript conformance fixtures.
 - Negative tests proving convenience coercions are outside the core codec.
-

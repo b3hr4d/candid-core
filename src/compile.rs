@@ -1,25 +1,28 @@
 use crate::canonical;
 use crate::diagnostics::{CompileError, Diagnostic, DiagnosticPhase, Severity, SourceSpan};
+use crate::limits::RuntimeContext;
 use crate::model::{
     Actor, Contract, Declaration, Field, FieldLabelProvenance, MethodMode, PrimitiveType,
-    ServiceMethod, SourceActorInfo, SourceDeclaration, SourceFileInfo,
-    SourceFunctionArgumentDirection, SourceFunctionArgumentInfo, SourceInfo, SourceLabel,
-    SourceMethodInfo, SourceOrigin, TypeNode, TypeRef, CONTRACT_VERSION, SOURCE_INFO_VERSION,
+    RawContract, RawSourceInfo as SerializedSourceInfo, ServiceMethod, SourceActorInfo,
+    SourceDeclaration, SourceFileInfo, SourceFunctionArgumentDirection, SourceFunctionArgumentInfo,
+    SourceImportInfo, SourceImportKind, SourceInfo, SourceLabel, SourceMethodInfo, SourceOrigin,
+    TypeNode, TypeRef, SOURCE_INFO_VERSION,
 };
 use candid_parser::candid::types::{FuncMode, Label, Type, TypeEnv, TypeInner};
-use candid_parser::syntax::{Dec, IDLProg, IDLType};
+use candid_parser::syntax::{pretty_print, Dec, IDLMergedProg, IDLProg, IDLType};
 use candid_parser::typing::ast_to_type;
 use candid_parser::{check_file, check_prog};
-use serde::{Deserialize, Serialize};
+use serde::{de::Error as _, Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CompileOptions {
     /// Preserve optional names, comments, raw source, and label spelling in a
-    /// sidecar. This never changes the Contract or its fingerprint.
+    /// sidecar. This never changes the Contract or its identities.
     pub include_source_info: bool,
 }
 
@@ -31,19 +34,137 @@ impl Default for CompileOptions {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Compilation {
-    pub contract: Contract,
+    contract: Contract,
+    source_info: Option<SourceInfo>,
+}
+
+impl Compilation {
+    pub fn contract(&self) -> &Contract {
+        &self.contract
+    }
+
+    pub fn source_info(&self) -> Option<&SourceInfo> {
+        self.source_info.as_ref()
+    }
+
+    pub fn into_parts(self) -> (Contract, Option<SourceInfo>) {
+        (self.contract, self.source_info)
+    }
+
+    pub fn try_from_raw(
+        raw_contract: RawContract,
+        raw_source_info: Option<SerializedSourceInfo>,
+        limits: &crate::Limits,
+    ) -> Result<Self, crate::ContractValidationError> {
+        let (contract, mapping) = Contract::from_raw_with_mapping(raw_contract, limits)?;
+        let source_info = raw_source_info
+            .map(SourceInfo::from)
+            .map(|mut source_info| {
+                remap_source_info(&mut source_info, &mapping)?;
+                source_info.validate(&contract, limits)?;
+                Ok::<SourceInfo, crate::ContractValidationError>(source_info)
+            })
+            .transpose()?;
+        Ok(Self {
+            contract,
+            source_info,
+        })
+    }
+}
+
+#[derive(Serialize)]
+#[serde(deny_unknown_fields)]
+struct CompilationRef<'a> {
+    contract: &'a Contract,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub source_info: Option<SourceInfo>,
+    source_info: &'a Option<SourceInfo>,
+}
+
+impl Serialize for Compilation {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        CompilationRef {
+            contract: &self.contract,
+            source_info: &self.source_info,
+        }
+        .serialize(serializer)
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawCompilation {
+    contract: RawContract,
+    #[serde(default)]
+    source_info: Option<SerializedSourceInfo>,
+}
+
+impl<'de> Deserialize<'de> for Compilation {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let raw = RawCompilation::deserialize(deserializer)?;
+        let limits = crate::Limits::default();
+        Self::try_from_raw(raw.contract, raw.source_info, &limits).map_err(D::Error::custom)
+    }
+}
+
+impl TryFrom<(RawContract, Option<SerializedSourceInfo>)> for Compilation {
+    type Error = crate::ContractValidationError;
+
+    fn try_from(
+        (contract, source_info): (RawContract, Option<SerializedSourceInfo>),
+    ) -> Result<Self, Self::Error> {
+        Self::try_from_raw(contract, source_info, &crate::Limits::default())
+    }
+}
+
+fn remap_source_info(
+    source_info: &mut SourceInfo,
+    mapping: &[TypeRef],
+) -> Result<(), crate::ContractValidationError> {
+    let map = |reference: TypeRef| {
+        mapping.get(reference as usize).copied().ok_or_else(|| {
+            crate::ContractValidationError::single(
+                "source_type_ref_out_of_bounds",
+                "$",
+                format!("source sidecar type reference {reference} is outside the input arena"),
+            )
+        })
+    };
+    for declaration in &mut source_info.declarations {
+        declaration.ty = map(declaration.ty)?;
+    }
+    for field in &mut source_info.field_labels {
+        field.container = map(field.container)?;
+    }
+    for method in &mut source_info.methods {
+        method.service = map(method.service)?;
+    }
+    for argument in &mut source_info.function_arguments {
+        argument.function = map(argument.function)?;
+    }
+    Ok(())
 }
 
 struct SourceUnit {
     name: String,
     source: String,
     program: IDLProg,
+    imports: Vec<ResolvedImport>,
     include_actor: bool,
+}
+
+#[derive(Debug, Clone)]
+struct ResolvedImport {
+    import: String,
+    target: crate::SourceId,
+    kind: SourceImportKind,
 }
 
 /// Compile a self-contained DID source string. DID imports require a file path
@@ -56,7 +177,34 @@ pub fn compile_did_with_options(
     source: &str,
     options: CompileOptions,
 ) -> Result<Compilation, CompileError> {
-    let program = parse_program(source, Some("<inline>".to_string()))?;
+    compile_did_with_context(source, options, &RuntimeContext::default())
+}
+
+pub fn compile_did_with_context(
+    source: &str,
+    options: CompileOptions,
+    context: &RuntimeContext,
+) -> Result<Compilation, CompileError> {
+    if context.limits.deadline_exceeded() {
+        return Err(CompileError::single(
+            "operation_deadline_exceeded",
+            DiagnosticPhase::Load,
+            "compilation deadline has elapsed",
+        ));
+    }
+    if source.len() > context.limits.max_source_bytes {
+        return Err(CompileError::resource_limit(
+            "source_bytes",
+            context.limits.max_source_bytes,
+            source.len(),
+            format!(
+                "inline source uses {} bytes; limit is {}",
+                source.len(),
+                context.limits.max_source_bytes
+            ),
+        ));
+    }
+    let program = parse_program(source, Some("memory:/inline.did".to_string()))?;
     let imports: Vec<_> = program
         .decs
         .iter()
@@ -82,12 +230,19 @@ pub fn compile_did_with_options(
     let actor = check_prog(&mut environment, &program)
         .map_err(|error| candid_error(error, DiagnosticPhase::TypeCheck, None))?;
     let source_units = vec![SourceUnit {
-        name: "<inline>".to_string(),
+        name: "memory:/inline.did".to_string(),
         source: source.to_string(),
         program,
+        imports: Vec::new(),
         include_actor: true,
     }];
-    lower_checked(&source_units, &environment, actor.as_ref(), options)
+    lower_checked(
+        &source_units,
+        &environment,
+        actor.as_ref(),
+        options,
+        context,
+    )
 }
 
 /// Compile a DID file through `candid_parser::check_file`, including its
@@ -100,10 +255,50 @@ pub fn compile_did_file_with_options(
     path: impl AsRef<Path>,
     options: CompileOptions,
 ) -> Result<Compilation, CompileError> {
+    compile_did_file_with_context(path, options, &RuntimeContext::default())
+}
+
+pub fn compile_did_file_with_context(
+    path: impl AsRef<Path>,
+    options: CompileOptions,
+    context: &RuntimeContext,
+) -> Result<Compilation, CompileError> {
     let path = path.as_ref();
-    let source_units = load_source_units(path)?;
-    let (environment, actor, _) = check_file(path).map_err(candid_file_error)?;
-    lower_checked(&source_units, &environment, actor.as_ref(), options)
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    let entry = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| {
+            CompileError::single(
+                "did_invalid_source_id",
+                DiagnosticPhase::Load,
+                format!("{} has no UTF-8 file name", path.display()),
+            )
+        })?;
+    let resolver =
+        crate::WorkspaceResolver::new(parent).map_err(crate::ResolveError::into_compile_error)?;
+    compile_with_resolver(entry, &resolver, options, context)
+}
+
+pub fn compile_with_resolver(
+    entry: &str,
+    resolver: &dyn crate::SourceResolver,
+    options: CompileOptions,
+    context: &RuntimeContext,
+) -> Result<Compilation, CompileError> {
+    let (source_units, entry_id) = load_source_units_with_resolver(entry, resolver, context)?;
+    let materialized = MaterializedBundle::new(&source_units, &entry_id)?;
+    let (environment, actor, _) = check_file(&materialized.entry).map_err(candid_file_error)?;
+    lower_checked(
+        &source_units,
+        &environment,
+        actor.as_ref(),
+        options,
+        context,
+    )
 }
 
 fn parse_program(source: &str, source_name: Option<String>) -> Result<IDLProg, CompileError> {
@@ -112,62 +307,250 @@ fn parse_program(source: &str, source_name: Option<String>) -> Result<IDLProg, C
         .map_err(|error| candid_error(error, DiagnosticPhase::Parse, source_name))
 }
 
-fn load_source_units(root: &Path) -> Result<Vec<SourceUnit>, CompileError> {
-    let mut units = Vec::new();
-    let mut indexes = BTreeMap::new();
-    load_source_unit(root.to_path_buf(), true, &mut units, &mut indexes)?;
-    Ok(units)
+fn load_source_units_with_resolver(
+    entry: &str,
+    resolver: &dyn crate::SourceResolver,
+    context: &RuntimeContext,
+) -> Result<(Vec<SourceUnit>, crate::SourceId), CompileError> {
+    struct Pending {
+        source_id: crate::SourceId,
+        include_actor: bool,
+        depth: usize,
+        ancestors: Vec<crate::SourceId>,
+    }
+
+    let limits = &context.limits;
+    let mut units = Vec::<SourceUnit>::new();
+    let mut indexes = BTreeMap::<crate::SourceId, usize>::new();
+    let entry_id = resolver
+        .identify(None, entry)
+        .map_err(crate::ResolveError::into_compile_error)?;
+    let mut pending = vec![Pending {
+        source_id: entry_id.clone(),
+        include_actor: true,
+        depth: 0,
+        ancestors: Vec::new(),
+    }];
+    let mut total_bytes = 0usize;
+    let mut import_edges = 0usize;
+
+    while let Some(request) = pending.pop() {
+        if limits.deadline_exceeded() {
+            return Err(CompileError::single(
+                "operation_deadline_exceeded",
+                DiagnosticPhase::Load,
+                "source resolution deadline has elapsed",
+            ));
+        }
+        if request.depth > limits.max_import_depth {
+            return Err(CompileError::resource_limit(
+                "import_depth",
+                limits.max_import_depth,
+                request.depth,
+                format!(
+                    "import depth {} exceeds limit {}",
+                    request.depth, limits.max_import_depth
+                ),
+            ));
+        }
+        let source_id = request.source_id;
+        if request.ancestors.contains(&source_id) {
+            return Err(CompileError::single(
+                "did_import_cycle",
+                DiagnosticPhase::Load,
+                format!("import cycle reached {:?}", source_id.as_str()),
+            ));
+        }
+        if let Some(index) = indexes.get(&source_id).copied() {
+            units[index].include_actor |= request.include_actor;
+            continue;
+        }
+        let resolved = resolver
+            .load(&source_id, limits)
+            .map_err(crate::ResolveError::into_compile_error)?;
+        if resolved.id != source_id {
+            return Err(CompileError::single(
+                "did_resolver_identity_mismatch",
+                DiagnosticPhase::Load,
+                format!(
+                    "resolver identified {:?} but loaded {:?}",
+                    source_id.as_str(),
+                    resolved.id.as_str()
+                ),
+            ));
+        }
+        resolved
+            .verify()
+            .map_err(crate::ResolveError::into_compile_error)?;
+        if units.len() >= limits.max_sources {
+            return Err(CompileError::resource_limit(
+                "sources",
+                limits.max_sources,
+                units.len() + 1,
+                format!("source count exceeds limit {}", limits.max_sources),
+            ));
+        }
+        total_bytes = total_bytes.saturating_add(resolved.source.len());
+        if total_bytes > limits.max_bundle_bytes {
+            return Err(CompileError::resource_limit(
+                "bundle_bytes",
+                limits.max_bundle_bytes,
+                total_bytes,
+                format!(
+                    "source bundle uses {total_bytes} bytes; limit is {}",
+                    limits.max_bundle_bytes
+                ),
+            ));
+        }
+        let program = parse_program(&resolved.source, Some(resolved.id.as_str().to_string()))?;
+        let imports: Vec<_> = program
+            .decs
+            .iter()
+            .filter_map(|declaration| match declaration {
+                Dec::ImportType(import) => Some((import.clone(), SourceImportKind::Type)),
+                Dec::ImportServ(import) => Some((import.clone(), SourceImportKind::Service)),
+                Dec::TypD(_) => None,
+            })
+            .collect();
+        import_edges = import_edges.saturating_add(imports.len());
+        if import_edges > limits.max_import_edges {
+            return Err(CompileError::resource_limit(
+                "import_edges",
+                limits.max_import_edges,
+                import_edges,
+                format!("import edges exceed limit {}", limits.max_import_edges),
+            ));
+        }
+        let resolved_imports = imports
+            .into_iter()
+            .map(|(import, kind)| {
+                let target = resolver
+                    .identify(Some(&resolved.id), &import)
+                    .map_err(crate::ResolveError::into_compile_error)?;
+                Ok(ResolvedImport {
+                    import,
+                    target,
+                    kind,
+                })
+            })
+            .collect::<Result<Vec<_>, CompileError>>()?;
+        let index = units.len();
+        indexes.insert(source_id.clone(), index);
+        units.push(SourceUnit {
+            name: resolved.id.as_str().to_string(),
+            source: resolved.source,
+            program,
+            imports: resolved_imports.clone(),
+            include_actor: request.include_actor,
+        });
+        let mut ancestors = request.ancestors;
+        ancestors.push(resolved.id.clone());
+        for import in resolved_imports.into_iter().rev() {
+            pending.push(Pending {
+                source_id: import.target,
+                include_actor: import.kind == SourceImportKind::Service,
+                depth: request.depth + 1,
+                ancestors: ancestors.clone(),
+            });
+        }
+    }
+    Ok((units, entry_id))
 }
 
-/// This loader only supplies source provenance. `candid_parser::check_file`
-/// remains the sole authority for import semantics and type checking.
-fn load_source_unit(
-    path: PathBuf,
-    include_actor: bool,
-    units: &mut Vec<SourceUnit>,
-    indexes: &mut BTreeMap<PathBuf, usize>,
-) -> Result<(), CompileError> {
-    if let Some(index) = indexes.get(&path).copied() {
-        units[index].include_actor |= include_actor;
-        return Ok(());
-    }
-    let name = path.display().to_string();
-    let source = fs::read_to_string(&path).map_err(|error| {
-        CompileError::single(
-            "did_file_read_error",
-            DiagnosticPhase::Load,
-            format!("cannot read {name}: {error}"),
-        )
-    })?;
-    let program = parse_program(&source, Some(name.clone()))?;
-    let imports: Vec<_> = program
-        .decs
-        .iter()
-        .filter_map(|declaration| match declaration {
-            Dec::ImportType(import) => Some((import.clone(), false)),
-            Dec::ImportServ(import) => Some((import.clone(), true)),
-            Dec::TypD(_) => None,
-        })
-        .collect();
-    let index = units.len();
-    indexes.insert(path.clone(), index);
-    units.push(SourceUnit {
-        name,
-        source,
-        program,
-        include_actor,
-    });
-    let base = path.parent().unwrap_or_else(|| Path::new("."));
-    for (import, imports_actor) in imports {
-        let import_path = PathBuf::from(&import);
-        let resolved = if import_path.is_absolute() {
-            import_path
-        } else {
-            base.join(import_path)
+struct MaterializedBundle {
+    root: PathBuf,
+    entry: PathBuf,
+}
+
+impl MaterializedBundle {
+    fn new(units: &[SourceUnit], entry: &crate::SourceId) -> Result<Self, CompileError> {
+        static NEXT_ID: AtomicU64 = AtomicU64::new(0);
+        let id = NEXT_ID.fetch_add(1, AtomicOrdering::Relaxed);
+        let root = std::env::temp_dir().join(format!("candid-core-{}-{id}", std::process::id()));
+        let indexes = units
+            .iter()
+            .enumerate()
+            .map(|(index, unit)| {
+                let id = crate::SourceId::parse(&unit.name)
+                    .expect("resolver-produced source IDs are valid");
+                (id, index)
+            })
+            .collect::<BTreeMap<_, _>>();
+        let entry_index = indexes.get(entry).copied().ok_or_else(|| {
+            CompileError::single(
+                "did_materialize_error",
+                DiagnosticPhase::Load,
+                "entry source is missing from the resolved bundle",
+            )
+        })?;
+        create_private_dir(&root).map_err(|error| {
+            CompileError::single(
+                "did_materialize_error",
+                DiagnosticPhase::Load,
+                format!("cannot create isolated source bundle: {error}"),
+            )
+        })?;
+        let bundle = Self {
+            entry: root.join(format!("{entry_index}.did")),
+            root,
         };
-        load_source_unit(resolved, imports_actor, units, indexes)?;
+        for (index, unit) in units.iter().enumerate() {
+            let path = bundle.root.join(format!("{index}.did"));
+            let source = materialized_source(unit, &indexes)?;
+            fs::write(&path, source).map_err(|error| {
+                CompileError::single(
+                    "did_materialize_error",
+                    DiagnosticPhase::Load,
+                    format!("cannot materialize source {:?}: {error}", unit.name),
+                )
+            })?;
+        }
+        Ok(bundle)
     }
-    Ok(())
+}
+
+fn create_private_dir(path: &Path) -> std::io::Result<()> {
+    let mut builder = fs::DirBuilder::new();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        builder.mode(0o700);
+    }
+    builder.create(path)
+}
+
+fn materialized_source(
+    unit: &SourceUnit,
+    indexes: &BTreeMap<crate::SourceId, usize>,
+) -> Result<String, CompileError> {
+    let mut source = String::new();
+    for import in &unit.imports {
+        let target = indexes.get(&import.target).copied().ok_or_else(|| {
+            CompileError::single(
+                "did_materialize_error",
+                DiagnosticPhase::Load,
+                format!(
+                    "resolved import {:?} is missing from the source bundle",
+                    import.target.as_str()
+                ),
+            )
+        })?;
+        match import.kind {
+            SourceImportKind::Type => source.push_str(&format!("import \"{target}.did\";\n")),
+            SourceImportKind::Service => {
+                source.push_str(&format!("import service \"{target}.did\";\n"));
+            }
+        }
+    }
+    let program = parse_program(&unit.source, Some(unit.name.clone()))?;
+    source.push_str(&pretty_print(&IDLMergedProg::new(program)));
+    Ok(source)
+}
+
+impl Drop for MaterializedBundle {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.root);
+    }
 }
 
 fn lower_checked(
@@ -175,6 +558,7 @@ fn lower_checked(
     environment: &TypeEnv,
     actor_type: Option<&Type>,
     options: CompileOptions,
+    context: &RuntimeContext,
 ) -> Result<Compilation, CompileError> {
     let mut lowerer = Lowerer::new(environment);
     let declaration_names: Vec<_> = environment.0.keys().cloned().collect();
@@ -227,17 +611,13 @@ fn lower_checked(
         .map_err(lower_error)?;
 
     // Structural validation needs a syntactically valid placeholder. The
-    // canonicalizer then computes the real fingerprint.
-    let raw_contract = Contract {
-        contract_version: CONTRACT_VERSION,
-        fingerprint: format!("sha256:{}", "0".repeat(64)),
-        types,
-        declarations,
-        actor,
-    };
-    crate::validate::validate_structure(&raw_contract)
+    // canonicalizer then computes the real identities.
+    let raw_contract = Contract::new_unchecked(types, declarations, actor);
+    crate::validate::validate_structure_with_limits(&raw_contract, &context.limits)
         .map_err(|error| lower_error(format!("lowered Contract violated an invariant: {error}")))?;
-    let canonicalized = canonical::canonicalize_with_mapping_unchecked(&raw_contract);
+    let canonicalized =
+        canonical::canonicalize_with_mapping_unchecked_and_limits(&raw_contract, &context.limits)
+            .map_err(|error| lower_error(format!("canonicalization failed: {error}")))?;
 
     let source_info = options.include_source_info.then(|| {
         let mut field_labels: Vec<_> = raw_source_info
@@ -310,27 +690,54 @@ fn lower_checked(
                 .cmp(&right.source)
                 .then(left.docs.cmp(&right.docs))
         });
-        SourceInfo {
+        let mut sources: Vec<_> = source_units
+            .iter()
+            .map(|unit| SourceFileInfo {
+                name: unit.name.clone(),
+                source: unit.source.clone(),
+            })
+            .collect();
+        sources.sort_by(|left, right| left.name.cmp(&right.name));
+        let mut imports = source_imports(source_units);
+        imports.sort();
+        let source_bundle_id = crate::source::source_bundle_id(&sources, &imports);
+        let source_info = SourceInfo {
             source_info_version: SOURCE_INFO_VERSION,
-            sources: source_units
-                .iter()
-                .map(|unit| SourceFileInfo {
-                    name: unit.name.clone(),
-                    source: unit.source.clone(),
-                })
-                .collect(),
+            contract_id: canonicalized.contract.contract_id().to_string(),
+            source_bundle_id,
+            sources,
+            imports,
             declarations,
             field_labels,
             methods,
             function_arguments,
             actors,
-        }
+        };
+        source_info
+            .validate(&canonicalized.contract, &context.limits)
+            .expect("compiler-generated SourceInfo must validate");
+        source_info
     });
 
     Ok(Compilation {
         contract: canonicalized.contract,
         source_info,
     })
+}
+
+fn source_imports(source_units: &[SourceUnit]) -> Vec<SourceImportInfo> {
+    let mut imports = Vec::new();
+    for unit in source_units {
+        for import in &unit.imports {
+            imports.push(SourceImportInfo {
+                from: unit.name.clone(),
+                import: import.import.clone(),
+                to: import.target.as_str().to_string(),
+                kind: import.kind,
+            });
+        }
+    }
+    imports
 }
 
 fn lower_error(message: impl Into<String>) -> CompileError {
@@ -352,6 +759,33 @@ fn candid_file_error(error: candid_parser::Error) -> CompileError {
         }
     };
     candid_error(error, phase, None)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn materialized_bundle_root_is_private_and_self_cleaning() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let source = "service : {};";
+        let entry = crate::SourceId::parse("memory:/private.did").unwrap();
+        let unit = SourceUnit {
+            name: entry.as_str().to_string(),
+            source: source.to_string(),
+            program: parse_program(source, Some(entry.as_str().to_string())).unwrap(),
+            imports: Vec::new(),
+            include_actor: true,
+        };
+        let bundle = MaterializedBundle::new(&[unit], &entry).unwrap();
+        let root = bundle.root.clone();
+        let mode = fs::metadata(&root).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o700);
+        drop(bundle);
+        assert!(!root.exists());
+    }
 }
 
 fn candid_error(
@@ -380,6 +814,7 @@ fn candid_error(
             message,
             span,
             notes: report.notes,
+            resource_limit: None,
         }],
     }
 }

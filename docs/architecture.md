@@ -1,8 +1,8 @@
-# Candid Contract Runtime — architecture (slice 1)
+# Candid Core — architecture (slice 1)
 
-The accepted [foundation ADRs](adrs/README.md) define the identity, versioning,
-validation, source-resolution, resource-limit, and HostValue boundaries that
-supersede any conflicting pre-stable implementation detail in this document.
+The implemented [foundation ADRs](adrs/README.md) define the identity,
+versioning, validation, source-resolution, resource-limit, and HostValue
+boundaries.
 
 This project turns Candid DID source into a small, validated, versioned
 **Contract** graph.  A Contract describes Candid's wire-level type semantics;
@@ -44,8 +44,15 @@ object keys are deterministic in its canonical representation):
 
 ```json
 {
-  "contract_version": 1,
-  "fingerprint": "sha256:<64 lowercase hex characters>",
+  "format": "candid-core",
+  "format_version": 1,
+  "semantics_profile": "candid-1",
+  "canonicalization_profile": "candid-core-canon-1",
+  "identities": {
+    "contract": "candid-core:contract:v1:sha256:<64 lowercase hex>",
+    "interface": "candid-core:interface:v1:sha256:<64 lowercase hex>"
+  },
+  "producer": { "name": "candid-core", "version": "..." },
   "types": [
     { "kind": "record", "fields": [
       { "id": 477006482, "type": 0 }
@@ -89,12 +96,11 @@ It preserves useful named declaration spellings, but a declaration name is not
 the identity of a type.  A structural type reachable through two aliases is
 still represented by its graph position and edges.
 
-The `fingerprint` is SHA-256 over the canonical semantic payload:
-`contract_version`, a bisimulation-minimized and deterministically re-indexed
-`types` arena, and `actor`. It excludes itself, `declarations`, and all source
-sidecars, so it tracks wire semantics rather than aliases, comments, spans, or
-source presentation. This makes it invariant to harmless TypeRef reindexing
-and duplicate source definitions of the same equi-recursive type.
+`interface_id` hashes only the canonical actor-reachable graph. `contract_id`
+hashes the complete canonical Contract, including declaration names and
+retained declaration-only types. Both use domain-separated SHA-256 over JCS
+bytes under the named canonicalization profile. `source_bundle_id`
+independently hashes logical source URIs, bytes, and import edges.
 
 ## Provenance is a sidecar
 
@@ -103,9 +109,11 @@ DID sources (including imports and comments), parsed declaration/actor/field/
 method documentation, function argument names, and named, numeric, or
 positional label spellings.
 It is useful for editors and diagnostics but is not sent to
-encoders/transports and is never included in the fingerprint.
+encoders/transports and is bound to `contract_id` rather than embedded in core
+identity.
 
-`SourceInfo` is itself versioned. `sources` contains `{ name, source }` for
+`SourceInfo` is itself versioned and contains `contract_id` and
+`source_bundle_id`. `sources` contains `{ name, source }` for
 the entry DID and every resolved import. Its declaration entries carry
 `{ source, name, type, docs }`; field-label, method, and function-argument
 entries carry a source origin plus an AST-shaped `path`, so distinct source
@@ -146,8 +154,9 @@ an unchecked Contract by taking a normal JSON deserialization path.
 
 - A Contract is self-contained: every `TypeRef` is in bounds and every actor,
   field, argument, result, method, and class edge has the required target kind.
-- Type identity is graph-based.  Names, aliases, comments, and source spans do
-  not define it and cannot alter the fingerprint.
+- Interface identity is graph-based and excludes declaration names, comments,
+  and source spans. Contract identity includes declaration names; source identity
+  includes logical source URIs, bytes, and import edges.
 - Record and variant fields retain authoritative Candid `u32` field IDs only.
   The semantic engine, not host code, determines named-label hashes;
   SourceInfo retains label spelling.
@@ -163,25 +172,25 @@ an unchecked Contract by taking a normal JSON deserialization path.
   arbitrary strings or combinations are accepted.
 - The graph may contain cycles.  Validation tracks visited node identities and
   never requires a recursive type to be expanded into a tree.
-- `contract_version` selects the JSON schema and canonicalization algorithm.
-  Unknown versions fail closed.
+- Format, semantics, and canonicalization profiles are independently declared.
+  Unknown versions or profiles fail closed.
 - Every arena node is reachable from an actor or declaration root (unless the
   arena itself is empty).
-- The producer owns construction and fingerprinting.  Consumers may validate
+- The producer owns construction and identity calculation. Consumers may validate
   and traverse immutable Contract JSON, but must not infer missing semantics.
 
 ## Explicit non-goals for this slice
 
-This slice does **not** implement structured host-value validation, defaults,
-forms, widgets, UI metadata, workflow projections, transport adapters, agent
-calls, code generation, or Candid binary encoding/decoding.  It also does not
-introduce `blob`, `tuple`, or `Result` nodes: those are future derived semantic
-views over the canonical graph.
+This slice implements the lossless tagged HostValue ABI and graph-directed
+validation, but not defaults, coercions, forms, widgets, UI metadata, workflow
+projections, transport adapters, agent calls, code generation, or Candid binary
+encoding/decoding. It also does not introduce `blob`, `tuple`, or `Result`
+nodes: those remain derived semantic views over the canonical graph.
 
 ## Next slice
 
-Implement the structured host-value \<-> Candid binary bridge.  It will accept
-a validated Contract plus a selected function/method ref, validate a host value
-against that graph, delegate binary encode/decode to the authoritative Candid
-runtime, and return structured values/diagnostics.  It must consume Contract
-only; it must not parse DID source or add UI policy.
+Implement the HostValue \<-> Candid binary bridge. It will accept a validated
+Contract plus a contract-bound type or method selector, reuse the implemented
+HostValue validator, delegate binary encode/decode to the authoritative Candid
+runtime, and return structured diagnostics. It must consume Contract only; it
+must not parse DID source or add UI policy.

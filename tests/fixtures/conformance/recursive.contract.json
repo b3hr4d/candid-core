@@ -1,0 +1,32 @@
+{
+  "format": "candid-core",
+  "format_version": 1,
+  "semantics_profile": "candid-1",
+  "canonicalization_profile": "candid-core-canon-1",
+  "identities": {
+    "contract": "candid-core:contract:v1:sha256:b344f6593e2a907f98f208fec77f73456fbcb798f4bb13b2e0491d6cd09cb50a",
+    "interface": "candid-core:interface:v1:sha256:6634de80c26390309e22d050608e45e75c6564d29a7bc59aec4f06467256ef57"
+  },
+  "producer": {
+    "name": "candid-core",
+    "version": "0.1.0",
+    "candid_version": "0.10.30",
+    "candid_parser_version": "0.4.0"
+  },
+  "types": [
+    { "kind": "service", "methods": [
+      { "name": "get", "id": 5144726, "function": 1 }
+    ] },
+    { "kind": "func", "args": [], "results": [2], "mode": "query" },
+    { "kind": "opt", "inner": 3 },
+    { "kind": "record", "fields": [
+      { "id": 1158359328, "type": 4 },
+      { "id": 1291237008, "type": 2 }
+    ] },
+    { "kind": "primitive", "primitive": "nat" }
+  ],
+  "declarations": [
+    { "name": "List", "type": 2 }
+  ],
+  "actor": { "kind": "service", "service": 0 }
+}

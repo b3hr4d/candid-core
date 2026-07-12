@@ -1,4 +1,4 @@
-use candid_contract_runtime::compile_did;
+use candid_core::compile_did;
 use std::error::Error;
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -22,18 +22,25 @@ fn main() -> Result<(), Box<dyn Error>> {
         "#,
     )?;
 
-    println!("first:  {}", first.contract.fingerprint);
-    println!("second: {}", second.contract.fingerprint);
+    println!("first:  {}", first.contract().interface_id().unwrap());
+    println!("second: {}", second.contract().interface_id().unwrap());
     println!(
         "same wire semantics: {}",
-        first.contract.fingerprint == second.contract.fingerprint
+        first.contract().interface_id() == second.contract().interface_id()
     );
     println!(
         "same source bundle: {}",
-        first.source_info == second.source_info
+        first.source_info().map(|source| source.source_bundle_id())
+            == second.source_info().map(|source| source.source_bundle_id())
     );
 
-    assert_eq!(first.contract.fingerprint, second.contract.fingerprint);
-    assert_ne!(first.source_info, second.source_info);
+    assert_eq!(
+        first.contract().interface_id(),
+        second.contract().interface_id()
+    );
+    assert_ne!(
+        first.source_info().unwrap().source_bundle_id(),
+        second.source_info().unwrap().source_bundle_id()
+    );
     Ok(())
 }

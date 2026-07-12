@@ -1,20 +1,16 @@
 # ADR 0001: Separate interface, Contract, and source-bundle identities
 
-- Status: Accepted; implementation pending
+- Status: Implemented
 - Date: 2026-07-10
 - Owners: Contract runtime maintainers
 
 ## Context
 
-The current `fingerprint` hashes the canonical type arena and actor but omits
-declaration names and source provenance. Because the arena also contains types
-rooted only by declarations, an unused novel declaration changes the
-fingerprint even when the actor wire interface is unchanged. Conversely, an
-additional alias can change the Contract document without changing the
-fingerprint.
-
-One identifier therefore cannot safely serve interface compatibility caches,
-artifact registries, provenance binding, and human-facing package identity.
+A single digest of the type arena and actor cannot safely serve interface
+compatibility caches, artifact registries, provenance binding, and
+human-facing package identity. Declaration-only types and declaration names
+belong to the complete Contract, while the actor wire interface and source
+bundle require narrower and broader equality claims respectively.
 
 ## Decision
 
@@ -33,9 +29,9 @@ The protocol will expose three domain-separated content identifiers:
 Identifiers use an explicit domain and profile:
 
 ```text
-ccr:interface:v1:sha256:<lowercase hex>
-ccr:contract:v1:sha256:<lowercase hex>
-ccr:source-bundle:v1:sha256:<lowercase hex>
+candid-core:interface:v1:sha256:<lowercase hex>
+candid-core:contract:v1:sha256:<lowercase hex>
+candid-core:source-bundle:v1:sha256:<lowercase hex>
 ```
 
 The hash input is the domain prefix followed by the canonical bytes selected
@@ -57,13 +53,12 @@ but do not participate in semantic IDs.
 - Compatibility is not inferred from ID inequality; structural compatibility
   is a separate analysis operation.
 
-## Migration
+## Implementation
 
-The current `fingerprint` remains readable during the pre-stable migration but
-is explicitly a legacy semantic fingerprint. Before a stable format release,
-the JSON model will gain `identities`, `SourceInfo` will bind to `contract_id`,
-and CLI output will label legacy fingerprints clearly. No registry or signing
-format may use the legacy field as its sole artifact identity.
+The Contract envelope exposes `identities.contract` and optional
+`identities.interface`; `SourceInfo` exposes `contract_id` and
+`source_bundle_id`. Contract-bound type and method selectors prevent persisted
+bare refs.
 
 ## Required verification
 
@@ -72,4 +67,3 @@ format may use the legacy field as its sole artifact identity.
 - Tests proving source-only edits affect only `source_bundle_id`.
 - Cross-language conformance vectors for actorless, empty-actor, class, and
   recursive Contracts.
-

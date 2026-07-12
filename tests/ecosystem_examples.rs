@@ -1,7 +1,7 @@
-use candid_contract_runtime::{compile_did, Actor, Contract, SourceLabel, TypeNode, TypeRef};
+use candid_core::{compile_did, Actor, Contract, SourceLabel, TypeNode, TypeRef};
 use std::collections::BTreeSet;
 
-fn compile(source: &str) -> candid_contract_runtime::Compilation {
+fn compile(source: &str) -> candid_core::Compilation {
     compile_did(source).unwrap_or_else(|error| panic!("compilation failed: {error:#?}"))
 }
 
@@ -24,17 +24,17 @@ fn children(node: &TypeNode) -> Vec<TypeRef> {
 
 #[test]
 fn canonical_contract_is_an_idempotent_cache_value() {
-    let contract = compile(
+    let compilation = compile(
         r#"
         type Payload = record { owner: principal; amount: nat };
         service : { transfer: (Payload) -> () };
         "#,
-    )
-    .contract;
+    );
+    let contract = compilation.contract();
 
-    assert_eq!(contract.canonicalize().unwrap(), contract);
+    assert_eq!(contract.canonicalize().unwrap(), contract.clone());
     let json = contract.to_json_pretty().unwrap();
-    assert_eq!(Contract::from_json(&json).unwrap(), contract);
+    assert_eq!(Contract::from_json(&json).unwrap(), contract.clone());
     assert_eq!(
         Contract::from_json(&json)
             .unwrap()
@@ -60,20 +60,23 @@ fn equivalent_sources_share_semantic_cache_identity_but_not_provenance() {
         "#,
     );
 
-    assert_eq!(first.contract.fingerprint, second.contract.fingerprint);
-    assert_ne!(first.source_info, second.source_info);
+    assert_eq!(
+        first.contract().interface_id(),
+        second.contract().interface_id()
+    );
+    assert_ne!(first.source_info(), second.source_info());
 }
 
 #[test]
 fn recursive_contracts_are_finite_and_safe_for_iterative_tooling() {
-    let contract = compile(
+    let compilation = compile(
         r#"
         type List = opt record { head: nat; tail: List };
         service : { get: () -> (List) query };
         "#,
-    )
-    .contract;
-    let root = match contract.actor.as_ref().expect("service actor") {
+    );
+    let contract = compilation.contract();
+    let root = match contract.actor().as_ref().expect("service actor") {
         Actor::Service { service } => *service,
         Actor::Class { .. } => panic!("expected service actor"),
     };
@@ -82,11 +85,11 @@ fn recursive_contracts_are_finite_and_safe_for_iterative_tooling() {
     let mut work = vec![root];
     while let Some(reference) = work.pop() {
         if seen.insert(reference) {
-            work.extend(children(&contract.types[reference as usize]));
+            work.extend(children(&contract.types()[reference as usize]));
         }
     }
 
-    assert_eq!(seen.len(), contract.types.len());
+    assert_eq!(seen.len(), contract.types().len());
     assert!(
         seen.len() < 10,
         "recursive syntax should remain a finite graph"
@@ -102,9 +105,9 @@ fn source_labels_explain_wire_ids_without_changing_the_contract() {
         service : { inspect: (Named) -> (Numeric) };
         "#,
     );
-    let source_info = compilation.source_info.expect("source sidecar");
+    let source_info = compilation.source_info().expect("source sidecar");
     let labels: BTreeSet<_> = source_info
-        .field_labels
+        .field_labels()
         .iter()
         .map(|field| match &field.label {
             SourceLabel::Named { .. } => "named",
@@ -115,7 +118,7 @@ fn source_labels_explain_wire_ids_without_changing_the_contract() {
 
     assert_eq!(labels, BTreeSet::from(["named", "numeric"]));
     assert!(!compilation
-        .contract
+        .contract()
         .to_json_pretty()
         .unwrap()
         .contains("\"item\""));
@@ -123,7 +126,8 @@ fn source_labels_explain_wire_ids_without_changing_the_contract() {
 
 #[test]
 fn extension_metadata_is_separate_from_the_strict_semantic_core() {
-    let contract = compile("service : { ping: () -> () };").contract;
+    let compilation = compile("service : { ping: () -> () };");
+    let contract = compilation.contract();
     let mut core: serde_json::Value =
         serde_json::from_str(&contract.to_json_pretty().unwrap()).unwrap();
     core["com.example.form/v1"] = serde_json::json!({ "widget": "button" });

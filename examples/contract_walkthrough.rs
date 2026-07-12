@@ -1,4 +1,4 @@
-use candid_contract_runtime::{compile_did, Actor, TypeNode};
+use candid_core::{compile_did, Actor, TypeNode};
 use std::error::Error;
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -20,14 +20,15 @@ fn main() -> Result<(), Box<dyn Error>> {
         "#,
     )?;
 
-    let contract = &compilation.contract;
-    println!("semantic fingerprint: {}", contract.fingerprint);
-    println!("canonical type nodes: {}", contract.types.len());
+    let contract = compilation.contract();
+    println!("contract identity: {}", contract.contract_id());
+    println!("interface identity: {:?}", contract.interface_id());
+    println!("canonical type nodes: {}", contract.types().len());
 
-    let Some(Actor::Service { service }) = &contract.actor else {
+    let Some(Actor::Service { service }) = contract.actor() else {
         return Err("walkthrough expected a service actor".into());
     };
-    let TypeNode::Service { methods } = &contract.types[*service as usize] else {
+    let TypeNode::Service { methods } = &contract.types()[*service as usize] else {
         return Err("actor did not reference a service node".into());
     };
     for method in methods {
@@ -35,7 +36,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             args,
             results,
             mode,
-        } = &contract.types[method.function as usize]
+        } = &contract.types()[method.function as usize]
         else {
             return Err("service method did not reference a function node".into());
         };
@@ -50,18 +51,17 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
 
     let source_info = compilation
-        .source_info
-        .as_ref()
+        .source_info()
         .ok_or("source provenance was not requested")?;
     println!(
         "provenance: {} source(s), {} documented field occurrence(s), {} named function value(s)",
-        source_info.sources.len(),
+        source_info.sources().len(),
         source_info
-            .field_labels
+            .field_labels()
             .iter()
             .filter(|field| !field.docs.is_empty())
             .count(),
-        source_info.function_arguments.len()
+        source_info.function_arguments().len()
     );
 
     println!("\nCanonical Contract JSON:\n{}", contract.to_json_pretty()?);
