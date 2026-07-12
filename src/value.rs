@@ -145,6 +145,7 @@ pub fn validate_host_value(
         limits,
         elements: 0,
         bytes: 0,
+        work: 0,
     };
     state.validate_node(selector.type_ref, value, "$", 0)
 }
@@ -154,6 +155,7 @@ struct HostValueValidationState<'a> {
     limits: &'a Limits,
     elements: usize,
     bytes: usize,
+    work: usize,
 }
 
 impl HostValueValidationState<'_> {
@@ -206,7 +208,7 @@ impl HostValueValidationState<'_> {
                 self.preflight_children(values.len(), path)?;
                 for (index, field) in values.iter().enumerate() {
                     for other in &values[index + 1..] {
-                        self.check_deadline(path)?;
+                        self.charge_work(path)?;
                         if other.id == field.id {
                             return Err(single(
                                 "duplicate_host_field",
@@ -220,7 +222,7 @@ impl HostValueValidationState<'_> {
                 if field_set_matches {
                     'expected_fields: for field in fields {
                         for value in values {
-                            self.check_deadline(path)?;
+                            self.charge_work(path)?;
                             if value.id == field.id {
                                 continue 'expected_fields;
                             }
@@ -230,21 +232,26 @@ impl HostValueValidationState<'_> {
                     }
                 }
                 if !field_set_matches {
+                    let expected_ids =
+                        self.sorted_field_ids(fields.len(), |index| fields[index].id, path)?;
+                    let actual_ids =
+                        self.sorted_field_ids(values.len(), |index| values[index].id, path)?;
                     return Err(single(
                         "record_field_set_mismatch",
                         path,
-                        format!(
-                            "expected field IDs {}, found {}",
-                            self.sorted_field_ids(fields.len(), |index| fields[index].id, path)?,
-                            self.sorted_field_ids(values.len(), |index| values[index].id, path)?
-                        ),
+                        format!("expected field IDs {}, found {}", expected_ids, actual_ids),
                     ));
                 }
                 for field in fields {
-                    let value = values
-                        .iter()
-                        .find(|value| value.id == field.id)
-                        .expect("record field set was checked above");
+                    let mut matching_value = None;
+                    for value in values {
+                        self.charge_work(path)?;
+                        if value.id == field.id {
+                            matching_value = Some(value);
+                            break;
+                        }
+                    }
+                    let value = matching_value.expect("record field set was checked above");
                     let child_path = format!("{path}.fields[{}]", field.id);
                     self.validate_node(field.ty, &value.value, &child_path, depth + 1)?;
                 }
@@ -324,8 +331,26 @@ impl HostValueValidationState<'_> {
         Ok(())
     }
 
+    fn charge_work(&mut self, path: &str) -> Result<(), HostValueValidationError> {
+        self.check_deadline(path)?;
+        self.work = self.work.saturating_add(1);
+        if self.work > self.limits.max_canonicalization_work {
+            return Err(resource_single(
+                "canonicalization_work",
+                self.limits.max_canonicalization_work,
+                self.work,
+                path,
+                format!(
+                    "HostValue validation work exceeds limit {}",
+                    self.limits.max_canonicalization_work
+                ),
+            ));
+        }
+        Ok(())
+    }
+
     fn preflight_children(
-        &self,
+        &mut self,
         child_count: usize,
         path: &str,
     ) -> Result<(), HostValueValidationError> {
@@ -364,7 +389,7 @@ impl HostValueValidationState<'_> {
     }
 
     fn sorted_field_ids(
-        &self,
+        &mut self,
         length: usize,
         id_at: impl Fn(usize) -> u32,
         path: &str,
@@ -374,7 +399,7 @@ impl HostValueValidationState<'_> {
         for position in 0..length {
             let mut next = None;
             for index in 0..length {
-                self.check_deadline(path)?;
+                self.charge_work(path)?;
                 let id = id_at(index);
                 let after_previous = previous.map_or(true, |previous| id > previous);
                 let before_next = next.map_or(true, |next| id < next);
