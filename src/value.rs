@@ -18,16 +18,25 @@ pub struct ContractMethodRef {
     pub method: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct HostFieldValue {
     pub id: u32,
     pub value: HostValue,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// A locally canonical tagged HostValue.
+///
+/// This type serializes as the portable tagged JSON ABI, but deliberately does
+/// not implement `Deserialize`. JSON callers must use
+/// [`HostValue::from_json_with_limits`], which decodes a private raw DTO and
+/// checks locally canonical scalar encodings before exposing this value.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(transparent)]
+pub struct HostValue(HostValueKind);
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
-pub enum HostValue {
+enum HostValueKind {
     Null,
     Bool { value: bool },
     Nat { value: String },
@@ -61,15 +70,172 @@ impl HostValue {
                 observed: input.len(),
             });
         }
-        serde_json::from_str(input)
-            .map_err(|error| HostValueJsonError::Malformed(error.to_string()))
+        let raw: RawHostValue = serde_json::from_str(input)
+            .map_err(|error| HostValueJsonError::Malformed(error.to_string()))?;
+        HostValueLocalValidationState::new(limits).canonicalize(raw)
+    }
+
+    pub fn null() -> Self {
+        Self(HostValueKind::Null)
+    }
+
+    pub fn boolean(value: bool) -> Self {
+        Self(HostValueKind::Bool { value })
+    }
+
+    pub fn nat(value: impl Into<String>) -> Result<Self, HostValueJsonError> {
+        let value = value.into();
+        Self::require(canonical_nat(&value), "non-canonical nat")?;
+        Ok(Self(HostValueKind::Nat { value }))
+    }
+
+    pub fn int(value: impl Into<String>) -> Result<Self, HostValueJsonError> {
+        let value = value.into();
+        Self::require(canonical_int(&value), "non-canonical int")?;
+        Ok(Self(HostValueKind::Int { value }))
+    }
+
+    pub fn nat8(value: u8) -> Self {
+        Self(HostValueKind::Nat8 { value })
+    }
+
+    pub fn nat16(value: u16) -> Self {
+        Self(HostValueKind::Nat16 { value })
+    }
+
+    pub fn nat32(value: u32) -> Self {
+        Self(HostValueKind::Nat32 { value })
+    }
+
+    pub fn nat64(value: impl Into<String>) -> Result<Self, HostValueJsonError> {
+        let value = value.into();
+        Self::require(
+            canonical_nat(&value) && value.parse::<u64>().is_ok(),
+            "non-canonical nat64",
+        )?;
+        Ok(Self(HostValueKind::Nat64 { value }))
+    }
+
+    pub fn int8(value: i8) -> Self {
+        Self(HostValueKind::Int8 { value })
+    }
+
+    pub fn int16(value: i16) -> Self {
+        Self(HostValueKind::Int16 { value })
+    }
+
+    pub fn int32(value: i32) -> Self {
+        Self(HostValueKind::Int32 { value })
+    }
+
+    pub fn int64(value: impl Into<String>) -> Result<Self, HostValueJsonError> {
+        let value = value.into();
+        Self::require(
+            canonical_int(&value) && value.parse::<i64>().is_ok(),
+            "non-canonical int64",
+        )?;
+        Ok(Self(HostValueKind::Int64 { value }))
+    }
+
+    pub fn float32(bits: impl Into<String>) -> Result<Self, HostValueJsonError> {
+        let bits = bits.into();
+        Self::require(canonical_hex(&bits, 8), "non-canonical float32 bits")?;
+        Ok(Self(HostValueKind::Float32 { bits }))
+    }
+
+    pub fn float64(bits: impl Into<String>) -> Result<Self, HostValueJsonError> {
+        let bits = bits.into();
+        Self::require(canonical_hex(&bits, 16), "non-canonical float64 bits")?;
+        Ok(Self(HostValueKind::Float64 { bits }))
+    }
+
+    pub fn text(value: impl Into<String>) -> Self {
+        Self(HostValueKind::Text {
+            value: value.into(),
+        })
+    }
+
+    pub fn reserved() -> Self {
+        Self(HostValueKind::Reserved)
+    }
+
+    pub fn principal(value: impl Into<String>) -> Result<Self, HostValueJsonError> {
+        let value = value.into();
+        Self::require_canonical_principal(&value)?;
+        Ok(Self(HostValueKind::Principal { value }))
+    }
+
+    pub fn opt(value: Option<Self>) -> Self {
+        Self(HostValueKind::Opt {
+            value: value.map(Box::new),
+        })
+    }
+
+    pub fn vector(values: Vec<Self>) -> Self {
+        Self(HostValueKind::Vec { values })
+    }
+
+    pub fn record(fields: Vec<HostFieldValue>) -> Self {
+        Self(HostValueKind::Record { fields })
+    }
+
+    pub fn variant(id: u32, value: Self) -> Self {
+        Self(HostValueKind::Variant {
+            id,
+            value: Box::new(value),
+        })
+    }
+
+    pub fn service(principal: impl Into<String>) -> Result<Self, HostValueJsonError> {
+        let principal = principal.into();
+        Self::require_canonical_principal(&principal)?;
+        Ok(Self(HostValueKind::Service { principal }))
+    }
+
+    pub fn func(
+        principal: impl Into<String>,
+        method: impl Into<String>,
+    ) -> Result<Self, HostValueJsonError> {
+        let principal = principal.into();
+        Self::require_canonical_principal(&principal)?;
+        Ok(Self(HostValueKind::Func {
+            principal,
+            method: method.into(),
+        }))
+    }
+
+    fn require(condition: bool, message: &str) -> Result<(), HostValueJsonError> {
+        if condition {
+            Ok(())
+        } else {
+            Err(HostValueJsonError::Malformed(format!("$: {message}")))
+        }
+    }
+
+    fn require_canonical_principal(value: &str) -> Result<(), HostValueJsonError> {
+        let principal = candid_parser::Principal::from_text(value).map_err(|error| {
+            HostValueJsonError::Malformed(format!("$: invalid principal {value:?}: {error}"))
+        })?;
+        Self::require(principal.to_text() == value, "non-canonical principal")
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HostValueJsonError {
     Malformed(String),
-    Limit { limit: usize, observed: usize },
+    Limit {
+        limit: usize,
+        observed: usize,
+    },
+    ValueLimit {
+        resource: &'static str,
+        limit: usize,
+        observed: usize,
+        path: String,
+    },
+    Deadline {
+        path: String,
+    },
 }
 
 impl fmt::Display for HostValueJsonError {
@@ -80,11 +246,278 @@ impl fmt::Display for HostValueJsonError {
                 formatter,
                 "HostValue JSON uses {observed} bytes; limit is {limit}"
             ),
+            Self::ValueLimit {
+                resource,
+                limit,
+                observed,
+                path,
+            } => write!(
+                formatter,
+                "HostValue JSON at {path} uses {observed} {resource}; limit is {limit}"
+            ),
+            Self::Deadline { path } => {
+                write!(
+                    formatter,
+                    "HostValue JSON validation deadline elapsed at {path}"
+                )
+            }
         }
     }
 }
 
 impl std::error::Error for HostValueJsonError {}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawHostFieldValue {
+    id: u32,
+    value: RawHostValue,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+enum RawHostValue {
+    Null,
+    Bool { value: bool },
+    Nat { value: String },
+    Int { value: String },
+    Nat8 { value: u8 },
+    Nat16 { value: u16 },
+    Nat32 { value: u32 },
+    Nat64 { value: String },
+    Int8 { value: i8 },
+    Int16 { value: i16 },
+    Int32 { value: i32 },
+    Int64 { value: String },
+    Float32 { bits: String },
+    Float64 { bits: String },
+    Text { value: String },
+    Reserved,
+    Principal { value: String },
+    Opt { value: Option<Box<RawHostValue>> },
+    Vec { values: Vec<RawHostValue> },
+    Record { fields: Vec<RawHostFieldValue> },
+    Variant { id: u32, value: Box<RawHostValue> },
+    Service { principal: String },
+    Func { principal: String, method: String },
+}
+
+struct HostValueLocalValidationState<'a> {
+    limits: &'a Limits,
+    elements: usize,
+    bytes: usize,
+    work: usize,
+}
+
+impl<'a> HostValueLocalValidationState<'a> {
+    fn new(limits: &'a Limits) -> Self {
+        Self {
+            limits,
+            elements: 0,
+            bytes: 0,
+            work: 0,
+        }
+    }
+
+    fn canonicalize(mut self, raw: RawHostValue) -> Result<HostValue, HostValueJsonError> {
+        self.canonicalize_value(raw, "$", 0)
+    }
+
+    fn canonicalize_value(
+        &mut self,
+        raw: RawHostValue,
+        path: &str,
+        depth: usize,
+    ) -> Result<HostValue, HostValueJsonError> {
+        if self.limits.deadline_exceeded() {
+            return Err(HostValueJsonError::Deadline {
+                path: path.to_string(),
+            });
+        }
+        if depth > self.limits.max_value_depth {
+            return Err(HostValueJsonError::ValueLimit {
+                resource: "value_depth",
+                limit: self.limits.max_value_depth,
+                observed: depth,
+                path: path.to_string(),
+            });
+        }
+        self.elements = self.elements.saturating_add(1);
+        if self.elements > self.limits.max_value_elements {
+            return Err(HostValueJsonError::ValueLimit {
+                resource: "value_elements",
+                limit: self.limits.max_value_elements,
+                observed: self.elements,
+                path: path.to_string(),
+            });
+        }
+        self.work = self.work.saturating_add(1);
+        if self.work > self.limits.max_canonicalization_work {
+            return Err(HostValueJsonError::ValueLimit {
+                resource: "canonicalization_work",
+                limit: self.limits.max_canonicalization_work,
+                observed: self.work,
+                path: path.to_string(),
+            });
+        }
+
+        let value = match raw {
+            RawHostValue::Null => HostValueKind::Null,
+            RawHostValue::Bool { value } => HostValueKind::Bool { value },
+            RawHostValue::Nat { value } => {
+                self.charge(&value, path)?;
+                self.require(canonical_nat(&value), path, "non-canonical nat")?;
+                HostValueKind::Nat { value }
+            }
+            RawHostValue::Int { value } => {
+                self.charge(&value, path)?;
+                self.require(canonical_int(&value), path, "non-canonical int")?;
+                HostValueKind::Int { value }
+            }
+            RawHostValue::Nat8 { value } => HostValueKind::Nat8 { value },
+            RawHostValue::Nat16 { value } => HostValueKind::Nat16 { value },
+            RawHostValue::Nat32 { value } => HostValueKind::Nat32 { value },
+            RawHostValue::Nat64 { value } => {
+                self.charge(&value, path)?;
+                self.require(
+                    canonical_nat(&value) && value.parse::<u64>().is_ok(),
+                    path,
+                    "non-canonical nat64",
+                )?;
+                HostValueKind::Nat64 { value }
+            }
+            RawHostValue::Int8 { value } => HostValueKind::Int8 { value },
+            RawHostValue::Int16 { value } => HostValueKind::Int16 { value },
+            RawHostValue::Int32 { value } => HostValueKind::Int32 { value },
+            RawHostValue::Int64 { value } => {
+                self.charge(&value, path)?;
+                self.require(
+                    canonical_int(&value) && value.parse::<i64>().is_ok(),
+                    path,
+                    "non-canonical int64",
+                )?;
+                HostValueKind::Int64 { value }
+            }
+            RawHostValue::Float32 { bits } => {
+                self.charge(&bits, path)?;
+                self.require(canonical_hex(&bits, 8), path, "non-canonical float32 bits")?;
+                HostValueKind::Float32 { bits }
+            }
+            RawHostValue::Float64 { bits } => {
+                self.charge(&bits, path)?;
+                self.require(canonical_hex(&bits, 16), path, "non-canonical float64 bits")?;
+                HostValueKind::Float64 { bits }
+            }
+            RawHostValue::Text { value } => {
+                self.charge(&value, path)?;
+                HostValueKind::Text { value }
+            }
+            RawHostValue::Reserved => HostValueKind::Reserved,
+            RawHostValue::Principal { value } => {
+                self.charge(&value, path)?;
+                self.require_canonical_principal(&value, path)?;
+                HostValueKind::Principal { value }
+            }
+            RawHostValue::Opt { value } => HostValueKind::Opt {
+                value: value
+                    .map(|value| {
+                        self.canonicalize_value(*value, &format!("{path}.value"), depth + 1)
+                    })
+                    .transpose()?
+                    .map(Box::new),
+            },
+            RawHostValue::Vec { values } => HostValueKind::Vec {
+                values: values
+                    .into_iter()
+                    .enumerate()
+                    .map(|(index, value)| {
+                        self.canonicalize_value(
+                            value,
+                            &format!("{path}.values[{index}]"),
+                            depth + 1,
+                        )
+                    })
+                    .collect::<Result<Vec<_>, _>>()?,
+            },
+            RawHostValue::Record { fields } => HostValueKind::Record {
+                fields: fields
+                    .into_iter()
+                    .map(|field| {
+                        Ok(HostFieldValue {
+                            id: field.id,
+                            value: self.canonicalize_value(
+                                field.value,
+                                &format!("{path}.fields[{}]", field.id),
+                                depth + 1,
+                            )?,
+                        })
+                    })
+                    .collect::<Result<Vec<_>, HostValueJsonError>>()?,
+            },
+            RawHostValue::Variant { id, value } => HostValueKind::Variant {
+                id,
+                value: Box::new(self.canonicalize_value(
+                    *value,
+                    &format!("{path}.value"),
+                    depth + 1,
+                )?),
+            },
+            RawHostValue::Service { principal } => {
+                self.charge(&principal, path)?;
+                self.require_canonical_principal(&principal, path)?;
+                HostValueKind::Service { principal }
+            }
+            RawHostValue::Func { principal, method } => {
+                self.charge(&principal, path)?;
+                self.charge(&method, path)?;
+                self.require_canonical_principal(&principal, path)?;
+                HostValueKind::Func { principal, method }
+            }
+        };
+        Ok(HostValue(value))
+    }
+
+    fn charge(&mut self, value: &str, path: &str) -> Result<(), HostValueJsonError> {
+        self.bytes = self.bytes.saturating_add(value.len());
+        if self.bytes > self.limits.max_value_bytes {
+            return Err(HostValueJsonError::ValueLimit {
+                resource: "value_bytes",
+                limit: self.limits.max_value_bytes,
+                observed: self.bytes,
+                path: path.to_string(),
+            });
+        }
+        Ok(())
+    }
+
+    fn require(
+        &self,
+        condition: bool,
+        path: &str,
+        message: &str,
+    ) -> Result<(), HostValueJsonError> {
+        if condition {
+            Ok(())
+        } else {
+            Err(HostValueJsonError::Malformed(format!("{path}: {message}")))
+        }
+    }
+
+    fn require_canonical_principal(
+        &self,
+        value: &str,
+        path: &str,
+    ) -> Result<(), HostValueJsonError> {
+        let principal = candid_parser::Principal::from_text(value).map_err(|error| {
+            HostValueJsonError::Malformed(format!("{path}: invalid principal {value:?}: {error}"))
+        })?;
+        self.require(
+            principal.to_text() == value,
+            path,
+            "non-canonical principal",
+        )
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct HostValueViolation {
@@ -186,25 +619,25 @@ impl HostValueValidationState<'_> {
         self.charge_element(path)?;
         self.charge_string_bytes(value, path)?;
 
-        match (&self.contract.types()[reference as usize], value) {
+        match (&self.contract.types()[reference as usize], &value.0) {
             (TypeNode::Primitive { primitive }, value) => {
                 validate_primitive(*primitive, value, path)?;
             }
-            (TypeNode::Opt { inner }, HostValue::Opt { value }) => {
+            (TypeNode::Opt { inner }, HostValueKind::Opt { value }) => {
                 if let Some(value) = value {
                     self.preflight_children(1, path)?;
                     let child_path = format!("{path}.value");
                     self.validate_node(*inner, value, &child_path, depth + 1)?;
                 }
             }
-            (TypeNode::Vec { inner }, HostValue::Vec { values }) => {
+            (TypeNode::Vec { inner }, HostValueKind::Vec { values }) => {
                 self.preflight_children(values.len(), path)?;
                 for (index, value) in values.iter().enumerate() {
                     let child_path = format!("{path}.values[{index}]");
                     self.validate_node(*inner, value, &child_path, depth + 1)?;
                 }
             }
-            (TypeNode::Record { fields }, HostValue::Record { fields: values }) => {
+            (TypeNode::Record { fields }, HostValueKind::Record { fields: values }) => {
                 self.preflight_children(values.len(), path)?;
                 for (index, field) in values.iter().enumerate() {
                     for other in &values[index + 1..] {
@@ -256,7 +689,7 @@ impl HostValueValidationState<'_> {
                     self.validate_node(field.ty, &value.value, &child_path, depth + 1)?;
                 }
             }
-            (TypeNode::Variant { fields }, HostValue::Variant { id, value }) => {
+            (TypeNode::Variant { fields }, HostValueKind::Variant { id, value }) => {
                 let Some(field) = fields.iter().find(|field| field.id == *id) else {
                     return Err(single(
                         "unknown_variant_id",
@@ -268,10 +701,10 @@ impl HostValueValidationState<'_> {
                 let child_path = format!("{path}.value");
                 self.validate_node(field.ty, value, &child_path, depth + 1)?;
             }
-            (TypeNode::Service { .. }, HostValue::Service { principal }) => {
+            (TypeNode::Service { .. }, HostValueKind::Service { principal }) => {
                 validate_principal(principal, path)?;
             }
-            (TypeNode::Func { .. }, HostValue::Func { principal, method }) => {
+            (TypeNode::Func { .. }, HostValueKind::Func { principal, method }) => {
                 validate_principal(principal, path)?;
                 if method.is_empty() {
                     return Err(single(
@@ -423,31 +856,31 @@ impl HostValueValidationState<'_> {
 
 fn validate_primitive(
     primitive: PrimitiveType,
-    value: &HostValue,
+    value: &HostValueKind,
     path: &str,
 ) -> Result<(), HostValueValidationError> {
     let valid = match (primitive, value) {
-        (PrimitiveType::Null, HostValue::Null)
-        | (PrimitiveType::Bool, HostValue::Bool { .. })
-        | (PrimitiveType::Nat8, HostValue::Nat8 { .. })
-        | (PrimitiveType::Nat16, HostValue::Nat16 { .. })
-        | (PrimitiveType::Nat32, HostValue::Nat32 { .. })
-        | (PrimitiveType::Int8, HostValue::Int8 { .. })
-        | (PrimitiveType::Int16, HostValue::Int16 { .. })
-        | (PrimitiveType::Int32, HostValue::Int32 { .. })
-        | (PrimitiveType::Reserved, HostValue::Reserved) => true,
-        (PrimitiveType::Nat, HostValue::Nat { value }) => canonical_nat(value),
-        (PrimitiveType::Int, HostValue::Int { value }) => canonical_int(value),
-        (PrimitiveType::Nat64, HostValue::Nat64 { value }) => {
+        (PrimitiveType::Null, HostValueKind::Null)
+        | (PrimitiveType::Bool, HostValueKind::Bool { .. })
+        | (PrimitiveType::Nat8, HostValueKind::Nat8 { .. })
+        | (PrimitiveType::Nat16, HostValueKind::Nat16 { .. })
+        | (PrimitiveType::Nat32, HostValueKind::Nat32 { .. })
+        | (PrimitiveType::Int8, HostValueKind::Int8 { .. })
+        | (PrimitiveType::Int16, HostValueKind::Int16 { .. })
+        | (PrimitiveType::Int32, HostValueKind::Int32 { .. })
+        | (PrimitiveType::Reserved, HostValueKind::Reserved) => true,
+        (PrimitiveType::Nat, HostValueKind::Nat { value }) => canonical_nat(value),
+        (PrimitiveType::Int, HostValueKind::Int { value }) => canonical_int(value),
+        (PrimitiveType::Nat64, HostValueKind::Nat64 { value }) => {
             canonical_nat(value) && value.parse::<u64>().is_ok()
         }
-        (PrimitiveType::Int64, HostValue::Int64 { value }) => {
+        (PrimitiveType::Int64, HostValueKind::Int64 { value }) => {
             canonical_int(value) && value.parse::<i64>().is_ok()
         }
-        (PrimitiveType::Float32, HostValue::Float32 { bits }) => canonical_hex(bits, 8),
-        (PrimitiveType::Float64, HostValue::Float64 { bits }) => canonical_hex(bits, 16),
-        (PrimitiveType::Text, HostValue::Text { .. }) => true,
-        (PrimitiveType::Principal, HostValue::Principal { value }) => {
+        (PrimitiveType::Float32, HostValueKind::Float32 { bits }) => canonical_hex(bits, 8),
+        (PrimitiveType::Float64, HostValueKind::Float64 { bits }) => canonical_hex(bits, 16),
+        (PrimitiveType::Text, HostValueKind::Text { .. }) => true,
+        (PrimitiveType::Principal, HostValueKind::Principal { value }) => {
             validate_principal(value, path)?;
             true
         }
@@ -475,16 +908,16 @@ fn validate_primitive(
 }
 
 fn value_string_bytes(value: &HostValue) -> usize {
-    match value {
-        HostValue::Nat { value }
-        | HostValue::Int { value }
-        | HostValue::Nat64 { value }
-        | HostValue::Int64 { value }
-        | HostValue::Text { value }
-        | HostValue::Principal { value } => value.len(),
-        HostValue::Float32 { bits } | HostValue::Float64 { bits } => bits.len(),
-        HostValue::Service { principal } => principal.len(),
-        HostValue::Func { principal, method } => principal.len().saturating_add(method.len()),
+    match &value.0 {
+        HostValueKind::Nat { value }
+        | HostValueKind::Int { value }
+        | HostValueKind::Nat64 { value }
+        | HostValueKind::Int64 { value }
+        | HostValueKind::Text { value }
+        | HostValueKind::Principal { value } => value.len(),
+        HostValueKind::Float32 { bits } | HostValueKind::Float64 { bits } => bits.len(),
+        HostValueKind::Service { principal } => principal.len(),
+        HostValueKind::Func { principal, method } => principal.len().saturating_add(method.len()),
         _ => 0,
     }
 }
@@ -512,13 +945,20 @@ fn canonical_hex(value: &str, length: usize) -> bool {
 }
 
 fn validate_principal(value: &str, path: &str) -> Result<(), HostValueValidationError> {
-    candid_parser::Principal::from_text(value).map_err(|error| {
+    let principal = candid_parser::Principal::from_text(value).map_err(|error| {
         single(
             "invalid_principal",
             path,
             format!("invalid principal {value:?}: {error}"),
         )
     })?;
+    if principal.to_text() != value {
+        return Err(single(
+            "invalid_principal",
+            path,
+            format!("principal {value:?} is not in canonical textual form"),
+        ));
+    }
     Ok(())
 }
 
@@ -571,31 +1011,31 @@ fn type_node_kind(node: &TypeNode) -> &'static str {
     }
 }
 
-fn host_value_kind(value: &HostValue) -> &'static str {
+fn host_value_kind(value: &HostValueKind) -> &'static str {
     match value {
-        HostValue::Null => "null",
-        HostValue::Bool { .. } => "bool",
-        HostValue::Nat { .. } => "nat",
-        HostValue::Int { .. } => "int",
-        HostValue::Nat8 { .. } => "nat8",
-        HostValue::Nat16 { .. } => "nat16",
-        HostValue::Nat32 { .. } => "nat32",
-        HostValue::Nat64 { .. } => "nat64",
-        HostValue::Int8 { .. } => "int8",
-        HostValue::Int16 { .. } => "int16",
-        HostValue::Int32 { .. } => "int32",
-        HostValue::Int64 { .. } => "int64",
-        HostValue::Float32 { .. } => "float32",
-        HostValue::Float64 { .. } => "float64",
-        HostValue::Text { .. } => "text",
-        HostValue::Reserved => "reserved",
-        HostValue::Principal { .. } => "principal",
-        HostValue::Opt { .. } => "opt",
-        HostValue::Vec { .. } => "vec",
-        HostValue::Record { .. } => "record",
-        HostValue::Variant { .. } => "variant",
-        HostValue::Service { .. } => "service",
-        HostValue::Func { .. } => "func",
+        HostValueKind::Null => "null",
+        HostValueKind::Bool { .. } => "bool",
+        HostValueKind::Nat { .. } => "nat",
+        HostValueKind::Int { .. } => "int",
+        HostValueKind::Nat8 { .. } => "nat8",
+        HostValueKind::Nat16 { .. } => "nat16",
+        HostValueKind::Nat32 { .. } => "nat32",
+        HostValueKind::Nat64 { .. } => "nat64",
+        HostValueKind::Int8 { .. } => "int8",
+        HostValueKind::Int16 { .. } => "int16",
+        HostValueKind::Int32 { .. } => "int32",
+        HostValueKind::Int64 { .. } => "int64",
+        HostValueKind::Float32 { .. } => "float32",
+        HostValueKind::Float64 { .. } => "float64",
+        HostValueKind::Text { .. } => "text",
+        HostValueKind::Reserved => "reserved",
+        HostValueKind::Principal { .. } => "principal",
+        HostValueKind::Opt { .. } => "opt",
+        HostValueKind::Vec { .. } => "vec",
+        HostValueKind::Record { .. } => "record",
+        HostValueKind::Variant { .. } => "variant",
+        HostValueKind::Service { .. } => "service",
+        HostValueKind::Func { .. } => "func",
     }
 }
 
