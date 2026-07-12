@@ -316,6 +316,40 @@ fn scalar_bytes_are_charged_before_numeric_hex_and_principal_parsing() {
 }
 
 #[test]
+fn record_scans_are_bounded_by_the_work_limit() {
+    let compilation =
+        compile_did("type T = record { a: nat; b: nat; c: nat; d: nat }; service : {};").unwrap();
+    let contract = compilation.contract();
+    let selector = contract.bind_type(declaration(contract, "T")).unwrap();
+    let value = HostValue::Record {
+        fields: ["a", "b", "c", "d"]
+            .into_iter()
+            .map(|name| {
+                field(
+                    name,
+                    HostValue::Nat {
+                        value: "1".to_string(),
+                    },
+                )
+            })
+            .collect(),
+    };
+    let limits = Limits {
+        max_canonicalization_work: 2,
+        ..Limits::default()
+    };
+
+    let error = validate_host_value(contract, &selector, &value, &limits).unwrap_err();
+    let violation = &error.violations[0];
+    assert_eq!(violation.code, "resource_limit_exceeded");
+    assert_eq!(violation.path, "$");
+    let info = violation.resource_limit.as_ref().unwrap();
+    assert_eq!(info.resource, "canonicalization_work");
+    assert_eq!(info.limit, 2);
+    assert_eq!(info.observed, 3);
+}
+
+#[test]
 fn cursor_validation_preserves_ordering_duplicates_paths_and_valid_values() {
     let compilation = compile_did(
         r#"
