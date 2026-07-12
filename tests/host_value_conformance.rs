@@ -211,3 +211,211 @@ fn empty_and_noncanonical_numeric_representations_are_rejected() {
         "value_bytes"
     );
 }
+
+#[test]
+fn wide_vectors_are_rejected_before_child_paths_are_scheduled() {
+    let compilation = compile_did("type Items = vec nat; service : {};").unwrap();
+    let contract = compilation.contract();
+    let selector = contract.bind_type(declaration(contract, "Items")).unwrap();
+    let value = HostValue::Vec {
+        values: (0..100)
+            .map(|_| HostValue::Nat {
+                value: "not-canonical".to_string(),
+            })
+            .collect(),
+    };
+    let limits = Limits {
+        max_value_elements: 10,
+        ..Limits::default()
+    };
+
+    let error = validate_host_value(contract, &selector, &value, &limits).unwrap_err();
+    let violation = &error.violations[0];
+    assert_eq!(violation.code, "resource_limit_exceeded");
+    assert_eq!(violation.path, "$");
+    let info = violation.resource_limit.as_ref().unwrap();
+    assert_eq!(info.resource, "value_elements");
+    assert_eq!(info.limit, 10);
+    assert_eq!(info.observed, 101);
+}
+
+#[test]
+fn wide_records_are_rejected_before_duplicate_or_field_set_scans() {
+    let compilation = compile_did("type Pair = record { a: nat; b: nat }; service : {};").unwrap();
+    let contract = compilation.contract();
+    let selector = contract.bind_type(declaration(contract, "Pair")).unwrap();
+    let mut fields = Vec::new();
+    fields.push(field(
+        "a",
+        HostValue::Nat {
+            value: "1".to_string(),
+        },
+    ));
+    fields.extend((0..100).map(|_| {
+        field(
+            "b",
+            HostValue::Nat {
+                value: "2".to_string(),
+            },
+        )
+    }));
+    let value = HostValue::Record { fields };
+    let limits = Limits {
+        max_value_elements: 10,
+        ..Limits::default()
+    };
+
+    let error = validate_host_value(contract, &selector, &value, &limits).unwrap_err();
+    let violation = &error.violations[0];
+    assert_eq!(violation.code, "resource_limit_exceeded");
+    assert_eq!(violation.path, "$");
+    let info = violation.resource_limit.as_ref().unwrap();
+    assert_eq!(info.resource, "value_elements");
+    assert_eq!(info.limit, 10);
+    assert_eq!(info.observed, 102);
+}
+
+#[test]
+fn scalar_bytes_are_charged_before_numeric_hex_and_principal_parsing() {
+    for (did, value) in [
+        (
+            "type T = nat; service : {};",
+            HostValue::Nat {
+                value: "01".to_string(),
+            },
+        ),
+        (
+            "type T = float32; service : {};",
+            HostValue::Float32 {
+                bits: "zzzzzzzz".to_string(),
+            },
+        ),
+        (
+            "type T = principal; service : {};",
+            HostValue::Principal {
+                value: "not-a-principal".to_string(),
+            },
+        ),
+    ] {
+        let compilation = compile_did(did).unwrap();
+        let contract = compilation.contract();
+        let selector = contract.bind_type(declaration(contract, "T")).unwrap();
+        let limits = Limits {
+            max_value_bytes: 1,
+            ..Limits::default()
+        };
+        let error = validate_host_value(contract, &selector, &value, &limits).unwrap_err();
+        let violation = &error.violations[0];
+        assert_eq!(violation.code, "resource_limit_exceeded");
+        assert_eq!(violation.path, "$");
+        assert_eq!(
+            violation.resource_limit.as_ref().unwrap().resource,
+            "value_bytes"
+        );
+    }
+}
+
+#[test]
+fn cursor_validation_preserves_ordering_duplicates_paths_and_valid_values() {
+    let compilation = compile_did(
+        r#"
+        type Inner = record { first: nat; second: nat };
+        type Outer = record { inner: Inner; items: vec nat };
+        service : {};
+        "#,
+    )
+    .unwrap();
+    let contract = compilation.contract();
+    let selector = contract.bind_type(declaration(contract, "Outer")).unwrap();
+
+    let first_id = candid_parser::candid::idl_hash("first");
+    let inner_id = candid_parser::candid::idl_hash("inner");
+    let invalid_nested_first = HostValue::Record {
+        fields: vec![
+            HostFieldValue {
+                id: inner_id,
+                value: HostValue::Record {
+                    fields: vec![
+                        HostFieldValue {
+                            id: first_id,
+                            value: HostValue::Nat {
+                                value: "01".to_string(),
+                            },
+                        },
+                        field(
+                            "second",
+                            HostValue::Nat {
+                                value: "2".to_string(),
+                            },
+                        ),
+                    ],
+                },
+            },
+            field(
+                "items",
+                HostValue::Vec {
+                    values: vec![HostValue::Nat {
+                        value: "bad".to_string(),
+                    }],
+                },
+            ),
+        ],
+    };
+    let error = validate_host_value(
+        contract,
+        &selector,
+        &invalid_nested_first,
+        &Limits::default(),
+    )
+    .unwrap_err();
+    assert_eq!(error.violations[0].code, "host_value_kind_mismatch");
+    assert_eq!(
+        error.violations[0].path,
+        format!("$.fields[{inner_id}].fields[{first_id}]")
+    );
+
+    let duplicate = HostValue::Record {
+        fields: vec![
+            field("inner", HostValue::Null),
+            field("inner", HostValue::Null),
+            field("items", HostValue::Vec { values: vec![] }),
+        ],
+    };
+    let error =
+        validate_host_value(contract, &selector, &duplicate, &Limits::default()).unwrap_err();
+    assert_eq!(error.violations[0].code, "duplicate_host_field");
+    assert_eq!(error.violations[0].path, "$");
+
+    let valid = HostValue::Record {
+        fields: vec![
+            HostFieldValue {
+                id: inner_id,
+                value: HostValue::Record {
+                    fields: vec![
+                        field(
+                            "second",
+                            HostValue::Nat {
+                                value: "2".to_string(),
+                            },
+                        ),
+                        HostFieldValue {
+                            id: first_id,
+                            value: HostValue::Nat {
+                                value: "1".to_string(),
+                            },
+                        },
+                    ],
+                },
+            },
+            field(
+                "items",
+                HostValue::Vec {
+                    values: vec![HostValue::Nat {
+                        value: "3".to_string(),
+                    }],
+                },
+            ),
+        ],
+    };
+    validate_host_value(contract, &selector, &valid, &Limits::default()).unwrap();
+}

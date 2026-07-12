@@ -1,7 +1,6 @@
 use crate::limits::Limits;
 use crate::model::{Contract, PrimitiveType, TypeNode, TypeRef};
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -141,99 +140,136 @@ pub fn validate_host_value(
         ));
     }
 
-    let mut work = vec![(selector.type_ref, value, "$".to_string(), 0usize)];
-    let mut elements = 0usize;
-    let mut bytes = 0usize;
-    while let Some((reference, value, path, depth)) = work.pop() {
-        if limits.deadline_exceeded() {
+    let mut state = HostValueValidationState {
+        contract,
+        limits,
+        elements: 0,
+        bytes: 0,
+    };
+    state.validate_node(selector.type_ref, value, "$", 0)
+}
+
+struct HostValueValidationState<'a> {
+    contract: &'a Contract,
+    limits: &'a Limits,
+    elements: usize,
+    bytes: usize,
+}
+
+impl HostValueValidationState<'_> {
+    fn validate_node(
+        &mut self,
+        reference: TypeRef,
+        value: &HostValue,
+        path: &str,
+        depth: usize,
+    ) -> Result<(), HostValueValidationError> {
+        if self.limits.deadline_exceeded() {
             return Err(single(
                 "operation_deadline_exceeded",
                 path,
                 "HostValue validation deadline has elapsed",
             ));
         }
-        if depth > limits.max_value_depth {
+        if depth > self.limits.max_value_depth {
             return Err(resource_single(
                 "value_depth",
-                limits.max_value_depth,
+                self.limits.max_value_depth,
                 depth,
                 path,
-                format!("value depth exceeds limit {}", limits.max_value_depth),
+                format!("value depth exceeds limit {}", self.limits.max_value_depth),
             ));
         }
-        elements = elements.saturating_add(1);
-        if elements > limits.max_value_elements {
-            return Err(resource_single(
-                "value_elements",
-                limits.max_value_elements,
-                elements,
-                path,
-                format!("value elements exceed limit {}", limits.max_value_elements),
-            ));
-        }
-        bytes = bytes.saturating_add(value_string_bytes(value));
-        match (&contract.types()[reference as usize], value) {
+
+        self.charge_element(path)?;
+        self.charge_string_bytes(value, path)?;
+
+        match (&self.contract.types()[reference as usize], value) {
             (TypeNode::Primitive { primitive }, value) => {
-                validate_primitive(*primitive, value, &path)?;
+                validate_primitive(*primitive, value, path)?;
             }
             (TypeNode::Opt { inner }, HostValue::Opt { value }) => {
                 if let Some(value) = value {
-                    work.push((*inner, value, format!("{path}.value"), depth + 1));
+                    self.preflight_children(1, path)?;
+                    let child_path = format!("{path}.value");
+                    self.validate_node(*inner, value, &child_path, depth + 1)?;
                 }
             }
             (TypeNode::Vec { inner }, HostValue::Vec { values }) => {
-                for (index, value) in values.iter().enumerate().rev() {
-                    work.push((*inner, value, format!("{path}.values[{index}]"), depth + 1));
+                self.preflight_children(values.len(), path)?;
+                for (index, value) in values.iter().enumerate() {
+                    let child_path = format!("{path}.values[{index}]");
+                    self.validate_node(*inner, value, &child_path, depth + 1)?;
                 }
             }
             (TypeNode::Record { fields }, HostValue::Record { fields: values }) => {
-                let mut by_id = BTreeMap::new();
-                for field in values {
-                    if by_id.insert(field.id, &field.value).is_some() {
-                        return Err(single(
-                            "duplicate_host_field",
-                            &path,
-                            format!("record field ID {} occurs more than once", field.id),
-                        ));
+                self.preflight_children(values.len(), path)?;
+                for (index, field) in values.iter().enumerate() {
+                    for other in &values[index + 1..] {
+                        self.check_deadline(path)?;
+                        if other.id == field.id {
+                            return Err(single(
+                                "duplicate_host_field",
+                                path,
+                                format!("record field ID {} occurs more than once", field.id),
+                            ));
+                        }
                     }
                 }
-                let expected: BTreeSet<_> = fields.iter().map(|field| field.id).collect();
-                let actual: BTreeSet<_> = by_id.keys().copied().collect();
-                if expected != actual {
+                let mut field_set_matches = fields.len() == values.len();
+                if field_set_matches {
+                    'expected_fields: for field in fields {
+                        for value in values {
+                            self.check_deadline(path)?;
+                            if value.id == field.id {
+                                continue 'expected_fields;
+                            }
+                        }
+                        field_set_matches = false;
+                        break;
+                    }
+                }
+                if !field_set_matches {
                     return Err(single(
                         "record_field_set_mismatch",
-                        &path,
-                        format!("expected field IDs {expected:?}, found {actual:?}"),
+                        path,
+                        format!(
+                            "expected field IDs {}, found {}",
+                            self.sorted_field_ids(fields.len(), |index| fields[index].id, path)?,
+                            self.sorted_field_ids(values.len(), |index| values[index].id, path)?
+                        ),
                     ));
                 }
-                for field in fields.iter().rev() {
-                    work.push((
-                        field.ty,
-                        by_id[&field.id],
-                        format!("{path}.fields[{}]", field.id),
-                        depth + 1,
-                    ));
+                for field in fields {
+                    let value = values
+                        .iter()
+                        .find(|value| value.id == field.id)
+                        .expect("record field set was checked above");
+                    let child_path = format!("{path}.fields[{}]", field.id);
+                    self.validate_node(field.ty, &value.value, &child_path, depth + 1)?;
                 }
             }
             (TypeNode::Variant { fields }, HostValue::Variant { id, value }) => {
                 let Some(field) = fields.iter().find(|field| field.id == *id) else {
                     return Err(single(
                         "unknown_variant_id",
-                        &path,
+                        path,
                         format!("variant ID {id} does not exist in the expected type"),
                     ));
                 };
-                work.push((field.ty, value, format!("{path}.value"), depth + 1));
+                self.preflight_children(1, path)?;
+                let child_path = format!("{path}.value");
+                self.validate_node(field.ty, value, &child_path, depth + 1)?;
             }
             (TypeNode::Service { .. }, HostValue::Service { principal }) => {
-                validate_principal(principal, &path)?;
+                validate_principal(principal, path)?;
             }
             (TypeNode::Func { .. }, HostValue::Func { principal, method }) => {
-                validate_principal(principal, &path)?;
+                validate_principal(principal, path)?;
                 if method.is_empty() {
                     return Err(single(
                         "empty_function_method",
-                        &path,
+                        path,
                         "function method names must not be empty",
                     ));
                 }
@@ -241,14 +277,14 @@ pub fn validate_host_value(
             (TypeNode::Class { .. }, _) => {
                 return Err(single(
                     "class_has_no_host_value",
-                    &path,
+                    path,
                     "service constructors are not first-class Candid values",
                 ));
             }
             (expected, actual) => {
                 return Err(single(
                     "host_value_kind_mismatch",
-                    &path,
+                    path,
                     format!(
                         "expected {}, found {}",
                         type_node_kind(expected),
@@ -257,17 +293,107 @@ pub fn validate_host_value(
                 ));
             }
         }
-        if bytes > limits.max_value_bytes {
+        Ok(())
+    }
+
+    fn charge_element(&mut self, path: &str) -> Result<(), HostValueValidationError> {
+        self.elements = self.elements.saturating_add(1);
+        if self.elements > self.limits.max_value_elements {
             return Err(resource_single(
-                "value_bytes",
-                limits.max_value_bytes,
-                bytes,
-                &path,
-                format!("value bytes exceed limit {}", limits.max_value_bytes),
+                "value_elements",
+                self.limits.max_value_elements,
+                self.elements,
+                path,
+                format!(
+                    "value elements exceed limit {}",
+                    self.limits.max_value_elements
+                ),
             ));
         }
+        Ok(())
     }
-    Ok(())
+
+    fn check_deadline(&self, path: &str) -> Result<(), HostValueValidationError> {
+        if self.limits.deadline_exceeded() {
+            return Err(single(
+                "operation_deadline_exceeded",
+                path,
+                "HostValue validation deadline has elapsed",
+            ));
+        }
+        Ok(())
+    }
+
+    fn preflight_children(
+        &self,
+        child_count: usize,
+        path: &str,
+    ) -> Result<(), HostValueValidationError> {
+        let observed = self.elements.saturating_add(child_count);
+        if observed > self.limits.max_value_elements {
+            return Err(resource_single(
+                "value_elements",
+                self.limits.max_value_elements,
+                observed,
+                path,
+                format!(
+                    "value elements exceed limit {}",
+                    self.limits.max_value_elements
+                ),
+            ));
+        }
+        Ok(())
+    }
+
+    fn charge_string_bytes(
+        &mut self,
+        value: &HostValue,
+        path: &str,
+    ) -> Result<(), HostValueValidationError> {
+        self.bytes = self.bytes.saturating_add(value_string_bytes(value));
+        if self.bytes > self.limits.max_value_bytes {
+            return Err(resource_single(
+                "value_bytes",
+                self.limits.max_value_bytes,
+                self.bytes,
+                path,
+                format!("value bytes exceed limit {}", self.limits.max_value_bytes),
+            ));
+        }
+        Ok(())
+    }
+
+    fn sorted_field_ids(
+        &self,
+        length: usize,
+        id_at: impl Fn(usize) -> u32,
+        path: &str,
+    ) -> Result<String, HostValueValidationError> {
+        let mut output = String::from("[");
+        let mut previous = None;
+        for position in 0..length {
+            let mut next = None;
+            for index in 0..length {
+                self.check_deadline(path)?;
+                let id = id_at(index);
+                let after_previous = previous.map_or(true, |previous| id > previous);
+                let before_next = next.map_or(true, |next| id < next);
+                if after_previous && before_next {
+                    next = Some(id);
+                }
+            }
+            let Some(id) = next else {
+                break;
+            };
+            if position > 0 {
+                output.push_str(", ");
+            }
+            output.push_str(&id.to_string());
+            previous = Some(id);
+        }
+        output.push(']');
+        Ok(output)
+    }
 }
 
 fn validate_primitive(
