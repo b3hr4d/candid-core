@@ -205,26 +205,38 @@ impl HostValueValidationState<'_> {
             (TypeNode::Record { fields }, HostValue::Record { fields: values }) => {
                 self.preflight_children(values.len(), path)?;
                 for (index, field) in values.iter().enumerate() {
-                    if values[index + 1..].iter().any(|other| other.id == field.id) {
-                        return Err(single(
-                            "duplicate_host_field",
-                            path,
-                            format!("record field ID {} occurs more than once", field.id),
-                        ));
+                    for other in &values[index + 1..] {
+                        self.check_deadline(path)?;
+                        if other.id == field.id {
+                            return Err(single(
+                                "duplicate_host_field",
+                                path,
+                                format!("record field ID {} occurs more than once", field.id),
+                            ));
+                        }
                     }
                 }
-                if fields.len() != values.len()
-                    || fields
-                        .iter()
-                        .any(|field| !values.iter().any(|value| value.id == field.id))
-                {
+                let mut field_set_matches = fields.len() == values.len();
+                if field_set_matches {
+                    'expected_fields: for field in fields {
+                        for value in values {
+                            self.check_deadline(path)?;
+                            if value.id == field.id {
+                                continue 'expected_fields;
+                            }
+                        }
+                        field_set_matches = false;
+                        break;
+                    }
+                }
+                if !field_set_matches {
                     return Err(single(
                         "record_field_set_mismatch",
                         path,
                         format!(
                             "expected field IDs {}, found {}",
-                            sorted_field_ids(fields.len(), |index| fields[index].id),
-                            sorted_field_ids(values.len(), |index| values[index].id)
+                            self.sorted_field_ids(fields.len(), |index| fields[index].id, path)?,
+                            self.sorted_field_ids(values.len(), |index| values[index].id, path)?
                         ),
                     ));
                 }
@@ -301,6 +313,17 @@ impl HostValueValidationState<'_> {
         Ok(())
     }
 
+    fn check_deadline(&self, path: &str) -> Result<(), HostValueValidationError> {
+        if self.limits.deadline_exceeded() {
+            return Err(single(
+                "operation_deadline_exceeded",
+                path,
+                "HostValue validation deadline has elapsed",
+            ));
+        }
+        Ok(())
+    }
+
     fn preflight_children(
         &self,
         child_count: usize,
@@ -339,32 +362,38 @@ impl HostValueValidationState<'_> {
         }
         Ok(())
     }
-}
 
-fn sorted_field_ids(length: usize, id_at: impl Fn(usize) -> u32) -> String {
-    let mut output = String::from("[");
-    let mut previous = None;
-    for position in 0..length {
-        let mut next = None;
-        for index in 0..length {
-            let id = id_at(index);
-            let after_previous = previous.map_or(true, |previous| id > previous);
-            let before_next = next.map_or(true, |next| id < next);
-            if after_previous && before_next {
-                next = Some(id);
+    fn sorted_field_ids(
+        &self,
+        length: usize,
+        id_at: impl Fn(usize) -> u32,
+        path: &str,
+    ) -> Result<String, HostValueValidationError> {
+        let mut output = String::from("[");
+        let mut previous = None;
+        for position in 0..length {
+            let mut next = None;
+            for index in 0..length {
+                self.check_deadline(path)?;
+                let id = id_at(index);
+                let after_previous = previous.map_or(true, |previous| id > previous);
+                let before_next = next.map_or(true, |next| id < next);
+                if after_previous && before_next {
+                    next = Some(id);
+                }
             }
+            let Some(id) = next else {
+                break;
+            };
+            if position > 0 {
+                output.push_str(", ");
+            }
+            output.push_str(&id.to_string());
+            previous = Some(id);
         }
-        let Some(id) = next else {
-            break;
-        };
-        if position > 0 {
-            output.push_str(", ");
-        }
-        output.push_str(&id.to_string());
-        previous = Some(id);
+        output.push(']');
+        Ok(output)
     }
-    output.push(']');
-    output
 }
 
 fn validate_primitive(
