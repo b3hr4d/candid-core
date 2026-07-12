@@ -7,6 +7,7 @@ pub const CONTRACT_FORMAT: &str = "candid-core";
 pub const FORMAT_VERSION: u32 = 1;
 pub const SEMANTICS_PROFILE: &str = "candid-1";
 pub const CANONICALIZATION_PROFILE: &str = "candid-core-canon-1";
+const PACKAGE_MANIFEST: &str = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/Cargo.toml"));
 pub type TypeRef = u32;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -31,10 +32,28 @@ impl ProducerInfo {
         Self {
             name: env!("CARGO_PKG_NAME").to_string(),
             version: env!("CARGO_PKG_VERSION").to_string(),
-            candid_version: "0.10.30".to_string(),
-            candid_parser_version: "0.4.0".to_string(),
+            candid_version: exact_dependency_version(PACKAGE_MANIFEST, "candid"),
+            candid_parser_version: exact_dependency_version(PACKAGE_MANIFEST, "candid_parser"),
         }
     }
+}
+
+fn exact_dependency_version(manifest: &str, dependency: &str) -> String {
+    let prefix = format!("{dependency} = ");
+    manifest
+        .lines()
+        .map(str::trim)
+        .find_map(|line| line.strip_prefix(&prefix))
+        .and_then(|value| {
+            value
+                .strip_prefix('"')
+                .and_then(|value| value.strip_prefix('='))
+                .and_then(|value| value.split_once('"').map(|(version, _)| version))
+        })
+        .unwrap_or_else(|| {
+            panic!("{dependency} must be declared as an exact string dependency in Cargo.toml")
+        })
+        .to_string()
 }
 
 /// The wire-semantics Contract consumed by host runtimes.

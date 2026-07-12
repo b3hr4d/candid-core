@@ -544,3 +544,75 @@ fn canonical_contracts_match_checked_in_cross_language_fixtures() {
         assert_eq!(contract, expected, "fixture {name} drifted");
     }
 }
+
+fn exact_manifest_dependency_version(dependency: &str) -> String {
+    let manifest = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/Cargo.toml"));
+    let prefix = format!("{dependency} = ");
+    manifest
+        .lines()
+        .map(str::trim)
+        .find_map(|line| line.strip_prefix(&prefix))
+        .and_then(|value| {
+            value
+                .strip_prefix('"')
+                .and_then(|value| value.strip_prefix('='))
+                .and_then(|value| value.split_once('"').map(|(version, _)| version))
+        })
+        .unwrap_or_else(|| panic!("{dependency} must be exact-pinned in Cargo.toml"))
+        .to_string()
+}
+
+fn lockfile_versions(package: &str) -> Vec<String> {
+    let lockfile = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/Cargo.lock"));
+    let mut versions = Vec::new();
+    let mut current_package_matches = false;
+
+    for line in lockfile.lines().map(str::trim) {
+        if line == "[[package]]" {
+            current_package_matches = false;
+        } else if line == format!("name = \"{package}\"") {
+            current_package_matches = true;
+        } else if current_package_matches {
+            if let Some(version) = line
+                .strip_prefix("version = ")
+                .and_then(|value| value.strip_prefix('"'))
+                .and_then(|value| value.strip_suffix('"'))
+            {
+                versions.push(version.to_string());
+                current_package_matches = false;
+            }
+        }
+    }
+
+    versions
+}
+
+#[test]
+fn producer_reports_exact_selected_candid_engine_versions() {
+    let contract = compile("service : {};").contract().clone();
+    let producer = contract.producer();
+
+    assert_eq!(producer.name, env!("CARGO_PKG_NAME"));
+    assert_eq!(producer.version, env!("CARGO_PKG_VERSION"));
+    assert_eq!(
+        producer.candid_version,
+        exact_manifest_dependency_version("candid")
+    );
+    assert_eq!(
+        producer.candid_parser_version,
+        exact_manifest_dependency_version("candid_parser")
+    );
+    assert_eq!(contract.semantics_profile(), SEMANTICS_PROFILE);
+}
+
+#[test]
+fn identity_relevant_candid_dependencies_are_exact_and_not_duplicated() {
+    let candid_version = exact_manifest_dependency_version("candid");
+    let candid_parser_version = exact_manifest_dependency_version("candid_parser");
+
+    assert_eq!(lockfile_versions("candid"), vec![candid_version]);
+    assert_eq!(
+        lockfile_versions("candid_parser"),
+        vec![candid_parser_version]
+    );
+}
