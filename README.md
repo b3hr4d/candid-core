@@ -54,6 +54,13 @@ All six decisions are implemented in the Rust reference runtime. Because the
 crate has not been released, this profile is the clean starting point rather
 than a compatibility layer over an earlier format.
 
+## Rust version and dependencies
+
+The crate advertises Rust 1.78 as its minimum supported Rust version (MSRV).
+Direct dependencies are pinned to versions that are expected to build on that
+toolchain, and dependency updates should preserve the advertised MSRV unless the
+`rust-version` field is intentionally raised in the same change.
+
 ## Platform APIs
 
 - `RawContract` → `Contract::try_from_raw` validates an external artifact.
