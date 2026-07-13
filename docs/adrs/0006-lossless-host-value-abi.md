@@ -1,6 +1,6 @@
 # ADR 0006: Use a lossless tagged HostValue ABI
 
-- Status: Implemented
+- Status: Implemented, verification pending
 - Date: 2026-07-10
 - Owners: Contract runtime maintainers
 

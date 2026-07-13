@@ -1,6 +1,6 @@
 # ADR 0001: Separate interface, Contract, and source-bundle identities
 
-- Status: Implemented
+- Status: Implemented, verification pending
 - Date: 2026-07-10
 - Owners: Contract runtime maintainers
 

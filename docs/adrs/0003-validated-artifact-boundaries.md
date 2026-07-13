@@ -1,6 +1,6 @@
 # ADR 0003: Make validated artifacts and provenance binding explicit
 
-- Status: Implemented
+- Status: Implemented, verification pending
 - Date: 2026-07-10
 - Owners: Contract runtime maintainers
 

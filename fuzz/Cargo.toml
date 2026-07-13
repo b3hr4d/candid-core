@@ -1,0 +1,57 @@
+[package]
+name = "candid-core-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+serde_json = "1"
+
+[dependencies.candid-core]
+path = ".."
+
+[[bin]]
+name = "source_parsing"
+path = "fuzz_targets/source_parsing.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "contract_json"
+path = "fuzz_targets/contract_json.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "canonicalization"
+path = "fuzz_targets/canonicalization.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "resolver_ids"
+path = "fuzz_targets/resolver_ids.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "provenance"
+path = "fuzz_targets/provenance.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "host_value"
+path = "fuzz_targets/host_value.rs"
+test = false
+doc = false
+bench = false

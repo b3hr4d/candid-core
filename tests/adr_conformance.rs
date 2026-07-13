@@ -515,7 +515,7 @@ fn raw_graph_builder_calculates_identities_for_producers() {
 
 #[test]
 fn canonical_contracts_match_checked_in_cross_language_fixtures() {
-    for name in ["basic", "recursive"] {
+    for name in ["actorless", "empty_actor", "class", "basic", "recursive"] {
         let did = format!(
             "{}/tests/fixtures/conformance/{name}.did",
             env!("CARGO_MANIFEST_DIR")

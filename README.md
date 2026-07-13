@@ -18,6 +18,8 @@ source spelling/comments are identified separately by `source_bundle_id`.
 See [architecture](docs/architecture.md) and the
 [Contract graph](docs/contract-graph.md) for the v1 model, constraints, and
 the explicitly deferred host-value ↔ Candid binary bridge.
+See [release verification gates](docs/verification.md) for the checks required
+before declaring the format stable across implementations.
 
 ## Runnable examples
 

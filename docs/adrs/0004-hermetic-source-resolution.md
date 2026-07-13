@@ -1,6 +1,6 @@
 # ADR 0004: Resolve imports through a hermetic capability boundary
 
-- Status: Implemented
+- Status: Implemented, verification pending
 - Date: 2026-07-10
 - Owners: Contract runtime maintainers
 

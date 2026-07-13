@@ -1,0 +1,14 @@
+{
+  "format": "candid-core",
+  "format_version": 1,
+  "semantics_profile": "candid-1",
+  "canonicalization_profile": "candid-core-canon-1",
+  "identities": {
+    "contract": "candid-core:contract:v1:sha256:edfb9052c7234db653686a79e02e317241b4ccfe74e989a2f5735aa2c8a70ba5",
+    "interface": "candid-core:interface:v1:sha256:ea1e1478267a0f0bdffeb8f5acc0ac91c3a496f285c46c10c104fac61698e401"
+  },
+  "producer": { "name": "candid-core", "version": "0.1.0", "candid_version": "0.10.30", "candid_parser_version": "0.4.0" },
+  "types": [{ "kind": "service", "methods": [] }],
+  "declarations": [],
+  "actor": { "kind": "service", "service": 0 }
+}

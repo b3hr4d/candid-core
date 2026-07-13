@@ -1,6 +1,6 @@
 # ADR 0005: Bound all untrusted work and avoid recursive execution
 
-- Status: Implemented
+- Status: Implemented, verification pending
 - Date: 2026-07-10
 - Owners: Contract runtime maintainers
 

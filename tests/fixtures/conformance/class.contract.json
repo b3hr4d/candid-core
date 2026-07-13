@@ -1,0 +1,19 @@
+{
+  "format": "candid-core",
+  "format_version": 1,
+  "semantics_profile": "candid-1",
+  "canonicalization_profile": "candid-core-canon-1",
+  "identities": {
+    "contract": "candid-core:contract:v1:sha256:a91547c764a74b424776b2af1ea68cc68e3e47e879b0c498c20786a69da3c86b",
+    "interface": "candid-core:interface:v1:sha256:f7aeff5c83e4293731a993d4b4db82d32e3d5368800903956dcbb378b11ec6cf"
+  },
+  "producer": { "name": "candid-core", "version": "0.1.0", "candid_version": "0.10.30", "candid_parser_version": "0.4.0" },
+  "types": [
+    { "kind": "class", "init": [1], "service": 2 },
+    { "kind": "primitive", "primitive": "nat" },
+    { "kind": "service", "methods": [{ "name": "get", "id": 5144726, "function": 3 }] },
+    { "kind": "func", "args": [], "results": [1], "mode": "query" }
+  ],
+  "declarations": [],
+  "actor": { "kind": "class", "class": 0 }
+}

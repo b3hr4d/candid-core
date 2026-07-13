@@ -1,0 +1,15 @@
+{
+  "format": "candid-core",
+  "format_version": 1,
+  "semantics_profile": "candid-1",
+  "canonicalization_profile": "candid-core-canon-1",
+  "identities": { "contract": "candid-core:contract:v1:sha256:467f5e65665ca30be0d8e35fbfb82db40610e37da1a706869f0fcfa8de38e0bc" },
+  "producer": { "name": "candid-core", "version": "0.1.0", "candid_version": "0.10.30", "candid_parser_version": "0.4.0" },
+  "types": [
+    { "kind": "record", "fields": [{ "id": 834174833, "type": 1 }, { "id": 1225398258, "type": 2 }] },
+    { "kind": "primitive", "primitive": "nat" },
+    { "kind": "primitive", "primitive": "text" }
+  ],
+  "declarations": [{ "name": "LibraryValue", "type": 0 }],
+  "actor": null
+}

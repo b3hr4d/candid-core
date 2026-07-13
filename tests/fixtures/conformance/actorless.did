@@ -1,0 +1,1 @@
+type LibraryValue = record { value: nat; note: text };

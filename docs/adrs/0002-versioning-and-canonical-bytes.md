@@ -1,6 +1,6 @@
 # ADR 0002: Version schema, semantics, and canonical bytes independently
 
-- Status: Implemented
+- Status: Implemented, verification pending
 - Date: 2026-07-10
 - Owners: Contract runtime maintainers
 
