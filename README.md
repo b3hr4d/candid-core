@@ -59,7 +59,9 @@ than a compatibility layer over an earlier format.
 The crate advertises Rust 1.78 as its minimum supported Rust version (MSRV).
 Direct dependencies are pinned to versions that are expected to build on that
 toolchain, and dependency updates should preserve the advertised MSRV unless the
-`rust-version` field is intentionally raised in the same change.
+`rust-version` field is intentionally raised in the same change. CI runs the
+locked dependency graph against Rust 1.78, so an incompatible direct or
+transitive dependency update fails before merge.
 
 ## Platform APIs
 
