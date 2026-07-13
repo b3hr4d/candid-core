@@ -1,0 +1,4 @@
+interface:
+  display_name: "Candid Core Issue Pipeline"
+  short_description: "Run secure issue-to-merge workflows"
+  default_prompt: "Use $candid-core-issue-pipeline to handle GitHub issue #N locally."
