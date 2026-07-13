@@ -484,7 +484,7 @@ fn jcs_bytes(value: &Value) -> Vec<u8> {
             Value::Object(object) => {
                 output.push(b'{');
                 let mut entries: Vec<_> = object.iter().collect();
-                entries.sort_by(|(left, _), (right, _)| left.cmp(right));
+                entries.sort_by_key(|(key, _)| *key);
                 for (index, (key, value)) in entries.into_iter().enumerate() {
                     if index > 0 {
                         output.push(b',');

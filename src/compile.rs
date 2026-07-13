@@ -510,7 +510,10 @@ impl MaterializedBundle {
 }
 
 fn create_private_dir(path: &Path) -> std::io::Result<()> {
+    #[cfg(unix)]
     let mut builder = fs::DirBuilder::new();
+    #[cfg(not(unix))]
+    let builder = fs::DirBuilder::new();
     #[cfg(unix)]
     {
         use std::os::unix::fs::DirBuilderExt;
@@ -761,7 +764,7 @@ fn candid_file_error(error: candid_parser::Error) -> CompileError {
     candid_error(error, phase, None)
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
 
