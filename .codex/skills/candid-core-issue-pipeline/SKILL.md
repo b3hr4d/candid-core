@@ -45,10 +45,12 @@ Do not make a material API, serialized-format, dependency, or scope expansion wi
 
 ## Publish, review, and merge
 
-1. Create a PR only after the implementation review and required checks pass. Make its body state scope, deliberate API impact, exact verification, and any limitation.
-2. Inspect all PR reviews, review comments, and unresolved threads before merging. Compare even outdated comments with the final code; fix every valid actionable issue in a narrow follow-up commit.
-3. Merge only when the PR is clean, verified, conflict-free, and its acceptance criteria are satisfied. Do not merge merely because checks are green.
-4. After merge, refresh `main`, verify the merge commit and issue state, then comment on the issue with the merged PR link, concise fix, performed checks, and remaining limitation. Close the issue only then.
+1. **PR-first by default:** after implementation review and required checks pass, push only the issue branch and create a PR. Never push an implementation commit directly to `main`, and never treat pushing a branch as permission to update `main`.
+2. A direct-to-`main` push is permitted only when the user explicitly authorizes that exception in the current turn. Before it, verify that `origin/main` is fresh and the commit is a fast-forward; report the exception in the completion report.
+3. Make the PR body state scope, deliberate API impact, exact verification, and any limitation.
+4. Inspect all PR reviews, review comments, and unresolved threads before merging. Compare even outdated comments with the final code; fix every valid actionable issue in a narrow follow-up commit.
+5. Merge only when the PR is clean, verified, conflict-free, and its acceptance criteria are satisfied. Do not merge merely because checks are green.
+6. After merge, refresh `main`, verify the merge commit and issue state, then comment on the issue with the merged PR link, concise fix, performed checks, and remaining limitation. Close the issue only then.
 
 ## Completion report
 
