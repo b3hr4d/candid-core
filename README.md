@@ -20,6 +20,8 @@ See [architecture](docs/architecture.md) and the
 the explicitly deferred host-value ↔ Candid binary bridge.
 See [release verification gates](docs/verification.md) for the checks required
 before declaring the format stable across implementations.
+See [performance benchmarks](docs/benchmarks.md) for reproducible comparisons
+with the pinned official Candid checker and for allocation measurements.
 
 ## Runnable examples
 

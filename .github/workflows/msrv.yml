@@ -5,6 +5,7 @@ on:
   push:
     branches:
       - main
+  workflow_dispatch:
   schedule:
     - cron: '0 3 * * 0'
 
@@ -49,6 +50,39 @@ jobs:
           targets: wasm32-unknown-unknown
       - name: Check WASM library
         run: cargo check --lib --target wasm32-unknown-unknown --locked
+  benchmark-smoke:
+    name: Benchmark smoke test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Compile and exercise every benchmark once
+        run: cargo bench --benches --locked -- --test
+  benchmarks:
+    name: Scheduled benchmarks
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Record environment
+        run: |
+          mkdir -p benchmark-artifacts
+          rustc --version --verbose > benchmark-artifacts/environment.txt
+          cargo --version >> benchmark-artifacts/environment.txt
+          uname -a >> benchmark-artifacts/environment.txt
+          echo "git_sha=${GITHUB_SHA}" >> benchmark-artifacts/environment.txt
+      - name: Run statistical benchmarks
+        run: cargo bench --bench compilation --locked -- --noplot
+      - name: Run allocation probe
+        run: cargo bench --bench allocation --locked > benchmark-artifacts/allocations.json
+      - name: Collect machine-readable Criterion results
+        run: cp -R target/criterion benchmark-artifacts/criterion
+      - uses: actions/upload-artifact@v4
+        with:
+          name: benchmarks-${{ github.sha }}
+          path: benchmark-artifacts
+          retention-days: 90
   fuzz:
     name: Scheduled fuzzing
     if: github.event_name == 'schedule'
