@@ -5,7 +5,7 @@ description: Handle Candid Core GitHub security, design-remediation, and mainten
 
 # Candid Core Issue Pipeline
 
-Use this workflow for `b3hr4d/candid-core`. Read the repository `AGENTS.md` and every file it references before acting; those instructions override this skill. Prefix every terminal command with `rtk`.
+Use this workflow for `b3hr4d/candid-core`. Read the repository `AGENTS.md` and every file it references before acting; those instructions override this skill.
 
 ## Select a mode
 
