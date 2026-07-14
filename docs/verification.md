@@ -17,6 +17,10 @@ pending** until the independent-vector gate is complete.
   change that omits work charging or crosses the configured limit fails.
 - The weekly fuzz job exercises source parsing, Contract JSON,
   canonicalization, resolver IDs, provenance, and HostValue JSON.
+- Pull requests compile and exercise every benchmark once without enforcing
+  wall-clock thresholds. Weekly and manually dispatched runs retain Criterion's
+  raw estimates, allocation measurements, toolchain, host, and exact commit as
+  downloadable CI artifacts.
 
 ## Required before a stable format declaration
 

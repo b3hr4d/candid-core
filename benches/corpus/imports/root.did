@@ -1,0 +1,8 @@
+import "common.did";
+import "archive.did";
+
+service : {
+  balance_of: (Account) -> (Tokens) query;
+  transfer: (TransferArg) -> (TransferResult);
+  get_transactions: (record { start: nat; length: nat }) -> (TransactionsResponse) query;
+};

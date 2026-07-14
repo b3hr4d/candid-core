@@ -1,0 +1,16 @@
+type Transaction = record {
+  index: nat;
+  timestamp: nat64;
+  from: opt Account;
+  to: opt Account;
+  amount: Tokens;
+  fee: opt Tokens;
+};
+type TransactionRange = record { transactions: vec Transaction };
+type ArchiveCallback = func (record { start: nat; length: nat }) -> (TransactionRange) query;
+type ArchivedRange = record { start: nat; length: nat; callback: ArchiveCallback };
+type TransactionsResponse = record {
+  log_length: nat;
+  transactions: vec Transaction;
+  archived_transactions: vec ArchivedRange;
+};
