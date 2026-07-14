@@ -1,9 +1,10 @@
 use candid_core::{
     compile_did, compile_did_file, compile_did_with_context, compile_with_resolver,
     validate_host_value, Actor, Compilation, CompileOptions, Contract, ContractEnvelope,
-    Declaration, Field, HostValue, Limits, MemoryResolver, PrimitiveType, RawContract,
-    ResolveError, ResolvedSource, RuntimeContext, SourceId, SourceResolver, TypeNode,
-    CANONICALIZATION_PROFILE, CONTRACT_FORMAT, FORMAT_VERSION, SEMANTICS_PROFILE,
+    ContractMethodRef, ContractTypeRef, Declaration, Field, HostValue, Limits, MemoryResolver,
+    PrimitiveType, RawContract, ResolveError, ResolvedSource, RuntimeContext, SourceId,
+    SourceResolver, TypeNode, CANONICALIZATION_PROFILE, CONTRACT_FORMAT, FORMAT_VERSION,
+    SEMANTICS_PROFILE,
 };
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
@@ -461,9 +462,54 @@ fn actor_methods_are_persisted_by_contract_identity_and_name() {
         .clone();
     let selector = contract.bind_method("ping").unwrap();
     assert_eq!(selector.contract_id, contract.contract_id());
-    assert_eq!(selector.method, "ping");
+    assert_eq!(selector.method_name, "ping");
     assert!(contract.bind_method("missing").is_err());
     assert!(matches!(contract.actor(), Some(Actor::Service { .. })));
+}
+
+#[test]
+fn persisted_selectors_use_protocol_field_names_and_fail_closed() {
+    let contract = compile("type Amount = nat; service : { ping: () -> () query };")
+        .contract()
+        .clone();
+    let type_selector = contract
+        .bind_type(declaration(&contract, "Amount"))
+        .unwrap();
+    let method_selector = contract.bind_method("ping").unwrap();
+
+    let type_json = serde_json::json!({
+        "contract_id": contract.contract_id(),
+        "type_ref": type_selector.type_ref,
+    });
+    let method_json = serde_json::json!({
+        "contract_id": contract.contract_id(),
+        "method_name": "ping",
+    });
+    assert_eq!(serde_json::to_value(&type_selector).unwrap(), type_json);
+    assert_eq!(serde_json::to_value(&method_selector).unwrap(), method_json);
+    assert_eq!(
+        serde_json::from_value::<ContractTypeRef>(type_json).unwrap(),
+        type_selector
+    );
+    assert_eq!(
+        serde_json::from_value::<ContractMethodRef>(method_json).unwrap(),
+        method_selector
+    );
+
+    assert!(
+        serde_json::from_value::<ContractTypeRef>(serde_json::json!({
+            "contract_id": contract.contract_id(),
+            "type": type_selector.type_ref,
+        }))
+        .is_err()
+    );
+    assert!(
+        serde_json::from_value::<ContractMethodRef>(serde_json::json!({
+            "contract_id": contract.contract_id(),
+            "method": "ping",
+        }))
+        .is_err()
+    );
 }
 
 #[test]

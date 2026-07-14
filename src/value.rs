@@ -7,7 +7,6 @@ use std::fmt;
 #[serde(deny_unknown_fields)]
 pub struct ContractTypeRef {
     pub contract_id: String,
-    #[serde(rename = "type")]
     pub type_ref: TypeRef,
 }
 
@@ -15,7 +14,7 @@ pub struct ContractTypeRef {
 #[serde(deny_unknown_fields)]
 pub struct ContractMethodRef {
     pub contract_id: String,
-    pub method: String,
+    pub method_name: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -1080,7 +1079,7 @@ impl Contract {
             TypeNode::Service { methods } if methods.iter().any(|entry| entry.name == method) => {
                 Ok(ContractMethodRef {
                     contract_id: self.contract_id().to_string(),
-                    method,
+                    method_name: method,
                 })
             }
             _ => Err(single(
