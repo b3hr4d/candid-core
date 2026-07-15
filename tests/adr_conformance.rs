@@ -93,6 +93,41 @@ fn compilation_deserialization_rejects_a_mismatched_sidecar() {
 }
 
 #[test]
+fn source_ids_deserialize_through_the_canonical_parser() {
+    for invalid in [
+        r#"""#,
+        r#""not-a-logical-uri/../..""#,
+        r#""UPPER:/entry.did""#,
+        r#""memory:/../entry.did""#,
+    ] {
+        assert!(
+            serde_json::from_str::<SourceId>(invalid).is_err(),
+            "{invalid}"
+        );
+    }
+
+    let id: SourceId = serde_json::from_str(r#""registry:/catalog/./v1/types.did""#).unwrap();
+    assert_eq!(id.as_str(), "registry:/catalog/v1/types.did");
+    assert_eq!(id.scheme(), "registry");
+    assert_eq!(id.path(), "catalog/v1/types.did");
+    assert_eq!(
+        serde_json::to_string(&id).unwrap(),
+        r#""registry:/catalog/v1/types.did""#
+    );
+}
+
+#[test]
+fn source_id_construction_routes_share_normalization() {
+    let parsed = SourceId::parse("registry:/catalog/./v1/types.did").unwrap();
+    let from_str = "registry:/catalog/./v1/types.did"
+        .parse::<SourceId>()
+        .unwrap();
+    let tried = SourceId::try_from("registry:/catalog/./v1/types.did").unwrap();
+    assert_eq!(parsed, from_str);
+    assert_eq!(parsed, tried);
+}
+
+#[test]
 fn memory_resolver_compiles_one_immutable_logical_source_bundle() {
     let mut resolver = MemoryResolver::new();
     resolver
