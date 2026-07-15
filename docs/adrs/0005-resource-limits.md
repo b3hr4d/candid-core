@@ -6,37 +6,24 @@
 
 ## Context
 
-DID sources, Contract JSON, source bundles, recursive graphs, and host values
-will be supplied by agents and remote ecosystem components. Valid structure is
-not the same as safe cost. Unbounded input, graph refinement, recursive graph
-walks, large diagnostic collections, and import expansion can cause memory,
-CPU, or stack exhaustion.
+DID sources, Contract JSON, source bundles, recursive graphs, and host values will be supplied by agents and remote ecosystem components. Valid structure is not the same as safe cost. Unbounded input, graph refinement, recursive graph walks, large diagnostic collections, and import expansion can cause memory, CPU, or stack exhaustion.
 
 ## Decision
 
-Every public parse, compile, validate, canonicalize, encode, and decode entry
-point accepts a `Limits` policy, directly or through a context. Defaults are
-safe for interactive tooling and may be raised explicitly by trusted hosts.
+Every public parse, compile, validate, canonicalize, encode, and decode entry point accepts a `Limits` policy, directly or through a context. Defaults are safe for interactive tooling and may be raised explicitly by trusted hosts.
 
 The policy includes at least:
 
 - input bytes, per-source bytes, total bundle bytes, and source count;
 - import depth and import edge count;
-- type nodes, graph edges, declarations, fields, methods, arguments, results,
-  and string bytes;
+- type nodes, graph edges, declarations, fields, methods, arguments, results, and string bytes;
 - diagnostics count and retained diagnostic text;
 - HostValue depth, elements, text/blob bytes, and encoded message bytes;
 - canonicalization/refinement work units and an optional cancellation/deadline.
 
-Graph and import algorithms use explicit work queues rather than call-stack
-recursion. Limits are checked before allocation where possible and during work
-otherwise. Exhaustion fails closed with a stable `resource_limit_exceeded`
-diagnostic containing `resource`, `limit`, and observed or attempted value. No
-partially validated Contract is returned.
+Graph and import algorithms use explicit work queues rather than call-stack recursion. Limits are checked before allocation where possible and during work otherwise. Exhaustion fails closed with a stable `resource_limit_exceeded` diagnostic containing `resource`, `limit`, and observed or attempted value. No partially validated Contract is returned.
 
-Default numeric values live in a versioned operational profile rather than the
-semantic Contract format, so hosts can choose server, desktop, or embedded
-profiles without changing Contract IDs.
+Default numeric values live in a versioned operational profile rather than the semantic Contract format, so hosts can choose server, desktop, or embedded profiles without changing Contract IDs.
 
 ## Consequences
 
@@ -47,11 +34,7 @@ profiles without changing Contract IDs.
 
 ## Implementation
 
-Existing conveniences use `Limits::default`; context-aware entry points expose
-the policy. Contract JSON, source resolution, graph structure,
-canonicalization, extensions, and HostValue traversal enforce limits. Graph
-canonicalization and value validation use explicit work stacks. Limit failures
-carry structured resource, limit, and observed values.
+Existing conveniences use `Limits::default`; context-aware entry points expose the policy. Contract JSON, source resolution, graph structure, canonicalization, extensions, and HostValue traversal enforce limits. Graph canonicalization and value validation use explicit work stacks. Limit failures carry structured resource, limit, and observed values.
 
 ## Required verification
 
