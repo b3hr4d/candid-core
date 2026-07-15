@@ -1,4 +1,6 @@
-use candid_core::{Contract, Declaration, Field, Limits, PrimitiveType, RawContract, TypeNode};
+use candid_core::{
+    Contract, Declaration, Field, Limits, PrimitiveType, RawContract, SourceId, TypeNode,
+};
 use proptest::prelude::*;
 
 fn primitive(text: bool) -> TypeNode {
@@ -66,5 +68,21 @@ proptest! {
         let contract = candid_core::compile_did(&source).unwrap().into_parts().0;
         let canonical = candid_core::compile_did("type Payload = record { left: nat; right: text }; service : { read: (Payload) -> (Payload) query };").unwrap().into_parts().0;
         prop_assert_eq!(contract, canonical);
+    }
+
+
+    #[test]
+    fn source_id_parse_serde_round_trip_preserves_normalized_id(
+        scheme in "[a-z][a-z0-9-]{0,15}",
+        components in prop::collection::vec("[a-zA-Z0-9_-]{1,16}", 1..8),
+    ) {
+        let input = format!("{scheme}:/{}", components.join("/./"));
+        let parsed = SourceId::parse(&input).unwrap();
+        let json = serde_json::to_string(&parsed).unwrap();
+        let deserialized: SourceId = serde_json::from_str(&json).unwrap();
+        prop_assert_eq!(&deserialized, &parsed);
+        prop_assert_eq!(deserialized.as_str(), format!("{scheme}:/{}", components.join("/")));
+        prop_assert_eq!(deserialized.scheme(), scheme);
+        prop_assert_eq!(deserialized.path(), components.join("/"));
     }
 }

@@ -1,13 +1,13 @@
 use crate::diagnostics::{CompileError, DiagnosticPhase};
 use crate::limits::Limits;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::fmt;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 #[serde(transparent)]
 pub struct SourceId(String);
 
@@ -32,18 +32,44 @@ impl SourceId {
         self.0
             .split_once(":/")
             .map(|(scheme, _)| scheme)
-            .expect("validated SourceIds always contain a scheme")
+            .unwrap_or("")
     }
 
     pub fn path(&self) -> &str {
         self.0
             .split_once(":/")
             .map(|(_, path)| path.trim_start_matches('/'))
-            .expect("validated SourceIds always contain a path")
+            .unwrap_or("")
     }
 
     fn with_scheme(scheme: &str, path: String) -> Self {
         Self(format!("{scheme}:/{path}"))
+    }
+}
+
+impl<'de> Deserialize<'de> for SourceId {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        Self::parse(value).map_err(serde::de::Error::custom)
+    }
+}
+
+impl std::str::FromStr for SourceId {
+    type Err = ResolveError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        Self::parse(value)
+    }
+}
+
+impl TryFrom<&str> for SourceId {
+    type Error = ResolveError;
+
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        Self::parse(value)
     }
 }
 

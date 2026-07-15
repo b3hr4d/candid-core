@@ -324,7 +324,8 @@ fn load_source_units_with_resolver(
     let mut indexes = BTreeMap::<crate::SourceId, usize>::new();
     let entry_id = resolver
         .identify(None, entry)
-        .map_err(crate::ResolveError::into_compile_error)?;
+        .map_err(crate::ResolveError::into_compile_error)
+        .and_then(validate_resolver_id)?;
     let mut pending = vec![Pending {
         source_id: entry_id.clone(),
         include_actor: true,
@@ -368,7 +369,8 @@ fn load_source_units_with_resolver(
         let resolved = resolver
             .load(&source_id, limits)
             .map_err(crate::ResolveError::into_compile_error)?;
-        if resolved.id != source_id {
+        let resolved_id = validate_resolver_id(resolved.id.clone())?;
+        if resolved_id != source_id {
             return Err(CompileError::single(
                 "did_resolver_identity_mismatch",
                 DiagnosticPhase::Load,
@@ -426,7 +428,8 @@ fn load_source_units_with_resolver(
             .map(|(import, kind)| {
                 let target = resolver
                     .identify(Some(&resolved.id), &import)
-                    .map_err(crate::ResolveError::into_compile_error)?;
+                    .map_err(crate::ResolveError::into_compile_error)
+                    .and_then(validate_resolver_id)?;
                 Ok(ResolvedImport {
                     import,
                     target,
@@ -457,6 +460,22 @@ fn load_source_units_with_resolver(
     Ok((units, entry_id))
 }
 
+fn validate_resolver_id(id: crate::SourceId) -> Result<crate::SourceId, CompileError> {
+    let normalized =
+        crate::SourceId::parse(id.as_str()).map_err(crate::ResolveError::into_compile_error)?;
+    if normalized != id {
+        return Err(CompileError::single(
+            "did_invalid_source_id",
+            DiagnosticPhase::Load,
+            format!(
+                "resolver returned non-canonical source ID {:?}",
+                id.as_str()
+            ),
+        ));
+    }
+    Ok(normalized)
+}
+
 struct MaterializedBundle {
     root: PathBuf,
     entry: PathBuf,
@@ -472,10 +491,10 @@ impl MaterializedBundle {
             .enumerate()
             .map(|(index, unit)| {
                 let id = crate::SourceId::parse(&unit.name)
-                    .expect("resolver-produced source IDs are valid");
-                (id, index)
+                    .map_err(crate::ResolveError::into_compile_error)?;
+                Ok((id, index))
             })
-            .collect::<BTreeMap<_, _>>();
+            .collect::<Result<BTreeMap<_, _>, CompileError>>()?;
         let entry_index = indexes.get(entry).copied().ok_or_else(|| {
             CompileError::single(
                 "did_materialize_error",

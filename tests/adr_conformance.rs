@@ -2,9 +2,9 @@ use candid_core::{
     compile_did, compile_did_file, compile_did_with_context, compile_with_resolver,
     validate_host_value, Actor, Compilation, CompileOptions, Contract, ContractEnvelope,
     ContractMethodRef, ContractTypeRef, Declaration, Field, HostValue, Limits, MemoryResolver,
-    PrimitiveType, RawContract, ResolveError, ResolvedSource, RuntimeContext, SourceId,
-    SourceResolver, TypeNode, CANONICALIZATION_PROFILE, CONTRACT_FORMAT, FORMAT_VERSION,
-    SEMANTICS_PROFILE,
+    PrimitiveType, RawContract, RawSourceInfo, ResolveError, ResolvedSource, RuntimeContext,
+    SourceId, SourceInfo, SourceResolver, TypeNode, CANONICALIZATION_PROFILE, CONTRACT_FORMAT,
+    FORMAT_VERSION, SEMANTICS_PROFILE,
 };
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
@@ -90,6 +90,82 @@ fn compilation_deserialization_rejects_a_mismatched_sidecar() {
         "candid-core:contract:v1:sha256:0000000000000000000000000000000000000000000000000000000000000000"
     );
     assert!(serde_json::from_value::<Compilation>(json).is_err());
+}
+
+#[test]
+fn source_ids_deserialize_through_the_canonical_parser() {
+    for invalid in [
+        r#"""#,
+        r#""not-a-logical-uri/../..""#,
+        r#""UPPER:/entry.did""#,
+        r#""memory:/../entry.did""#,
+    ] {
+        assert!(
+            serde_json::from_str::<SourceId>(invalid).is_err(),
+            "{invalid}"
+        );
+    }
+
+    let id: SourceId = serde_json::from_str(r#""registry:/catalog/./v1/types.did""#).unwrap();
+    assert_eq!(id.as_str(), "registry:/catalog/v1/types.did");
+    assert_eq!(id.scheme(), "registry");
+    assert_eq!(id.path(), "catalog/v1/types.did");
+    assert_eq!(
+        serde_json::to_string(&id).unwrap(),
+        r#""registry:/catalog/v1/types.did""#
+    );
+}
+
+#[test]
+fn source_id_construction_routes_share_normalization() {
+    let parsed = SourceId::parse("registry:/catalog/./v1/types.did").unwrap();
+    let from_str = "registry:/catalog/./v1/types.did"
+        .parse::<SourceId>()
+        .unwrap();
+    let tried = SourceId::try_from("registry:/catalog/./v1/types.did").unwrap();
+    assert_eq!(parsed, from_str);
+    assert_eq!(parsed, tried);
+}
+
+#[test]
+fn source_info_rejects_invalid_and_noncanonical_logical_ids() {
+    let compilation = compile("service : {};");
+    let mut json = serde_json::to_value(compilation.source_info().unwrap()).unwrap();
+    json["sources"][0]["name"] = serde_json::json!("UPPER:/entry.did");
+    let source_info = SourceInfo::from(serde_json::from_value::<RawSourceInfo>(json).unwrap());
+    let error = source_info
+        .validate(compilation.contract(), &Limits::default())
+        .unwrap_err();
+    assert_eq!(error.violations[0].code, "invalid_source_id");
+    assert_eq!(error.violations[0].path, "$.sources[0].name");
+
+    let mut resolver = MemoryResolver::new();
+    resolver
+        .insert("root.did", r#"import "types.did"; service : {};"#)
+        .unwrap();
+    resolver.insert("types.did", "type Item = nat;").unwrap();
+    let compilation = compile_with_resolver(
+        "root.did",
+        &resolver,
+        CompileOptions::default(),
+        &RuntimeContext::default(),
+    )
+    .unwrap();
+    let json = serde_json::to_value(compilation.source_info().unwrap()).unwrap();
+    for (field, invalid) in [
+        ("from", "memory:/root/../root.did"),
+        ("to", "memory:/../types.did"),
+    ] {
+        let mut candidate = json.clone();
+        candidate["imports"][0][field] = serde_json::json!(invalid);
+        let source_info =
+            SourceInfo::from(serde_json::from_value::<RawSourceInfo>(candidate).unwrap());
+        let error = source_info
+            .validate(compilation.contract(), &Limits::default())
+            .unwrap_err();
+        assert_eq!(error.violations[0].code, "invalid_source_id");
+        assert_eq!(error.violations[0].path, format!("$.imports[0].{field}"));
+    }
 }
 
 #[test]
