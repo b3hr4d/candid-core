@@ -6,12 +6,7 @@
 
 ## Context
 
-The next runtime slice will bridge host values and Candid binary messages.
-Ordinary JSON values cannot faithfully represent arbitrary `nat`/`int`, all
-64-bit integers in JavaScript, floating-point bit patterns, principals,
-function/service references, option presence, field IDs, or variant tags.
-Choosing a convenient JSON shape first would bake lossy coercions into every
-future SDK, form, workflow, and agent tool.
+The next runtime slice will bridge host values and Candid binary messages. Ordinary JSON values cannot faithfully represent arbitrary `nat`/`int`, all 64-bit integers in JavaScript, floating-point bit patterns, principals, function/service references, option presence, field IDs, or variant tags. Choosing a convenient JSON shape first would bake lossy coercions into every future SDK, form, workflow, and agent tool.
 
 ## Decision
 
@@ -28,12 +23,7 @@ record([{ id, value }]) · variant({ id, value })
 service(principal) · func({ principal, method })
 ```
 
-`empty` has no constructible value. Floating values retain IEEE bits so NaN
-payloads and signed zero round-trip. Arbitrary integers use canonical decimal
-strings at the JSON boundary. Principals use canonical textual form while the
-codec validates and converts their bytes. Record fields use authoritative
-`u32` IDs; labels remain provenance. Blob, tuple, and conventional Result are
-derived adapters, not new HostValue variants.
+`empty` has no constructible value. Floating values retain IEEE bits so NaN payloads and signed zero round-trip. Arbitrary integers use canonical decimal strings at the JSON boundary. Principals use canonical textual form while the codec validates and converts their bytes. Record fields use authoritative `u32` IDs; labels remain provenance. Blob, tuple, and conventional Result are derived adapters, not new HostValue variants.
 
 The portable JSON ABI is explicitly tagged, for example:
 
@@ -43,11 +33,7 @@ The portable JSON ABI is explicitly tagged, for example:
 { "kind": "variant", "id": 24860, "value": { "kind": "text", "value": "ok" } }
 ```
 
-The core validator performs no UI defaults, string-to-number coercion, tuple
-guessing, or missing-option repair. Ergonomic adapters may produce explicit
-conversion diagnostics. Encoding and decoding always receive a validated
-Contract plus `{ contract_id, method_name }` or another contract-bound type
-selector. Transport invocation remains outside the codec.
+The core validator performs no UI defaults, string-to-number coercion, tuple guessing, or missing-option repair. Ergonomic adapters may produce explicit conversion diagnostics. Encoding and decoding always receive a validated Contract plus `{ contract_id, method_name }` or another contract-bound type selector. Transport invocation remains outside the codec.
 
 ## Consequences
 
@@ -58,16 +44,7 @@ selector. Transport invocation remains outside the codec.
 
 ## Implementation
 
-`HostValue` serializes the tagged JSON ABI, including canonical decimal big
-integers, IEEE float bits, principal/service/function values, field IDs, and
-variant IDs. It intentionally does not implement serde `Deserialize`: callers
-must use `HostValue::from_json_with_limits`, which decodes a private raw DTO
-and exposes `HostValue` only after local canonical validation. Public Rust
-constructors enforce the same scalar canonical forms. This is a deliberate
-pre-release API break from direct enum construction. `validate_host_value`
-remains iterative, bounded, and contract-selector-directed; it is a separate
-step from local JSON validation. No binary encode/decode or lossy
-`serde_json::Value` shortcut is exposed yet.
+`HostValue` serializes the tagged JSON ABI, including canonical decimal big integers, IEEE float bits, principal/service/function values, field IDs, and variant IDs. It intentionally does not implement serde `Deserialize`: callers must use `HostValue::from_json_with_limits`, which decodes a private raw DTO and exposes `HostValue` only after local canonical validation. Public Rust constructors enforce the same scalar canonical forms. This is a deliberate pre-release API break from direct enum construction. `validate_host_value` remains iterative, bounded, and contract-selector-directed; it is a separate step from local JSON validation. No binary encode/decode or lossy `serde_json::Value` shortcut is exposed yet.
 
 ## Required verification
 

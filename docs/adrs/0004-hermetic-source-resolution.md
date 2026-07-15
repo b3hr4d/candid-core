@@ -6,11 +6,7 @@
 
 ## Context
 
-The current file compiler walks imports for provenance and then delegates to
-`candid_parser::check_file`, which reads them again for semantic checking. This
-creates two snapshots, ambient filesystem authority, host-specific paths, and
-no central place to impose import policy. Those properties are unsuitable for
-agents, browser/WASM consumers, reproducible builds, or hosted registries.
+The current file compiler walks imports for provenance and then delegates to `candid_parser::check_file`, which reads them again for semantic checking. This creates two snapshots, ambient filesystem authority, host-specific paths, and no central place to impose import policy. Those properties are unsuitable for agents, browser/WASM consumers, reproducible builds, or hosted registries.
 
 ## Decision
 
@@ -31,23 +27,15 @@ struct ResolvedSource {
 }
 ```
 
-`SourceId` is a normalized logical URI, not an ambient absolute path. The
-resolver produces one immutable `SourceBundle`; the authoritative Candid
-checker and provenance collector consume that exact bundle. If the upstream
-checker cannot consume virtual sources directly, the adapter may materialize
-the bundle inside a controlled temporary root with verified import rewriting;
-it may not reread the caller's workspace.
+`SourceId` is a normalized logical URI, not an ambient absolute path. The resolver produces one immutable `SourceBundle`; the authoritative Candid checker and provenance collector consume that exact bundle. If the upstream checker cannot consume virtual sources directly, the adapter may materialize the bundle inside a controlled temporary root with verified import rewriting; it may not reread the caller's workspace.
 
 The supported resolver profiles are:
 
 - `MemoryResolver` for tests, editors, agents, and network-fetched bundles.
-- `WorkspaceResolver` rooted at an explicitly authorized directory; absolute
-  imports, parent escapes, and symlink escapes are rejected by default.
+- `WorkspaceResolver` rooted at an explicitly authorized directory; absolute imports, parent escapes, and symlink escapes are rejected by default.
 - Future content-addressed registry resolvers with integrity verification.
 
-Resolution detects cycles and duplicate logical identities, records import
-edges, applies ADR 0005 limits, and returns structured diagnostics. Network
-access is never implicit in `contract-core` or `candid-frontend`.
+Resolution detects cycles and duplicate logical identities, records import edges, applies ADR 0005 limits, and returns structured diagnostics. Network access is never implicit in `contract-core` or `candid-frontend`.
 
 ## Consequences
 
@@ -58,11 +46,7 @@ access is never implicit in `contract-core` or `candid-frontend`.
 
 ## Implementation
 
-`compile_did` remains the self-contained convenience. `compile_did_file` is a
-thin `WorkspaceResolver` adapter, while `compile_with_resolver` is the platform
-primitive. `MemoryResolver` and `WorkspaceResolver` produce one immutable
-logical-URI bundle which is materialized into an isolated temporary root for
-the authoritative checker.
+`compile_did` remains the self-contained convenience. `compile_did_file` is a thin `WorkspaceResolver` adapter, while `compile_with_resolver` is the platform primitive. `MemoryResolver` and `WorkspaceResolver` produce one immutable logical-URI bundle which is materialized into an isolated temporary root for the authoritative checker.
 
 ## Required verification
 
