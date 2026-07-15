@@ -87,6 +87,14 @@ pub(crate) fn validate_source_info(
         ));
     }
 
+    for (index, source) in source_info.sources.iter().enumerate() {
+        validate_source_id(&source.name, "sources", index, "name")?;
+    }
+    for (index, import) in source_info.imports.iter().enumerate() {
+        validate_source_id(&import.from, "imports", index, "from")?;
+        validate_source_id(&import.to, "imports", index, "to")?;
+    }
+
     let mut sources = source_info.sources.clone();
     sources.sort_by(|left, right| left.name.cmp(&right.name));
     let mut imports = source_info.imports.clone();
@@ -207,6 +215,30 @@ pub(crate) fn validate_source_info(
         }
     }
     Ok(())
+}
+
+fn validate_source_id(
+    value: &str,
+    collection: &str,
+    index: usize,
+    field: &str,
+) -> Result<(), ContractValidationError> {
+    match crate::SourceId::parse(value) {
+        Ok(source_id) if source_id.as_str() == value => Ok(()),
+        Ok(source_id) => Err(ContractValidationError::single(
+            "invalid_source_id",
+            format!("$.{collection}[{index}].{field}"),
+            format!(
+                "source logical ID {value:?} is not canonical; expected {:?}",
+                source_id.as_str()
+            ),
+        )),
+        Err(error) => Err(ContractValidationError::single(
+            "invalid_source_id",
+            format!("$.{collection}[{index}].{field}"),
+            error.message,
+        )),
+    }
 }
 
 fn validate_ref(
