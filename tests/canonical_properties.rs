@@ -73,7 +73,7 @@ proptest! {
 
     #[test]
     fn source_id_parse_serde_round_trip_preserves_normalized_id(
-        scheme in "[a-z][a-z0-9-]{0,15}",
+        scheme in "[a-z][a-z0-9-]{1,15}",
         components in prop::collection::vec("[a-zA-Z0-9_-]{1,16}", 1..8),
     ) {
         let input = format!("{scheme}:/{}", components.join("/./"));

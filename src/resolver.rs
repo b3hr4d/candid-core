@@ -5,7 +5,7 @@ use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::fmt;
 use std::fs;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 #[serde(transparent)]
@@ -16,7 +16,7 @@ impl SourceId {
         let value = value.as_ref();
         if let Some((scheme, path)) = value.split_once(":/") {
             validate_scheme(scheme)?;
-            let path = normalize_path(None, path.trim_start_matches('/'))?;
+            let path = normalize_path(None, path)?;
             Ok(Self(format!("{scheme}:/{path}")))
         } else {
             let path = normalize_path(None, value)?;
@@ -310,7 +310,10 @@ impl SourceResolver for WorkspaceResolver {
                 "WorkspaceResolver can only load workspace:/ sources",
             ));
         }
-        let candidate = self.root.join(id.path());
+        let mut candidate = self.root.clone();
+        for segment in id.path().split('/') {
+            candidate.push(segment);
+        }
         let canonical = fs::canonicalize(&candidate).map_err(|error| {
             ResolveError::new(
                 "did_file_read_error",
@@ -344,30 +347,41 @@ fn normalize_path(from: Option<&SourceId>, import: &str) -> Result<String, Resol
             "source IDs and imports must not be empty",
         ));
     }
-    let import_path = Path::new(import);
-    if import_path.is_absolute() {
+    if import.starts_with('/') {
         return Err(ResolveError::new(
             "did_absolute_import_forbidden",
             format!("absolute import {import:?} is not permitted"),
         ));
     }
+    if import.contains('\\') {
+        return Err(ResolveError::new(
+            "did_invalid_source_id",
+            format!("backslashes are not permitted in logical source path {import:?}"),
+        ));
+    }
+    if import.chars().any(char::is_control) {
+        return Err(ResolveError::new(
+            "did_invalid_source_id",
+            format!("control characters are not permitted in logical source path {import:?}"),
+        ));
+    }
+    if import.split('/').any(str::is_empty) {
+        return Err(ResolveError::new(
+            "did_invalid_source_id",
+            format!("empty segments are not permitted in logical source path {import:?}"),
+        ));
+    }
 
     let mut components = Vec::<String>::new();
     if let Some(from) = from {
-        let parent = Path::new(from.path())
-            .parent()
-            .unwrap_or_else(|| Path::new(""));
-        for component in parent.components() {
-            if let Component::Normal(value) = component {
-                components.push(value.to_string_lossy().into_owned());
-            }
+        if let Some((parent, _)) = from.path().rsplit_once('/') {
+            components.extend(parent.split('/').map(str::to_owned));
         }
     }
-    for component in import_path.components() {
+    for component in import.split('/') {
         match component {
-            Component::CurDir => {}
-            Component::Normal(value) => components.push(value.to_string_lossy().into_owned()),
-            Component::ParentDir => {
+            "." => {}
+            ".." => {
                 if components.pop().is_none() {
                     return Err(ResolveError::new(
                         "did_import_outside_workspace",
@@ -375,12 +389,13 @@ fn normalize_path(from: Option<&SourceId>, import: &str) -> Result<String, Resol
                     ));
                 }
             }
-            Component::RootDir | Component::Prefix(_) => {
+            value if value.contains(':') => {
                 return Err(ResolveError::new(
-                    "did_absolute_import_forbidden",
-                    format!("absolute import {import:?} is not permitted"),
+                    "did_invalid_source_id",
+                    format!("colons are not permitted in logical source path {import:?}"),
                 ));
             }
+            value => components.push(value.to_owned()),
         }
     }
     if components.is_empty() {
@@ -393,10 +408,10 @@ fn normalize_path(from: Option<&SourceId>, import: &str) -> Result<String, Resol
 }
 
 fn validate_scheme(scheme: &str) -> Result<(), ResolveError> {
-    if scheme.is_empty()
-        || !scheme
-            .bytes()
-            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+    let mut bytes = scheme.bytes();
+    if scheme.len() < 2
+        || !bytes.next().is_some_and(|byte| byte.is_ascii_lowercase())
+        || !bytes.all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
     {
         return Err(ResolveError::new(
             "did_invalid_source_id",

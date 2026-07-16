@@ -128,6 +128,64 @@ fn source_id_construction_routes_share_normalization() {
 }
 
 #[test]
+fn logical_source_path_grammar_is_platform_independent() {
+    for (input, expected) in [
+        ("entry.did", "memory:/entry.did"),
+        ("memory:/dir/./entry.did", "memory:/dir/entry.did"),
+        ("memory:/dir/nested/../entry.did", "memory:/dir/entry.did"),
+    ] {
+        assert_eq!(
+            SourceId::parse(input).unwrap().as_str(),
+            expected,
+            "{input}"
+        );
+    }
+
+    for invalid in [
+        "/entry.did",
+        "memory://entry.did",
+        "memory:/dir//entry.did",
+        "memory:/entry.did/",
+        "memory:/dir\\entry.did",
+        "C:/entry.did",
+        "c:/entry.did",
+        "C:\\entry.did",
+        "memory:/C:/entry.did",
+        "memory:/dir:entry.did",
+        "memory:/entry\0.did",
+        "memory:/entry\n.did",
+        "memory:/../entry.did",
+        "memory:/dir/../..",
+        "1memory:/entry.did",
+        "-memory:/entry.did",
+    ] {
+        assert!(SourceId::parse(invalid).is_err(), "accepted {invalid:?}");
+    }
+
+    let resolver = MemoryResolver::new();
+    let parent = SourceId::parse("memory:/dir/parent.did").unwrap();
+    assert_eq!(
+        resolver
+            .identify(Some(&parent), "nested/../child.did")
+            .unwrap()
+            .as_str(),
+        "memory:/dir/child.did"
+    );
+    for invalid in [
+        "",
+        "/child.did",
+        "dir//child.did",
+        "dir\\child.did",
+        "C:/child.did",
+    ] {
+        assert!(
+            resolver.identify(Some(&parent), invalid).is_err(),
+            "accepted {invalid:?}"
+        );
+    }
+}
+
+#[test]
 fn source_info_rejects_invalid_and_noncanonical_logical_ids() {
     let compilation = compile("service : {};");
     let mut json = serde_json::to_value(compilation.source_info().unwrap()).unwrap();

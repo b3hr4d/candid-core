@@ -29,6 +29,8 @@ struct ResolvedSource {
 
 `SourceId` is a normalized logical URI, not an ambient absolute path. The resolver produces one immutable `SourceBundle`; the authoritative Candid checker and provenance collector consume that exact bundle. If the upstream checker cannot consume virtual sources directly, the adapter may materialize the bundle inside a controlled temporary root with verified import rewriting; it may not reread the caller's workspace.
 
+Logical source paths use a platform-independent UTF-8 `/` grammar. Empty path segments, leading `/`, backslashes, colons, control characters, and Windows drive syntax are rejected. `.` segments are removed and `..` removes one preceding segment, but may not escape the logical root. These rules do not perform percent-decoding or Unicode normalization. Only `WorkspaceResolver` converts the normalized logical segments to a native filesystem path. Schemes contain at least two ASCII characters, begin with a lowercase letter, and otherwise contain only lowercase letters, digits, or `-`; the minimum length distinguishes logical schemes from Windows drive prefixes.
+
 The supported resolver profiles are:
 
 - `MemoryResolver` for tests, editors, agents, and network-fetched bundles.
