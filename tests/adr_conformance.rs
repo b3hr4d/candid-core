@@ -1,10 +1,10 @@
 use candid_core::{
-    compile_did, compile_did_file, compile_did_with_context, compile_with_resolver,
-    validate_host_value, Actor, Compilation, CompileOptions, Contract, ContractEnvelope,
-    ContractMethodRef, ContractTypeRef, Declaration, Field, HostValue, Limits, MemoryResolver,
-    PrimitiveType, RawContract, RawSourceInfo, ResolveError, ResolvedSource, RuntimeContext,
-    SourceId, SourceInfo, SourceResolver, TypeNode, CANONICALIZATION_PROFILE, CONTRACT_FORMAT,
-    FORMAT_VERSION, SEMANTICS_PROFILE,
+    compile_did, compile_did_file, compile_did_file_with_context, compile_did_with_context,
+    compile_with_resolver, validate_host_value, Actor, Compilation, CompileError, CompileOptions,
+    Contract, ContractEnvelope, ContractMethodRef, ContractTypeRef, Declaration, Field, HostValue,
+    Limits, MemoryResolver, PrimitiveType, RawContract, RawSourceInfo, ResolveError,
+    ResolvedSource, RuntimeContext, SourceId, SourceInfo, SourceResolver, TypeNode,
+    CANONICALIZATION_PROFILE, CONTRACT_FORMAT, FORMAT_VERSION, SEMANTICS_PROFILE,
 };
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
@@ -466,6 +466,171 @@ fn operational_limits_fail_with_machine_stable_diagnostics() {
     };
     let error = Contract::from_json_with_limits(&json, &limits).unwrap_err();
     assert!(error.to_string().contains("validation failed"));
+}
+
+struct IgnoringLimitsResolver {
+    source: String,
+    digest: Option<String>,
+}
+
+impl SourceResolver for IgnoringLimitsResolver {
+    fn identify(&self, _from: Option<&SourceId>, import: &str) -> Result<SourceId, ResolveError> {
+        SourceId::parse(import)
+    }
+
+    fn load(&self, id: &SourceId, _limits: &Limits) -> Result<ResolvedSource, ResolveError> {
+        Ok(ResolvedSource {
+            id: id.clone(),
+            source: self.source.clone(),
+            digest: self.digest.clone().unwrap_or_else(|| {
+                format!(
+                    "sha256:{}",
+                    hex::encode(Sha256::digest(self.source.as_bytes()))
+                )
+            }),
+        })
+    }
+}
+
+fn assert_source_limit(error: CompileError, limit: usize, observed: usize) {
+    let diagnostic = &error.diagnostics[0];
+    assert_eq!(diagnostic.code, "resource_limit_exceeded");
+    let resource = diagnostic.resource_limit.as_ref().unwrap();
+    assert_eq!(resource.resource, "source_bytes");
+    assert_eq!(resource.limit, limit);
+    assert_eq!(resource.observed, observed);
+}
+
+#[test]
+fn compiler_owns_source_limit_enforcement_for_every_resolver_path() {
+    static NEXT_DIRECTORY: AtomicUsize = AtomicUsize::new(0);
+
+    let source = "service : {};";
+    let limit = source.len() - 1;
+    let context = RuntimeContext {
+        limits: Limits {
+            max_source_bytes: limit,
+            ..Limits::default()
+        },
+    };
+
+    let mut memory = MemoryResolver::new();
+    memory.insert("entry.did", source).unwrap();
+    let custom = IgnoringLimitsResolver {
+        source: source.to_string(),
+        digest: None,
+    };
+    let directory = std::env::temp_dir().join(format!(
+        "candid-core-source-limits-{}-{}",
+        std::process::id(),
+        NEXT_DIRECTORY.fetch_add(1, Ordering::Relaxed)
+    ));
+    std::fs::create_dir(&directory).unwrap();
+    let path = directory.join("entry.did");
+    std::fs::write(&path, source).unwrap();
+
+    for include_source_info in [false, true] {
+        let options = CompileOptions {
+            include_source_info,
+        };
+        assert_source_limit(
+            compile_did_with_context(source, options, &context).unwrap_err(),
+            limit,
+            source.len(),
+        );
+        assert_source_limit(
+            compile_with_resolver("entry.did", &memory, options, &context).unwrap_err(),
+            limit,
+            source.len(),
+        );
+        assert_source_limit(
+            compile_with_resolver("entry.did", &custom, options, &context).unwrap_err(),
+            limit,
+            source.len(),
+        );
+        assert_source_limit(
+            compile_did_file_with_context(&path, options, &context).unwrap_err(),
+            limit,
+            source.len(),
+        );
+    }
+
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+fn compiler_source_accounting_accepts_exact_boundaries_and_rejects_next_source() {
+    let source = "service : {};";
+    let resolver = IgnoringLimitsResolver {
+        source: source.to_string(),
+        digest: None,
+    };
+    let exact = RuntimeContext {
+        limits: Limits {
+            max_source_bytes: source.len(),
+            max_bundle_bytes: source.len(),
+            max_sources: 1,
+            ..Limits::default()
+        },
+    };
+    compile_with_resolver("entry.did", &resolver, CompileOptions::default(), &exact).unwrap();
+
+    for (limits, resource, limit, observed) in [
+        (
+            Limits {
+                max_sources: 0,
+                ..Limits::default()
+            },
+            "sources",
+            0,
+            1,
+        ),
+        (
+            Limits {
+                max_bundle_bytes: source.len() - 1,
+                ..Limits::default()
+            },
+            "bundle_bytes",
+            source.len() - 1,
+            source.len(),
+        ),
+    ] {
+        for include_source_info in [false, true] {
+            let error = compile_did_with_context(
+                source,
+                CompileOptions {
+                    include_source_info,
+                },
+                &RuntimeContext {
+                    limits: limits.clone(),
+                },
+            )
+            .unwrap_err();
+            let info = error.diagnostics[0].resource_limit.as_ref().unwrap();
+            assert_eq!(info.resource, resource);
+            assert_eq!(info.limit, limit);
+            assert_eq!(info.observed, observed);
+        }
+    }
+}
+
+#[test]
+fn compiler_checks_source_limits_before_digesting_resolver_content() {
+    let source = "service : {};";
+    let resolver = IgnoringLimitsResolver {
+        source: source.to_string(),
+        digest: Some("sha256:not-a-digest".to_string()),
+    };
+    let limit = source.len() - 1;
+    let context = RuntimeContext {
+        limits: Limits {
+            max_source_bytes: limit,
+            ..Limits::default()
+        },
+    };
+    let error = compile_with_resolver("entry.did", &resolver, CompileOptions::default(), &context)
+        .unwrap_err();
+    assert_source_limit(error, limit, source.len());
 }
 
 #[test]

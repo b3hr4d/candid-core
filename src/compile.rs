@@ -185,25 +185,13 @@ pub fn compile_did_with_context(
     options: CompileOptions,
     context: &RuntimeContext,
 ) -> Result<Compilation, CompileError> {
-    if context.limits.deadline_exceeded() {
-        return Err(CompileError::single(
-            "operation_deadline_exceeded",
-            DiagnosticPhase::Load,
-            "compilation deadline has elapsed",
-        ));
-    }
-    if source.len() > context.limits.max_source_bytes {
-        return Err(CompileError::resource_limit(
-            "source_bytes",
-            context.limits.max_source_bytes,
-            source.len(),
-            format!(
-                "inline source uses {} bytes; limit is {}",
-                source.len(),
-                context.limits.max_source_bytes
-            ),
-        ));
-    }
+    let mut accounting = SourceAccounting::default();
+    accept_source(
+        "memory:/inline.did",
+        source.len(),
+        &context.limits,
+        &mut accounting,
+    )?;
     let program = parse_program(source, Some("memory:/inline.did".to_string()))?;
     let imports: Vec<_> = program
         .decs
@@ -332,17 +320,11 @@ fn load_source_units_with_resolver(
         depth: 0,
         ancestors: Vec::new(),
     }];
-    let mut total_bytes = 0usize;
+    let mut accounting = SourceAccounting::default();
     let mut import_edges = 0usize;
 
     while let Some(request) = pending.pop() {
-        if limits.deadline_exceeded() {
-            return Err(CompileError::single(
-                "operation_deadline_exceeded",
-                DiagnosticPhase::Load,
-                "source resolution deadline has elapsed",
-            ));
-        }
+        check_source_deadline(limits)?;
         if request.depth > limits.max_import_depth {
             return Err(CompileError::resource_limit(
                 "import_depth",
@@ -369,41 +351,7 @@ fn load_source_units_with_resolver(
         let resolved = resolver
             .load(&source_id, limits)
             .map_err(crate::ResolveError::into_compile_error)?;
-        let resolved_id = validate_resolver_id(resolved.id.clone())?;
-        if resolved_id != source_id {
-            return Err(CompileError::single(
-                "did_resolver_identity_mismatch",
-                DiagnosticPhase::Load,
-                format!(
-                    "resolver identified {:?} but loaded {:?}",
-                    source_id.as_str(),
-                    resolved.id.as_str()
-                ),
-            ));
-        }
-        resolved
-            .verify()
-            .map_err(crate::ResolveError::into_compile_error)?;
-        if units.len() >= limits.max_sources {
-            return Err(CompileError::resource_limit(
-                "sources",
-                limits.max_sources,
-                units.len() + 1,
-                format!("source count exceeds limit {}", limits.max_sources),
-            ));
-        }
-        total_bytes = total_bytes.saturating_add(resolved.source.len());
-        if total_bytes > limits.max_bundle_bytes {
-            return Err(CompileError::resource_limit(
-                "bundle_bytes",
-                limits.max_bundle_bytes,
-                total_bytes,
-                format!(
-                    "source bundle uses {total_bytes} bytes; limit is {}",
-                    limits.max_bundle_bytes
-                ),
-            ));
-        }
+        let resolved = accept_resolved_source(&source_id, resolved, limits, &mut accounting)?;
         let program = parse_program(&resolved.source, Some(resolved.id.as_str().to_string()))?;
         let imports: Vec<_> = program
             .decs
@@ -474,6 +422,98 @@ fn validate_resolver_id(id: crate::SourceId) -> Result<crate::SourceId, CompileE
         ));
     }
     Ok(normalized)
+}
+
+#[derive(Default)]
+struct SourceAccounting {
+    sources: usize,
+    bundle_bytes: usize,
+}
+
+fn check_source_deadline(limits: &crate::Limits) -> Result<(), CompileError> {
+    if limits.deadline_exceeded() {
+        return Err(CompileError::single(
+            "operation_deadline_exceeded",
+            DiagnosticPhase::Load,
+            "source resolution deadline has elapsed",
+        ));
+    }
+    Ok(())
+}
+
+fn accept_source(
+    id: &str,
+    source_bytes: usize,
+    limits: &crate::Limits,
+    accounting: &mut SourceAccounting,
+) -> Result<(), CompileError> {
+    check_source_deadline(limits)?;
+    if source_bytes > limits.max_source_bytes {
+        return Err(CompileError::resource_limit(
+            "source_bytes",
+            limits.max_source_bytes,
+            source_bytes,
+            format!(
+                "source {id:?} uses {source_bytes} bytes; limit is {}",
+                limits.max_source_bytes
+            ),
+        ));
+    }
+    let sources = accounting.sources.saturating_add(1);
+    if sources > limits.max_sources {
+        return Err(CompileError::resource_limit(
+            "sources",
+            limits.max_sources,
+            sources,
+            format!("source count exceeds limit {}", limits.max_sources),
+        ));
+    }
+    let bundle_bytes = accounting.bundle_bytes.saturating_add(source_bytes);
+    if bundle_bytes > limits.max_bundle_bytes {
+        return Err(CompileError::resource_limit(
+            "bundle_bytes",
+            limits.max_bundle_bytes,
+            bundle_bytes,
+            format!(
+                "source bundle uses {bundle_bytes} bytes; limit is {}",
+                limits.max_bundle_bytes
+            ),
+        ));
+    }
+    accounting.sources = sources;
+    accounting.bundle_bytes = bundle_bytes;
+    Ok(())
+}
+
+fn accept_resolved_source(
+    expected_id: &crate::SourceId,
+    resolved: crate::ResolvedSource,
+    limits: &crate::Limits,
+    accounting: &mut SourceAccounting,
+) -> Result<crate::ResolvedSource, CompileError> {
+    check_source_deadline(limits)?;
+    let resolved_id = validate_resolver_id(resolved.id.clone())?;
+    if resolved_id != *expected_id {
+        return Err(CompileError::single(
+            "did_resolver_identity_mismatch",
+            DiagnosticPhase::Load,
+            format!(
+                "resolver identified {:?} but loaded {:?}",
+                expected_id.as_str(),
+                resolved.id.as_str()
+            ),
+        ));
+    }
+    accept_source(
+        resolved.id.as_str(),
+        resolved.source.len(),
+        limits,
+        accounting,
+    )?;
+    resolved
+        .verify()
+        .map_err(crate::ResolveError::into_compile_error)?;
+    Ok(resolved)
 }
 
 struct MaterializedBundle {
@@ -641,7 +681,7 @@ fn lower_checked(
         canonical::canonicalize_with_mapping_unchecked_and_limits(&raw_contract, &context.limits)
             .map_err(|error| lower_error(format!("canonicalization failed: {error}")))?;
 
-    let source_info = options.include_source_info.then(|| {
+    let source_info = if options.include_source_info {
         let mut field_labels: Vec<_> = raw_source_info
             .field_labels
             .into_iter()
@@ -737,14 +777,34 @@ fn lower_checked(
         };
         source_info
             .validate(&canonicalized.contract, &context.limits)
-            .expect("compiler-generated SourceInfo must validate");
-        source_info
-    });
+            .map_err(source_info_compile_error)?;
+        Some(source_info)
+    } else {
+        None
+    };
 
     Ok(Compilation {
         contract: canonicalized.contract,
         source_info,
     })
+}
+
+fn source_info_compile_error(error: crate::ContractValidationError) -> CompileError {
+    CompileError {
+        diagnostics: error
+            .violations
+            .into_iter()
+            .map(|violation| Diagnostic {
+                code: violation.code,
+                phase: DiagnosticPhase::Lower,
+                severity: Severity::Error,
+                message: format!("{}: {}", violation.path, violation.message),
+                span: None,
+                notes: Vec::new(),
+                resource_limit: violation.resource_limit,
+            })
+            .collect(),
+    }
 }
 
 fn source_imports(source_units: &[SourceUnit]) -> Vec<SourceImportInfo> {
