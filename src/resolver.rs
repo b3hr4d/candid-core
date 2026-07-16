@@ -1,11 +1,18 @@
 use crate::diagnostics::{CompileError, DiagnosticPhase};
 use crate::limits::Limits;
+#[cfg(not(target_os = "unknown"))]
+use cap_std::{ambient_authority, fs::Dir};
 use serde::{Deserialize, Deserializer, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::fmt;
+#[cfg(not(target_os = "unknown"))]
 use std::fs;
+#[cfg(not(target_os = "unknown"))]
+use std::io::{self, Read};
 use std::path::{Path, PathBuf};
+#[cfg(not(target_os = "unknown"))]
+use std::sync::Arc;
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 #[serde(transparent)]
@@ -253,26 +260,52 @@ impl SourceResolver for MemoryResolver {
 #[derive(Debug, Clone)]
 pub struct WorkspaceResolver {
     root: PathBuf,
+    #[cfg(not(target_os = "unknown"))]
+    directory: Arc<Dir>,
 }
 
 impl WorkspaceResolver {
     pub fn new(root: impl AsRef<Path>) -> Result<Self, ResolveError> {
-        let root = fs::canonicalize(root.as_ref()).map_err(|error| {
-            ResolveError::new(
-                "did_workspace_root_error",
-                format!(
-                    "cannot open workspace root {}: {error}",
-                    root.as_ref().display()
-                ),
-            )
-        })?;
-        if !root.is_dir() {
+        #[cfg(target_os = "unknown")]
+        {
+            let _ = root;
             return Err(ResolveError::new(
                 "did_workspace_root_error",
-                format!("workspace root {} is not a directory", root.display()),
+                format!(
+                    "workspace filesystem resolution is unavailable on target {}",
+                    std::env::consts::OS
+                ),
             ));
         }
-        Ok(Self { root })
+
+        #[cfg(not(target_os = "unknown"))]
+        {
+            // Acquire the authority in one operation before deriving the
+            // informational canonical path exposed by `root()`.
+            let directory =
+                Dir::open_ambient_dir(root.as_ref(), ambient_authority()).map_err(|error| {
+                    ResolveError::new(
+                        "did_workspace_root_error",
+                        format!(
+                            "cannot open workspace root {}: {error}",
+                            root.as_ref().display()
+                        ),
+                    )
+                })?;
+            let root = fs::canonicalize(root.as_ref()).map_err(|error| {
+                ResolveError::new(
+                    "did_workspace_root_error",
+                    format!(
+                        "cannot open workspace root {}: {error}",
+                        root.as_ref().display()
+                    ),
+                )
+            })?;
+            Ok(Self {
+                root,
+                directory: Arc::new(directory),
+            })
+        }
     }
 
     pub fn root(&self) -> &Path {
@@ -310,33 +343,52 @@ impl SourceResolver for WorkspaceResolver {
                 "WorkspaceResolver can only load workspace:/ sources",
             ));
         }
-        let mut candidate = self.root.clone();
-        for segment in id.path().split('/') {
-            candidate.push(segment);
-        }
-        let canonical = fs::canonicalize(&candidate).map_err(|error| {
-            ResolveError::new(
-                "did_file_read_error",
-                format!("cannot read source {:?}: {error}", id.as_str()),
-            )
-        })?;
-        if !canonical.starts_with(&self.root) {
+        #[cfg(target_os = "unknown")]
+        {
+            let _ = limits;
             return Err(ResolveError::new(
-                "did_import_outside_workspace",
+                "did_file_read_error",
                 format!(
-                    "source {:?} resolves outside the authorized workspace",
-                    id.as_str()
+                    "cannot read source {:?}: workspace filesystem resolution is unavailable on target {}",
+                    id.as_str(),
+                    std::env::consts::OS
                 ),
             ));
         }
-        let source = fs::read_to_string(&canonical).map_err(|error| {
-            ResolveError::new(
-                "did_file_read_error",
-                format!("cannot read source {:?}: {error}", id.as_str()),
-            )
-        })?;
-        check_source_size(id, &source, limits)?;
-        Ok(ResolvedSource::new(id.clone(), source))
+        #[cfg(not(target_os = "unknown"))]
+        {
+            let mut file = self
+                .directory
+                .open(id.path())
+                .map_err(|error| workspace_open_error(id, error))?;
+            let mut source = String::new();
+            file.read_to_string(&mut source).map_err(|error| {
+                ResolveError::new(
+                    "did_file_read_error",
+                    format!("cannot read source {:?}: {error}", id.as_str()),
+                )
+            })?;
+            check_source_size(id, &source, limits)?;
+            Ok(ResolvedSource::new(id.clone(), source))
+        }
+    }
+}
+
+#[cfg(not(target_os = "unknown"))]
+fn workspace_open_error(id: &SourceId, error: io::Error) -> ResolveError {
+    if error.kind() == io::ErrorKind::PermissionDenied {
+        ResolveError::new(
+            "did_import_outside_workspace",
+            format!(
+                "source {:?} is not permitted beneath the authorized workspace: {error}",
+                id.as_str()
+            ),
+        )
+    } else {
+        ResolveError::new(
+            "did_file_read_error",
+            format!("cannot read source {:?}: {error}", id.as_str()),
+        )
     }
 }
 
@@ -436,4 +488,108 @@ fn check_source_size(id: &SourceId, source: &str, limits: &Limits) -> Result<(),
         ));
     }
     Ok(())
+}
+
+#[cfg(all(test, unix))]
+mod workspace_tests {
+    use super::*;
+    use std::os::unix::fs::symlink;
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+    use std::thread;
+
+    static NEXT_FIXTURE: AtomicU64 = AtomicU64::new(0);
+
+    struct Fixture {
+        base: PathBuf,
+        workspace: PathBuf,
+        outside: PathBuf,
+    }
+
+    impl Fixture {
+        fn new() -> Self {
+            let sequence = NEXT_FIXTURE.fetch_add(1, Ordering::Relaxed);
+            let base = std::env::temp_dir().join(format!(
+                "candid-core-workspace-resolver-{}-{sequence}",
+                std::process::id()
+            ));
+            let workspace = base.join("workspace");
+            let outside = base.join("outside.did");
+            fs::create_dir_all(&workspace).unwrap();
+            fs::write(&outside, "OUTSIDE").unwrap();
+            Self {
+                base,
+                workspace,
+                outside,
+            }
+        }
+    }
+
+    impl Drop for Fixture {
+        fn drop(&mut self) {
+            fs::remove_dir_all(&self.base).unwrap();
+        }
+    }
+
+    #[test]
+    fn workspace_capability_governs_symlink_policy() {
+        let fixture = Fixture::new();
+        fs::create_dir(fixture.workspace.join("nested")).unwrap();
+        fs::write(fixture.workspace.join("nested/source.did"), "service : {};").unwrap();
+        symlink("nested/source.did", fixture.workspace.join("inside.did")).unwrap();
+        symlink(&fixture.outside, fixture.workspace.join("outside.did")).unwrap();
+
+        let resolver = WorkspaceResolver::new(&fixture.workspace).unwrap();
+        let limits = Limits::default();
+        let inside = SourceId::parse("workspace:/inside.did").unwrap();
+        assert_eq!(
+            resolver.load(&inside, &limits).unwrap().source,
+            "service : {};"
+        );
+
+        let outside = SourceId::parse("workspace:/outside.did").unwrap();
+        let error = resolver.load(&outside, &limits).unwrap_err();
+        assert_eq!(error.code, "did_import_outside_workspace");
+    }
+
+    #[test]
+    fn concurrent_symlink_replacement_never_reads_outside_capability() {
+        let fixture = Fixture::new();
+        fs::write(fixture.workspace.join("inside.did"), "INSIDE").unwrap();
+        let target = fixture.workspace.join("target.did");
+        symlink("inside.did", &target).unwrap();
+
+        let resolver = WorkspaceResolver::new(&fixture.workspace).unwrap();
+        let id = SourceId::parse("workspace:/target.did").unwrap();
+        let running = AtomicBool::new(true);
+
+        thread::scope(|scope| {
+            scope.spawn(|| {
+                let mut outside = false;
+                let replacement = fixture.workspace.join("replacement.did");
+                while running.load(Ordering::Relaxed) {
+                    let _ = fs::remove_file(&replacement);
+                    let destination = if outside {
+                        fixture.outside.as_path()
+                    } else {
+                        Path::new("inside.did")
+                    };
+                    symlink(destination, &replacement).unwrap();
+                    fs::rename(&replacement, &target).unwrap();
+                    outside = !outside;
+                }
+            });
+
+            for _ in 0..2_000 {
+                match resolver.load(&id, &Limits::default()) {
+                    Ok(source) => assert_eq!(source.source, "INSIDE"),
+                    Err(error) => assert!(
+                        error.code == "did_import_outside_workspace"
+                            || error.code == "did_file_read_error",
+                        "unexpected resolver error: {error}"
+                    ),
+                }
+            }
+            running.store(false, Ordering::Relaxed);
+        });
+    }
 }

@@ -50,6 +50,8 @@ Resolution detects cycles and duplicate logical identities, records import edges
 
 `compile_did` remains the self-contained convenience. `compile_did_file` is a thin `WorkspaceResolver` adapter, while `compile_with_resolver` is the platform primitive. `MemoryResolver` and `WorkspaceResolver` produce one immutable logical-URI bundle which is materialized into an isolated temporary root for the authoritative checker.
 
+On native hosts, `WorkspaceResolver` retains an open directory capability and opens every logical path relative to it. Relative symlinks are permitted only when their resolution remains beneath that capability; absolute symlinks and escapes are rejected. Authorization and reading use the same opened file handle so concurrent path replacement cannot substitute a file outside the workspace. Bare `wasm32-unknown-unknown` hosts have no workspace filesystem resolver and must use a memory or host-provided resolver.
+
 ## Required verification
 
 - In-memory multi-file and diamond-import tests.
