@@ -126,13 +126,21 @@ impl Eq for CancellationToken {}
 ///
 /// let _ = RuntimeContext { limits: Limits::default() };
 /// ```
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RuntimeContext {
     pub limits: Limits,
     #[serde(skip, default)]
     cancellation: CancellationToken,
 }
+
+impl PartialEq for RuntimeContext {
+    fn eq(&self, other: &Self) -> bool {
+        self.limits == other.limits
+    }
+}
+
+impl Eq for RuntimeContext {}
 
 impl RuntimeContext {
     pub fn new(limits: Limits) -> Self {

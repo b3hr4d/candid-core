@@ -128,8 +128,12 @@ fn monotonic_deadline(deadline_unix_ms: Option<u64>) -> Option<Instant> {
     let now_ms = u64::try_from(now.as_millis()).unwrap_or(u64::MAX);
     let remaining_ms = deadline_unix_ms.saturating_sub(now_ms);
     let now = Instant::now();
-    now.checked_add(Duration::from_millis(remaining_ms))
-        .or(Some(now))
+    Some(
+        now.checked_add(Duration::from_millis(remaining_ms))
+            // An explicit deadline must never silently become unbounded. If
+            // the platform cannot represent it monotonically, fail closed.
+            .unwrap_or(now),
+    )
 }
 
 #[cfg(test)]
@@ -162,6 +166,24 @@ mod tests {
             Budget::from_limits(&elapsed).checkpoint(),
             Err(BudgetError::DeadlineExceeded)
         );
+    }
+
+    #[test]
+    fn extreme_deadline_is_accepted_when_representable_and_fails_closed_otherwise() {
+        let remaining_ms = u64::MAX.saturating_sub(unix_ms());
+        let is_representable = Instant::now()
+            .checked_add(Duration::from_millis(remaining_ms))
+            .is_some();
+        let limits = Limits {
+            deadline_unix_ms: Some(u64::MAX),
+            ..Limits::default()
+        };
+        let expected = if is_representable {
+            Ok(())
+        } else {
+            Err(BudgetError::DeadlineExceeded)
+        };
+        assert_eq!(Budget::from_limits(&limits).checkpoint(), expected);
     }
 
     #[test]

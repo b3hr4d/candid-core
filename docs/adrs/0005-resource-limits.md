@@ -54,6 +54,8 @@ consumed cumulatively.
 `RuntimeContext` snapshots the configured Unix deadline into a monotonic local
 deadline when work begins and carries a cloneable `CancellationToken` for
 cooperative cancellation. Traversals and stage boundaries checkpoint both.
+If a platform cannot represent the remaining duration as a monotonic deadline,
+the operation fails closed rather than silently discarding an explicit limit.
 Synchronous upstream parser/type-checker calls and third-party resolvers cannot
 be preempted safely; the runtime checks immediately before and after them, and
 custom resolvers may override `load_with_context` to checkpoint during their

@@ -727,6 +727,27 @@ fn elapsed_deadlines_abort_work_without_partial_artifacts() {
 }
 
 #[test]
+fn resolver_context_methods_enforce_elapsed_deadlines() {
+    let mut resolver = MemoryResolver::new();
+    resolver
+        .insert("memory:/entry.did", "service : {};")
+        .unwrap();
+    let id = SourceId::parse("memory:/entry.did").unwrap();
+    let context = RuntimeContext::new(Limits {
+        deadline_unix_ms: Some(1),
+        ..Limits::default()
+    });
+
+    let load_error = resolver.load_with_context(&id, &context).unwrap_err();
+    assert_eq!(load_error.code, "operation_deadline_exceeded");
+
+    let resolve_error = resolver
+        .resolve_with_context(None, "memory:/entry.did", &context)
+        .unwrap_err();
+    assert_eq!(resolve_error.code, "operation_deadline_exceeded");
+}
+
+#[test]
 fn runtime_context_cancellation_is_cooperative_and_not_serialized() {
     let compilation = compile("service : {};");
     let token = CancellationToken::new();
@@ -738,6 +759,7 @@ fn runtime_context_cancellation_is_cooperative_and_not_serialized() {
     assert!(!decoded.cancellation_token().is_cancelled());
 
     token.cancel();
+    assert_eq!(decoded, context);
     let compile_error =
         compile_did_with_context("service : {};", CompileOptions::default(), &context).unwrap_err();
     assert_eq!(compile_error.diagnostics[0].code, "operation_cancelled");
