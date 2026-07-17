@@ -1,4 +1,11 @@
-use candid_core::{compile_did_file_with_options, CompileOptions, Contract, ContractJsonError};
+#[path = "../bounded.rs"]
+mod bounded;
+
+use bounded::{read_bounded_utf8, BoundedUtf8Error};
+use candid_core::{
+    compile_did_file_with_options, CompileOptions, Contract, ContractJsonError,
+    ContractValidationError, ContractViolation, Limits, ResourceLimitInfo,
+};
 use serde_json::json;
 use std::env;
 use std::fs;
@@ -38,12 +45,44 @@ fn main() -> ExitCode {
                 })),
             }
         }
-        "validate" => match fs::read_to_string(&path) {
+        "validate" => match fs::File::open(&path)
+            .map_err(BoundedUtf8Error::Io)
+            .and_then(|file| read_bounded_utf8(file, Limits::default().max_input_bytes))
+        {
             Ok(input) => match Contract::from_json(&input) {
                 Ok(contract) => write_json(&json!({ "ok": true, "contract": contract })),
                 Err(error) => write_error(json_error(error)),
             },
-            Err(error) => write_error(json!({
+            Err(BoundedUtf8Error::LimitExceeded { observed }) => {
+                let limit = Limits::default().max_input_bytes;
+                write_error(json_error(ContractJsonError::InvalidContract(
+                    ContractValidationError {
+                        violations: vec![ContractViolation {
+                            code: "resource_limit_exceeded".to_string(),
+                            path: "$".to_string(),
+                            message: format!(
+                                "resource input_bytes exceeded limit {limit}; observed {}",
+                                observed
+                            ),
+                            resource_limit: Some(ResourceLimitInfo {
+                                resource: "input_bytes".to_string(),
+                                limit,
+                                observed,
+                            }),
+                        }],
+                    },
+                )))
+            }
+            Err(BoundedUtf8Error::Io(error)) => write_error(json!({
+                "ok": false,
+                "diagnostics": [{
+                    "code": "contract_file_read_error",
+                    "phase": "load",
+                    "severity": "error",
+                    "message": format!("cannot read {}: {error}", path.display()),
+                }],
+            })),
+            Err(BoundedUtf8Error::InvalidUtf8(error)) => write_error(json!({
                 "ok": false,
                 "diagnostics": [{
                     "code": "contract_file_read_error",

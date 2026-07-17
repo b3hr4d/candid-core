@@ -5,6 +5,8 @@
 //! host-neutral JSON model; it does not implement a second Candid parser or
 //! codec.
 
+#[cfg(not(target_os = "unknown"))]
+mod bounded;
 mod canonical;
 mod compile;
 mod diagnostics;
