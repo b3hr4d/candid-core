@@ -36,6 +36,8 @@ Default numeric values live in a versioned operational profile rather than the s
 
 Existing conveniences use `Limits::default`; context-aware entry points expose the policy. Contract JSON, source resolution, graph structure, canonicalization, extensions, and HostValue traversal enforce limits. Graph canonicalization and value validation use explicit work stacks. Limit failures carry structured resource, limit, and observed values.
 
+The compiler revalidates every resolver result before digesting or parsing it and owns source-count, per-source-byte, and bundle-byte accounting. Resolver implementations may reject inputs earlier, but cannot bypass compiler enforcement. Inline compilation uses the same accounting and source-sidecar generation propagates validation failures without panicking.
+
 ## Required verification
 
 - Boundary tests at and one unit over every limit.
