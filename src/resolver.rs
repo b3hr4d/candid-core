@@ -376,7 +376,7 @@ impl SourceResolver for WorkspaceResolver {
 
 #[cfg(not(target_os = "unknown"))]
 fn workspace_open_error(id: &SourceId, error: io::Error) -> ResolveError {
-    if error.kind() == io::ErrorKind::PermissionDenied {
+    if is_cap_std_escape(&error) {
         ResolveError::new(
             "did_import_outside_workspace",
             format!(
@@ -390,6 +390,15 @@ fn workspace_open_error(id: &SourceId, error: io::Error) -> ResolveError {
             format!("cannot read source {:?}: {error}", id.as_str()),
         )
     }
+}
+
+#[cfg(not(target_os = "unknown"))]
+fn is_cap_std_escape(error: &io::Error) -> bool {
+    // cap-std 4.0.2 represents capability escapes with this synthetic error;
+    // ordinary filesystem denials retain their OS error code and message.
+    error.kind() == io::ErrorKind::PermissionDenied
+        && error.raw_os_error().is_none()
+        && error.to_string() == "a path led outside of the filesystem"
 }
 
 fn normalize_path(from: Option<&SourceId>, import: &str) -> Result<String, ResolveError> {
@@ -493,7 +502,7 @@ fn check_source_size(id: &SourceId, source: &str, limits: &Limits) -> Result<(),
 #[cfg(all(test, unix))]
 mod workspace_tests {
     use super::*;
-    use std::os::unix::fs::symlink;
+    use std::os::unix::fs::{symlink, PermissionsExt};
     use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
     use std::thread;
 
@@ -549,6 +558,19 @@ mod workspace_tests {
         let outside = SourceId::parse("workspace:/outside.did").unwrap();
         let error = resolver.load(&outside, &limits).unwrap_err();
         assert_eq!(error.code, "did_import_outside_workspace");
+    }
+
+    #[test]
+    fn workspace_permission_denials_remain_file_read_errors() {
+        let fixture = Fixture::new();
+        let unreadable = fixture.workspace.join("unreadable.did");
+        fs::write(&unreadable, "service : {};").unwrap();
+        fs::set_permissions(&unreadable, fs::Permissions::from_mode(0o000)).unwrap();
+
+        let resolver = WorkspaceResolver::new(&fixture.workspace).unwrap();
+        let id = SourceId::parse("workspace:/unreadable.did").unwrap();
+        let error = resolver.load(&id, &Limits::default()).unwrap_err();
+        assert_eq!(error.code, "did_file_read_error");
     }
 
     #[test]
