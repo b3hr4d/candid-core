@@ -1,8 +1,8 @@
 mod support;
 
 use candid_core::{
-    compile_did_with_options, compile_with_resolver, CompileOptions, Contract, RuntimeContext,
-    WorkspaceResolver,
+    compile_did_with_context, compile_did_with_options, compile_with_resolver, CompileOptions,
+    Contract, Limits, RuntimeContext, WorkspaceResolver,
 };
 use candid_parser::candid::TypeEnv;
 use candid_parser::{check_file, check_prog, IDLProg};
@@ -16,18 +16,31 @@ fn official_check(source: &str) {
     black_box((environment, actor));
 }
 
+fn compile_trusted_benchmark(
+    source: &str,
+    options: CompileOptions,
+    context: &RuntimeContext,
+) -> candid_core::Compilation {
+    compile_did_with_context(source, options, context).expect("benchmark DID must compile")
+}
+
 fn compilation_benchmarks(criterion: &mut Criterion) {
+    let context = RuntimeContext {
+        limits: Limits {
+            max_type_depth: 1_024,
+            ..Limits::default()
+        },
+    };
     for case in support::import_free_cases() {
         official_check(&case.source);
-        compile_did_with_options(
+        compile_trusted_benchmark(
             &case.source,
             CompileOptions {
                 include_source_info: false,
             },
-        )
-        .expect("benchmark DID must compile without source info");
-        compile_did_with_options(&case.source, CompileOptions::default())
-            .expect("benchmark DID must compile with source info");
+            &context,
+        );
+        compile_trusted_benchmark(&case.source, CompileOptions::default(), &context);
 
         let mut group = criterion.benchmark_group(format!("compile/{}", case.name));
         group.throughput(Throughput::Bytes(case.source.len() as u64));
@@ -41,15 +54,13 @@ fn compilation_benchmarks(criterion: &mut Criterion) {
             &case.source,
             |bencher, source| {
                 bencher.iter(|| {
-                    black_box(
-                        compile_did_with_options(
-                            black_box(source),
-                            CompileOptions {
-                                include_source_info: false,
-                            },
-                        )
-                        .expect("benchmark DID must compile"),
-                    )
+                    black_box(compile_trusted_benchmark(
+                        black_box(source),
+                        CompileOptions {
+                            include_source_info: false,
+                        },
+                        black_box(&context),
+                    ))
                 })
             },
         );
@@ -58,10 +69,11 @@ fn compilation_benchmarks(criterion: &mut Criterion) {
             &case.source,
             |bencher, source| {
                 bencher.iter(|| {
-                    black_box(
-                        compile_did_with_options(black_box(source), CompileOptions::default())
-                            .expect("benchmark DID must compile"),
-                    )
+                    black_box(compile_trusted_benchmark(
+                        black_box(source),
+                        CompileOptions::default(),
+                        black_box(&context),
+                    ))
                 })
             },
         );

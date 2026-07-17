@@ -195,7 +195,7 @@ pub fn compile_did_with_context(
     )?;
     check_source_nesting(source, &context.limits)?;
     let program = parse_program(source, Some("memory:/inline.did".to_string()))?;
-    check_program_type_depth(&program, &context.limits)?;
+    check_programs_type_depth(std::iter::once(&program), &context.limits)?;
     let imports: Vec<_> = program
         .decs
         .iter()
@@ -281,6 +281,10 @@ pub fn compile_with_resolver(
     context: &RuntimeContext,
 ) -> Result<Compilation, CompileError> {
     let (source_units, entry_id) = load_source_units_with_resolver(entry, resolver, context)?;
+    check_programs_type_depth(
+        source_units.iter().map(|unit| &unit.program),
+        &context.limits,
+    )?;
     let materialized = MaterializedBundle::new(&source_units, &entry_id)?;
     let (environment, actor, _) = check_file(&materialized.entry).map_err(candid_file_error)?;
     lower_checked(
@@ -338,22 +342,33 @@ fn check_source_nesting(source: &str, limits: &crate::Limits) -> Result<(), Comp
     Ok(())
 }
 
-/// Follow parsed declaration references with an explicit stack before the
-/// upstream checker can recursively expand a long chain of shallow aliases.
-fn check_program_type_depth(program: &IDLProg, limits: &crate::Limits) -> Result<(), CompileError> {
-    let declarations: BTreeMap<_, _> = program
-        .decs
-        .iter()
-        .filter_map(|declaration| match declaration {
-            Dec::TypD(binding) => Some((binding.id.as_str(), &binding.typ)),
-            _ => None,
-        })
-        .collect();
+/// Follow parsed declaration references across the complete resolved bundle
+/// with an explicit stack before the upstream checker can recursively expand
+/// a long chain of shallow aliases.
+fn check_programs_type_depth<'a>(
+    programs: impl IntoIterator<Item = &'a IDLProg>,
+    limits: &crate::Limits,
+) -> Result<(), CompileError> {
+    let programs: Vec<_> = programs.into_iter().collect();
+    let mut declarations = BTreeMap::new();
+    for program in &programs {
+        for declaration in &program.decs {
+            if let Dec::TypD(binding) = declaration {
+                declarations
+                    .entry(binding.id.as_str())
+                    .or_insert(&binding.typ);
+            }
+        }
+    }
     let mut pending: Vec<_> = declarations
         .values()
         .copied()
-        .chain(program.actor.as_ref().map(|actor| &actor.typ))
-        .map(|ty| (ty, 1usize, BTreeSet::<&str>::new()))
+        .chain(
+            programs
+                .iter()
+                .filter_map(|program| program.actor.as_ref().map(|actor| &actor.typ)),
+        )
+        .map(|ty| (ty, 0usize, BTreeSet::<&str>::new()))
         .collect();
 
     while let Some((ty, depth, active_names)) = pending.pop() {
@@ -375,7 +390,9 @@ fn check_program_type_depth(program: &IDLProg, limits: &crate::Limits) -> Result
                     if !active_names.contains(name.as_str()) {
                         let mut next_names = active_names;
                         next_names.insert(name);
-                        pending.push((resolved, next_depth, next_names));
+                        // Aliases name a type but do not add a semantic type
+                        // constructor of their own.
+                        pending.push((resolved, depth, next_names));
                     }
                 }
             }
@@ -468,7 +485,7 @@ fn load_source_units_with_resolver(
         let resolved = accept_resolved_source(&source_id, resolved, limits, &mut accounting)?;
         check_source_nesting(&resolved.source, limits)?;
         let program = parse_program(&resolved.source, Some(resolved.id.as_str().to_string()))?;
-        check_program_type_depth(&program, limits)?;
+        check_programs_type_depth(std::iter::once(&program), limits)?;
         let imports: Vec<_> = program
             .decs
             .iter()
@@ -915,7 +932,7 @@ fn check_type_depth(
     roots.extend(actor_type.cloned());
     let mut pending: Vec<_> = roots
         .into_iter()
-        .map(|ty| (ty, 1usize, BTreeSet::<String>::new()))
+        .map(|ty| (ty, 0usize, BTreeSet::<String>::new()))
         .collect();
 
     while let Some((ty, depth, active_names)) = pending.pop() {
@@ -940,7 +957,7 @@ fn check_type_depth(
                         .find_type(name)
                         .map_err(|error| lower_error(error.to_string()))?
                         .clone();
-                    pending.push((resolved, next_depth, next_names));
+                    pending.push((resolved, depth, next_names));
                 }
             }
             TypeInner::Opt(inner) | TypeInner::Vec(inner) => {
