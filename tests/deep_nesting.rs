@@ -30,7 +30,7 @@ fn compile_with_limits(source: &str, limits: Limits) -> Result<(), candid_core::
         CompileOptions {
             include_source_info: true,
         },
-        &RuntimeContext { limits },
+        &RuntimeContext::new(limits),
     )
     .map(|_| ())
 }

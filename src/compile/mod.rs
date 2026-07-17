@@ -27,8 +27,10 @@ mod materialize;
 mod nesting;
 
 pub use artifact::{Compilation, CompileOptions};
-use diagnostics::{candid_error, candid_file_error, lower_error, source_info_compile_error};
-use loading::{accept_source, load_source_units_with_resolver, SourceAccounting, SourceUnit};
+use diagnostics::{
+    budget_error, candid_error, candid_file_error, lower_error, source_info_compile_error,
+};
+use loading::{accept_source, load_source_units_with_resolver, SourceUnit};
 use lower::lower_checked;
 use materialize::MaterializedBundle;
 use nesting::{check_programs_type_depth, check_source_nesting};
@@ -49,16 +51,11 @@ pub fn compile_did_with_context(
     options: CompileOptions,
     context: &RuntimeContext,
 ) -> Result<Compilation, CompileError> {
-    let mut accounting = SourceAccounting::default();
-    accept_source(
-        "memory:/inline.did",
-        source.len(),
-        &context.limits,
-        &mut accounting,
-    )?;
-    check_source_nesting(source, &context.limits)?;
-    let program = parse_program(source, Some("memory:/inline.did".to_string()))?;
-    check_programs_type_depth(std::iter::once(&program), &context.limits)?;
+    let mut budget = context.budget();
+    accept_source("memory:/inline.did", source.len(), &mut budget)?;
+    check_source_nesting(source, &mut budget)?;
+    let program = parse_program(source, Some("memory:/inline.did".to_string()), &mut budget)?;
+    check_programs_type_depth(std::iter::once(&program), &mut budget)?;
     let imports: Vec<_> = program
         .decs
         .iter()
@@ -80,9 +77,15 @@ pub fn compile_did_with_context(
         return Err(error);
     }
 
+    budget
+        .checkpoint()
+        .map_err(|error| budget_error(error, DiagnosticPhase::TypeCheck, "Candid type checking"))?;
     let mut environment = TypeEnv::new();
     let actor = check_prog(&mut environment, &program)
         .map_err(|error| candid_error(error, DiagnosticPhase::TypeCheck, None))?;
+    budget
+        .checkpoint()
+        .map_err(|error| budget_error(error, DiagnosticPhase::TypeCheck, "Candid type checking"))?;
     let source_units = vec![SourceUnit {
         name: "memory:/inline.did".to_string(),
         source: source.to_string(),
@@ -95,7 +98,7 @@ pub fn compile_did_with_context(
         &environment,
         actor.as_ref(),
         options,
-        context,
+        &mut budget,
     )
 }
 
@@ -143,27 +146,40 @@ pub fn compile_with_resolver(
     options: CompileOptions,
     context: &RuntimeContext,
 ) -> Result<Compilation, CompileError> {
-    let (source_units, entry_id) = load_source_units_with_resolver(entry, resolver, context)?;
-    check_programs_type_depth(
-        source_units.iter().map(|unit| &unit.program),
-        &context.limits,
-    )?;
-    let materialized = MaterializedBundle::new(&source_units, &entry_id)?;
+    let mut budget = context.budget();
+    let (source_units, entry_id) =
+        load_source_units_with_resolver(entry, resolver, context, &mut budget)?;
+    check_programs_type_depth(source_units.iter().map(|unit| &unit.program), &mut budget)?;
+    let materialized = MaterializedBundle::new(&source_units, &entry_id, &mut budget)?;
+    budget
+        .checkpoint()
+        .map_err(|error| budget_error(error, DiagnosticPhase::TypeCheck, "Candid type checking"))?;
     let (environment, actor, _) = check_file(&materialized.entry).map_err(candid_file_error)?;
+    budget
+        .checkpoint()
+        .map_err(|error| budget_error(error, DiagnosticPhase::TypeCheck, "Candid type checking"))?;
     lower_checked(
         &source_units,
         &environment,
         actor.as_ref(),
         options,
-        context,
+        &mut budget,
     )
 }
 
 pub(super) fn parse_program(
     source: &str,
     source_name: Option<String>,
+    budget: &mut crate::budget::Budget<'_>,
 ) -> Result<IDLProg, CompileError> {
-    source
+    budget
+        .checkpoint()
+        .map_err(|error| budget_error(error, DiagnosticPhase::Parse, "Candid parsing"))?;
+    let program = source
         .parse::<IDLProg>()
-        .map_err(|error| candid_error(error, DiagnosticPhase::Parse, source_name))
+        .map_err(|error| candid_error(error, DiagnosticPhase::Parse, source_name))?;
+    budget
+        .checkpoint()
+        .map_err(|error| budget_error(error, DiagnosticPhase::Parse, "Candid parsing"))?;
+    Ok(program)
 }

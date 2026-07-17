@@ -44,6 +44,23 @@ checker is invoked. Checked Candid types are depth-validated with an explicit
 work stack, and Contract lowering plus provenance collection likewise use
 explicit work stacks rather than recursive descent.
 
+Each context-aware public operation creates one internal consumable budget.
+Loading, preflight checks, lowering, Contract validation, canonicalization, and
+provenance validation share that instance instead of resetting allowances at
+stage boundaries. Retained resources use high-water accounting so validating
+the same artifact in a later stage does not count it twice, while work units are
+consumed cumulatively.
+
+`RuntimeContext` snapshots the configured Unix deadline into a monotonic local
+deadline when work begins and carries a cloneable `CancellationToken` for
+cooperative cancellation. Traversals and stage boundaries checkpoint both.
+If a platform cannot represent the remaining duration as a monotonic deadline,
+the operation fails closed rather than silently discarding an explicit limit.
+Synchronous upstream parser/type-checker calls and third-party resolvers cannot
+be preempted safely; the runtime checks immediately before and after them, and
+custom resolvers may override `load_with_context` to checkpoint during their
+own long-running work.
+
 ## Required verification
 
 - Boundary tests at and one unit over every limit.

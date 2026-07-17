@@ -40,12 +40,23 @@ impl Compilation {
         raw_source_info: Option<SerializedSourceInfo>,
         limits: &crate::Limits,
     ) -> Result<Self, crate::ContractValidationError> {
-        let (contract, mapping) = Contract::from_raw_with_mapping(raw_contract, limits)?;
+        let context = crate::RuntimeContext::new(limits.clone());
+        Self::try_from_raw_with_context(raw_contract, raw_source_info, &context)
+    }
+
+    pub fn try_from_raw_with_context(
+        raw_contract: RawContract,
+        raw_source_info: Option<SerializedSourceInfo>,
+        context: &crate::RuntimeContext,
+    ) -> Result<Self, crate::ContractValidationError> {
+        let mut budget = context.budget();
+        let (contract, mapping) =
+            Contract::from_raw_with_mapping_and_budget(raw_contract, &mut budget)?;
         let source_info = raw_source_info
             .map(SourceInfo::from_raw_unchecked)
             .map(|mut source_info| {
                 remap_source_info(&mut source_info, &mapping)?;
-                source_info.validate(&contract, limits)?;
+                source_info.validate_with_budget(&contract, &mut budget)?;
                 Ok::<SourceInfo, crate::ContractValidationError>(source_info)
             })
             .transpose()?;

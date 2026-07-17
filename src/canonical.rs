@@ -1,4 +1,4 @@
-use crate::limits::Limits;
+use crate::budget::Budget;
 use crate::model::{
     Actor, Contract, ContractIdentities, ContractValidationError, Declaration, Field, MethodMode,
     PrimitiveType, ServiceMethod, TypeNode, TypeRef,
@@ -11,12 +11,12 @@ use std::collections::{BTreeMap, VecDeque};
 
 /// Validate structural rules, then minimize semantic-equivalent nodes and
 /// deterministically re-index the arena before calculating its identities.
-pub(crate) fn canonicalize_contract_with_limits(
+pub(crate) fn canonicalize_contract_with_budget(
     contract: &Contract,
-    limits: &Limits,
+    budget: &mut Budget<'_>,
 ) -> Result<Contract, ContractValidationError> {
-    crate::validate::validate_structure_with_limits(contract, limits)?;
-    Ok(canonicalize_with_mapping_unchecked_and_limits(contract, limits)?.contract)
+    crate::validate::validate_structure_with_budget(contract, budget)?;
+    Ok(canonicalize_with_mapping_unchecked_with_budget(contract, budget)?.contract)
 }
 
 pub(crate) struct Canonicalized {
@@ -26,12 +26,18 @@ pub(crate) struct Canonicalized {
     pub old_to_new: Vec<TypeRef>,
 }
 
-pub(crate) fn canonicalize_with_mapping_unchecked_and_limits(
+pub(crate) fn canonicalize_with_mapping_unchecked_with_budget(
     contract: &Contract,
-    limits: &Limits,
+    budget: &mut Budget<'_>,
 ) -> Result<Canonicalized, ContractValidationError> {
-    let quotient = quotient_semantic_nodes(contract, limits)?;
+    let quotient = quotient_semantic_nodes(contract, budget)?;
+    budget
+        .checkpoint()
+        .map_err(crate::budget::BudgetError::into_contract_error)?;
     let indexed = canonicalize_indexed(&quotient.contract);
+    budget
+        .checkpoint()
+        .map_err(crate::budget::BudgetError::into_contract_error)?;
     Ok(Canonicalized {
         contract: indexed.contract,
         old_to_new: quotient
@@ -42,11 +48,11 @@ pub(crate) fn canonicalize_with_mapping_unchecked_and_limits(
     })
 }
 
-pub(crate) fn expected_canonical(
+pub(crate) fn expected_canonical_with_budget(
     contract: &Contract,
-    limits: &Limits,
+    budget: &mut Budget<'_>,
 ) -> Result<Contract, ContractValidationError> {
-    Ok(canonicalize_with_mapping_unchecked_and_limits(contract, limits)?.contract)
+    Ok(canonicalize_with_mapping_unchecked_with_budget(contract, budget)?.contract)
 }
 
 struct QuotientGraph {
@@ -60,9 +66,9 @@ struct QuotientGraph {
 /// stable quotient before any numeric TypeRef ordering is considered.
 fn quotient_semantic_nodes(
     contract: &Contract,
-    limits: &Limits,
+    budget: &mut Budget<'_>,
 ) -> Result<QuotientGraph, ContractValidationError> {
-    let classes = semantic_classes(&contract.types, limits)?;
+    let classes = semantic_classes(&contract.types, budget)?;
     let class_count = classes.iter().copied().max().map_or(0, |class| class + 1);
     let mut representatives = vec![None; class_count];
     for (index, class) in classes.iter().copied().enumerate() {
@@ -114,28 +120,19 @@ fn quotient_semantic_nodes(
 
 fn semantic_classes(
     types: &[TypeNode],
-    limits: &Limits,
+    budget: &mut Budget<'_>,
 ) -> Result<Vec<usize>, ContractValidationError> {
-    let mut work = types.len();
+    let max_work = budget.limits().max_canonicalization_work;
+    budget
+        .charge("canonicalization_work", max_work, types.len())
+        .map_err(crate::budget::BudgetError::into_contract_error)?;
     let mut classes =
         assign_partition_ids(types.iter().map(local_signature).collect::<Vec<Vec<u8>>>());
 
     loop {
-        if limits.deadline_exceeded() {
-            return Err(ContractValidationError::single(
-                "operation_deadline_exceeded",
-                "$",
-                "canonicalization deadline has elapsed",
-            ));
-        }
-        work = work.saturating_add(types.len());
-        if work > limits.max_canonicalization_work {
-            return Err(ContractValidationError::resource_limit(
-                "canonicalization_work",
-                limits.max_canonicalization_work,
-                work,
-            ));
-        }
+        budget
+            .charge("canonicalization_work", max_work, types.len())
+            .map_err(crate::budget::BudgetError::into_contract_error)?;
         let next = assign_partition_ids(
             types
                 .iter()

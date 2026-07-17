@@ -1,5 +1,34 @@
 use super::*;
 
+pub(super) fn budget_error(
+    error: crate::budget::BudgetError,
+    phase: DiagnosticPhase,
+    operation: &str,
+) -> CompileError {
+    match error {
+        crate::budget::BudgetError::Cancelled => CompileError::single(
+            "operation_cancelled",
+            phase,
+            format!("{operation} was cancelled"),
+        ),
+        crate::budget::BudgetError::DeadlineExceeded => CompileError::single(
+            "operation_deadline_exceeded",
+            phase,
+            format!("{operation} deadline has elapsed"),
+        ),
+        crate::budget::BudgetError::ResourceLimit {
+            resource,
+            limit,
+            observed,
+        } => CompileError::resource_limit(
+            resource,
+            limit,
+            observed,
+            format!("resource {resource} exceeded limit {limit}; observed {observed}"),
+        ),
+    }
+}
+
 pub(super) fn source_info_compile_error(error: crate::ContractValidationError) -> CompileError {
     CompileError {
         diagnostics: error

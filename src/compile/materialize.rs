@@ -6,7 +6,14 @@ pub(super) struct MaterializedBundle {
 }
 
 impl MaterializedBundle {
-    pub(super) fn new(units: &[SourceUnit], entry: &crate::SourceId) -> Result<Self, CompileError> {
+    pub(super) fn new(
+        units: &[SourceUnit],
+        entry: &crate::SourceId,
+        budget: &mut crate::budget::Budget<'_>,
+    ) -> Result<Self, CompileError> {
+        budget.checkpoint().map_err(|error| {
+            budget_error(error, DiagnosticPhase::Load, "source materialization")
+        })?;
         static NEXT_ID: AtomicU64 = AtomicU64::new(0);
         let id = NEXT_ID.fetch_add(1, AtomicOrdering::Relaxed);
         let root = std::env::temp_dir().join(format!("candid-core-{}-{id}", std::process::id()));
@@ -38,8 +45,11 @@ impl MaterializedBundle {
             root,
         };
         for (index, unit) in units.iter().enumerate() {
+            budget.checkpoint().map_err(|error| {
+                budget_error(error, DiagnosticPhase::Load, "source materialization")
+            })?;
             let path = bundle.root.join(format!("{index}.did"));
-            let source = materialized_source(unit, &indexes)?;
+            let source = materialized_source(unit, &indexes, budget)?;
             fs::write(&path, source).map_err(|error| {
                 CompileError::single(
                     "did_materialize_error",
@@ -68,6 +78,7 @@ fn create_private_dir(path: &Path) -> std::io::Result<()> {
 fn materialized_source(
     unit: &SourceUnit,
     indexes: &BTreeMap<crate::SourceId, usize>,
+    budget: &mut crate::budget::Budget<'_>,
 ) -> Result<String, CompileError> {
     let mut source = String::new();
     for import in &unit.imports {
@@ -88,7 +99,7 @@ fn materialized_source(
             }
         }
     }
-    let program = parse_program(&unit.source, Some(unit.name.clone()))?;
+    let program = parse_program(&unit.source, Some(unit.name.clone()), budget)?;
     source.push_str(&pretty_print(&IDLMergedProg::new(program)));
     Ok(source)
 }
@@ -109,14 +120,16 @@ mod tests {
 
         let source = "service : {};";
         let entry = crate::SourceId::parse("memory:/private.did").unwrap();
+        let limits = crate::Limits::default();
+        let mut budget = crate::budget::Budget::from_limits(&limits);
         let unit = SourceUnit {
             name: entry.as_str().to_string(),
             source: source.to_string(),
-            program: parse_program(source, Some(entry.as_str().to_string())).unwrap(),
+            program: parse_program(source, Some(entry.as_str().to_string()), &mut budget).unwrap(),
             imports: Vec::new(),
             include_actor: true,
         };
-        let bundle = MaterializedBundle::new(&[unit], &entry).unwrap();
+        let bundle = MaterializedBundle::new(&[unit], &entry, &mut budget).unwrap();
         let root = bundle.root.clone();
         let mode = fs::metadata(&root).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode, 0o700);

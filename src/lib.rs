@@ -7,6 +7,7 @@
 
 #[cfg(not(target_os = "unknown"))]
 mod bounded;
+mod budget;
 mod canonical;
 mod compile;
 mod diagnostics;
@@ -27,7 +28,7 @@ pub use diagnostics::{
     CompileError, Diagnostic, DiagnosticPhase, ResourceLimitInfo, Severity, SourceSpan,
 };
 pub use envelope::ContractEnvelope;
-pub use limits::{Limits, RuntimeContext};
+pub use limits::{CancellationToken, Limits, RuntimeContext};
 pub use model::{
     Actor, Contract, ContractIdentities, ContractJsonError, ContractValidationError,
     ContractViolation, Declaration, Field, FieldLabelProvenance, MethodMode, PrimitiveType,
@@ -41,6 +42,6 @@ pub use resolver::{
     MemoryResolver, ResolveError, ResolvedSource, SourceId, SourceResolver, WorkspaceResolver,
 };
 pub use value::{
-    validate_host_value, ContractMethodRef, ContractTypeRef, HostFieldValue, HostValue,
-    HostValueJsonError, HostValueValidationError, HostValueViolation,
+    validate_host_value, validate_host_value_with_context, ContractMethodRef, ContractTypeRef,
+    HostFieldValue, HostValue, HostValueJsonError, HostValueValidationError, HostValueViolation,
 };

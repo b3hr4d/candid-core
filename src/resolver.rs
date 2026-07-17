@@ -150,6 +150,28 @@ impl ResolveError {
         }
     }
 
+    fn budget(error: crate::budget::BudgetError, operation: &str) -> Self {
+        match error {
+            crate::budget::BudgetError::Cancelled => {
+                Self::new("operation_cancelled", format!("{operation} was cancelled"))
+            }
+            crate::budget::BudgetError::DeadlineExceeded => Self::new(
+                "operation_deadline_exceeded",
+                format!("{operation} deadline has elapsed"),
+            ),
+            crate::budget::BudgetError::ResourceLimit {
+                resource,
+                limit,
+                observed,
+            } => Self::resource_limit(
+                resource,
+                limit,
+                observed,
+                format!("resource {resource} exceeded limit {limit}; observed {observed}"),
+            ),
+        }
+    }
+
     pub(crate) fn into_compile_error(self) -> CompileError {
         match self.resource_limit {
             Some(info) => CompileError::resource_limit(
@@ -168,6 +190,25 @@ pub trait SourceResolver {
 
     fn load(&self, id: &SourceId, limits: &Limits) -> Result<ResolvedSource, ResolveError>;
 
+    /// Loads with cooperative runtime cancellation and deadline checks.
+    /// Implementations that do long-running work may override this method to
+    /// checkpoint internally.
+    fn load_with_context(
+        &self,
+        id: &SourceId,
+        context: &crate::RuntimeContext,
+    ) -> Result<ResolvedSource, ResolveError> {
+        let budget = context.budget();
+        budget
+            .checkpoint()
+            .map_err(|error| ResolveError::budget(error, "source loading"))?;
+        let resolved = self.load(id, &context.limits)?;
+        budget
+            .checkpoint()
+            .map_err(|error| ResolveError::budget(error, "source loading"))?;
+        Ok(resolved)
+    }
+
     fn resolve(
         &self,
         from: Option<&SourceId>,
@@ -176,6 +217,23 @@ pub trait SourceResolver {
     ) -> Result<ResolvedSource, ResolveError> {
         let id = self.identify(from, import)?;
         self.load(&id, limits)
+    }
+
+    fn resolve_with_context(
+        &self,
+        from: Option<&SourceId>,
+        import: &str,
+        context: &crate::RuntimeContext,
+    ) -> Result<ResolvedSource, ResolveError> {
+        let budget = context.budget();
+        budget
+            .checkpoint()
+            .map_err(|error| ResolveError::budget(error, "source resolution"))?;
+        let id = self.identify(from, import)?;
+        budget
+            .checkpoint()
+            .map_err(|error| ResolveError::budget(error, "source resolution"))?;
+        self.load_with_context(&id, context)
     }
 }
 

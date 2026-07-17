@@ -25,12 +25,10 @@ fn compile_trusted_benchmark(
 }
 
 fn compilation_benchmarks(criterion: &mut Criterion) {
-    let context = RuntimeContext {
-        limits: Limits {
-            max_type_depth: 1_024,
-            ..Limits::default()
-        },
-    };
+    let context = RuntimeContext::new(Limits {
+        max_type_depth: 1_024,
+        ..Limits::default()
+    });
     for case in support::import_free_cases() {
         official_check(&case.source);
         compile_trusted_benchmark(

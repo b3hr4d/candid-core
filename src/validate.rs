@@ -1,5 +1,5 @@
+use crate::budget::Budget;
 use crate::canonical;
-use crate::limits::Limits;
 use crate::model::{
     Actor, Contract, ContractValidationError, ContractViolation, MethodMode, ServiceMethod,
     TypeNode, TypeRef, CANONICALIZATION_PROFILE, CONTRACT_FORMAT, FORMAT_VERSION,
@@ -64,12 +64,12 @@ impl ViolationCollector {
     }
 }
 
-pub(crate) fn validate_contract_with_limits(
+pub(crate) fn validate_contract_with_budget(
     contract: &Contract,
-    limits: &Limits,
+    budget: &mut Budget<'_>,
 ) -> Result<(), ContractValidationError> {
-    validate_structure_with_limits(contract, limits)?;
-    let expected = canonical::expected_canonical(contract, limits)?;
+    validate_structure_with_budget(contract, budget)?;
+    let expected = canonical::expected_canonical_with_budget(contract, budget)?;
     if contract.identities.contract != expected.identities.contract {
         return Err(ContractValidationError::single(
             "contract_id_mismatch",
@@ -95,18 +95,15 @@ pub(crate) fn validate_contract_with_limits(
 
 /// Checks only JSON/graph invariants. Identity verification is intentionally
 /// separate so the compiler can canonicalize a newly built graph first.
-pub(crate) fn validate_structure_with_limits(
+pub(crate) fn validate_structure_with_budget(
     contract: &Contract,
-    limits: &Limits,
+    budget: &mut Budget<'_>,
 ) -> Result<(), ContractValidationError> {
-    if limits.deadline_exceeded() {
-        return Err(ContractValidationError::single(
-            "operation_deadline_exceeded",
-            "$",
-            "Contract validation deadline has elapsed",
-        ));
-    }
-    enforce_limits(contract, limits)?;
+    budget
+        .checkpoint()
+        .map_err(crate::budget::BudgetError::into_contract_error)?;
+    enforce_limits(contract, budget)?;
+    let limits = budget.limits();
     let mut violations = ViolationCollector::new(limits.max_diagnostics);
     if contract.format != CONTRACT_FORMAT {
         violation(
@@ -190,6 +187,9 @@ pub(crate) fn validate_structure_with_limits(
 
     let mut declaration_names = BTreeSet::new();
     for (index, declaration) in contract.declarations.iter().enumerate() {
+        budget
+            .checkpoint()
+            .map_err(crate::budget::BudgetError::into_contract_error)?;
         let base = format!("$.declarations[{index}]");
         if declaration.name.is_empty() {
             violation(
@@ -216,30 +216,41 @@ pub(crate) fn validate_structure_with_limits(
     }
 
     for (index, node) in contract.types.iter().enumerate() {
+        budget
+            .checkpoint()
+            .map_err(crate::budget::BudgetError::into_contract_error)?;
         validate_node(index, node, contract, &mut violations);
     }
+    budget
+        .checkpoint()
+        .map_err(crate::budget::BudgetError::into_contract_error)?;
     validate_actor(contract, &mut violations);
     validate_class_placement(contract, &mut violations);
+    budget
+        .checkpoint()
+        .map_err(crate::budget::BudgetError::into_contract_error)?;
     validate_reachability(contract, &mut violations);
 
     violations.into_result()
 }
 
-fn enforce_limits(contract: &Contract, limits: &Limits) -> Result<(), ContractValidationError> {
-    if contract.types.len() > limits.max_type_nodes {
-        return Err(ContractValidationError::resource_limit(
-            "type_nodes",
-            limits.max_type_nodes,
-            contract.types.len(),
-        ));
-    }
-    if contract.declarations.len() > limits.max_declarations {
-        return Err(ContractValidationError::resource_limit(
+fn enforce_limits(
+    contract: &Contract,
+    budget: &mut Budget<'_>,
+) -> Result<(), ContractValidationError> {
+    let limits = budget.limits().clone();
+    let max_type_nodes = limits.max_type_nodes;
+    let max_declarations = limits.max_declarations;
+    budget
+        .observe("type_nodes", max_type_nodes, contract.types.len())
+        .map_err(crate::budget::BudgetError::into_contract_error)?;
+    budget
+        .observe(
             "declarations",
-            limits.max_declarations,
+            max_declarations,
             contract.declarations.len(),
-        ));
-    }
+        )
+        .map_err(crate::budget::BudgetError::into_contract_error)?;
 
     let mut edges = 0usize;
     let mut fields = 0usize;
@@ -251,6 +262,9 @@ fn enforce_limits(contract: &Contract, limits: &Limits) -> Result<(), ContractVa
         .map(|declaration| declaration.name.len())
         .sum::<usize>();
     for node in &contract.types {
+        budget
+            .checkpoint()
+            .map_err(crate::budget::BudgetError::into_contract_error)?;
         match node {
             TypeNode::Primitive { .. } => {}
             TypeNode::Opt { .. } | TypeNode::Vec { .. } => edges += 1,
@@ -293,11 +307,9 @@ fn enforce_limits(contract: &Contract, limits: &Limits) -> Result<(), ContractVa
         ),
         ("string_bytes", limits.max_string_bytes, string_bytes),
     ] {
-        if observed > limit {
-            return Err(ContractValidationError::resource_limit(
-                resource, limit, observed,
-            ));
-        }
+        budget
+            .observe(resource, limit, observed)
+            .map_err(crate::budget::BudgetError::into_contract_error)?;
     }
     Ok(())
 }

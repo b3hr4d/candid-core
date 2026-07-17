@@ -34,9 +34,18 @@ impl ContractEnvelope {
         value: Value,
         limits: &Limits,
     ) -> Result<(), ContractValidationError> {
+        self.insert_extension_with_context(name, value, &crate::RuntimeContext::new(limits.clone()))
+    }
+
+    pub fn insert_extension_with_context(
+        &mut self,
+        name: impl Into<String>,
+        value: Value,
+        context: &crate::RuntimeContext,
+    ) -> Result<(), ContractValidationError> {
         let name = name.into();
         let previous = self.extensions.insert(name.clone(), value);
-        if let Err(error) = self.validate(limits) {
+        if let Err(error) = self.validate_with_context(context) {
             match previous {
                 Some(previous) => {
                     self.extensions.insert(name, previous);
@@ -51,9 +60,21 @@ impl ContractEnvelope {
     }
 
     pub fn validate(&self, limits: &Limits) -> Result<(), ContractValidationError> {
-        self.contract.validate_with_limits(limits)?;
+        self.validate_with_context(&crate::RuntimeContext::new(limits.clone()))
+    }
+
+    pub fn validate_with_context(
+        &self,
+        context: &crate::RuntimeContext,
+    ) -> Result<(), ContractValidationError> {
+        let mut budget = context.budget();
+        crate::validate::validate_contract_with_budget(&self.contract, &mut budget)?;
+        let limits = &context.limits;
         let mut bytes = 0usize;
         for (name, value) in &self.extensions {
+            budget
+                .checkpoint()
+                .map_err(crate::budget::BudgetError::into_contract_error)?;
             if !valid_extension_name(name) {
                 return Err(ContractValidationError::single(
                     "invalid_extension_name",
@@ -67,13 +88,9 @@ impl ContractEnvelope {
                 .saturating_add(name.len())
                 .saturating_add(serde_json::to_vec(value).map_or(usize::MAX, |value| value.len()));
         }
-        if bytes > limits.max_value_bytes {
-            return Err(ContractValidationError::resource_limit(
-                "extension_bytes",
-                limits.max_value_bytes,
-                bytes,
-            ));
-        }
+        budget
+            .observe("extension_bytes", limits.max_value_bytes, bytes)
+            .map_err(crate::budget::BudgetError::into_contract_error)?;
         Ok(())
     }
 }
