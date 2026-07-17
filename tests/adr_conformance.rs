@@ -93,6 +93,47 @@ fn compilation_deserialization_rejects_a_mismatched_sidecar() {
 }
 
 #[test]
+fn compilation_atomically_remaps_raw_source_references() {
+    let expected = compile("type A = nat; type B = text; service : {};");
+    let mut raw_contract = RawContract::from(expected.contract());
+    let mut raw_source_info: RawSourceInfo =
+        serde_json::from_value(serde_json::to_value(expected.source_info().unwrap()).unwrap())
+            .unwrap();
+
+    let a = raw_contract
+        .declarations
+        .iter()
+        .find(|declaration| declaration.name == "A")
+        .unwrap()
+        .ty;
+    let b = raw_contract
+        .declarations
+        .iter()
+        .find(|declaration| declaration.name == "B")
+        .unwrap()
+        .ty;
+    raw_contract.types.swap(a as usize, b as usize);
+    for declaration in &mut raw_contract.declarations {
+        declaration.ty = match declaration.ty {
+            ty if ty == a => b,
+            ty if ty == b => a,
+            ty => ty,
+        };
+    }
+    for declaration in &mut raw_source_info.declarations {
+        declaration.ty = match declaration.ty {
+            ty if ty == a => b,
+            ty if ty == b => a,
+            ty => ty,
+        };
+    }
+
+    let actual =
+        Compilation::try_from_raw(raw_contract, Some(raw_source_info), &Limits::default()).unwrap();
+    assert_eq!(actual, expected);
+}
+
+#[test]
 fn source_ids_deserialize_through_the_canonical_parser() {
     for invalid in [
         r#"""#,
@@ -190,10 +231,12 @@ fn source_info_rejects_invalid_and_noncanonical_logical_ids() {
     let compilation = compile("service : {};");
     let mut json = serde_json::to_value(compilation.source_info().unwrap()).unwrap();
     json["sources"][0]["name"] = serde_json::json!("UPPER:/entry.did");
-    let source_info = SourceInfo::from(serde_json::from_value::<RawSourceInfo>(json).unwrap());
-    let error = source_info
-        .validate(compilation.contract(), &Limits::default())
-        .unwrap_err();
+    let error = SourceInfo::try_from_raw(
+        serde_json::from_value::<RawSourceInfo>(json).unwrap(),
+        compilation.contract(),
+        &Limits::default(),
+    )
+    .unwrap_err();
     assert_eq!(error.violations[0].code, "invalid_source_id");
     assert_eq!(error.violations[0].path, "$.sources[0].name");
 
@@ -216,14 +259,39 @@ fn source_info_rejects_invalid_and_noncanonical_logical_ids() {
     ] {
         let mut candidate = json.clone();
         candidate["imports"][0][field] = serde_json::json!(invalid);
-        let source_info =
-            SourceInfo::from(serde_json::from_value::<RawSourceInfo>(candidate).unwrap());
-        let error = source_info
-            .validate(compilation.contract(), &Limits::default())
-            .unwrap_err();
+        let error = SourceInfo::try_from_raw(
+            serde_json::from_value::<RawSourceInfo>(candidate).unwrap(),
+            compilation.contract(),
+            &Limits::default(),
+        )
+        .unwrap_err();
         assert_eq!(error.violations[0].code, "invalid_source_id");
         assert_eq!(error.violations[0].path, format!("$.imports[0].{field}"));
     }
+}
+
+#[test]
+fn source_info_raw_construction_is_fallible_and_contract_bound() {
+    let compilation = compile("service : {};");
+    let raw: RawSourceInfo =
+        serde_json::from_value(serde_json::to_value(compilation.source_info().unwrap()).unwrap())
+            .unwrap();
+    assert_eq!(
+        SourceInfo::try_from_raw(raw.clone(), compilation.contract(), &Limits::default()).unwrap(),
+        compilation.source_info().unwrap().clone()
+    );
+
+    let mut unsupported = raw.clone();
+    unsupported.source_info_version = 999;
+    let error = SourceInfo::try_from_raw(unsupported, compilation.contract(), &Limits::default())
+        .unwrap_err();
+    assert_eq!(error.violations[0].code, "unsupported_source_info_version");
+    assert_eq!(error.violations[0].path, "$.source_info_version");
+
+    let other = compile("service : { ping: () -> () };");
+    let error = SourceInfo::try_from_raw(raw, other.contract(), &Limits::default()).unwrap_err();
+    assert_eq!(error.violations[0].code, "source_contract_id_mismatch");
+    assert_eq!(error.violations[0].path, "$.contract_id");
 }
 
 #[test]

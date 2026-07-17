@@ -440,6 +440,17 @@ pub struct SourceInfo {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+/// Unvalidated source/provenance data.
+///
+/// Raw data cannot be converted infallibly into validated [`SourceInfo`]:
+///
+/// ```compile_fail
+/// use candid_core::{RawSourceInfo, SourceInfo};
+///
+/// fn bypass_validation(raw: RawSourceInfo) -> SourceInfo {
+///     raw.into()
+/// }
+/// ```
 pub struct RawSourceInfo {
     pub source_info_version: u32,
     pub contract_id: String,
@@ -459,8 +470,8 @@ pub struct RawSourceInfo {
     pub actors: Vec<SourceActorInfo>,
 }
 
-impl From<RawSourceInfo> for SourceInfo {
-    fn from(raw: RawSourceInfo) -> Self {
+impl SourceInfo {
+    pub(crate) fn from_raw_unchecked(raw: RawSourceInfo) -> Self {
         Self {
             source_info_version: raw.source_info_version,
             contract_id: raw.contract_id,
@@ -474,9 +485,18 @@ impl From<RawSourceInfo> for SourceInfo {
             actors: raw.actors,
         }
     }
-}
 
-impl SourceInfo {
+    /// Validates raw provenance against its bound Contract and operational limits.
+    pub fn try_from_raw(
+        raw: RawSourceInfo,
+        contract: &Contract,
+        limits: &Limits,
+    ) -> Result<Self, ContractValidationError> {
+        let source_info = Self::from_raw_unchecked(raw);
+        source_info.validate(contract, limits)?;
+        Ok(source_info)
+    }
+
     pub fn source_info_version(&self) -> u32 {
         self.source_info_version
     }

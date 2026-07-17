@@ -42,7 +42,7 @@ impl Compilation {
     ) -> Result<Self, crate::ContractValidationError> {
         let (contract, mapping) = Contract::from_raw_with_mapping(raw_contract, limits)?;
         let source_info = raw_source_info
-            .map(SourceInfo::from)
+            .map(SourceInfo::from_raw_unchecked)
             .map(|mut source_info| {
                 remap_source_info(&mut source_info, &mapping)?;
                 source_info.validate(&contract, limits)?;
