@@ -1,3 +1,5 @@
+#[cfg(not(target_os = "unknown"))]
+use crate::bounded::{read_bounded_utf8, BoundedUtf8Error};
 use crate::diagnostics::{CompileError, DiagnosticPhase};
 use crate::limits::Limits;
 #[cfg(not(target_os = "unknown"))]
@@ -9,7 +11,7 @@ use std::fmt;
 #[cfg(not(target_os = "unknown"))]
 use std::fs;
 #[cfg(not(target_os = "unknown"))]
-use std::io::{self, Read};
+use std::io;
 use std::path::{Path, PathBuf};
 #[cfg(not(target_os = "unknown"))]
 use std::sync::Arc;
@@ -243,7 +245,7 @@ impl SourceResolver for MemoryResolver {
                 "MemoryResolver can only load memory:/ sources",
             ));
         }
-        let source = self.sources.get(id).cloned().ok_or_else(|| {
+        let source = self.sources.get(id).ok_or_else(|| {
             ResolveError::new(
                 "did_source_not_found",
                 format!(
@@ -252,8 +254,8 @@ impl SourceResolver for MemoryResolver {
                 ),
             )
         })?;
-        check_source_size(id, &source, limits)?;
-        Ok(ResolvedSource::new(id.clone(), source))
+        check_source_size(id, source, limits)?;
+        Ok(ResolvedSource::new(id.clone(), source.clone()))
     }
 }
 
@@ -361,14 +363,29 @@ impl SourceResolver for WorkspaceResolver {
                 .directory
                 .open(id.path())
                 .map_err(|error| workspace_open_error(id, error))?;
-            let mut source = String::new();
-            file.read_to_string(&mut source).map_err(|error| {
-                ResolveError::new(
-                    "did_file_read_error",
-                    format!("cannot read source {:?}: {error}", id.as_str()),
-                )
-            })?;
-            check_source_size(id, &source, limits)?;
+            let source = read_bounded_utf8(&mut file, limits.max_source_bytes).map_err(
+                |error| match error {
+                    BoundedUtf8Error::LimitExceeded { observed } => ResolveError::resource_limit(
+                        "source_bytes",
+                        limits.max_source_bytes,
+                        observed,
+                        format!(
+                            "source {:?} uses more than {} bytes; limit is {}",
+                            id.as_str(),
+                            limits.max_source_bytes,
+                            limits.max_source_bytes
+                        ),
+                    ),
+                    BoundedUtf8Error::Io(error) => ResolveError::new(
+                        "did_file_read_error",
+                        format!("cannot read source {:?}: {error}", id.as_str()),
+                    ),
+                    BoundedUtf8Error::InvalidUtf8(error) => ResolveError::new(
+                        "did_file_read_error",
+                        format!("cannot read source {:?}: {error}", id.as_str()),
+                    ),
+                },
+            )?;
             Ok(ResolvedSource::new(id.clone(), source))
         }
     }
