@@ -4,6 +4,13 @@ use candid_core::{
 };
 use std::process::Command;
 
+#[cfg(not(windows))]
+const SMALL_STACK_BYTES: usize = 64 * 1024;
+// The Windows test runtime itself requires more than 64 KiB before the
+// compiler preflight runs; 512 KiB remains well below its default stack.
+#[cfg(windows)]
+const SMALL_STACK_BYTES: usize = 512 * 1024;
+
 fn nested_opts(depth: usize) -> String {
     format!("type T = {}nat; service : {{}};", "opt ".repeat(depth))
 }
@@ -136,7 +143,7 @@ fn imported_alias_chain_is_rejected_before_upstream_type_checking() {
 fn small_stack_rejects_hostile_nesting_without_aborting() {
     if std::env::var_os("CANDID_CORE_DEEP_NESTING_CHILD").is_some() {
         let handle = std::thread::Builder::new()
-            .stack_size(64 * 1024)
+            .stack_size(SMALL_STACK_BYTES)
             .spawn(|| compile_with_limits(&nested_opts(3_000), Limits::default()))
             .unwrap();
         let error = handle
@@ -145,7 +152,7 @@ fn small_stack_rejects_hostile_nesting_without_aborting() {
             .unwrap_err();
         assert_eq!(error.diagnostics[0].code, "resource_limit_exceeded");
         let imported = std::thread::Builder::new()
-            .stack_size(64 * 1024)
+            .stack_size(SMALL_STACK_BYTES)
             .spawn(compile_imported_alias_chain)
             .unwrap()
             .join()
