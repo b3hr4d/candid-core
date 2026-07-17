@@ -16,6 +16,7 @@ The policy includes at least:
 
 - input bytes, per-source bytes, total bundle bytes, and source count;
 - import depth and import edge count;
+- source syntax nesting and checked semantic type depth;
 - type nodes, graph edges, declarations, fields, methods, arguments, results, and string bytes;
 - diagnostics count and retained diagnostic text;
 - HostValue depth, elements, text/blob bytes, and encoded message bytes;
@@ -37,6 +38,11 @@ Default numeric values live in a versioned operational profile rather than the s
 Existing conveniences use `Limits::default`; context-aware entry points expose the policy. Contract JSON, source resolution, graph structure, canonicalization, extensions, and HostValue traversal enforce limits. Graph canonicalization and value validation use explicit work stacks. Limit failures carry structured resource, limit, and observed values.
 
 The compiler revalidates every resolver result before digesting or parsing it and owns source-count, per-source-byte, and bundle-byte accounting. Resolver implementations may reject inputs earlier, but cannot bypass compiler enforcement. Inline compilation uses the same accounting and source-sidecar generation propagates validation failures without panicking.
+
+Source token nesting is bounded before the recursive upstream parser or type
+checker is invoked. Checked Candid types are depth-validated with an explicit
+work stack, and Contract lowering plus provenance collection likewise use
+explicit work stacks rather than recursive descent.
 
 ## Required verification
 

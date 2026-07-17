@@ -10,6 +10,7 @@ use crate::model::{
 };
 use candid_parser::candid::types::{FuncMode, Label, Type, TypeEnv, TypeInner};
 use candid_parser::syntax::{pretty_print, Dec, IDLMergedProg, IDLProg, IDLType};
+use candid_parser::token::{Token, Tokenizer};
 use candid_parser::typing::ast_to_type;
 use candid_parser::{check_file, check_prog};
 use serde::{de::Error as _, Deserialize, Deserializer, Serialize, Serializer};
@@ -192,7 +193,9 @@ pub fn compile_did_with_context(
         &context.limits,
         &mut accounting,
     )?;
+    check_source_nesting(source, &context.limits)?;
     let program = parse_program(source, Some("memory:/inline.did".to_string()))?;
+    check_program_type_depth(&program, &context.limits)?;
     let imports: Vec<_> = program
         .decs
         .iter()
@@ -295,6 +298,117 @@ fn parse_program(source: &str, source_name: Option<String>) -> Result<IDLProg, C
         .map_err(|error| candid_error(error, DiagnosticPhase::Parse, source_name))
 }
 
+/// Reject stack-hostile syntax before any recursive upstream parser or checker
+/// sees it. The token stream skips strings and comments, so their contents do
+/// not affect the operational nesting budget.
+fn check_source_nesting(source: &str, limits: &crate::Limits) -> Result<(), CompileError> {
+    let mut delimiters = 0usize;
+    let mut unary = 0usize;
+    for token in Tokenizer::new(source) {
+        let (_, token, _) = match token {
+            Ok(token) => token,
+            // Preserve the parser's established lexical diagnostic.
+            Err(_) => return Ok(()),
+        };
+        match token {
+            Token::Opt | Token::Vec => unary = unary.saturating_add(1),
+            Token::LParen | Token::LBrace => {
+                delimiters = delimiters.saturating_add(1);
+                unary = 0;
+            }
+            Token::RParen | Token::RBrace => {
+                delimiters = delimiters.saturating_sub(1);
+                unary = 0;
+            }
+            _ => unary = 0,
+        }
+        let observed = delimiters.saturating_add(unary);
+        if observed > limits.max_source_nesting {
+            return Err(CompileError::resource_limit(
+                "source_nesting",
+                limits.max_source_nesting,
+                observed,
+                format!(
+                    "Candid source nesting {observed} exceeds limit {}",
+                    limits.max_source_nesting
+                ),
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Follow parsed declaration references with an explicit stack before the
+/// upstream checker can recursively expand a long chain of shallow aliases.
+fn check_program_type_depth(program: &IDLProg, limits: &crate::Limits) -> Result<(), CompileError> {
+    let declarations: BTreeMap<_, _> = program
+        .decs
+        .iter()
+        .filter_map(|declaration| match declaration {
+            Dec::TypD(binding) => Some((binding.id.as_str(), &binding.typ)),
+            _ => None,
+        })
+        .collect();
+    let mut pending: Vec<_> = declarations
+        .values()
+        .copied()
+        .chain(program.actor.as_ref().map(|actor| &actor.typ))
+        .map(|ty| (ty, 1usize, BTreeSet::<&str>::new()))
+        .collect();
+
+    while let Some((ty, depth, active_names)) = pending.pop() {
+        if depth > limits.max_type_depth {
+            return Err(CompileError::resource_limit(
+                "type_depth",
+                limits.max_type_depth,
+                depth,
+                format!(
+                    "Candid type depth {depth} exceeds limit {}",
+                    limits.max_type_depth
+                ),
+            ));
+        }
+        let next_depth = depth.saturating_add(1);
+        match ty {
+            IDLType::VarT(name) => {
+                if let Some(resolved) = declarations.get(name.as_str()) {
+                    if !active_names.contains(name.as_str()) {
+                        let mut next_names = active_names;
+                        next_names.insert(name);
+                        pending.push((resolved, next_depth, next_names));
+                    }
+                }
+            }
+            IDLType::OptT(inner) | IDLType::VecT(inner) => {
+                pending.push((inner, next_depth, active_names));
+            }
+            IDLType::RecordT(fields) | IDLType::VariantT(fields) => {
+                for field in fields {
+                    pending.push((&field.typ, next_depth, active_names.clone()));
+                }
+            }
+            IDLType::FuncT(function) => {
+                for ty in function.args.iter().chain(&function.rets) {
+                    pending.push((&ty.typ, next_depth, active_names.clone()));
+                }
+            }
+            IDLType::ServT(methods) => {
+                for method in methods {
+                    pending.push((&method.typ, next_depth, active_names.clone()));
+                }
+            }
+            IDLType::ClassT(init, service) => {
+                pending.push((service, next_depth, active_names.clone()));
+                for ty in init {
+                    pending.push((&ty.typ, next_depth, active_names.clone()));
+                }
+            }
+            IDLType::PrimT(_) | IDLType::PrincipalT => {}
+        }
+    }
+    Ok(())
+}
+
 fn load_source_units_with_resolver(
     entry: &str,
     resolver: &dyn crate::SourceResolver,
@@ -352,7 +466,9 @@ fn load_source_units_with_resolver(
             .load(&source_id, limits)
             .map_err(crate::ResolveError::into_compile_error)?;
         let resolved = accept_resolved_source(&source_id, resolved, limits, &mut accounting)?;
+        check_source_nesting(&resolved.source, limits)?;
         let program = parse_program(&resolved.source, Some(resolved.id.as_str().to_string()))?;
+        check_program_type_depth(&program, limits)?;
         let imports: Vec<_> = program
             .decs
             .iter()
@@ -622,6 +738,7 @@ fn lower_checked(
     options: CompileOptions,
     context: &RuntimeContext,
 ) -> Result<Compilation, CompileError> {
+    check_type_depth(environment, actor_type, &context.limits)?;
     let mut lowerer = Lowerer::new(environment);
     let declaration_names: Vec<_> = environment.0.keys().cloned().collect();
     for name in &declaration_names {
@@ -789,6 +906,73 @@ fn lower_checked(
     })
 }
 
+fn check_type_depth(
+    environment: &TypeEnv,
+    actor_type: Option<&Type>,
+    limits: &crate::Limits,
+) -> Result<(), CompileError> {
+    let mut roots: Vec<Type> = environment.0.values().cloned().collect();
+    roots.extend(actor_type.cloned());
+    let mut pending: Vec<_> = roots
+        .into_iter()
+        .map(|ty| (ty, 1usize, BTreeSet::<String>::new()))
+        .collect();
+
+    while let Some((ty, depth, active_names)) = pending.pop() {
+        if depth > limits.max_type_depth {
+            return Err(CompileError::resource_limit(
+                "type_depth",
+                limits.max_type_depth,
+                depth,
+                format!(
+                    "checked Candid type depth {depth} exceeds limit {}",
+                    limits.max_type_depth
+                ),
+            ));
+        }
+        let next_depth = depth.saturating_add(1);
+        match ty.as_ref() {
+            TypeInner::Var(name) => {
+                if !active_names.contains(name) {
+                    let mut next_names = active_names;
+                    next_names.insert(name.clone());
+                    let resolved = environment
+                        .find_type(name)
+                        .map_err(|error| lower_error(error.to_string()))?
+                        .clone();
+                    pending.push((resolved, next_depth, next_names));
+                }
+            }
+            TypeInner::Opt(inner) | TypeInner::Vec(inner) => {
+                pending.push((inner.clone(), next_depth, active_names));
+            }
+            TypeInner::Record(fields) | TypeInner::Variant(fields) => {
+                for field in fields {
+                    pending.push((field.ty.clone(), next_depth, active_names.clone()));
+                }
+            }
+            TypeInner::Func(function) => {
+                for ty in function.args.iter().chain(&function.rets) {
+                    pending.push((ty.clone(), next_depth, active_names.clone()));
+                }
+            }
+            TypeInner::Service(methods) => {
+                for (_, ty) in methods {
+                    pending.push((ty.clone(), next_depth, active_names.clone()));
+                }
+            }
+            TypeInner::Class(init, service) => {
+                pending.push((service.clone(), next_depth, active_names.clone()));
+                for ty in init {
+                    pending.push((ty.clone(), next_depth, active_names.clone()));
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
 fn source_info_compile_error(error: crate::ContractValidationError) -> CompileError {
     CompileError {
         diagnostics: error
@@ -937,12 +1121,23 @@ impl<'a> Lowerer<'a> {
     }
 
     fn lower_named(&mut self, name: &str) -> Result<TypeRef, String> {
+        let mut pending = Vec::new();
+        let reference = self.ensure_named(name, &mut pending)?;
+        self.drain_pending(&mut pending)?;
+        Ok(reference)
+    }
+
+    fn ensure_named(
+        &mut self,
+        name: &str,
+        pending: &mut Vec<(TypeRef, Type)>,
+    ) -> Result<TypeRef, String> {
         if let Some(reference) = self.named_refs.get(name) {
             return Ok(*reference);
         }
         let terminal = self.terminal_name(name)?;
         if terminal != name {
-            let reference = self.lower_named(&terminal)?;
+            let reference = self.ensure_named(&terminal, pending)?;
             self.named_refs.insert(name.to_string(), reference);
             return Ok(reference);
         }
@@ -953,7 +1148,7 @@ impl<'a> Lowerer<'a> {
             .map_err(|error| error.to_string())?
             .clone();
         if primitive_from_type(ty.as_ref()).is_some() {
-            let reference = self.lower_type(&ty)?;
+            let reference = self.ensure_type(&ty, pending)?;
             self.named_refs.insert(terminal, reference);
             return Ok(reference);
         }
@@ -965,7 +1160,7 @@ impl<'a> Lowerer<'a> {
         let reference = self.reserve()?;
         self.named_refs.insert(terminal, reference);
         self.composite_refs.insert(ty.clone(), reference);
-        self.fill(reference, &ty)?;
+        pending.push((reference, ty));
         Ok(reference)
     }
 
@@ -989,8 +1184,19 @@ impl<'a> Lowerer<'a> {
     }
 
     fn lower_type(&mut self, ty: &Type) -> Result<TypeRef, String> {
+        let mut pending = Vec::new();
+        let reference = self.ensure_type(ty, &mut pending)?;
+        self.drain_pending(&mut pending)?;
+        Ok(reference)
+    }
+
+    fn ensure_type(
+        &mut self,
+        ty: &Type,
+        pending: &mut Vec<(TypeRef, Type)>,
+    ) -> Result<TypeRef, String> {
         if let TypeInner::Var(name) = ty.as_ref() {
-            return self.lower_named(name);
+            return self.ensure_named(name, pending);
         }
         if let Some(primitive) = primitive_from_type(ty.as_ref()) {
             if let Some(reference) = self.primitive_refs.get(&primitive) {
@@ -1006,8 +1212,17 @@ impl<'a> Lowerer<'a> {
         }
         let reference = self.reserve()?;
         self.composite_refs.insert(ty.clone(), reference);
-        self.fill(reference, ty)?;
+        pending.push((reference, ty.clone()));
         Ok(reference)
+    }
+
+    fn drain_pending(&mut self, pending: &mut Vec<(TypeRef, Type)>) -> Result<(), String> {
+        while let Some((reference, ty)) = pending.pop() {
+            if self.nodes[reference as usize].is_none() {
+                self.fill_one(reference, &ty, pending)?;
+            }
+        }
+        Ok(())
     }
 
     fn reserve(&mut self) -> Result<TypeRef, String> {
@@ -1017,30 +1232,35 @@ impl<'a> Lowerer<'a> {
         Ok(reference)
     }
 
-    fn fill(&mut self, reference: TypeRef, ty: &Type) -> Result<(), String> {
+    fn fill_one(
+        &mut self,
+        reference: TypeRef,
+        ty: &Type,
+        pending: &mut Vec<(TypeRef, Type)>,
+    ) -> Result<(), String> {
         let node = match ty.as_ref() {
             TypeInner::Opt(inner) => TypeNode::Opt {
-                inner: self.lower_type(inner)?,
+                inner: self.ensure_type(inner, pending)?,
             },
             TypeInner::Vec(inner) => TypeNode::Vec {
-                inner: self.lower_type(inner)?,
+                inner: self.ensure_type(inner, pending)?,
             },
             TypeInner::Record(fields) => TypeNode::Record {
-                fields: self.lower_fields(fields)?,
+                fields: self.lower_fields(fields, pending)?,
             },
             TypeInner::Variant(fields) => TypeNode::Variant {
-                fields: self.lower_fields(fields)?,
+                fields: self.lower_fields(fields, pending)?,
             },
             TypeInner::Func(function) => TypeNode::Func {
                 args: function
                     .args
                     .iter()
-                    .map(|argument| self.lower_type(argument))
+                    .map(|argument| self.ensure_type(argument, pending))
                     .collect::<Result<Vec<_>, _>>()?,
                 results: function
                     .rets
                     .iter()
-                    .map(|result| self.lower_type(result))
+                    .map(|result| self.ensure_type(result, pending))
                     .collect::<Result<Vec<_>, _>>()?,
                 mode: lower_mode(&function.modes)?,
             },
@@ -1051,7 +1271,7 @@ impl<'a> Lowerer<'a> {
                         Ok(ServiceMethod {
                             name: name.clone(),
                             id: candid_parser::candid::idl_hash(name),
-                            function: self.lower_type(function)?,
+                            function: self.ensure_type(function, pending)?,
                         })
                     })
                     .collect::<Result<Vec<_>, String>>()?;
@@ -1066,9 +1286,9 @@ impl<'a> Lowerer<'a> {
             TypeInner::Class(init, service) => TypeNode::Class {
                 init: init
                     .iter()
-                    .map(|argument| self.lower_type(argument))
+                    .map(|argument| self.ensure_type(argument, pending))
                     .collect::<Result<Vec<_>, _>>()?,
-                service: self.lower_type(service)?,
+                service: self.ensure_type(service, pending)?,
             },
             TypeInner::Var(name) => {
                 return Err(format!("unresolved alias {name} leaked into lowering"))
@@ -1098,13 +1318,14 @@ impl<'a> Lowerer<'a> {
     fn lower_fields(
         &mut self,
         fields: &[candid_parser::candid::types::Field],
+        pending: &mut Vec<(TypeRef, Type)>,
     ) -> Result<Vec<Field>, String> {
         let mut lowered = Vec::with_capacity(fields.len());
         for field in fields {
             let id = field.id.get_id();
             lowered.push(Field {
                 id,
-                ty: self.lower_type(&field.ty)?,
+                ty: self.ensure_type(&field.ty, pending)?,
             });
         }
         lowered.sort_by(|left, right| left.id.cmp(&right.id).then(left.ty.cmp(&right.ty)));
@@ -1293,113 +1514,84 @@ fn collect_type_source_info(
     lowerer: &mut Lowerer<'_>,
     output: &mut RawSourceInfo,
 ) -> Result<(), String> {
-    match ast {
-        IDLType::RecordT(fields) | IDLType::VariantT(fields) => {
-            let container = lower_ast_type(ast, environment, lowerer)?;
-            for (position, field) in fields.iter().enumerate() {
-                let field_path = format!("{path}.fields[{position}]");
-                output.field_labels.push(RawFieldLabelInfo {
-                    origin: origin.clone(),
-                    path: field_path.clone(),
-                    container,
-                    id: field.label.get_id(),
-                    label: lower_source_label(&field.label),
-                    docs: field.docs.clone(),
-                });
-                collect_type_source_info(
-                    &field.typ,
-                    origin,
-                    &format!("{field_path}.type"),
-                    environment,
-                    lowerer,
-                    output,
-                )?;
+    let mut pending = vec![(ast, path.to_string())];
+    while let Some((ast, path)) = pending.pop() {
+        match ast {
+            IDLType::RecordT(fields) | IDLType::VariantT(fields) => {
+                let container = lower_ast_type(ast, environment, lowerer)?;
+                for (position, field) in fields.iter().enumerate() {
+                    let field_path = format!("{path}.fields[{position}]");
+                    output.field_labels.push(RawFieldLabelInfo {
+                        origin: origin.clone(),
+                        path: field_path.clone(),
+                        container,
+                        id: field.label.get_id(),
+                        label: lower_source_label(&field.label),
+                        docs: field.docs.clone(),
+                    });
+                }
+                for (position, field) in fields.iter().enumerate().rev() {
+                    pending.push((&field.typ, format!("{path}.fields[{position}].type")));
+                }
             }
-        }
-        IDLType::FuncT(function) => {
-            let function_ref = lower_ast_type(ast, environment, lowerer)?;
-            for (position, argument) in function.args.iter().enumerate() {
-                record_function_argument_name(
-                    origin,
-                    &format!("{path}.args[{position}]"),
-                    function_ref,
-                    SourceFunctionArgumentDirection::Argument,
-                    position,
-                    argument.name.as_deref(),
-                    output,
-                )?;
-                collect_type_source_info(
-                    &argument.typ,
-                    origin,
-                    &format!("{path}.args[{position}].type"),
-                    environment,
-                    lowerer,
-                    output,
-                )?;
+            IDLType::FuncT(function) => {
+                let function_ref = lower_ast_type(ast, environment, lowerer)?;
+                for (position, argument) in function.args.iter().enumerate() {
+                    record_function_argument_name(
+                        origin,
+                        &format!("{path}.args[{position}]"),
+                        function_ref,
+                        SourceFunctionArgumentDirection::Argument,
+                        position,
+                        argument.name.as_deref(),
+                        output,
+                    )?;
+                }
+                for (position, result) in function.rets.iter().enumerate() {
+                    record_function_argument_name(
+                        origin,
+                        &format!("{path}.results[{position}]"),
+                        function_ref,
+                        SourceFunctionArgumentDirection::Result,
+                        position,
+                        result.name.as_deref(),
+                        output,
+                    )?;
+                }
+                for (position, result) in function.rets.iter().enumerate().rev() {
+                    pending.push((&result.typ, format!("{path}.results[{position}].type")));
+                }
+                for (position, argument) in function.args.iter().enumerate().rev() {
+                    pending.push((&argument.typ, format!("{path}.args[{position}].type")));
+                }
             }
-            for (position, result) in function.rets.iter().enumerate() {
-                record_function_argument_name(
-                    origin,
-                    &format!("{path}.results[{position}]"),
-                    function_ref,
-                    SourceFunctionArgumentDirection::Result,
-                    position,
-                    result.name.as_deref(),
-                    output,
-                )?;
-                collect_type_source_info(
-                    &result.typ,
-                    origin,
-                    &format!("{path}.results[{position}].type"),
-                    environment,
-                    lowerer,
-                    output,
-                )?;
+            IDLType::ServT(methods) => {
+                let service = lower_ast_type(ast, environment, lowerer)?;
+                for (position, method) in methods.iter().enumerate() {
+                    let method_path = format!("{path}.methods[{position}]");
+                    output.methods.push(RawMethodInfo {
+                        origin: origin.clone(),
+                        path: method_path,
+                        service,
+                        name: method.id.clone(),
+                        docs: method.docs.clone(),
+                    });
+                }
+                for (position, method) in methods.iter().enumerate().rev() {
+                    pending.push((&method.typ, format!("{path}.methods[{position}].function")));
+                }
             }
-        }
-        IDLType::ServT(methods) => {
-            let service = lower_ast_type(ast, environment, lowerer)?;
-            collect_service_source_info(
-                methods,
-                origin,
-                path,
-                service,
-                environment,
-                lowerer,
-                output,
-            )?;
-        }
-        IDLType::ClassT(init, service) => {
-            for (position, argument) in init.iter().enumerate() {
-                collect_type_source_info(
-                    &argument.typ,
-                    origin,
-                    &format!("{path}.init[{position}].type"),
-                    environment,
-                    lowerer,
-                    output,
-                )?;
+            IDLType::ClassT(init, service) => {
+                pending.push((service, format!("{path}.service")));
+                for (position, argument) in init.iter().enumerate().rev() {
+                    pending.push((&argument.typ, format!("{path}.init[{position}].type")));
+                }
             }
-            collect_type_source_info(
-                service,
-                origin,
-                &format!("{path}.service"),
-                environment,
-                lowerer,
-                output,
-            )?;
+            IDLType::OptT(inner) | IDLType::VecT(inner) => {
+                pending.push((inner, format!("{path}.inner")));
+            }
+            IDLType::PrimT(_) | IDLType::VarT(_) | IDLType::PrincipalT => {}
         }
-        IDLType::OptT(inner) | IDLType::VecT(inner) => {
-            collect_type_source_info(
-                inner,
-                origin,
-                &format!("{path}.inner"),
-                environment,
-                lowerer,
-                output,
-            )?;
-        }
-        IDLType::PrimT(_) | IDLType::VarT(_) | IDLType::PrincipalT => {}
     }
     Ok(())
 }

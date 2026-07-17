@@ -13,6 +13,10 @@ pub struct Limits {
     pub max_sources: usize,
     pub max_import_depth: usize,
     pub max_import_edges: usize,
+    /// Maximum lexical nesting accepted before invoking the upstream parser.
+    pub max_source_nesting: usize,
+    /// Maximum semantic type nesting lowered from a checked Candid program.
+    pub max_type_depth: usize,
     pub max_type_nodes: usize,
     pub max_graph_edges: usize,
     pub max_declarations: usize,
@@ -38,6 +42,8 @@ impl Default for Limits {
             max_sources: 256,
             max_import_depth: 64,
             max_import_edges: 1024,
+            max_source_nesting: 256,
+            max_type_depth: 256,
             max_type_nodes: 100_000,
             max_graph_edges: 1_000_000,
             max_declarations: 100_000,
