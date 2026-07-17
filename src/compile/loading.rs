@@ -19,6 +19,7 @@ pub(super) fn load_source_units_with_resolver(
     entry: &str,
     resolver: &dyn crate::SourceResolver,
     context: &RuntimeContext,
+    budget: &mut crate::budget::Budget<'_>,
 ) -> Result<(Vec<SourceUnit>, crate::SourceId), CompileError> {
     struct Pending {
         source_id: crate::SourceId,
@@ -27,7 +28,7 @@ pub(super) fn load_source_units_with_resolver(
         ancestors: Vec<crate::SourceId>,
     }
 
-    let limits = &context.limits;
+    let limits = budget.limits().clone();
     let mut units = Vec::<SourceUnit>::new();
     let mut indexes = BTreeMap::<crate::SourceId, usize>::new();
     let entry_id = resolver
@@ -40,11 +41,11 @@ pub(super) fn load_source_units_with_resolver(
         depth: 0,
         ancestors: Vec::new(),
     }];
-    let mut accounting = SourceAccounting::default();
-    let mut import_edges = 0usize;
 
     while let Some(request) = pending.pop() {
-        check_source_deadline(limits)?;
+        budget
+            .checkpoint()
+            .map_err(|error| budget_error(error, DiagnosticPhase::Load, "source resolution"))?;
         if request.depth > limits.max_import_depth {
             return Err(CompileError::resource_limit(
                 "import_depth",
@@ -69,12 +70,19 @@ pub(super) fn load_source_units_with_resolver(
             continue;
         }
         let resolved = resolver
-            .load(&source_id, limits)
+            .load_with_context(&source_id, context)
             .map_err(crate::ResolveError::into_compile_error)?;
-        let resolved = accept_resolved_source(&source_id, resolved, limits, &mut accounting)?;
-        check_source_nesting(&resolved.source, limits)?;
-        let program = parse_program(&resolved.source, Some(resolved.id.as_str().to_string()))?;
-        check_programs_type_depth(std::iter::once(&program), limits)?;
+        budget
+            .checkpoint()
+            .map_err(|error| budget_error(error, DiagnosticPhase::Load, "source loading"))?;
+        let resolved = accept_resolved_source(&source_id, resolved, budget)?;
+        check_source_nesting(&resolved.source, budget)?;
+        let program = parse_program(
+            &resolved.source,
+            Some(resolved.id.as_str().to_string()),
+            budget,
+        )?;
+        check_programs_type_depth(std::iter::once(&program), budget)?;
         let imports: Vec<_> = program
             .decs
             .iter()
@@ -84,15 +92,9 @@ pub(super) fn load_source_units_with_resolver(
                 Dec::TypD(_) => None,
             })
             .collect();
-        import_edges = import_edges.saturating_add(imports.len());
-        if import_edges > limits.max_import_edges {
-            return Err(CompileError::resource_limit(
-                "import_edges",
-                limits.max_import_edges,
-                import_edges,
-                format!("import edges exceed limit {}", limits.max_import_edges),
-            ));
-        }
+        budget
+            .charge("import_edges", limits.max_import_edges, imports.len())
+            .map_err(|error| budget_error(error, DiagnosticPhase::Load, "import resolution"))?;
         let resolved_imports = imports
             .into_iter()
             .map(|(import, kind)| {
@@ -146,30 +148,15 @@ fn validate_resolver_id(id: crate::SourceId) -> Result<crate::SourceId, CompileE
     Ok(normalized)
 }
 
-#[derive(Default)]
-pub(super) struct SourceAccounting {
-    sources: usize,
-    bundle_bytes: usize,
-}
-
-fn check_source_deadline(limits: &crate::Limits) -> Result<(), CompileError> {
-    if limits.deadline_exceeded() {
-        return Err(CompileError::single(
-            "operation_deadline_exceeded",
-            DiagnosticPhase::Load,
-            "source resolution deadline has elapsed",
-        ));
-    }
-    Ok(())
-}
-
 pub(super) fn accept_source(
     id: &str,
     source_bytes: usize,
-    limits: &crate::Limits,
-    accounting: &mut SourceAccounting,
+    budget: &mut crate::budget::Budget<'_>,
 ) -> Result<(), CompileError> {
-    check_source_deadline(limits)?;
+    let limits = budget.limits().clone();
+    budget
+        .checkpoint()
+        .map_err(|error| budget_error(error, DiagnosticPhase::Load, "source accounting"))?;
     if source_bytes > limits.max_source_bytes {
         return Err(CompileError::resource_limit(
             "source_bytes",
@@ -181,39 +168,23 @@ pub(super) fn accept_source(
             ),
         ));
     }
-    let sources = accounting.sources.saturating_add(1);
-    if sources > limits.max_sources {
-        return Err(CompileError::resource_limit(
-            "sources",
-            limits.max_sources,
-            sources,
-            format!("source count exceeds limit {}", limits.max_sources),
-        ));
-    }
-    let bundle_bytes = accounting.bundle_bytes.saturating_add(source_bytes);
-    if bundle_bytes > limits.max_bundle_bytes {
-        return Err(CompileError::resource_limit(
-            "bundle_bytes",
-            limits.max_bundle_bytes,
-            bundle_bytes,
-            format!(
-                "source bundle uses {bundle_bytes} bytes; limit is {}",
-                limits.max_bundle_bytes
-            ),
-        ));
-    }
-    accounting.sources = sources;
-    accounting.bundle_bytes = bundle_bytes;
+    budget
+        .charge("sources", limits.max_sources, 1)
+        .map_err(|error| budget_error(error, DiagnosticPhase::Load, "source accounting"))?;
+    budget
+        .charge("bundle_bytes", limits.max_bundle_bytes, source_bytes)
+        .map_err(|error| budget_error(error, DiagnosticPhase::Load, "source accounting"))?;
     Ok(())
 }
 
 fn accept_resolved_source(
     expected_id: &crate::SourceId,
     resolved: crate::ResolvedSource,
-    limits: &crate::Limits,
-    accounting: &mut SourceAccounting,
+    budget: &mut crate::budget::Budget<'_>,
 ) -> Result<crate::ResolvedSource, CompileError> {
-    check_source_deadline(limits)?;
+    budget
+        .checkpoint()
+        .map_err(|error| budget_error(error, DiagnosticPhase::Load, "source loading"))?;
     let resolved_id = validate_resolver_id(resolved.id.clone())?;
     if resolved_id != *expected_id {
         return Err(CompileError::single(
@@ -226,12 +197,7 @@ fn accept_resolved_source(
             ),
         ));
     }
-    accept_source(
-        resolved.id.as_str(),
-        resolved.source.len(),
-        limits,
-        accounting,
-    )?;
+    accept_source(resolved.id.as_str(), resolved.source.len(), budget)?;
     resolved
         .verify()
         .map_err(crate::ResolveError::into_compile_error)?;

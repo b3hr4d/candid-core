@@ -1,3 +1,4 @@
+use crate::budget::Budget;
 use crate::canonical::domain_hash;
 use crate::limits::Limits;
 use crate::model::{
@@ -28,6 +29,19 @@ pub(crate) fn validate_source_info(
     contract: &Contract,
     limits: &Limits,
 ) -> Result<(), ContractValidationError> {
+    let mut budget = Budget::from_limits(limits);
+    validate_source_info_with_budget(source_info, contract, &mut budget)
+}
+
+pub(crate) fn validate_source_info_with_budget(
+    source_info: &SourceInfo,
+    contract: &Contract,
+    budget: &mut Budget<'_>,
+) -> Result<(), ContractValidationError> {
+    budget
+        .checkpoint()
+        .map_err(crate::budget::BudgetError::into_contract_error)?;
+    let limits = budget.limits().clone();
     if source_info.source_info_version != SOURCE_INFO_VERSION {
         return Err(ContractValidationError::single(
             "unsupported_source_info_version",
@@ -49,32 +63,62 @@ pub(crate) fn validate_source_info(
             ),
         ));
     }
-    if source_info.sources.len() > limits.max_sources {
-        return Err(ContractValidationError::resource_limit(
-            "sources",
-            limits.max_sources,
-            source_info.sources.len(),
-        ));
-    }
-    if source_info.imports.len() > limits.max_import_edges {
-        return Err(ContractValidationError::resource_limit(
+    budget
+        .observe("sources", limits.max_sources, source_info.sources.len())
+        .map_err(crate::budget::BudgetError::into_contract_error)?;
+    budget
+        .observe(
             "import_edges",
             limits.max_import_edges,
             source_info.imports.len(),
-        ));
+        )
+        .map_err(crate::budget::BudgetError::into_contract_error)?;
+    for (resource, limit, observed) in [
+        (
+            "source_declarations",
+            limits.max_declarations,
+            source_info.declarations.len(),
+        ),
+        (
+            "source_actors",
+            limits.max_sources,
+            source_info.actors.len(),
+        ),
+        (
+            "source_field_labels",
+            limits.max_fields,
+            source_info.field_labels.len(),
+        ),
+        (
+            "source_methods",
+            limits.max_methods,
+            source_info.methods.len(),
+        ),
+        (
+            "source_function_arguments",
+            limits.max_function_values,
+            source_info.function_arguments.len(),
+        ),
+    ] {
+        budget
+            .observe(resource, limit, observed)
+            .map_err(crate::budget::BudgetError::into_contract_error)?;
     }
+    budget
+        .observe(
+            "source_string_bytes",
+            limits.max_string_bytes,
+            source_info_string_bytes(source_info),
+        )
+        .map_err(crate::budget::BudgetError::into_contract_error)?;
     let bundle_bytes = source_info
         .sources
         .iter()
         .map(|source| source.source.len())
-        .sum::<usize>();
-    if bundle_bytes > limits.max_bundle_bytes {
-        return Err(ContractValidationError::resource_limit(
-            "bundle_bytes",
-            limits.max_bundle_bytes,
-            bundle_bytes,
-        ));
-    }
+        .fold(0usize, usize::saturating_add);
+    budget
+        .observe("bundle_bytes", limits.max_bundle_bytes, bundle_bytes)
+        .map_err(crate::budget::BudgetError::into_contract_error)?;
     if let Some(source) = source_info
         .sources
         .iter()
@@ -88,18 +132,30 @@ pub(crate) fn validate_source_info(
     }
 
     for (index, source) in source_info.sources.iter().enumerate() {
+        budget
+            .checkpoint()
+            .map_err(crate::budget::BudgetError::into_contract_error)?;
         validate_source_id(&source.name, "sources", index, "name")?;
     }
     for (index, import) in source_info.imports.iter().enumerate() {
+        budget
+            .checkpoint()
+            .map_err(crate::budget::BudgetError::into_contract_error)?;
         validate_source_id(&import.from, "imports", index, "from")?;
         validate_source_id(&import.to, "imports", index, "to")?;
     }
 
+    budget
+        .checkpoint()
+        .map_err(crate::budget::BudgetError::into_contract_error)?;
     let mut sources = source_info.sources.clone();
     sources.sort_by(|left, right| left.name.cmp(&right.name));
     let mut imports = source_info.imports.clone();
     imports.sort();
     let expected_bundle_id = source_bundle_id(&sources, &imports);
+    budget
+        .checkpoint()
+        .map_err(crate::budget::BudgetError::into_contract_error)?;
     if source_info.sources != sources || source_info.imports != imports {
         return Err(ContractValidationError::single(
             "non_canonical_source_bundle",
@@ -141,13 +197,22 @@ pub(crate) fn validate_source_info(
     }
 
     for (index, declaration) in source_info.declarations.iter().enumerate() {
+        budget
+            .checkpoint()
+            .map_err(crate::budget::BudgetError::into_contract_error)?;
         validate_source_name(&source_names, &declaration.source, "declaration", index)?;
         validate_ref(contract, declaration.ty, "declaration", index)?;
     }
     for (index, actor) in source_info.actors.iter().enumerate() {
+        budget
+            .checkpoint()
+            .map_err(crate::budget::BudgetError::into_contract_error)?;
         validate_source_name(&source_names, &actor.source, "actor", index)?;
     }
     for (index, field) in source_info.field_labels.iter().enumerate() {
+        budget
+            .checkpoint()
+            .map_err(crate::budget::BudgetError::into_contract_error)?;
         validate_origin(&source_names, &field.origin, "field_labels", index)?;
         if field.path.is_empty() {
             return Err(empty_path("field_labels", index));
@@ -165,6 +230,9 @@ pub(crate) fn validate_source_info(
         }
     }
     for (index, method) in source_info.methods.iter().enumerate() {
+        budget
+            .checkpoint()
+            .map_err(crate::budget::BudgetError::into_contract_error)?;
         validate_origin(&source_names, &method.origin, "methods", index)?;
         if method.path.is_empty() {
             return Err(empty_path("methods", index));
@@ -184,6 +252,9 @@ pub(crate) fn validate_source_info(
         }
     }
     for (index, argument) in source_info.function_arguments.iter().enumerate() {
+        budget
+            .checkpoint()
+            .map_err(crate::budget::BudgetError::into_contract_error)?;
         validate_origin(&source_names, &argument.origin, "function_arguments", index)?;
         if argument.path.is_empty() {
             return Err(empty_path("function_arguments", index));
@@ -215,6 +286,69 @@ pub(crate) fn validate_source_info(
         }
     }
     Ok(())
+}
+
+fn source_info_string_bytes(source_info: &SourceInfo) -> usize {
+    let mut bytes = source_info
+        .contract_id
+        .len()
+        .saturating_add(source_info.source_bundle_id.len());
+    let mut add = |value: &str| bytes = bytes.saturating_add(value.len());
+    for source in &source_info.sources {
+        add(&source.name);
+    }
+    for import in &source_info.imports {
+        add(&import.from);
+        add(&import.import);
+        add(&import.to);
+    }
+    for declaration in &source_info.declarations {
+        add(&declaration.source);
+        add(&declaration.name);
+        for doc in &declaration.docs {
+            add(doc);
+        }
+    }
+    for actor in &source_info.actors {
+        add(&actor.source);
+        for doc in &actor.docs {
+            add(doc);
+        }
+    }
+    for field in &source_info.field_labels {
+        add_origin_strings(&field.origin, &mut add);
+        add(&field.path);
+        if let crate::SourceLabel::Named { name } = &field.label {
+            add(name);
+        }
+        for doc in &field.docs {
+            add(doc);
+        }
+    }
+    for method in &source_info.methods {
+        add_origin_strings(&method.origin, &mut add);
+        add(&method.path);
+        add(&method.name);
+        for doc in &method.docs {
+            add(doc);
+        }
+    }
+    for argument in &source_info.function_arguments {
+        add_origin_strings(&argument.origin, &mut add);
+        add(&argument.path);
+        add(&argument.name);
+    }
+    bytes
+}
+
+fn add_origin_strings(origin: &SourceOrigin, add: &mut impl FnMut(&str)) {
+    match origin {
+        SourceOrigin::Declaration { source, name } => {
+            add(source);
+            add(name);
+        }
+        SourceOrigin::Actor { source } => add(source),
+    }
 }
 
 fn validate_source_id(

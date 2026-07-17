@@ -47,6 +47,8 @@ The crate advertises Rust 1.78 as its minimum supported Rust version (MSRV). Dir
 - `RawContract` → `Contract::try_from_raw` validates an external artifact.
 - `Contract::build_raw` is the producer path that calculates fresh identities.
 - `compile_with_resolver` compiles an immutable logical source bundle through `MemoryResolver` or sandboxed `WorkspaceResolver`.
-- `Limits` and `RuntimeContext` bound untrusted compilation and validation.
+- `Limits` and constructor-based `RuntimeContext` bound untrusted compilation
+  and validation with one shared budget, monotonic deadlines, and cooperative
+  `CancellationToken` support.
 - `HostValue` plus `validate_host_value` provide the lossless tagged value ABI.
 - `ContractEnvelope` keeps namespaced extensions outside the strict core.

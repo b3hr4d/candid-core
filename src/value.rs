@@ -63,15 +63,30 @@ enum HostValueKind {
 
 impl HostValue {
     pub fn from_json_with_limits(input: &str, limits: &Limits) -> Result<Self, HostValueJsonError> {
+        Self::from_json_with_context(input, &crate::RuntimeContext::new(limits.clone()))
+    }
+
+    pub fn from_json_with_context(
+        input: &str,
+        context: &crate::RuntimeContext,
+    ) -> Result<Self, HostValueJsonError> {
+        let limits = &context.limits;
         if input.len() > limits.max_value_bytes {
             return Err(HostValueJsonError::Limit {
                 limit: limits.max_value_bytes,
                 observed: input.len(),
             });
         }
+        let mut budget = context.budget();
+        budget
+            .checkpoint()
+            .map_err(|error| host_json_budget_error(error, "$"))?;
         let raw: RawHostValue = serde_json::from_str(input)
             .map_err(|error| HostValueJsonError::Malformed(error.to_string()))?;
-        HostValueLocalValidationState::new(limits).canonicalize(raw)
+        budget
+            .checkpoint()
+            .map_err(|error| host_json_budget_error(error, "$"))?;
+        HostValueLocalValidationState::new(&mut budget).canonicalize(raw)
     }
 
     pub fn null() -> Self {
@@ -235,6 +250,9 @@ pub enum HostValueJsonError {
     Deadline {
         path: String,
     },
+    Cancelled {
+        path: String,
+    },
 }
 
 impl fmt::Display for HostValueJsonError {
@@ -260,11 +278,35 @@ impl fmt::Display for HostValueJsonError {
                     "HostValue JSON validation deadline elapsed at {path}"
                 )
             }
+            Self::Cancelled { path } => {
+                write!(formatter, "HostValue JSON validation cancelled at {path}")
+            }
         }
     }
 }
 
 impl std::error::Error for HostValueJsonError {}
+
+fn host_json_budget_error(error: crate::budget::BudgetError, path: &str) -> HostValueJsonError {
+    match error {
+        crate::budget::BudgetError::Cancelled => HostValueJsonError::Cancelled {
+            path: path.to_string(),
+        },
+        crate::budget::BudgetError::DeadlineExceeded => HostValueJsonError::Deadline {
+            path: path.to_string(),
+        },
+        crate::budget::BudgetError::ResourceLimit {
+            resource,
+            limit,
+            observed,
+        } => HostValueJsonError::ValueLimit {
+            resource,
+            limit,
+            observed,
+            path: path.to_string(),
+        },
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -301,21 +343,13 @@ enum RawHostValue {
     Func { principal: String, method: String },
 }
 
-struct HostValueLocalValidationState<'a> {
-    limits: &'a Limits,
-    elements: usize,
-    bytes: usize,
-    work: usize,
+struct HostValueLocalValidationState<'a, 'limits> {
+    budget: &'a mut crate::budget::Budget<'limits>,
 }
 
-impl<'a> HostValueLocalValidationState<'a> {
-    fn new(limits: &'a Limits) -> Self {
-        Self {
-            limits,
-            elements: 0,
-            bytes: 0,
-            work: 0,
-        }
+impl<'a, 'limits> HostValueLocalValidationState<'a, 'limits> {
+    fn new(budget: &'a mut crate::budget::Budget<'limits>) -> Self {
+        Self { budget }
     }
 
     fn canonicalize(mut self, raw: RawHostValue) -> Result<HostValue, HostValueJsonError> {
@@ -328,37 +362,24 @@ impl<'a> HostValueLocalValidationState<'a> {
         path: &str,
         depth: usize,
     ) -> Result<HostValue, HostValueJsonError> {
-        if self.limits.deadline_exceeded() {
-            return Err(HostValueJsonError::Deadline {
-                path: path.to_string(),
-            });
-        }
-        if depth > self.limits.max_value_depth {
+        self.budget
+            .checkpoint()
+            .map_err(|error| host_json_budget_error(error, path))?;
+        let limits = self.budget.limits().clone();
+        if depth > limits.max_value_depth {
             return Err(HostValueJsonError::ValueLimit {
                 resource: "value_depth",
-                limit: self.limits.max_value_depth,
+                limit: limits.max_value_depth,
                 observed: depth,
                 path: path.to_string(),
             });
         }
-        self.elements = self.elements.saturating_add(1);
-        if self.elements > self.limits.max_value_elements {
-            return Err(HostValueJsonError::ValueLimit {
-                resource: "value_elements",
-                limit: self.limits.max_value_elements,
-                observed: self.elements,
-                path: path.to_string(),
-            });
-        }
-        self.work = self.work.saturating_add(1);
-        if self.work > self.limits.max_canonicalization_work {
-            return Err(HostValueJsonError::ValueLimit {
-                resource: "canonicalization_work",
-                limit: self.limits.max_canonicalization_work,
-                observed: self.work,
-                path: path.to_string(),
-            });
-        }
+        self.budget
+            .charge("value_elements", limits.max_value_elements, 1)
+            .map_err(|error| host_json_budget_error(error, path))?;
+        self.budget
+            .charge("canonicalization_work", limits.max_canonicalization_work, 1)
+            .map_err(|error| host_json_budget_error(error, path))?;
 
         let value = match raw {
             RawHostValue::Null => HostValueKind::Null,
@@ -477,15 +498,10 @@ impl<'a> HostValueLocalValidationState<'a> {
     }
 
     fn charge(&mut self, value: &str, path: &str) -> Result<(), HostValueJsonError> {
-        self.bytes = self.bytes.saturating_add(value.len());
-        if self.bytes > self.limits.max_value_bytes {
-            return Err(HostValueJsonError::ValueLimit {
-                resource: "value_bytes",
-                limit: self.limits.max_value_bytes,
-                observed: self.bytes,
-                path: path.to_string(),
-            });
-        }
+        let limit = self.budget.limits().max_value_bytes;
+        self.budget
+            .charge("value_bytes", limit, value.len())
+            .map_err(|error| host_json_budget_error(error, path))?;
         Ok(())
     }
 
@@ -550,6 +566,20 @@ pub fn validate_host_value(
     value: &HostValue,
     limits: &Limits,
 ) -> Result<(), HostValueValidationError> {
+    validate_host_value_with_context(
+        contract,
+        selector,
+        value,
+        &crate::RuntimeContext::new(limits.clone()),
+    )
+}
+
+pub fn validate_host_value_with_context(
+    contract: &Contract,
+    selector: &ContractTypeRef,
+    value: &HostValue,
+    context: &crate::RuntimeContext,
+) -> Result<(), HostValueValidationError> {
     if selector.contract_id != contract.contract_id() {
         return Err(single(
             "value_contract_id_mismatch",
@@ -572,25 +602,20 @@ pub fn validate_host_value(
         ));
     }
 
+    let mut budget = context.budget();
     let mut state = HostValueValidationState {
         contract,
-        limits,
-        elements: 0,
-        bytes: 0,
-        work: 0,
+        budget: &mut budget,
     };
     state.validate_node(selector.type_ref, value, "$", 0)
 }
 
-struct HostValueValidationState<'a> {
+struct HostValueValidationState<'a, 'budget, 'limits> {
     contract: &'a Contract,
-    limits: &'a Limits,
-    elements: usize,
-    bytes: usize,
-    work: usize,
+    budget: &'budget mut crate::budget::Budget<'limits>,
 }
 
-impl HostValueValidationState<'_> {
+impl HostValueValidationState<'_, '_, '_> {
     fn validate_node(
         &mut self,
         reference: TypeRef,
@@ -598,20 +623,17 @@ impl HostValueValidationState<'_> {
         path: &str,
         depth: usize,
     ) -> Result<(), HostValueValidationError> {
-        if self.limits.deadline_exceeded() {
-            return Err(single(
-                "operation_deadline_exceeded",
-                path,
-                "HostValue validation deadline has elapsed",
-            ));
-        }
-        if depth > self.limits.max_value_depth {
+        self.budget
+            .checkpoint()
+            .map_err(|error| host_validation_budget_error(error, path))?;
+        let limits = self.budget.limits().clone();
+        if depth > limits.max_value_depth {
             return Err(resource_single(
                 "value_depth",
-                self.limits.max_value_depth,
+                limits.max_value_depth,
                 depth,
                 path,
-                format!("value depth exceeds limit {}", self.limits.max_value_depth),
+                format!("value depth exceeds limit {}", limits.max_value_depth),
             ));
         }
 
@@ -736,48 +758,25 @@ impl HostValueValidationState<'_> {
     }
 
     fn charge_element(&mut self, path: &str) -> Result<(), HostValueValidationError> {
-        self.elements = self.elements.saturating_add(1);
-        if self.elements > self.limits.max_value_elements {
-            return Err(resource_single(
-                "value_elements",
-                self.limits.max_value_elements,
-                self.elements,
-                path,
-                format!(
-                    "value elements exceed limit {}",
-                    self.limits.max_value_elements
-                ),
-            ));
-        }
+        let limit = self.budget.limits().max_value_elements;
+        self.budget
+            .charge("value_elements", limit, 1)
+            .map_err(|error| host_validation_budget_error(error, path))?;
         Ok(())
     }
 
     fn check_deadline(&self, path: &str) -> Result<(), HostValueValidationError> {
-        if self.limits.deadline_exceeded() {
-            return Err(single(
-                "operation_deadline_exceeded",
-                path,
-                "HostValue validation deadline has elapsed",
-            ));
-        }
-        Ok(())
+        self.budget
+            .checkpoint()
+            .map_err(|error| host_validation_budget_error(error, path))
     }
 
     fn charge_work(&mut self, path: &str) -> Result<(), HostValueValidationError> {
         self.check_deadline(path)?;
-        self.work = self.work.saturating_add(1);
-        if self.work > self.limits.max_canonicalization_work {
-            return Err(resource_single(
-                "canonicalization_work",
-                self.limits.max_canonicalization_work,
-                self.work,
-                path,
-                format!(
-                    "HostValue validation work exceeds limit {}",
-                    self.limits.max_canonicalization_work
-                ),
-            ));
-        }
+        let limit = self.budget.limits().max_canonicalization_work;
+        self.budget
+            .charge("canonicalization_work", limit, 1)
+            .map_err(|error| host_validation_budget_error(error, path))?;
         Ok(())
     }
 
@@ -786,17 +785,18 @@ impl HostValueValidationState<'_> {
         child_count: usize,
         path: &str,
     ) -> Result<(), HostValueValidationError> {
-        let observed = self.elements.saturating_add(child_count);
-        if observed > self.limits.max_value_elements {
+        let limit = self.budget.limits().max_value_elements;
+        let observed = self
+            .budget
+            .consumed("value_elements")
+            .saturating_add(child_count);
+        if observed > limit {
             return Err(resource_single(
                 "value_elements",
-                self.limits.max_value_elements,
+                limit,
                 observed,
                 path,
-                format!(
-                    "value elements exceed limit {}",
-                    self.limits.max_value_elements
-                ),
+                format!("value elements exceed limit {limit}"),
             ));
         }
         Ok(())
@@ -807,16 +807,10 @@ impl HostValueValidationState<'_> {
         value: &HostValue,
         path: &str,
     ) -> Result<(), HostValueValidationError> {
-        self.bytes = self.bytes.saturating_add(value_string_bytes(value));
-        if self.bytes > self.limits.max_value_bytes {
-            return Err(resource_single(
-                "value_bytes",
-                self.limits.max_value_bytes,
-                self.bytes,
-                path,
-                format!("value bytes exceed limit {}", self.limits.max_value_bytes),
-            ));
-        }
+        let limit = self.budget.limits().max_value_bytes;
+        self.budget
+            .charge("value_bytes", limit, value_string_bytes(value))
+            .map_err(|error| host_validation_budget_error(error, path))?;
         Ok(())
     }
 
@@ -994,6 +988,35 @@ fn resource_single(
                 observed,
             }),
         }],
+    }
+}
+
+fn host_validation_budget_error(
+    error: crate::budget::BudgetError,
+    path: &str,
+) -> HostValueValidationError {
+    match error {
+        crate::budget::BudgetError::Cancelled => single(
+            "operation_cancelled",
+            path,
+            "HostValue validation was cancelled",
+        ),
+        crate::budget::BudgetError::DeadlineExceeded => single(
+            "operation_deadline_exceeded",
+            path,
+            "HostValue validation deadline has elapsed",
+        ),
+        crate::budget::BudgetError::ResourceLimit {
+            resource,
+            limit,
+            observed,
+        } => resource_single(
+            resource,
+            limit,
+            observed,
+            path,
+            format!("resource {resource} exceeded limit {limit}; observed {observed}"),
+        ),
     }
 }
 

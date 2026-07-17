@@ -1,4 +1,8 @@
 use serde::{Deserialize, Serialize};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
 
 /// Operational limits for work performed on untrusted Contracts, sources, and values.
 ///
@@ -75,8 +79,85 @@ impl Limits {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+/// A cheap, cloneable signal for cooperatively cancelling runtime work.
+#[derive(Clone, Default)]
+pub struct CancellationToken {
+    cancelled: Arc<AtomicBool>,
+}
+
+impl CancellationToken {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn cancel(&self) {
+        self.cancelled.store(true, Ordering::Release);
+    }
+
+    pub fn is_cancelled(&self) -> bool {
+        self.cancelled.load(Ordering::Acquire)
+    }
+}
+
+impl std::fmt::Debug for CancellationToken {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("CancellationToken")
+            .field("cancelled", &self.is_cancelled())
+            .finish()
+    }
+}
+
+impl PartialEq for CancellationToken {
+    fn eq(&self, other: &Self) -> bool {
+        self.is_cancelled() == other.is_cancelled()
+    }
+}
+
+impl Eq for CancellationToken {}
+
+/// Runtime policy and cooperative controls for one public operation.
+///
+/// Construct contexts with [`RuntimeContext::new`]; runtime controls are
+/// intentionally private so adding one does not reopen exhaustive literals.
+///
+/// ```compile_fail
+/// use candid_core::{Limits, RuntimeContext};
+///
+/// let _ = RuntimeContext { limits: Limits::default() };
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RuntimeContext {
     pub limits: Limits,
+    #[serde(skip, default)]
+    cancellation: CancellationToken,
+}
+
+impl RuntimeContext {
+    pub fn new(limits: Limits) -> Self {
+        Self {
+            limits,
+            cancellation: CancellationToken::new(),
+        }
+    }
+
+    pub fn with_cancellation(mut self, cancellation: CancellationToken) -> Self {
+        self.cancellation = cancellation;
+        self
+    }
+
+    pub fn cancellation_token(&self) -> CancellationToken {
+        self.cancellation.clone()
+    }
+
+    pub(crate) fn budget(&self) -> crate::budget::Budget<'_> {
+        crate::budget::Budget::new(&self.limits, self.cancellation.clone())
+    }
+}
+
+impl Default for RuntimeContext {
+    fn default() -> Self {
+        Self::new(Limits::default())
+    }
 }

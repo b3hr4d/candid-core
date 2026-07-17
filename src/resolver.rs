@@ -168,6 +168,29 @@ pub trait SourceResolver {
 
     fn load(&self, id: &SourceId, limits: &Limits) -> Result<ResolvedSource, ResolveError>;
 
+    /// Loads with cooperative runtime cancellation. Implementations that do
+    /// long-running work may override this method to checkpoint internally.
+    fn load_with_context(
+        &self,
+        id: &SourceId,
+        context: &crate::RuntimeContext,
+    ) -> Result<ResolvedSource, ResolveError> {
+        if context.cancellation_token().is_cancelled() {
+            return Err(ResolveError::new(
+                "operation_cancelled",
+                "source loading was cancelled",
+            ));
+        }
+        let resolved = self.load(id, &context.limits)?;
+        if context.cancellation_token().is_cancelled() {
+            return Err(ResolveError::new(
+                "operation_cancelled",
+                "source loading was cancelled",
+            ));
+        }
+        Ok(resolved)
+    }
+
     fn resolve(
         &self,
         from: Option<&SourceId>,
@@ -176,6 +199,16 @@ pub trait SourceResolver {
     ) -> Result<ResolvedSource, ResolveError> {
         let id = self.identify(from, import)?;
         self.load(&id, limits)
+    }
+
+    fn resolve_with_context(
+        &self,
+        from: Option<&SourceId>,
+        import: &str,
+        context: &crate::RuntimeContext,
+    ) -> Result<ResolvedSource, ResolveError> {
+        let id = self.identify(from, import)?;
+        self.load_with_context(&id, context)
     }
 }
 

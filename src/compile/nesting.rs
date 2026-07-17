@@ -5,11 +5,15 @@ use super::*;
 /// not affect the operational nesting budget.
 pub(super) fn check_source_nesting(
     source: &str,
-    limits: &crate::Limits,
+    budget: &mut crate::budget::Budget<'_>,
 ) -> Result<(), CompileError> {
+    let limits = budget.limits().clone();
     let mut delimiters = 0usize;
     let mut unary = 0usize;
     for token in Tokenizer::new(source) {
+        budget
+            .checkpoint()
+            .map_err(|error| budget_error(error, DiagnosticPhase::Parse, "source preflight"))?;
         let (_, token, _) = match token {
             Ok(token) => token,
             // Preserve the parser's established lexical diagnostic.
@@ -48,8 +52,9 @@ pub(super) fn check_source_nesting(
 /// a long chain of shallow aliases.
 pub(super) fn check_programs_type_depth<'a>(
     programs: impl IntoIterator<Item = &'a IDLProg>,
-    limits: &crate::Limits,
+    budget: &mut crate::budget::Budget<'_>,
 ) -> Result<(), CompileError> {
+    let limits = budget.limits().clone();
     let programs: Vec<_> = programs.into_iter().collect();
     let mut declarations = BTreeMap::new();
     for program in &programs {
@@ -73,6 +78,9 @@ pub(super) fn check_programs_type_depth<'a>(
         .collect();
 
     while let Some((ty, depth, active_names)) = pending.pop() {
+        budget.checkpoint().map_err(|error| {
+            budget_error(error, DiagnosticPhase::TypeCheck, "type-depth preflight")
+        })?;
         if depth > limits.max_type_depth {
             return Err(CompileError::resource_limit(
                 "type_depth",

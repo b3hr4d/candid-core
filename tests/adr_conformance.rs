@@ -1,10 +1,11 @@
 use candid_core::{
     compile_did, compile_did_file, compile_did_file_with_context, compile_did_with_context,
-    compile_with_resolver, validate_host_value, Actor, Compilation, CompileError, CompileOptions,
-    Contract, ContractEnvelope, ContractMethodRef, ContractTypeRef, Declaration, Field, HostValue,
-    Limits, MemoryResolver, PrimitiveType, RawContract, RawSourceInfo, ResolveError,
-    ResolvedSource, RuntimeContext, SourceId, SourceInfo, SourceResolver, TypeNode,
-    CANONICALIZATION_PROFILE, CONTRACT_FORMAT, FORMAT_VERSION, SEMANTICS_PROFILE,
+    compile_with_resolver, validate_host_value, Actor, CancellationToken, Compilation,
+    CompileError, CompileOptions, Contract, ContractEnvelope, ContractMethodRef, ContractTypeRef,
+    Declaration, Field, HostValue, Limits, MemoryResolver, PrimitiveType, RawContract,
+    RawSourceInfo, ResolveError, ResolvedSource, RuntimeContext, SourceId, SourceInfo,
+    SourceResolver, TypeNode, CANONICALIZATION_PROFILE, CONTRACT_FORMAT, FORMAT_VERSION,
+    SEMANTICS_PROFILE,
 };
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
@@ -506,12 +507,10 @@ fn resolver_rejects_authority_escape_and_import_cycles() {
 
 #[test]
 fn operational_limits_fail_with_machine_stable_diagnostics() {
-    let context = RuntimeContext {
-        limits: Limits {
-            max_source_bytes: 8,
-            ..Limits::default()
-        },
-    };
+    let context = RuntimeContext::new(Limits {
+        max_source_bytes: 8,
+        ..Limits::default()
+    });
     let error =
         compile_did_with_context("service : {};", CompileOptions::default(), &context).unwrap_err();
     assert_eq!(error.diagnostics[0].code, "resource_limit_exceeded");
@@ -539,6 +538,29 @@ fn operational_limits_fail_with_machine_stable_diagnostics() {
 struct IgnoringLimitsResolver {
     source: String,
     digest: Option<String>,
+}
+
+struct CancellingResolver {
+    source: String,
+    cancellation: CancellationToken,
+}
+
+impl SourceResolver for CancellingResolver {
+    fn identify(&self, _from: Option<&SourceId>, import: &str) -> Result<SourceId, ResolveError> {
+        SourceId::parse(import)
+    }
+
+    fn load(&self, id: &SourceId, _limits: &Limits) -> Result<ResolvedSource, ResolveError> {
+        self.cancellation.cancel();
+        Ok(ResolvedSource {
+            id: id.clone(),
+            source: self.source.clone(),
+            digest: format!(
+                "sha256:{}",
+                hex::encode(Sha256::digest(self.source.as_bytes()))
+            ),
+        })
+    }
 }
 
 impl SourceResolver for IgnoringLimitsResolver {
@@ -575,12 +597,10 @@ fn compiler_owns_source_limit_enforcement_for_every_resolver_path() {
 
     let source = "service : {};";
     let limit = source.len() - 1;
-    let context = RuntimeContext {
-        limits: Limits {
-            max_source_bytes: limit,
-            ..Limits::default()
-        },
-    };
+    let context = RuntimeContext::new(Limits {
+        max_source_bytes: limit,
+        ..Limits::default()
+    });
 
     let mut memory = MemoryResolver::new();
     memory.insert("entry.did", source).unwrap();
@@ -633,14 +653,12 @@ fn compiler_source_accounting_accepts_exact_boundaries_and_rejects_next_source()
         source: source.to_string(),
         digest: None,
     };
-    let exact = RuntimeContext {
-        limits: Limits {
-            max_source_bytes: source.len(),
-            max_bundle_bytes: source.len(),
-            max_sources: 1,
-            ..Limits::default()
-        },
-    };
+    let exact = RuntimeContext::new(Limits {
+        max_source_bytes: source.len(),
+        max_bundle_bytes: source.len(),
+        max_sources: 1,
+        ..Limits::default()
+    });
     compile_with_resolver("entry.did", &resolver, CompileOptions::default(), &exact).unwrap();
 
     for (limits, resource, limit, observed) in [
@@ -669,9 +687,7 @@ fn compiler_source_accounting_accepts_exact_boundaries_and_rejects_next_source()
                 CompileOptions {
                     include_source_info,
                 },
-                &RuntimeContext {
-                    limits: limits.clone(),
-                },
+                &RuntimeContext::new(limits.clone()),
             )
             .unwrap_err();
             let info = error.diagnostics[0].resource_limit.as_ref().unwrap();
@@ -690,12 +706,10 @@ fn compiler_checks_source_limits_before_digesting_resolver_content() {
         digest: Some("sha256:not-a-digest".to_string()),
     };
     let limit = source.len() - 1;
-    let context = RuntimeContext {
-        limits: Limits {
-            max_source_bytes: limit,
-            ..Limits::default()
-        },
-    };
+    let context = RuntimeContext::new(Limits {
+        max_source_bytes: limit,
+        ..Limits::default()
+    });
     let error = compile_with_resolver("entry.did", &resolver, CompileOptions::default(), &context)
         .unwrap_err();
     assert_source_limit(error, limit, source.len());
@@ -703,15 +717,101 @@ fn compiler_checks_source_limits_before_digesting_resolver_content() {
 
 #[test]
 fn elapsed_deadlines_abort_work_without_partial_artifacts() {
-    let context = RuntimeContext {
-        limits: Limits {
-            deadline_unix_ms: Some(1),
-            ..Limits::default()
-        },
-    };
+    let context = RuntimeContext::new(Limits {
+        deadline_unix_ms: Some(1),
+        ..Limits::default()
+    });
     let error =
         compile_did_with_context("service : {};", CompileOptions::default(), &context).unwrap_err();
     assert_eq!(error.diagnostics[0].code, "operation_deadline_exceeded");
+}
+
+#[test]
+fn runtime_context_cancellation_is_cooperative_and_not_serialized() {
+    let compilation = compile("service : {};");
+    let token = CancellationToken::new();
+    let context = RuntimeContext::new(Limits::default()).with_cancellation(token.clone());
+    let json = serde_json::to_value(&context).unwrap();
+    assert_eq!(json.as_object().unwrap().len(), 1);
+    assert!(json.get("limits").is_some());
+    let decoded: RuntimeContext = serde_json::from_value(json).unwrap();
+    assert!(!decoded.cancellation_token().is_cancelled());
+
+    token.cancel();
+    let compile_error =
+        compile_did_with_context("service : {};", CompileOptions::default(), &context).unwrap_err();
+    assert_eq!(compile_error.diagnostics[0].code, "operation_cancelled");
+
+    let contract_error = compilation
+        .contract()
+        .validate_with_context(&context)
+        .unwrap_err();
+    assert_eq!(contract_error.violations[0].code, "operation_cancelled");
+
+    let json_error = HostValue::from_json_with_context(r#"{"kind":"null"}"#, &context).unwrap_err();
+    assert!(matches!(
+        json_error,
+        candid_core::HostValueJsonError::Cancelled { ref path } if path == "$"
+    ));
+}
+
+#[test]
+fn resolver_cancellation_is_observed_before_accepting_loaded_content() {
+    let token = CancellationToken::new();
+    let resolver = CancellingResolver {
+        source: "service : {};".to_string(),
+        cancellation: token.clone(),
+    };
+    let context = RuntimeContext::new(Limits::default()).with_cancellation(token);
+    let error = compile_with_resolver(
+        "memory:/entry.did",
+        &resolver,
+        CompileOptions::default(),
+        &context,
+    )
+    .unwrap_err();
+    assert_eq!(error.diagnostics[0].code, "operation_cancelled");
+}
+
+#[test]
+fn provenance_budget_failures_retain_stable_resource_metadata() {
+    let compilation = compile("service : { ping: () -> () query };");
+    let raw: RawSourceInfo =
+        serde_json::from_value(serde_json::to_value(compilation.source_info().unwrap()).unwrap())
+            .unwrap();
+    assert_eq!(raw.methods.len(), 1);
+    let context = RuntimeContext::new(Limits {
+        max_methods: 0,
+        ..Limits::default()
+    });
+    let error =
+        SourceInfo::try_from_raw_with_context(raw, compilation.contract(), &context).unwrap_err();
+    let violation = &error.violations[0];
+    assert_eq!(violation.code, "resource_limit_exceeded");
+    let resource = violation.resource_limit.as_ref().unwrap();
+    assert_eq!(resource.resource, "source_methods");
+    assert_eq!(resource.limit, 0);
+    assert_eq!(resource.observed, 1);
+}
+
+#[test]
+fn one_operation_cannot_reset_canonicalization_work_between_stages() {
+    let compilation = compile("service : {};");
+    let raw = RawContract::from(compilation.contract());
+    let nodes = raw.types.len();
+    assert_eq!(nodes, 1);
+    let limit = nodes * 3;
+    let context = RuntimeContext::new(Limits {
+        max_canonicalization_work: limit,
+        ..Limits::default()
+    });
+    let error = Contract::try_from_raw_with_context(raw, &context).unwrap_err();
+    let violation = &error.violations[0];
+    assert_eq!(violation.code, "resource_limit_exceeded");
+    let resource = violation.resource_limit.as_ref().unwrap();
+    assert_eq!(resource.resource, "canonicalization_work");
+    assert_eq!(resource.limit, limit);
+    assert_eq!(resource.observed, nodes * 4);
 }
 
 #[test]

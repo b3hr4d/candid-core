@@ -5,12 +5,16 @@ pub(super) fn lower_checked(
     environment: &TypeEnv,
     actor_type: Option<&Type>,
     options: CompileOptions,
-    context: &RuntimeContext,
+    budget: &mut crate::budget::Budget<'_>,
 ) -> Result<Compilation, CompileError> {
-    check_type_depth(environment, actor_type, &context.limits)?;
+    let limits = budget.limits().clone();
+    check_type_depth(environment, actor_type, budget)?;
     let mut lowerer = Lowerer::new(environment);
     let declaration_names: Vec<_> = environment.0.keys().cloned().collect();
     for name in &declaration_names {
+        budget
+            .checkpoint()
+            .map_err(|error| budget_error(error, DiagnosticPhase::Lower, "Contract lowering"))?;
         lowerer.lower_named(name).map_err(lower_error)?;
     }
 
@@ -42,6 +46,37 @@ pub(super) fn lower_checked(
             &mut raw_source_info,
         )
         .map_err(lower_error)?;
+        for (resource, limit, observed) in [
+            (
+                "source_declarations",
+                limits.max_declarations,
+                raw_source_info.declarations.len(),
+            ),
+            (
+                "source_actors",
+                limits.max_sources,
+                raw_source_info.actors.len(),
+            ),
+            (
+                "source_field_labels",
+                limits.max_fields,
+                raw_source_info.field_labels.len(),
+            ),
+            (
+                "source_methods",
+                limits.max_methods,
+                raw_source_info.methods.len(),
+            ),
+            (
+                "source_function_arguments",
+                limits.max_function_values,
+                raw_source_info.function_arguments.len(),
+            ),
+        ] {
+            budget.observe(resource, limit, observed).map_err(|error| {
+                budget_error(error, DiagnosticPhase::Lower, "provenance collection")
+            })?;
+        }
     }
 
     let LoweredGraph { types, named_refs } = lowerer.finish().map_err(lower_error)?;
@@ -61,10 +96,10 @@ pub(super) fn lower_checked(
     // Structural validation needs a syntactically valid placeholder. The
     // canonicalizer then computes the real identities.
     let raw_contract = Contract::new_unchecked(types, declarations, actor);
-    crate::validate::validate_structure_with_limits(&raw_contract, &context.limits)
+    crate::validate::validate_structure_with_budget(&raw_contract, budget)
         .map_err(|error| lower_error(format!("lowered Contract violated an invariant: {error}")))?;
     let canonicalized =
-        canonical::canonicalize_with_mapping_unchecked_and_limits(&raw_contract, &context.limits)
+        canonical::canonicalize_with_mapping_unchecked_with_budget(&raw_contract, budget)
             .map_err(|error| lower_error(format!("canonicalization failed: {error}")))?;
 
     let source_info = if options.include_source_info {
@@ -162,7 +197,7 @@ pub(super) fn lower_checked(
             actors,
         };
         source_info
-            .validate(&canonicalized.contract, &context.limits)
+            .validate_with_budget(&canonicalized.contract, budget)
             .map_err(source_info_compile_error)?;
         Some(source_info)
     } else {
@@ -178,8 +213,9 @@ pub(super) fn lower_checked(
 fn check_type_depth(
     environment: &TypeEnv,
     actor_type: Option<&Type>,
-    limits: &crate::Limits,
+    budget: &mut crate::budget::Budget<'_>,
 ) -> Result<(), CompileError> {
+    let limits = budget.limits().clone();
     let mut roots: Vec<Type> = environment.0.values().cloned().collect();
     roots.extend(actor_type.cloned());
     let mut pending: Vec<_> = roots
@@ -188,6 +224,9 @@ fn check_type_depth(
         .collect();
 
     while let Some((ty, depth, active_names)) = pending.pop() {
+        budget.checkpoint().map_err(|error| {
+            budget_error(error, DiagnosticPhase::Lower, "checked type traversal")
+        })?;
         if depth > limits.max_type_depth {
             return Err(CompileError::resource_limit(
                 "type_depth",

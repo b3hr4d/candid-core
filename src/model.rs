@@ -124,7 +124,15 @@ impl Contract {
     }
 
     pub fn validate_with_limits(&self, limits: &Limits) -> Result<(), ContractValidationError> {
-        crate::validate::validate_contract_with_limits(self, limits)
+        self.validate_with_context(&crate::RuntimeContext::new(limits.clone()))
+    }
+
+    pub fn validate_with_context(
+        &self,
+        context: &crate::RuntimeContext,
+    ) -> Result<(), ContractValidationError> {
+        let mut budget = context.budget();
+        crate::validate::validate_contract_with_budget(self, &mut budget)
     }
 
     /// Return a deterministically re-indexed copy with freshly calculated
@@ -137,20 +145,42 @@ impl Contract {
         &self,
         limits: &Limits,
     ) -> Result<Self, ContractValidationError> {
-        crate::canonical::canonicalize_contract_with_limits(self, limits)
+        self.canonicalize_with_context(&crate::RuntimeContext::new(limits.clone()))
+    }
+
+    pub fn canonicalize_with_context(
+        &self,
+        context: &crate::RuntimeContext,
+    ) -> Result<Self, ContractValidationError> {
+        let mut budget = context.budget();
+        crate::canonical::canonicalize_contract_with_budget(self, &mut budget)
     }
 
     /// Serialize validated canonical JSON.
     pub fn to_json_pretty(&self) -> Result<String, ContractValidationError> {
-        self.validate()?;
-        let canonical = self.canonicalize()?;
-        serde_json::to_string_pretty(&canonical).map_err(|error| {
+        self.to_json_pretty_with_context(&crate::RuntimeContext::default())
+    }
+
+    pub fn to_json_pretty_with_context(
+        &self,
+        context: &crate::RuntimeContext,
+    ) -> Result<String, ContractValidationError> {
+        let mut budget = context.budget();
+        crate::validate::validate_contract_with_budget(self, &mut budget)?;
+        let canonical =
+            crate::canonical::canonicalize_with_mapping_unchecked_with_budget(self, &mut budget)?
+                .contract;
+        let json = serde_json::to_string_pretty(&canonical).map_err(|error| {
             ContractValidationError::single(
                 "contract_json_serialization_failed",
                 "$",
                 error.to_string(),
             )
-        })
+        })?;
+        budget
+            .checkpoint()
+            .map_err(crate::budget::BudgetError::into_contract_error)?;
+        Ok(json)
     }
 
     /// Parse, validate, and canonicalize a Contract JSON document.
@@ -159,6 +189,14 @@ impl Contract {
     }
 
     pub fn from_json_with_limits(input: &str, limits: &Limits) -> Result<Self, ContractJsonError> {
+        Self::from_json_with_context(input, &crate::RuntimeContext::new(limits.clone()))
+    }
+
+    pub fn from_json_with_context(
+        input: &str,
+        context: &crate::RuntimeContext,
+    ) -> Result<Self, ContractJsonError> {
+        let limits = &context.limits;
         if input.len() > limits.max_input_bytes {
             return Err(ContractJsonError::InvalidContract(
                 ContractValidationError::resource_limit(
@@ -168,9 +206,20 @@ impl Contract {
                 ),
             ));
         }
+        let mut budget = context.budget();
+        budget
+            .observe("input_bytes", limits.max_input_bytes, input.len())
+            .map_err(crate::budget::BudgetError::into_contract_error)
+            .map_err(ContractJsonError::InvalidContract)?;
         let raw: RawContract = serde_json::from_str(input)
             .map_err(|error| ContractJsonError::MalformedJson(error.to_string()))?;
-        Self::from_raw_with_limits(raw, limits).map_err(ContractJsonError::InvalidContract)
+        budget
+            .checkpoint()
+            .map_err(crate::budget::BudgetError::into_contract_error)
+            .map_err(ContractJsonError::InvalidContract)?;
+        Self::from_raw_with_mapping_and_budget(raw, &mut budget)
+            .map(|(contract, _)| contract)
+            .map_err(ContractJsonError::InvalidContract)
     }
 
     pub fn try_from_raw(raw: RawContract) -> Result<Self, ContractValidationError> {
@@ -184,18 +233,45 @@ impl Contract {
         Self::from_raw_with_limits(raw, limits)
     }
 
+    pub fn try_from_raw_with_context(
+        raw: RawContract,
+        context: &crate::RuntimeContext,
+    ) -> Result<Self, ContractValidationError> {
+        let mut budget = context.budget();
+        Ok(Self::from_raw_with_mapping_and_budget(raw, &mut budget)?.0)
+    }
+
     /// Validate the raw graph structure, canonicalize it, and calculate fresh
     /// identities. This producer API intentionally ignores supplied identity
     /// values; trust boundaries should use [`Self::try_from_raw`] instead.
     pub fn build_raw(raw: RawContract, limits: &Limits) -> Result<Self, ContractValidationError> {
+        let mut budget = crate::budget::Budget::from_limits(limits);
+        Self::build_raw_with_budget(raw, &mut budget)
+    }
+
+    pub fn build_raw_with_context(
+        raw: RawContract,
+        context: &crate::RuntimeContext,
+    ) -> Result<Self, ContractValidationError> {
+        let mut budget = context.budget();
+        Self::build_raw_with_budget(raw, &mut budget)
+    }
+
+    pub(crate) fn build_raw_with_budget(
+        raw: RawContract,
+        budget: &mut crate::budget::Budget<'_>,
+    ) -> Result<Self, ContractValidationError> {
         let mut contract = Self::new_unchecked(raw.types, raw.declarations, raw.actor);
         contract.format = raw.format;
         contract.format_version = raw.format_version;
         contract.semantics_profile = raw.semantics_profile;
         contract.canonicalization_profile = raw.canonicalization_profile;
         contract.producer = raw.producer;
-        crate::validate::validate_structure_with_limits(&contract, limits)?;
-        crate::canonical::canonicalize_contract_with_limits(&contract, limits)
+        crate::validate::validate_structure_with_budget(&contract, budget)?;
+        Ok(
+            crate::canonical::canonicalize_with_mapping_unchecked_with_budget(&contract, budget)?
+                .contract,
+        )
     }
 
     fn from_raw_with_limits(
@@ -209,6 +285,14 @@ impl Contract {
         raw: RawContract,
         limits: &Limits,
     ) -> Result<(Self, Vec<TypeRef>), ContractValidationError> {
+        let mut budget = crate::budget::Budget::from_limits(limits);
+        Self::from_raw_with_mapping_and_budget(raw, &mut budget)
+    }
+
+    pub(crate) fn from_raw_with_mapping_and_budget(
+        raw: RawContract,
+        budget: &mut crate::budget::Budget<'_>,
+    ) -> Result<(Self, Vec<TypeRef>), ContractValidationError> {
         let contract = Self {
             format: raw.format,
             format_version: raw.format_version,
@@ -220,9 +304,9 @@ impl Contract {
             declarations: raw.declarations,
             actor: raw.actor,
         };
-        contract.validate_with_limits(limits)?;
+        crate::validate::validate_contract_with_budget(&contract, budget)?;
         let canonicalized =
-            crate::canonical::canonicalize_with_mapping_unchecked_and_limits(&contract, limits)?;
+            crate::canonical::canonicalize_with_mapping_unchecked_with_budget(&contract, budget)?;
         Ok((canonicalized.contract, canonicalized.old_to_new))
     }
 
@@ -497,6 +581,17 @@ impl SourceInfo {
         Ok(source_info)
     }
 
+    pub fn try_from_raw_with_context(
+        raw: RawSourceInfo,
+        contract: &Contract,
+        context: &crate::RuntimeContext,
+    ) -> Result<Self, ContractValidationError> {
+        let source_info = Self::from_raw_unchecked(raw);
+        let mut budget = context.budget();
+        source_info.validate_with_budget(contract, &mut budget)?;
+        Ok(source_info)
+    }
+
     pub fn source_info_version(&self) -> u32 {
         self.source_info_version
     }
@@ -543,6 +638,14 @@ impl SourceInfo {
         limits: &Limits,
     ) -> Result<(), ContractValidationError> {
         crate::source::validate_source_info(self, contract, limits)
+    }
+
+    pub(crate) fn validate_with_budget(
+        &self,
+        contract: &Contract,
+        budget: &mut crate::budget::Budget<'_>,
+    ) -> Result<(), ContractValidationError> {
+        crate::source::validate_source_info_with_budget(self, contract, budget)
     }
 }
 
