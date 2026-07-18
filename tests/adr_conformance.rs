@@ -3,9 +3,9 @@ use candid_core::{
     compile_with_resolver, validate_host_value, Actor, CancellationToken, Compilation,
     CompileError, CompileOptions, Contract, ContractEnvelope, ContractMethodRef, ContractTypeRef,
     Declaration, Field, HostValue, Limits, MemoryResolver, PrimitiveType, RawContract,
-    RawSourceInfo, ResolveError, ResolvedSource, RuntimeContext, SourceId, SourceInfo,
-    SourceResolver, TypeNode, CANONICALIZATION_PROFILE, CONTRACT_FORMAT, FORMAT_VERSION,
-    SEMANTICS_PROFILE,
+    RawSourceInfo, ResolveError, ResolvedSource, RuntimeContext, SourceId, SourceInfo, SourceLabel,
+    SourceOrigin, SourceResolver, TypeNode, CANONICALIZATION_PROFILE, CONTRACT_FORMAT,
+    FORMAT_VERSION, SEMANTICS_PROFILE,
 };
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
@@ -295,6 +295,148 @@ fn source_info_raw_construction_is_fallible_and_contract_bound() {
     assert_eq!(error.violations[0].path, "$.contract_id");
 }
 
+fn assert_provenance_mismatch(raw: RawSourceInfo, contract: &Contract, path: &str) {
+    let error = SourceInfo::try_from_raw(raw, contract, &Limits::default()).unwrap_err();
+    assert_eq!(error.violations[0].code, "source_info_provenance_mismatch");
+    assert_eq!(error.violations[0].path, path);
+}
+
+#[test]
+fn source_info_rederivation_rejects_every_derived_provenance_category() {
+    let compilation = compile(
+        r#"
+        type Honest = record { honest: nat };
+        type Other = record { other: text };
+        service : {
+            ping: (input: Honest) -> (output: nat);
+            pong: (input: text) -> (output: nat);
+        };
+        "#,
+    );
+    let raw: RawSourceInfo =
+        serde_json::from_value(serde_json::to_value(compilation.source_info().unwrap()).unwrap())
+            .unwrap();
+
+    let mut declaration = raw.clone();
+    declaration
+        .declarations
+        .iter_mut()
+        .find(|item| item.name == "Honest")
+        .unwrap()
+        .name = "Forged".to_string();
+    assert_provenance_mismatch(
+        declaration.clone(),
+        compilation.contract(),
+        "$.declarations",
+    );
+    let compilation_error = Compilation::try_from_raw(
+        RawContract::from(compilation.contract()),
+        Some(declaration),
+        &Limits::default(),
+    )
+    .unwrap_err();
+    assert_eq!(
+        compilation_error.violations[0].code,
+        "source_info_provenance_mismatch"
+    );
+    assert_eq!(compilation_error.violations[0].path, "$.declarations");
+
+    let honest_field = raw
+        .field_labels
+        .iter()
+        .position(|field| {
+            matches!(
+                &field.origin,
+                SourceOrigin::Declaration { name, .. } if name == "Honest"
+            )
+        })
+        .unwrap();
+    let mut origin = raw.clone();
+    let SourceOrigin::Declaration { name, .. } = &mut origin.field_labels[honest_field].origin
+    else {
+        unreachable!()
+    };
+    *name = "Other".to_string();
+    assert_provenance_mismatch(origin, compilation.contract(), "$.field_labels");
+
+    let mut label = raw.clone();
+    let SourceLabel::Named { name } = &mut label.field_labels[honest_field].label else {
+        unreachable!()
+    };
+    *name = "forged".to_string();
+    assert_provenance_mismatch(label, compilation.contract(), "$.field_labels");
+
+    let mut path = raw.clone();
+    path.field_labels[honest_field].path = "type:Honest.forged".to_string();
+    assert_provenance_mismatch(path, compilation.contract(), "$.field_labels");
+
+    let mut docs = raw.clone();
+    docs.field_labels[honest_field]
+        .docs
+        .push("forged documentation".to_string());
+    assert_provenance_mismatch(docs, compilation.contract(), "$.field_labels");
+
+    let mut method = raw.clone();
+    method
+        .methods
+        .iter_mut()
+        .find(|item| item.name == "ping")
+        .unwrap()
+        .name = "pong".to_string();
+    assert_provenance_mismatch(method, compilation.contract(), "$.methods");
+
+    let service = match compilation.contract().actor().unwrap() {
+        Actor::Service { service } => *service,
+        Actor::Class { .. } => unreachable!(),
+    };
+    let TypeNode::Service { methods } = &compilation.contract().types()[service as usize] else {
+        unreachable!()
+    };
+    let ping_function = methods
+        .iter()
+        .find(|method| method.name == "ping")
+        .unwrap()
+        .function;
+    let pong_function = methods
+        .iter()
+        .find(|method| method.name == "pong")
+        .unwrap()
+        .function;
+    let mut argument = raw.clone();
+    argument
+        .function_arguments
+        .iter_mut()
+        .find(|item| item.function == ping_function)
+        .unwrap()
+        .function = pong_function;
+    assert_provenance_mismatch(argument, compilation.contract(), "$.function_arguments");
+
+    let mut argument_name = raw;
+    argument_name.function_arguments[0].name = "forged".to_string();
+    assert_provenance_mismatch(
+        argument_name,
+        compilation.contract(),
+        "$.function_arguments",
+    );
+}
+
+#[test]
+fn source_info_rederivation_verifies_imported_actor_relationships() {
+    let fixture = format!(
+        "{}/tests/fixtures/imports/root_service.did",
+        env!("CARGO_MANIFEST_DIR")
+    );
+    let compilation = compile_did_file(fixture).unwrap();
+    let mut raw: RawSourceInfo =
+        serde_json::from_value(serde_json::to_value(compilation.source_info().unwrap()).unwrap())
+            .unwrap();
+    assert_eq!(raw.actors.len(), 2);
+    let first = raw.actors[0].source.clone();
+    raw.actors[0].source = raw.actors[1].source.clone();
+    raw.actors[1].source = first;
+    assert_provenance_mismatch(raw, compilation.contract(), "$.actors");
+}
+
 #[test]
 fn memory_resolver_compiles_one_immutable_logical_source_bundle() {
     let mut resolver = MemoryResolver::new();
@@ -393,6 +535,12 @@ fn materialization_honors_custom_resolver_aliases() {
         source_info.imports()[0].to,
         "registry:/catalog/v1/types.did"
     );
+    let raw: RawSourceInfo =
+        serde_json::from_value(serde_json::to_value(source_info).unwrap()).unwrap();
+    assert_eq!(
+        SourceInfo::try_from_raw(raw, compilation.contract(), &Limits::default()).unwrap(),
+        source_info.clone()
+    );
 }
 
 #[derive(Clone)]
@@ -442,6 +590,13 @@ fn diamond_imports_are_snapshotted_and_loaded_once() {
     .unwrap();
     assert_eq!(compilation.source_info().unwrap().sources().len(), 4);
     assert_eq!(loads.load(Ordering::SeqCst), 4);
+    let raw: RawSourceInfo =
+        serde_json::from_value(serde_json::to_value(compilation.source_info().unwrap()).unwrap())
+            .unwrap();
+    assert_eq!(
+        SourceInfo::try_from_raw(raw, compilation.contract(), &Limits::default()).unwrap(),
+        compilation.source_info().unwrap().clone()
+    );
 }
 
 #[test]

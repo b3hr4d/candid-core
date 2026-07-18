@@ -77,6 +77,8 @@ Optional `SourceInfo` is separate from Contract v1. It carries a bundle of raw D
 
 `SourceInfo` is itself versioned and contains `contract_id` and `source_bundle_id`. `sources` contains `{ name, source }` for the entry DID and every resolved import. Its declaration entries carry `{ source, name, type, docs }`; field-label, method, and function-argument entries carry a source origin plus an AST-shaped `path`, so distinct source occurrences remain distinguishable even when they lower to one semantic node. This lets a future view distinguish tuple syntax from an explicit numeric record label without adding either concept to Contract.
 
+`source_bundle_id` identifies only the canonical list of raw sources and import edges. It deliberately does not hash derived provenance. External `RawSourceInfo` construction instead treats that bundle as authoritative, recompiles it through the same parser/type-checker/lowering pipeline under the caller's operation budget, and accepts the sidecar only when the rederived Contract identity and every provenance collection match exactly. Consequently, a validated `SourceInfo` authenticates its derived fields by rederivation for that construction operation; the sidecar has no independent persisted identity for signing or cache lookup.
+
 The public upstream Candid AST does not expose stable spans for every semantic node. v1 therefore preserves raw source plus AST-shaped occurrence paths in the sidecar and preserves byte spans on parser diagnostics. It intentionally does not introduce a second handwritten Candid parser just to manufacture node spans.
 
 This separation is deliberate:

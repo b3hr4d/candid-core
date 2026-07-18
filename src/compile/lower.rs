@@ -196,9 +196,12 @@ pub(super) fn lower_checked(
             function_arguments,
             actors,
         };
-        source_info
-            .validate_with_budget(&canonicalized.contract, budget)
-            .map_err(source_info_compile_error)?;
+        crate::source::validate_source_info_structure_with_budget(
+            &source_info,
+            &canonicalized.contract,
+            budget,
+        )
+        .map_err(source_info_compile_error)?;
         Some(source_info)
     } else {
         None

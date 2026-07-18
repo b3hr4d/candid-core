@@ -20,7 +20,7 @@ The model layer will distinguish:
 - `SourceInfo`: validated provenance bound to a `contract_id` and `source_bundle_id`.
 - `Compilation`: a validated pair constructed atomically from Contract and optional SourceInfo.
 
-`TryFrom<RawContract>` performs structural validation, canonicalization, and ID verification. `TryFrom<(RawContract, RawSourceInfo)>` performs one coordinated remap and validates every provenance reference, node kind, source origin, position, and occurrence path. Ordinary `Deserialize` is implemented only when it can preserve those guarantees; otherwise callers deserialize raw DTOs.
+`TryFrom<RawContract>` performs structural validation, canonicalization, and ID verification. `TryFrom<(RawContract, RawSourceInfo)>` performs one coordinated remap, recompiles the authoritative source/import bundle through the same compiler pipeline, and requires the regenerated Contract identity and every provenance collection to match exactly. This verifies declaration and actor origins, named-label spelling and hashes, occurrence paths, method/function relationships, argument names, and documentation instead of merely checking that their references are locally plausible. Ordinary `Deserialize` is implemented only when it can preserve those guarantees; otherwise callers deserialize raw DTOs.
 
 Core structs remain closed with unknown fields rejected. Ecosystem metadata is stored in a separate envelope:
 
@@ -44,11 +44,13 @@ Extensions are namespaced, versioned, size-limited, and excluded from core ident
 
 ## Implementation
 
-`Contract` and `Compilation` fields are private and exposed through immutable accessors. `RawContract` and `RawSourceInfo` are explicit DTOs. Compilation has a coordinated deserializer that canonicalizes the Contract, remaps provenance, and validates the bound sidecar. `ContractEnvelope` owns namespaced extensions.
+`Contract` and `Compilation` fields are private and exposed through immutable accessors. `RawContract` and `RawSourceInfo` are explicit DTOs. Compilation has a coordinated deserializer that canonicalizes the Contract, remaps provenance, and rederives the bound sidecar from its source bundle. `source_bundle_id` authenticates only sorted raw sources and import edges; it does not independently identify the derived sidecar. A `SourceInfo` validity claim therefore means that the complete presented sidecar matched rederivation during construction. `ContractEnvelope` owns namespaced extensions.
 
 ## Required verification
 
 - Compile-fail or API tests showing validated fields are immutable.
 - Adversarial tests for mismatched Contract/SourceInfo pairs.
+- Adversarial tests showing every derived provenance collection must match
+  compiler rederivation from the embedded source bundle.
 - Reindexing tests that prove sidecar references are remapped atomically.
 - Extension-envelope tests proving core unknown fields still fail closed.
