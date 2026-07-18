@@ -7,7 +7,7 @@ cargo run --bin candid-core -- compile ./service.did
 cargo run --bin candid-core -- validate ./contract.json
 ```
 
-The compile command emits JSON containing a canonical validated `contract` and an optional, identity-bound `source_info` sidecar. The Contract exposes a full `contract_id` and an actor-only `interface_id`; source spelling/comments are identified separately by `source_bundle_id`.
+The compile command emits JSON containing a canonical validated `contract` and an optional, identity-bound `source_info` sidecar. The Contract exposes a full `contract_id` and an actor-only `interface_id`; source spelling/comments are identified separately by `source_bundle_id`. That source identity covers only the raw source files and import edges. At an external trust boundary, `SourceInfo::try_from_raw` recompiles that bundle and requires every presented provenance field to match the compiler-derived sidecar.
 
 See [architecture](docs/architecture.md) and the [Contract graph](docs/contract-graph.md) for the v1 model, constraints, and the explicitly deferred host-value ↔ Candid binary bridge. See [release verification gates](docs/verification.md) for the checks required before declaring the format stable across implementations. See [performance benchmarks](docs/benchmarks.md) for reproducible comparisons with the pinned official Candid checker and for allocation measurements.
 
@@ -46,6 +46,8 @@ The crate advertises Rust 1.78 as its minimum supported Rust version (MSRV). Dir
 
 - `RawContract` → `Contract::try_from_raw` validates an external artifact.
 - `Contract::build_raw` is the producer path that calculates fresh identities.
+- `RawSourceInfo` → `SourceInfo::try_from_raw` recompiles the embedded source
+  bundle and rejects any derived provenance that does not match exactly.
 - `compile_with_resolver` compiles an immutable logical source bundle through `MemoryResolver` or sandboxed `WorkspaceResolver`.
 - `Limits` and constructor-based `RuntimeContext` bound untrusted compilation
   and validation with one shared budget, monotonic deadlines, and cooperative

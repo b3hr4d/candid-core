@@ -77,7 +77,8 @@ impl SourceInfo {
         }
     }
 
-    /// Validates raw provenance against its bound Contract and operational limits.
+    /// Recompiles the embedded source bundle and validates that every presented
+    /// provenance field matches the compiler-derived sidecar for `contract`.
     pub fn try_from_raw(
         raw: RawSourceInfo,
         contract: &Contract,

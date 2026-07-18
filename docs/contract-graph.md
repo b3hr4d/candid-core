@@ -139,7 +139,7 @@ Mutual recursion is represented the same way, with references crossing between t
 
 JSON decoding and graph validation reject a Contract when any of these are false:
 
-1. All profiles are supported; `contract_id` matches the complete canonical Contract and `interface_id` matches the actor-reachable graph. SourceInfo is independently bound by `contract_id` and `source_bundle_id`.
+1. All profiles are supported; `contract_id` matches the complete canonical Contract and `interface_id` matches the actor-reachable graph. SourceInfo is bound by `contract_id`; `source_bundle_id` identifies only its raw sources/import edges, while all derived provenance must exactly match compiler rederivation from that bundle.
 2. Every reference is an in-range integer and each constrained reference has the required node kind (`func`, `service`, etc.).
 3. Field IDs and method IDs are Candid `u32` values. Aggregate field IDs and service method names are unique. Each method ID matches the Candid hash of its name; distinct method names may share that 32-bit hash.
 4. Function mode is exactly one supported value: `update`, `query`, `composite_query`, or `oneway`; `oneway` has no result refs.
@@ -148,6 +148,6 @@ JSON decoding and graph validation reject a Contract when any of these are false
 
 ## What is intentionally outside this graph
 
-No raw source, source locations, comments, documentation, named/numeric/ positional label spellings, UI hints, form controls, defaults, validation policy, workflow state, transport settings, or encoded values live here. Optional `SourceInfo` is a separate, validated sidecar bound by `contract_id` and independently identified by `source_bundle_id`.
+No raw source, source locations, comments, documentation, named/numeric/ positional label spellings, UI hints, form controls, defaults, validation policy, workflow state, transport settings, or encoded values live here. Optional `SourceInfo` is a separate, validated sidecar bound by `contract_id`. Its raw bundle is independently identified by `source_bundle_id`; the derived sidecar is trusted only after exact compiler rederivation and has no separate identity.
 
 Likewise, `blob`, `tuple`, and `Result` are interpretations that can be derived later from `vec nat8`, positional records, and conventional variants. They are never primitive Contract node kinds.

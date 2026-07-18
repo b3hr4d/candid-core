@@ -167,6 +167,72 @@ pub fn compile_with_resolver(
     )
 }
 
+pub(crate) fn rederive_source_bundle_with_budget(
+    entry: &str,
+    resolver: &dyn crate::SourceResolver,
+    context: &RuntimeContext,
+    budget: &mut crate::budget::Budget<'_>,
+) -> Result<Compilation, CompileError> {
+    let (source_units, entry_id) =
+        load_source_units_with_resolver(entry, resolver, context, budget)?;
+    check_programs_type_depth(source_units.iter().map(|unit| &unit.program), budget)?;
+    let entry_unit = source_units
+        .iter()
+        .find(|unit| unit.name == entry_id.as_str())
+        .ok_or_else(|| {
+            CompileError::single(
+                "did_source_not_found",
+                DiagnosticPhase::Load,
+                "entry source is missing from the resolved bundle",
+            )
+        })?;
+    let entry_program = parse_program(&entry_unit.source, Some(entry_unit.name.clone()), budget)?;
+    let mut merged = IDLMergedProg::new(entry_program);
+    for unit in source_units
+        .iter()
+        .filter(|unit| unit.name != entry_id.as_str())
+    {
+        let program = parse_program(&unit.source, Some(unit.name.clone()), budget)?;
+        merged
+            .merge(unit.include_actor, unit.name.clone(), program)
+            .map_err(|error| {
+                candid_error(
+                    candid_parser::Error::Custom(error),
+                    DiagnosticPhase::TypeCheck,
+                    None,
+                )
+            })?;
+    }
+    let program = IDLProg {
+        decs: merged.decs(),
+        actor: merged.resolve_actor().map_err(|error| {
+            candid_error(
+                candid_parser::Error::Custom(error),
+                DiagnosticPhase::TypeCheck,
+                None,
+            )
+        })?,
+    };
+    budget
+        .checkpoint()
+        .map_err(|error| budget_error(error, DiagnosticPhase::TypeCheck, "Candid type checking"))?;
+    let mut environment = TypeEnv::new();
+    let actor = check_prog(&mut environment, &program)
+        .map_err(|error| candid_error(error, DiagnosticPhase::TypeCheck, None))?;
+    budget
+        .checkpoint()
+        .map_err(|error| budget_error(error, DiagnosticPhase::TypeCheck, "Candid type checking"))?;
+    lower_checked(
+        &source_units,
+        &environment,
+        actor.as_ref(),
+        CompileOptions {
+            include_source_info: true,
+        },
+        budget,
+    )
+}
+
 pub(super) fn parse_program(
     source: &str,
     source_name: Option<String>,
