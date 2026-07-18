@@ -8,6 +8,7 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, VecDeque};
+use std::io::{self, Write};
 
 /// Validate structural rules, then minimize semantic-equivalent nodes and
 /// deterministically re-index the arena before calculating its identities.
@@ -116,6 +117,9 @@ fn semantic_classes(
     budget: &mut Budget<'_>,
 ) -> Result<Vec<usize>, ContractValidationError> {
     let max_work = budget.limits().max_canonicalization_work;
+    budget
+        .checkpoint()
+        .map_err(crate::budget::BudgetError::into_contract_error)?;
     let round_work = signature_round_work(types);
     budget
         .charge("canonicalization_work", max_work, round_work)
@@ -470,20 +474,26 @@ fn domain_hash_with_budget(
     payload: &impl Serialize,
     budget: &mut Budget<'_>,
 ) -> Result<String, ContractValidationError> {
-    let value = serde_json::to_value(payload)
-        .expect("built-in Contract identity payloads must serialize to JSON");
-    let canonical = jcs_bytes(&value);
-    // One unit for producing each canonical byte and one for hashing it. The
-    // domain separator is hashed as well.
-    let work = canonical
-        .len()
+    budget
+        .checkpoint()
+        .map_err(crate::budget::BudgetError::into_contract_error)?;
+    let canonical_len = measure_serialized_len_with_budget(payload, budget)?;
+    // The counting pass above charges one unit per serialized byte. Reserve
+    // another unit for materializing each canonical byte and one for hashing
+    // it before either allocation occurs. JCS key sorting changes order, not
+    // encoded length.
+    let remaining_work = canonical_len
         .saturating_mul(2)
         .saturating_add(domain.len())
         .saturating_add(1);
     let max_work = budget.limits().max_canonicalization_work;
     budget
-        .charge("canonicalization_work", max_work, work)
+        .charge("canonicalization_work", max_work, remaining_work)
         .map_err(crate::budget::BudgetError::into_contract_error)?;
+    let value = serde_json::to_value(payload)
+        .expect("built-in Contract identity payloads must serialize to JSON");
+    let canonical = jcs_bytes(&value);
+    debug_assert_eq!(canonical.len(), canonical_len);
     let mut hasher = Sha256::new();
     hasher.update(domain.as_bytes());
     hasher.update([0]);
@@ -492,6 +502,57 @@ fn domain_hash_with_budget(
         "{domain}:sha256:{}",
         hex::encode(hasher.finalize())
     ))
+}
+
+struct BudgetCountingWriter<'budget, 'limits> {
+    budget: &'budget mut Budget<'limits>,
+    bytes: usize,
+    budget_error: Option<crate::budget::BudgetError>,
+}
+
+impl Write for BudgetCountingWriter<'_, '_> {
+    fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
+        let max_work = self.budget.limits().max_canonicalization_work;
+        match self
+            .budget
+            .charge("canonicalization_work", max_work, buffer.len())
+        {
+            Ok(_) => {
+                self.bytes = self.bytes.saturating_add(buffer.len());
+                Ok(buffer.len())
+            }
+            Err(error) => {
+                self.budget_error = Some(error);
+                Err(io::Error::other("canonicalization budget exhausted"))
+            }
+        }
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+fn measure_serialized_len_with_budget(
+    payload: &impl Serialize,
+    budget: &mut Budget<'_>,
+) -> Result<usize, ContractValidationError> {
+    let mut writer = BudgetCountingWriter {
+        budget,
+        bytes: 0,
+        budget_error: None,
+    };
+    if let Err(error) = serde_json::to_writer(&mut writer, payload) {
+        if let Some(error) = writer.budget_error {
+            return Err(error.into_contract_error());
+        }
+        return Err(ContractValidationError::single(
+            "contract_identity_serialization_failed",
+            "$",
+            error.to_string(),
+        ));
+    }
+    Ok(writer.bytes)
 }
 
 fn signature_round_work(types: &[TypeNode]) -> usize {
@@ -759,5 +820,42 @@ fn mode_tag(mode: MethodMode) -> u8 {
         MethodMode::Query => 1,
         MethodMode::CompositeQuery => 2,
         MethodMode::Oneway => 3,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::Limits;
+
+    #[test]
+    fn identity_hash_reserves_serialization_and_hashing_before_materializing() {
+        let domain = "test:identity:v1";
+        let payload = serde_json::json!({"b": 1, "a": "value"});
+        let canonical_len = jcs_bytes(&payload).len();
+        let exact_work = canonical_len
+            .saturating_mul(3)
+            .saturating_add(domain.len())
+            .saturating_add(1);
+        let exact_limits = Limits {
+            max_canonicalization_work: exact_work,
+            ..Limits::default()
+        };
+        let mut exact_budget = Budget::from_limits(&exact_limits);
+        assert_eq!(
+            domain_hash_with_budget(domain, &payload, &mut exact_budget).unwrap(),
+            domain_hash(domain, &payload)
+        );
+
+        let rejected_limits = Limits {
+            max_canonicalization_work: exact_work - 1,
+            ..Limits::default()
+        };
+        let mut rejected_budget = Budget::from_limits(&rejected_limits);
+        let error = domain_hash_with_budget(domain, &payload, &mut rejected_budget).unwrap_err();
+        let resource = error.violations[0].resource_limit.as_ref().unwrap();
+        assert_eq!(resource.resource, "canonicalization_work");
+        assert_eq!(resource.limit, exact_work - 1);
+        assert_eq!(resource.observed, exact_work);
     }
 }

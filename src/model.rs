@@ -168,6 +168,9 @@ impl Contract {
         let mut budget = context.budget();
         let canonical =
             crate::validate::validate_and_canonicalize_with_budget(self, &mut budget)?.contract;
+        budget
+            .checkpoint()
+            .map_err(crate::budget::BudgetError::into_contract_error)?;
         let json = serde_json::to_string_pretty(&canonical).map_err(|error| {
             ContractValidationError::single(
                 "contract_json_serialization_failed",
