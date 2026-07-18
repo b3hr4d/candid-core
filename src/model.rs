@@ -166,10 +166,8 @@ impl Contract {
         context: &crate::RuntimeContext,
     ) -> Result<String, ContractValidationError> {
         let mut budget = context.budget();
-        crate::validate::validate_contract_with_budget(self, &mut budget)?;
         let canonical =
-            crate::canonical::canonicalize_with_mapping_unchecked_with_budget(self, &mut budget)?
-                .contract;
+            crate::validate::validate_and_canonicalize_with_budget(self, &mut budget)?.contract;
         let json = serde_json::to_string_pretty(&canonical).map_err(|error| {
             ContractValidationError::single(
                 "contract_json_serialization_failed",
@@ -177,6 +175,10 @@ impl Contract {
                 error.to_string(),
             )
         })?;
+        let max_work = budget.limits().max_canonicalization_work;
+        budget
+            .charge("canonicalization_work", max_work, json.len())
+            .map_err(crate::budget::BudgetError::into_contract_error)?;
         budget
             .checkpoint()
             .map_err(crate::budget::BudgetError::into_contract_error)?;
@@ -304,9 +306,8 @@ impl Contract {
             declarations: raw.declarations,
             actor: raw.actor,
         };
-        crate::validate::validate_contract_with_budget(&contract, budget)?;
         let canonicalized =
-            crate::canonical::canonicalize_with_mapping_unchecked_with_budget(&contract, budget)?;
+            crate::validate::validate_and_canonicalize_with_budget(&contract, budget)?;
         Ok((canonicalized.contract, canonicalized.old_to_new))
     }
 

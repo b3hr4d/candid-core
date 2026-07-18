@@ -51,6 +51,12 @@ stage boundaries. Retained resources use high-water accounting so validating
 the same artifact in a later stage does not count it twice, while work units are
 consumed cumulatively.
 
+Canonicalization work is proportional to the graph operations it performs.
+It charges nodes and edges visited, signature and string bytes produced,
+comparison bounds for sorted collections, graph reindexing and rewriting, and
+the canonical bytes serialized and hashed for identities. Callers that both
+validate and consume the canonical result reuse the same canonicalization pass.
+
 `RuntimeContext` snapshots the configured Unix deadline into a monotonic local
 deadline when work begins and carries a cloneable `CancellationToken` for
 cooperative cancellation. Traversals and stage boundaries checkpoint both.

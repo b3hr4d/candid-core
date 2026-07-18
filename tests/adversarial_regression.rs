@@ -22,17 +22,35 @@ fn deep_record(depth: u32) -> RawContract {
     )
 }
 
-#[test]
-fn canonicalization_adversarial_work_threshold_is_enforced() {
-    let input = deep_record(1_024);
+fn wide_record(width: u32) -> RawContract {
+    let mut types = vec![TypeNode::Primitive {
+        primitive: PrimitiveType::Nat,
+    }];
+    types.push(TypeNode::Record {
+        fields: (0..width).map(|id| Field { id, ty: 0 }).collect(),
+    });
+    RawContract::new(
+        types,
+        vec![Declaration {
+            name: "AdversarialWidth".to_string(),
+            ty: 1,
+        }],
+        None,
+    )
+}
+
+fn assert_work_limit(input: RawContract, accepted_limit: usize, rejected_limit: usize) {
     let accepted = Limits {
-        max_canonicalization_work: 20_000,
+        max_canonicalization_work: accepted_limit,
         ..Limits::default()
     };
-    assert!(Contract::build_raw(input.clone(), &accepted).is_ok());
+    assert!(
+        Contract::build_raw(input.clone(), &accepted).is_ok(),
+        "graph must remain within its canonicalization regression threshold"
+    );
 
     let rejected = Limits {
-        max_canonicalization_work: 1_000,
+        max_canonicalization_work: rejected_limit,
         ..Limits::default()
     };
     let error = Contract::build_raw(input, &rejected).unwrap_err();
@@ -43,4 +61,15 @@ fn canonicalization_adversarial_work_threshold_is_enforced() {
         .expect("canonicalization work must be charged");
     assert_eq!(limit.resource, "canonicalization_work");
     assert_eq!(limit.limit, rejected.max_canonicalization_work);
+    assert!(limit.observed > limit.limit);
+}
+
+#[test]
+fn canonicalization_adversarial_work_threshold_is_enforced() {
+    assert_work_limit(deep_record(1_024), 1_000_000, 100_000);
+}
+
+#[test]
+fn canonicalization_wide_graph_threshold_is_enforced() {
+    assert_work_limit(wide_record(1_024), 1_000_000, 100_000);
 }

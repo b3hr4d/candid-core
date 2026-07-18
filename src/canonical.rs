@@ -34,7 +34,7 @@ pub(crate) fn canonicalize_with_mapping_unchecked_with_budget(
     budget
         .checkpoint()
         .map_err(crate::budget::BudgetError::into_contract_error)?;
-    let indexed = canonicalize_indexed(&quotient.contract);
+    let indexed = canonicalize_indexed(&quotient.contract, budget)?;
     budget
         .checkpoint()
         .map_err(crate::budget::BudgetError::into_contract_error)?;
@@ -46,13 +46,6 @@ pub(crate) fn canonicalize_with_mapping_unchecked_with_budget(
             .map(|reference| indexed.old_to_new[reference as usize])
             .collect(),
     })
-}
-
-pub(crate) fn expected_canonical_with_budget(
-    contract: &Contract,
-    budget: &mut Budget<'_>,
-) -> Result<Contract, ContractValidationError> {
-    Ok(canonicalize_with_mapping_unchecked_with_budget(contract, budget)?.contract)
 }
 
 struct QuotientGraph {
@@ -123,15 +116,16 @@ fn semantic_classes(
     budget: &mut Budget<'_>,
 ) -> Result<Vec<usize>, ContractValidationError> {
     let max_work = budget.limits().max_canonicalization_work;
+    let round_work = signature_round_work(types);
     budget
-        .charge("canonicalization_work", max_work, types.len())
+        .charge("canonicalization_work", max_work, round_work)
         .map_err(crate::budget::BudgetError::into_contract_error)?;
     let mut classes =
         assign_partition_ids(types.iter().map(local_signature).collect::<Vec<Vec<u8>>>());
 
     loop {
         budget
-            .charge("canonicalization_work", max_work, types.len())
+            .charge("canonicalization_work", max_work, round_work)
             .map_err(crate::budget::BudgetError::into_contract_error)?;
         let next = assign_partition_ids(
             types
@@ -317,7 +311,14 @@ struct IndexedCanonical {
 /// The quotient has one node per semantic type class. Its partition IDs are
 /// deterministic, so numeric fallback below is safe and cannot depend on the
 /// input arena's TypeRef assignment.
-fn canonicalize_indexed(contract: &Contract) -> IndexedCanonical {
+fn canonicalize_indexed(
+    contract: &Contract,
+    budget: &mut Budget<'_>,
+) -> Result<IndexedCanonical, ContractValidationError> {
+    let max_work = budget.limits().max_canonicalization_work;
+    budget
+        .charge("canonicalization_work", max_work, reindex_work(contract))
+        .map_err(crate::budget::BudgetError::into_contract_error)?;
     let mut old_to_new = vec![None; contract.types.len()];
     let mut new_to_old = Vec::<TypeRef>::new();
 
@@ -383,8 +384,8 @@ fn canonicalize_indexed(contract: &Contract) -> IndexedCanonical {
         declarations,
         actor,
     };
-    contract.identities = identities_for_canonical(&contract);
-    IndexedCanonical {
+    contract.identities = identities_for_canonical(&contract, budget)?;
+    Ok(IndexedCanonical {
         contract,
         old_to_new: old_to_new
             .into_iter()
@@ -392,10 +393,13 @@ fn canonicalize_indexed(contract: &Contract) -> IndexedCanonical {
                 reference.expect("validated Contract nodes must have canonical mappings")
             })
             .collect(),
-    }
+    })
 }
 
-fn identities_for_canonical(contract: &Contract) -> ContractIdentities {
+fn identities_for_canonical(
+    contract: &Contract,
+    budget: &mut Budget<'_>,
+) -> Result<ContractIdentities, ContractValidationError> {
     #[derive(Serialize)]
     struct ContractPayload<'a> {
         format: &'a str,
@@ -424,25 +428,30 @@ fn identities_for_canonical(contract: &Contract) -> ContractIdentities {
         declarations: &contract.declarations,
         actor: &contract.actor,
     };
-    let contract_id = domain_hash("candid-core:contract:v1", &contract_payload);
+    let contract_id =
+        domain_hash_with_budget("candid-core:contract:v1", &contract_payload, budget)?;
 
-    let interface = contract.actor.as_ref().map(|actor| {
-        let reachable = reachable_from(actor_type_ref(actor), &contract.types);
-        let prefix_len = reachable.iter().take_while(|reached| **reached).count();
-        debug_assert!(reachable[prefix_len..].iter().all(|reached| !reached));
-        let payload = InterfacePayload {
-            semantics_profile: &contract.semantics_profile,
-            canonicalization_profile: &contract.canonicalization_profile,
-            types: &contract.types[..prefix_len],
-            actor,
-        };
-        domain_hash("candid-core:interface:v1", &payload)
-    });
+    let interface = contract
+        .actor
+        .as_ref()
+        .map(|actor| {
+            let reachable = reachable_from(actor_type_ref(actor), &contract.types);
+            let prefix_len = reachable.iter().take_while(|reached| **reached).count();
+            debug_assert!(reachable[prefix_len..].iter().all(|reached| !reached));
+            let payload = InterfacePayload {
+                semantics_profile: &contract.semantics_profile,
+                canonicalization_profile: &contract.canonicalization_profile,
+                types: &contract.types[..prefix_len],
+                actor,
+            };
+            domain_hash_with_budget("candid-core:interface:v1", &payload, budget)
+        })
+        .transpose()?;
 
-    ContractIdentities {
+    Ok(ContractIdentities {
         contract: contract_id,
         interface,
-    }
+    })
 }
 
 pub(crate) fn domain_hash(domain: &str, payload: &impl Serialize) -> String {
@@ -454,6 +463,86 @@ pub(crate) fn domain_hash(domain: &str, payload: &impl Serialize) -> String {
     hasher.update([0]);
     hasher.update(canonical);
     format!("{domain}:sha256:{}", hex::encode(hasher.finalize()))
+}
+
+fn domain_hash_with_budget(
+    domain: &str,
+    payload: &impl Serialize,
+    budget: &mut Budget<'_>,
+) -> Result<String, ContractValidationError> {
+    let value = serde_json::to_value(payload)
+        .expect("built-in Contract identity payloads must serialize to JSON");
+    let canonical = jcs_bytes(&value);
+    // One unit for producing each canonical byte and one for hashing it. The
+    // domain separator is hashed as well.
+    let work = canonical
+        .len()
+        .saturating_mul(2)
+        .saturating_add(domain.len())
+        .saturating_add(1);
+    let max_work = budget.limits().max_canonicalization_work;
+    budget
+        .charge("canonicalization_work", max_work, work)
+        .map_err(crate::budget::BudgetError::into_contract_error)?;
+    let mut hasher = Sha256::new();
+    hasher.update(domain.as_bytes());
+    hasher.update([0]);
+    hasher.update(canonical);
+    Ok(format!(
+        "{domain}:sha256:{}",
+        hex::encode(hasher.finalize())
+    ))
+}
+
+fn signature_round_work(types: &[TypeNode]) -> usize {
+    types.iter().fold(0usize, |total, node| {
+        let (edges, bytes, sortable) = node_work(node);
+        total
+            .saturating_add(1)
+            .saturating_add(edges)
+            .saturating_add(bytes)
+            .saturating_add(sort_comparison_work(sortable))
+    })
+}
+
+fn reindex_work(contract: &Contract) -> usize {
+    let graph = signature_round_work(&contract.types);
+    let declaration_bytes = contract
+        .declarations
+        .iter()
+        .map(|declaration| declaration.name.len().saturating_add(1))
+        .sum::<usize>();
+    graph
+        .saturating_mul(2) // traversal plus node rewriting
+        .saturating_add(declaration_bytes)
+        .saturating_add(sort_comparison_work(contract.declarations.len()))
+}
+
+fn node_work(node: &TypeNode) -> (usize, usize, usize) {
+    match node {
+        TypeNode::Primitive { .. } => (0, 2, 0),
+        TypeNode::Opt { .. } | TypeNode::Vec { .. } => (1, 1, 0),
+        TypeNode::Record { fields } | TypeNode::Variant { fields } => {
+            (fields.len(), fields.len().saturating_mul(4), fields.len())
+        }
+        TypeNode::Func { args, results, .. } => (args.len().saturating_add(results.len()), 10, 0),
+        TypeNode::Service { methods } => (
+            methods.len(),
+            methods.iter().fold(0usize, |bytes, method| {
+                bytes.saturating_add(4).saturating_add(method.name.len())
+            }),
+            methods.len(),
+        ),
+        TypeNode::Class { init, .. } => (init.len().saturating_add(1), 5, 0),
+    }
+}
+
+fn sort_comparison_work(length: usize) -> usize {
+    if length < 2 {
+        return 0;
+    }
+    let log = usize::BITS as usize - (length - 1).leading_zeros() as usize;
+    length.saturating_mul(log)
 }
 
 fn jcs_bytes(value: &Value) -> Vec<u8> {

@@ -68,29 +68,36 @@ pub(crate) fn validate_contract_with_budget(
     contract: &Contract,
     budget: &mut Budget<'_>,
 ) -> Result<(), ContractValidationError> {
+    validate_and_canonicalize_with_budget(contract, budget).map(|_| ())
+}
+
+pub(crate) fn validate_and_canonicalize_with_budget(
+    contract: &Contract,
+    budget: &mut Budget<'_>,
+) -> Result<crate::canonical::Canonicalized, ContractValidationError> {
     validate_structure_with_budget(contract, budget)?;
-    let expected = canonical::expected_canonical_with_budget(contract, budget)?;
-    if contract.identities.contract != expected.identities.contract {
+    let expected = canonical::canonicalize_with_mapping_unchecked_with_budget(contract, budget)?;
+    if contract.identities.contract != expected.contract.identities.contract {
         return Err(ContractValidationError::single(
             "contract_id_mismatch",
             "$.identities.contract",
             format!(
                 "expected {}, found {}",
-                expected.identities.contract, contract.identities.contract
+                expected.contract.identities.contract, contract.identities.contract
             ),
         ));
     }
-    if contract.identities.interface != expected.identities.interface {
+    if contract.identities.interface != expected.contract.identities.interface {
         return Err(ContractValidationError::single(
             "interface_id_mismatch",
             "$.identities.interface",
             format!(
                 "expected {:?}, found {:?}",
-                expected.identities.interface, contract.identities.interface
+                expected.contract.identities.interface, contract.identities.interface
             ),
         ));
     }
-    Ok(())
+    Ok(expected)
 }
 
 /// Checks only JSON/graph invariants. Identity verification is intentionally
