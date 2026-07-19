@@ -1,0 +1,92 @@
+{
+  "contract": {
+    "format": "candid-core",
+    "format_version": 1,
+    "semantics_profile": "candid-1",
+    "canonicalization_profile": "candid-core-canon-1",
+    "identities": {
+      "contract": "candid-core:contract:v1:sha256:452591a8e9831b1d3cae1eaac041d46b3d4e900dac9dcecc947f33f0a5e29f72",
+      "interface": "candid-core:interface:v1:sha256:41b5e46c15a0d65fc7bc94c80d5dc00e630f23a6e111b625e5b0802c18ac2193"
+    },
+    "producer": {
+      "name": "candid-core",
+      "version": "0.1.0",
+      "candid_version": "0.10.30",
+      "candid_parser_version": "0.4.0"
+    },
+    "types": [
+      {
+        "kind": "service",
+        "methods": [
+          {
+            "name": "run",
+            "id": 5695307,
+            "function": 1
+          }
+        ]
+      },
+      {
+        "kind": "func",
+        "args": [
+          2
+        ],
+        "results": [
+          4
+        ],
+        "mode": "update"
+      },
+      {
+        "kind": "vec",
+        "inner": 3
+      },
+      {
+        "kind": "primitive",
+        "primitive": "nat8"
+      },
+      {
+        "kind": "variant",
+        "fields": [
+          {
+            "id": 24860,
+            "type": 5
+          },
+          {
+            "id": 5048165,
+            "type": 6
+          }
+        ]
+      },
+      {
+        "kind": "primitive",
+        "primitive": "text"
+      },
+      {
+        "kind": "record",
+        "fields": [
+          {
+            "id": 5446209,
+            "type": 5
+          },
+          {
+            "id": 1103409453,
+            "type": 7
+          }
+        ]
+      },
+      {
+        "kind": "primitive",
+        "primitive": "nat32"
+      }
+    ],
+    "declarations": [
+      {
+        "name": "R",
+        "type": 4
+      }
+    ],
+    "actor": {
+      "kind": "service",
+      "service": 0
+    }
+  }
+}

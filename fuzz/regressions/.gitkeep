@@ -1,0 +1,5 @@
+Minimized reproducers for fixed crashes live here, one directory per fuzz
+target, and are replayed on every pull request. See ../README.md.
+
+Do not add an input before its defect is fixed: the replay gate would then
+fail on every pull request.

@@ -1,0 +1,1 @@
+type R = variant { ok: text; err: record { code: nat32; msg: text } }; service : { run: (vec nat8) -> (R); };

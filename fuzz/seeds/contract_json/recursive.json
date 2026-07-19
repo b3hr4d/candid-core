@@ -1,0 +1,67 @@
+{
+  "format": "candid-core",
+  "format_version": 1,
+  "semantics_profile": "candid-1",
+  "canonicalization_profile": "candid-core-canon-1",
+  "identities": {
+    "contract": "candid-core:contract:v1:sha256:1ef2af05a392195675cbad03c92346f48c61a8531da55734591624f40d3cf639",
+    "interface": "candid-core:interface:v1:sha256:f4e633d7ace1e02b00fd48a94da9561af5147f1b28af6ea2fb72f7e384299aa1"
+  },
+  "producer": {
+    "name": "candid-core",
+    "version": "0.1.0",
+    "candid_version": "0.10.30",
+    "candid_parser_version": "0.4.0"
+  },
+  "types": [
+    {
+      "kind": "service",
+      "methods": [
+        {
+          "name": "head",
+          "id": 1158359328,
+          "function": 1
+        }
+      ]
+    },
+    {
+      "kind": "func",
+      "args": [],
+      "results": [
+        2
+      ],
+      "mode": "query"
+    },
+    {
+      "kind": "opt",
+      "inner": 3
+    },
+    {
+      "kind": "record",
+      "fields": [
+        {
+          "id": 834174833,
+          "type": 4
+        },
+        {
+          "id": 1224901875,
+          "type": 2
+        }
+      ]
+    },
+    {
+      "kind": "primitive",
+      "primitive": "nat"
+    }
+  ],
+  "declarations": [
+    {
+      "name": "Node",
+      "type": 3
+    }
+  ],
+  "actor": {
+    "kind": "service",
+    "service": 0
+  }
+}

@@ -9,7 +9,8 @@ The Rust reference runtime is not a stable cross-language protocol until every g
 - Property tests cover canonicalization idempotence, input-arena permutation, and semantically equivalent source ordering.
 - Checked-in vectors cover actorless, empty-actor, class, basic service, and recursive Contracts, including every canonical ID.
 - The adversarial canonicalization test has deterministic work thresholds; a change that omits work charging or crosses the configured limit fails.
-- The weekly fuzz job exercises source parsing, Contract JSON, canonicalization, resolver IDs, provenance, and HostValue JSON.
+- Pull requests compile every fuzz target and replay its tracked seed and regression corpora with `-runs=0`, so a target that stops compiling, or a previously fixed crash that returns, fails on the pull request rather than on the next schedule. The replay performs no mutation and is therefore deterministic. Both fuzz jobs first assert that `fuzz/Cargo.lock` is current, since `cargo fuzz` accepts no `--locked` flag of its own.
+- The weekly fuzz job exercises source parsing, Contract JSON, canonicalization, resolver IDs, provenance, HostValue JSON, and envelope parsing, seeded from the tracked corpora. Both fuzz jobs upload their crash artifacts, so a red run yields a reproducer without re-running locally.
 - Pull requests compile and exercise every benchmark once without enforcing wall-clock thresholds. Weekly and manually dispatched runs retain Criterion's raw estimates, allocation measurements, toolchain, host, and exact commit as downloadable CI artifacts.
 
 ## Required before a stable format declaration
