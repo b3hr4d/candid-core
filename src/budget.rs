@@ -104,6 +104,59 @@ impl<'a> Budget<'a> {
     }
 }
 
+/// Reject an oversized document before any decode allocates, then record the
+/// length as a high-water observation.
+///
+/// Every bounded parse entry point shares this so `input_bytes` metadata is
+/// emitted from one place.
+///
+/// `observe` rather than `charge` is deliberate, though no current call site
+/// records `input_bytes` twice on one budget. `input_bytes` describes a
+/// retained artifact — the document itself — not incremental work, so the
+/// high-water mark is the semantically correct counter, and it stays correct
+/// if a future nested parse ever re-observes the same input. Using `charge`
+/// here would make that future stacking reject documents that are within their
+/// limit: the regression #57 fixed for `sources` and `import_edges`, noted in
+/// `crate::source`.
+pub(crate) fn observe_input_bytes(
+    budget: &mut Budget<'_>,
+    input_len: usize,
+) -> Result<(), crate::ContractValidationError> {
+    let limit = budget.limits().max_input_bytes;
+    if input_len > limit {
+        return Err(crate::ContractValidationError::resource_limit(
+            "input_bytes",
+            limit,
+            input_len,
+        ));
+    }
+    budget
+        .observe("input_bytes", limit, input_len)
+        .map(|_| ())
+        .map_err(BudgetError::into_contract_error)
+}
+
+/// Gate input length, decode a raw DTO, then checkpoint — the shared shape of
+/// every bounded parse entry point.
+///
+/// The caller keeps the budget afterwards so validation charges the same
+/// counters the decode gate already observed, rather than starting from a
+/// fresh allowance.
+pub(crate) fn decode_bounded<T>(
+    budget: &mut Budget<'_>,
+    input_len: usize,
+    decode: impl FnOnce() -> Result<T, serde_json::Error>,
+) -> Result<T, crate::ContractJsonError> {
+    observe_input_bytes(budget, input_len).map_err(crate::ContractJsonError::InvalidContract)?;
+    let raw =
+        decode().map_err(|error| crate::ContractJsonError::MalformedJson(error.to_string()))?;
+    budget
+        .checkpoint()
+        .map_err(BudgetError::into_contract_error)
+        .map_err(crate::ContractJsonError::InvalidContract)?;
+    Ok(raw)
+}
+
 impl BudgetError {
     pub(crate) fn into_contract_error(self) -> crate::ContractValidationError {
         match self {

@@ -139,7 +139,7 @@ fn extension_metadata_is_separate_from_the_strict_semantic_core() {
             "com.example.form/v1": { "widget": "button" }
         }
     });
-    let decoded: Contract = serde_json::from_value(envelope["contract"].clone()).unwrap();
+    let decoded = Contract::from_json(&envelope["contract"].to_string()).unwrap();
     assert!(decoded.validate().is_ok());
 }
 

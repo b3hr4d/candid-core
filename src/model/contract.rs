@@ -1,7 +1,7 @@
 use super::type_graph::{Actor, Declaration, TypeNode, TypeRef};
 use super::validation_error::{ContractJsonError, ContractValidationError};
 use crate::limits::Limits;
-use serde::{de::Error as _, Deserialize, Deserializer, Serialize, Serializer};
+use serde::{Deserialize, Serialize, Serializer};
 
 pub const CONTRACT_FORMAT: &str = "candid-core";
 pub const FORMAT_VERSION: u32 = 1;
@@ -155,11 +155,41 @@ impl Contract {
         crate::canonical::canonicalize_contract_with_budget(self, &mut budget)
     }
 
-    /// Serialize validated canonical JSON.
+    /// Serialize validated canonical JSON under [`Limits::default`].
+    ///
+    /// A Contract built with raised limits can fail here. Use
+    /// [`Self::to_json_pretty_with_limits`] or
+    /// [`Self::to_json_pretty_with_context`] to serialize under the caller's
+    /// own policy.
     pub fn to_json_pretty(&self) -> Result<String, ContractValidationError> {
         self.to_json_pretty_with_context(&crate::RuntimeContext::default())
     }
 
+    /// Serialize validated canonical JSON under caller-supplied limits.
+    ///
+    /// This revalidates and recanonicalizes, so it consumes the structural
+    /// limits construction consumed *and* charges the rendered length against
+    /// `max_canonicalization_work`. Raising only the limit that gated
+    /// construction is therefore not always sufficient; see
+    /// [`Self::to_json_pretty_with_context`].
+    pub fn to_json_pretty_with_limits(
+        &self,
+        limits: &Limits,
+    ) -> Result<String, ContractValidationError> {
+        self.to_json_pretty_with_context(&crate::RuntimeContext::new(limits.clone()))
+    }
+
+    /// Serialize validated canonical JSON under the caller's context.
+    ///
+    /// Consumes two distinct budgets: the structural limits that gated
+    /// construction, and `max_canonicalization_work`, against which the
+    /// rendered byte length is charged. A caller who raised only a structural
+    /// limit (for example `max_string_bytes`) to build the Contract may still
+    /// need to raise `max_canonicalization_work` to render it.
+    ///
+    /// For a completely unbounded render, `serde` [`Serialize`] is implemented
+    /// on [`Contract`] directly; it consults no limits and performs no
+    /// revalidation. That path is for trusted, already-validated values.
     pub fn to_json_pretty_with_context(
         &self,
         context: &crate::RuntimeContext,
@@ -187,7 +217,8 @@ impl Contract {
         Ok(json)
     }
 
-    /// Parse, validate, and canonicalize a Contract JSON document.
+    /// Parse, validate, and canonicalize a Contract JSON document under
+    /// [`Limits::default`].
     pub fn from_json(input: &str) -> Result<Self, ContractJsonError> {
         Self::from_json_with_limits(input, &Limits::default())
     }
@@ -196,31 +227,40 @@ impl Contract {
         Self::from_json_with_context(input, &crate::RuntimeContext::new(limits.clone()))
     }
 
+    /// Bounded parse: `max_input_bytes` is enforced before the document is
+    /// decoded, and decode and validation share one budget.
     pub fn from_json_with_context(
         input: &str,
         context: &crate::RuntimeContext,
     ) -> Result<Self, ContractJsonError> {
-        let limits = &context.limits;
-        if input.len() > limits.max_input_bytes {
-            return Err(ContractJsonError::InvalidContract(
-                ContractValidationError::resource_limit(
-                    "input_bytes",
-                    limits.max_input_bytes,
-                    input.len(),
-                ),
-            ));
-        }
         let mut budget = context.budget();
-        budget
-            .observe("input_bytes", limits.max_input_bytes, input.len())
-            .map_err(crate::budget::BudgetError::into_contract_error)
-            .map_err(ContractJsonError::InvalidContract)?;
-        let raw: RawContract = serde_json::from_str(input)
-            .map_err(|error| ContractJsonError::MalformedJson(error.to_string()))?;
-        budget
-            .checkpoint()
-            .map_err(crate::budget::BudgetError::into_contract_error)
-            .map_err(ContractJsonError::InvalidContract)?;
+        let raw: RawContract = crate::budget::decode_bounded(&mut budget, input.len(), || {
+            serde_json::from_str(input)
+        })?;
+        Self::from_raw_with_mapping_and_budget(raw, &mut budget)
+            .map(|(contract, _)| contract)
+            .map_err(ContractJsonError::InvalidContract)
+    }
+
+    /// Parse, validate, and canonicalize Contract JSON bytes under
+    /// caller-supplied limits.
+    pub fn from_slice_with_limits(
+        input: &[u8],
+        limits: &Limits,
+    ) -> Result<Self, ContractJsonError> {
+        Self::from_slice_with_context(input, &crate::RuntimeContext::new(limits.clone()))
+    }
+
+    /// Bounded parse from bytes. Equivalent to [`Self::from_json_with_context`]
+    /// without requiring the caller to validate UTF-8 first.
+    pub fn from_slice_with_context(
+        input: &[u8],
+        context: &crate::RuntimeContext,
+    ) -> Result<Self, ContractJsonError> {
+        let mut budget = context.budget();
+        let raw: RawContract = crate::budget::decode_bounded(&mut budget, input.len(), || {
+            serde_json::from_slice(input)
+        })?;
         Self::from_raw_with_mapping_and_budget(raw, &mut budget)
             .map(|(contract, _)| contract)
             .map_err(ContractJsonError::InvalidContract)
@@ -337,6 +377,24 @@ impl Contract {
     }
 }
 
+/// Unvalidated Contract data.
+///
+/// This is the serde entry point for Contract JSON. [`Contract`] itself
+/// deliberately does not implement [`Deserialize`]: a trait impl has no
+/// argument position for a resource policy, so it could only ever decode under
+/// limits the library chose. Callers decode this DTO and convert through a
+/// policy-taking constructor such as [`Contract::try_from_raw_with_context`],
+/// or use a bounded parse entry point such as
+/// [`Contract::from_json_with_context`], which enforces `max_input_bytes`
+/// before decoding.
+///
+/// Decoding this DTO is *not* a trust boundary and carries no allocation
+/// bound; gate the byte length yourself, or use the bounded parse APIs.
+///
+/// ```compile_fail
+/// // A validated Contract cannot be produced by serde alone.
+/// let _: candid_core::Contract = serde_json::from_str("{}").unwrap();
+/// ```
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RawContract {
@@ -381,23 +439,5 @@ impl Serialize for Contract {
         S: Serializer,
     {
         RawContract::from(self).serialize(serializer)
-    }
-}
-
-impl<'de> Deserialize<'de> for Contract {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let raw = RawContract::deserialize(deserializer)?;
-        Self::try_from_raw(raw).map_err(D::Error::custom)
-    }
-}
-
-impl TryFrom<RawContract> for Contract {
-    type Error = ContractValidationError;
-
-    fn try_from(raw: RawContract) -> Result<Self, Self::Error> {
-        Self::try_from_raw(raw)
     }
 }

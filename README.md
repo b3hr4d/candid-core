@@ -21,9 +21,10 @@ cargo run --example semantic_equivalence
 cargo run --example trust_boundary
 cargo run --example hermetic_bundle
 cargo run --example host_value_validation
+cargo run --example bounded_parsing
 ```
 
-`contract_walkthrough` prints a canonical recursive Contract and its provenance summary. `semantic_equivalence` compares interface identity with source identity. `trust_boundary` demonstrates rejection of injected metadata and a tampered identity. `hermetic_bundle` shows filesystem-free import resolution, while `host_value_validation` preserves a large `nat` and an IEEE NaN payload.
+`contract_walkthrough` prints a canonical recursive Contract and its provenance summary. `semantic_equivalence` compares interface identity with source identity. `trust_boundary` demonstrates rejection of injected metadata and a tampered identity. `hermetic_bundle` shows filesystem-free import resolution, while `host_value_validation` preserves a large `nat` and an IEEE NaN payload. `bounded_parsing` rejects oversized untrusted documents before decoding and shows the second limit serialization consumes.
 
 ## Foundation decisions
 
@@ -54,3 +55,15 @@ The crate advertises Rust 1.78 as its minimum supported Rust version (MSRV). Dir
   `CancellationToken` support.
 - `HostValue` plus `validate_host_value` provide the lossless tagged value ABI.
 - `ContractEnvelope` keeps namespaced extensions outside the strict core.
+
+## Bounded parsing and trusted serde integration
+
+Untrusted bytes and already-validated values take different paths, and the crate does not let the two be confused.
+
+- `Contract`, `Compilation`, `ContractEnvelope`, and `HostValue` do not implement `Deserialize`: a trait impl has no argument position for a resource policy, so it could only ever decode under limits the library chose.
+- Untrusted Contract, Compilation, and envelope JSON goes through `from_json_with_limits`/`from_json_with_context` and `from_slice_with_limits`/`from_slice_with_context`. These enforce `max_input_bytes` before decoding and then share one budget with validation. `Contract::from_json` is the same path under `Limits::default`. The byte gate bounds peak decode allocation to a multiple of the caller's ceiling; it does not reject element by element during decode, which remains a follow-up.
+- `HostValue` is the exception to that sentence: `HostValue::from_json_with_limits`/`from_json_with_context` gate on `max_value_bytes`, not `max_input_bytes`, and report `HostValueJsonError::Limit`, which carries no `resource` name. Lowering `max_input_bytes` alone does not bound HostValue decoding — lower `max_value_bytes` too.
+- `Serialize` and the derived `Deserialize` on the raw DTOs (`RawContract`, `RawSourceInfo`) are the trusted serde integration: they consult no limits and revalidate nothing. Decoding a raw DTO is not a bounded operation, so callers must gate byte length themselves or use a bounded parse API.
+- The `to_json_pretty_with_limits`/`to_json_pretty_with_context` serializers on `Contract`, `Compilation`, and `ContractEnvelope` validate before rendering and charge the rendered length against `max_canonicalization_work`. That is a second budget: raising a structural limit such as `max_string_bytes` to build a value does not by itself make that value renderable. (`Compilation` validates its Contract, not its already-authenticated sidecar; rederiving provenance is construction-time work.)
+
+serde_json's own 128-frame recursion limit is the only depth bound that applies *during* decoding, so `Limits::max_value_depth` is not reachable above roughly 127 on any JSON path. The crate's own `max_value_depth` check still runs after decoding, on the materialized value.
