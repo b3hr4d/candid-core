@@ -92,7 +92,13 @@ This separation is deliberate:
 
 Loading DID produces either a valid Contract (and optional SourceInfo) or structured diagnostics.  A diagnostic has a stable category/code, severity, human-readable message, and optional source range/related locations.  Parser and semantic errors remain distinguishable so a host can render an actionable editor error without guessing Candid rules itself.
 
-Malformed Contract JSON is rejected by Contract JSON decoding and graph validation rather than being silently repaired. Both `Contract::from_json` and the Rust `Deserialize` boundary validate and canonicalize; a host does not get an unchecked Contract by taking a normal JSON deserialization path.
+Malformed Contract JSON is rejected by Contract JSON decoding and graph validation rather than being silently repaired. Validated `Contract`, `Compilation`, and `ContractEnvelope` values are reachable only through policy-taking constructors and bounded parse entry points such as `Contract::from_json_with_context`, `Compilation::from_slice_with_context`, and `ContractEnvelope::from_slice_with_limits`. None of these types implements `Deserialize`: a trait impl has no argument position for a resource policy, so it could only ever decode under limits the library chose. A host therefore does not get an unchecked Contract by taking a normal JSON deserialization path.
+
+Bounded parsing enforces `max_input_bytes` before the document is decoded, then shares one budget between decode and validation, so a nested parse charges the counters the decode gate already observed. The byte gate bounds peak allocation against a caller-chosen ceiling; it does not reject element-by-element during decode. Decode-time element charging is a named follow-up.
+
+The no-argument conveniences (`Contract::from_json`, `try_from_raw`, `validate`, `canonicalize`, `to_json_pretty`) remain, and run the same bounded path under `Limits::default`. That is the ADR 0005 position: conveniences use the default policy, and the context-aware entry points expose it. What changed is that a policy is now always expressible — every one of them has a `_with_limits` or `_with_context` sibling, which a trait impl could never offer.
+
+Trusted serde integration is the separate, unbounded path. Decoding a raw DTO (`RawContract`, `RawSourceInfo`) is not a trust boundary and carries no allocation bound: a caller must gate the byte length itself or use a bounded parse API. `Serialize` likewise consults no limits and performs no revalidation; it is for already-validated values. The limits-aware render is `to_json_pretty_with_context`, which charges its rendered length against `max_canonicalization_work` in addition to the structural limits construction consumed, so raising only the limit that gated construction is not always sufficient.
 
 ## Invariants and ownership rules
 

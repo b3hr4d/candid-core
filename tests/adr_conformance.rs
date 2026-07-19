@@ -84,13 +84,13 @@ fn canonical_envelope_profiles_are_explicit_and_fail_closed() {
 }
 
 #[test]
-fn compilation_deserialization_rejects_a_mismatched_sidecar() {
+fn compilation_parsing_rejects_a_mismatched_sidecar() {
     let compilation = compile("type Item = record { value: nat }; service : {};");
     let mut json = serde_json::to_value(&compilation).unwrap();
     json["source_info"]["contract_id"] = serde_json::json!(
         "candid-core:contract:v1:sha256:0000000000000000000000000000000000000000000000000000000000000000"
     );
-    assert!(serde_json::from_value::<Compilation>(json).is_err());
+    assert!(Compilation::from_json_with_limits(&json.to_string(), &Limits::default()).is_err());
 }
 
 #[test]
@@ -1096,7 +1096,7 @@ fn extensions_are_namespaced_and_cannot_mutate_the_core() {
 
     let mut raw = serde_json::to_value(&envelope).unwrap();
     raw["extensions"]["unversioned"] = serde_json::json!({});
-    assert!(serde_json::from_value::<ContractEnvelope>(raw).is_err());
+    assert!(ContractEnvelope::from_json_with_limits(&raw.to_string(), &Limits::default()).is_err());
 }
 
 #[test]
@@ -1177,7 +1177,7 @@ fn jcs_identity_is_independent_of_input_object_key_order() {
     let object = raw.as_object_mut().unwrap();
     let actor = object.remove("actor").unwrap();
     object.insert("actor".to_string(), actor);
-    let decoded: Contract = serde_json::from_value(raw).unwrap();
+    let decoded = Contract::from_json(&raw.to_string()).unwrap();
     assert_eq!(decoded.contract_id(), contract.contract_id());
 }
 

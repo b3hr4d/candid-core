@@ -13,7 +13,7 @@ use candid_parser::syntax::{pretty_print, Dec, IDLMergedProg, IDLProg, IDLType};
 use candid_parser::token::{Token, Tokenizer};
 use candid_parser::typing::ast_to_type;
 use candid_parser::{check_file, check_prog};
-use serde::{de::Error as _, Deserialize, Deserializer, Serialize, Serializer};
+use serde::{Deserialize, Serialize, Serializer};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs;
 use std::path::{Path, PathBuf};
