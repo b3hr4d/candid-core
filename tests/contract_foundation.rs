@@ -1,7 +1,7 @@
 use candid_core::{
-    compile_did, compile_did_file, compile_did_with_options, Actor, CompileOptions, Contract,
-    Declaration, Field, Limits, MethodMode, PrimitiveType, RawContract, ServiceMethod, SourceLabel,
-    SourceOrigin, TypeNode,
+    compile_did, compile_did_file, compile_did_with_options, compile_with_resolver, Actor,
+    CompileOptions, Contract, Declaration, Field, Limits, MemoryResolver, MethodMode,
+    PrimitiveType, RawContract, RuntimeContext, ServiceMethod, SourceLabel, SourceOrigin, TypeNode,
 };
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -511,6 +511,104 @@ fn no_actor_empty_actor_and_zero_arg_constructor_remain_distinct() {
     assert_ne!(
         empty_actor.contract().contract_id(),
         empty_constructor.contract().contract_id()
+    );
+}
+
+#[test]
+fn byte_escapes_that_break_utf8_are_reported_not_panicked() {
+    // `candid_parser` stores an unescaped string literal by pushing raw bytes
+    // through `String::as_mut_vec`, so `\B8` leaves `Token::Text` holding a
+    // lone UTF-8 continuation byte. Rendering that token panics inside
+    // `<str as Debug>::fmt`, and `Display for candid_parser::Error` renders
+    // the token for every parse error — so this five-byte source used to abort
+    // the caller instead of returning `CompileError`.
+    let error = compile_did("\"\\B8\"").expect_err("a bare text literal is not a program");
+    let diagnostic = &error.diagnostics[0];
+    assert_eq!(diagnostic.code, "did_parse_error");
+    assert_eq!(diagnostic.phase, candid_core::DiagnosticPhase::Parse);
+    assert!(!diagnostic.message.is_empty());
+    assert!(
+        diagnostic.span.is_some(),
+        "the offending range must survive even when the token cannot be rendered"
+    );
+
+    // The same escape in the positions the fuzzer explored: unterminated,
+    // repeated, and embedded after a well-formed prefix.
+    let poisoned = [
+        "\"\\B8\"",
+        "\"\\B8",
+        "\"\\B8\\B8\\B8\"",
+        "type A = nat; service : { f: (text) -> () }; \"\\B8\"",
+        "\"\\FF\\FE\"",
+        "\"\\80\"",
+    ];
+    for source in poisoned {
+        let result = compile_did(source);
+        assert!(
+            result.is_err(),
+            "{source:?} is not a valid program and must be rejected"
+        );
+        let error = result.unwrap_err();
+        assert!(
+            !error.diagnostics.is_empty(),
+            "{source:?} must produce at least one diagnostic"
+        );
+    }
+
+    // The same inputs through the resolver entry point. This shares the panic
+    // site with `compile_did` above — both reach `candid_error` via
+    // `parse_program` — so it adds no mutation coverage today; deleting the fix
+    // is already caught by the loop above. It is here to pin the *entry point*:
+    // a future change that gave the resolver route its own error rendering
+    // would otherwise reintroduce the panic with every test still green.
+    //
+    // `compile_did_file` shares this path. Neither route reaches
+    // `candid_file_error`'s `Parse` arm with these inputs, because loading
+    // parses every unit before `check_file` runs.
+    for source in poisoned {
+        let resolver = MemoryResolver::new()
+            .with_source("memory:/entry.did", source)
+            .expect("memory sources are well-formed ids");
+        let error = match compile_with_resolver(
+            "memory:/entry.did",
+            &resolver,
+            CompileOptions::default(),
+            &RuntimeContext::default(),
+        ) {
+            Ok(_) => panic!("{source:?} is not a valid program and must be rejected"),
+            Err(error) => error,
+        };
+        let diagnostic = &error.diagnostics[0];
+        let span = diagnostic
+            .span
+            .as_ref()
+            .expect("the offending range must survive the resolver route too");
+        assert_eq!(
+            span.source_name.as_deref(),
+            Some("memory:/entry.did"),
+            "the span must name the source it came from"
+        );
+    }
+}
+
+#[test]
+fn well_formed_sources_are_unaffected_by_the_parse_error_rendering() {
+    // The fix changes only how a `Parse` error is described. Type-check errors
+    // still render through the upstream `Display`, so their text must be
+    // unchanged and still name the offending symbol.
+    let type_error = compile_did("service : { broken: (Missing) -> () };").unwrap_err();
+    let diagnostic = &type_error.diagnostics[0];
+    assert_eq!(diagnostic.phase, candid_core::DiagnosticPhase::TypeCheck);
+    assert!(diagnostic.message.contains("Missing") || diagnostic.message.contains("Unbound"));
+
+    // A parse error still carries a usable span and the expected-token notes.
+    let syntax = compile_did("service : { broken: (nat) -> ( };").unwrap_err();
+    let diagnostic = &syntax.diagnostics[0];
+    let span = diagnostic.span.as_ref().expect("parse errors carry a span");
+    assert!(span.end_byte > span.start_byte);
+    assert!(
+        !diagnostic.notes.is_empty(),
+        "the expected-token list must still reach the caller"
     );
 }
 
