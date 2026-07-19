@@ -38,6 +38,12 @@ impl<'a> Budget<'a> {
         self.limits
     }
 
+    /// Nested contexts must inherit this token; constructing a fresh one would
+    /// silently make the caller's cancellation unobservable to resolvers.
+    pub(crate) fn cancellation(&self) -> CancellationToken {
+        self.cancellation.clone()
+    }
+
     pub(crate) fn checkpoint(&self) -> Result<(), BudgetError> {
         if self.cancellation.is_cancelled() {
             return Err(BudgetError::Cancelled);

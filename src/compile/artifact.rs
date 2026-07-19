@@ -55,7 +55,7 @@ impl Compilation {
         let source_info = raw_source_info
             .map(SourceInfo::from_raw_unchecked)
             .map(|mut source_info| {
-                remap_source_info(&mut source_info, &mapping)?;
+                remap_source_info(&mut source_info, &mapping, &mut budget)?;
                 source_info.validate_with_budget(&contract, &mut budget)?;
                 Ok::<SourceInfo, crate::ContractValidationError>(source_info)
             })
@@ -120,7 +120,11 @@ impl TryFrom<(RawContract, Option<SerializedSourceInfo>)> for Compilation {
 fn remap_source_info(
     source_info: &mut SourceInfo,
     mapping: &[TypeRef],
+    budget: &mut crate::budget::Budget<'_>,
 ) -> Result<(), crate::ContractValidationError> {
+    // Remapping walks attacker-sized collections before any validation stage
+    // runs, so it must bound them itself rather than inherit later checks.
+    crate::source::observe_remapped_collections(source_info, budget)?;
     let map = |reference: TypeRef| {
         mapping.get(reference as usize).copied().ok_or_else(|| {
             crate::ContractValidationError::single(
@@ -131,15 +135,27 @@ fn remap_source_info(
         })
     };
     for declaration in &mut source_info.declarations {
+        budget
+            .checkpoint()
+            .map_err(crate::budget::BudgetError::into_contract_error)?;
         declaration.ty = map(declaration.ty)?;
     }
     for field in &mut source_info.field_labels {
+        budget
+            .checkpoint()
+            .map_err(crate::budget::BudgetError::into_contract_error)?;
         field.container = map(field.container)?;
     }
     for method in &mut source_info.methods {
+        budget
+            .checkpoint()
+            .map_err(crate::budget::BudgetError::into_contract_error)?;
         method.service = map(method.service)?;
     }
     for argument in &mut source_info.function_arguments {
+        budget
+            .checkpoint()
+            .map_err(crate::budget::BudgetError::into_contract_error)?;
         argument.function = map(argument.function)?;
     }
     Ok(())

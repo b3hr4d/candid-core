@@ -103,6 +103,11 @@ pub(super) fn lower_checked(
             .map_err(|error| lower_error(format!("canonicalization failed: {error}")))?;
 
     let source_info = if options.include_source_info {
+        // Remapping and sorting the collected provenance is proportional to the
+        // bundle, so it must remain interruptible.
+        budget
+            .checkpoint()
+            .map_err(|error| budget_error(error, DiagnosticPhase::Lower, "provenance remapping"))?;
         let mut field_labels: Vec<_> = raw_source_info
             .field_labels
             .into_iter()
@@ -173,6 +178,9 @@ pub(super) fn lower_checked(
                 .cmp(&right.source)
                 .then(left.docs.cmp(&right.docs))
         });
+        budget
+            .checkpoint()
+            .map_err(|error| budget_error(error, DiagnosticPhase::Lower, "provenance remapping"))?;
         let mut sources: Vec<_> = source_units
             .iter()
             .map(|unit| SourceFileInfo {

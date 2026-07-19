@@ -40,15 +40,18 @@ pub(crate) fn validate_source_info_with_budget(
     budget: &mut Budget<'_>,
 ) -> Result<(), ContractValidationError> {
     validate_source_info_header(source_info, contract, budget)?;
-    preflight_source_info_resources(source_info, budget.limits())?;
+    preflight_source_info_resources(source_info, budget)?;
 
-    validate_source_bundle_ids(source_info)?;
+    validate_source_bundle_ids(source_info, budget)?;
     validate_source_bundle_identity(source_info)?;
     let bundle = SourceBundleResolver::new(source_info)?;
     let compilation = crate::compile::rederive_source_bundle_with_budget(
         bundle.entry.as_str(),
         &bundle,
-        &crate::RuntimeContext::new(budget.limits().clone()),
+        // The nested context must inherit the caller's cancellation token so a
+        // resolver can still observe cancellation during rederivation.
+        &crate::RuntimeContext::new(budget.limits().clone())
+            .with_cancellation(budget.cancellation()),
         budget,
     )
     .map_err(rederivation_error)?;
@@ -81,47 +84,18 @@ pub(crate) fn validate_source_info_structure_with_budget(
         .checkpoint()
         .map_err(crate::budget::BudgetError::into_contract_error)?;
     let limits = budget.limits().clone();
-    budget
-        .observe("sources", limits.max_sources, source_info.sources.len())
-        .map_err(crate::budget::BudgetError::into_contract_error)?;
+    observe_source_info_collections(source_info, budget)?;
+    // Element counts above bound the traversals below. Charge the O(records)
+    // documentation count before the O(entries) byte pass so this holds without
+    // depending on the caller having run the preflight first. The byte total
+    // includes the per-entry cost, so the high-water mark is unaffected.
     budget
         .observe(
-            "import_edges",
-            limits.max_import_edges,
-            source_info.imports.len(),
+            "source_string_bytes",
+            limits.max_string_bytes,
+            source_info_doc_entries(source_info),
         )
         .map_err(crate::budget::BudgetError::into_contract_error)?;
-    for (resource, limit, observed) in [
-        (
-            "source_declarations",
-            limits.max_declarations,
-            source_info.declarations.len(),
-        ),
-        (
-            "source_actors",
-            limits.max_sources,
-            source_info.actors.len(),
-        ),
-        (
-            "source_field_labels",
-            limits.max_fields,
-            source_info.field_labels.len(),
-        ),
-        (
-            "source_methods",
-            limits.max_methods,
-            source_info.methods.len(),
-        ),
-        (
-            "source_function_arguments",
-            limits.max_function_values,
-            source_info.function_arguments.len(),
-        ),
-    ] {
-        budget
-            .observe(resource, limit, observed)
-            .map_err(crate::budget::BudgetError::into_contract_error)?;
-    }
     budget
         .observe(
             "source_string_bytes",
@@ -166,21 +140,17 @@ pub(crate) fn validate_source_info_structure_with_budget(
     budget
         .checkpoint()
         .map_err(crate::budget::BudgetError::into_contract_error)?;
-    let mut sources = source_info.sources.clone();
-    sources.sort_by(|left, right| left.name.cmp(&right.name));
-    let mut imports = source_info.imports.clone();
-    imports.sort();
-    let expected_bundle_id = source_bundle_id(&sources, &imports);
-    budget
-        .checkpoint()
-        .map_err(crate::budget::BudgetError::into_contract_error)?;
-    if source_info.sources != sources || source_info.imports != imports {
+    if !source_bundle_is_canonical(source_info) {
         return Err(ContractValidationError::single(
             "non_canonical_source_bundle",
             "$",
             "sources and imports must be sorted canonically",
         ));
     }
+    budget
+        .checkpoint()
+        .map_err(crate::budget::BudgetError::into_contract_error)?;
+    let expected_bundle_id = source_bundle_id(&source_info.sources, &source_info.imports);
     if source_info.source_bundle_id != expected_bundle_id {
         return Err(ContractValidationError::single(
             "source_bundle_id_mismatch",
@@ -338,11 +308,15 @@ fn validate_source_info_header(
     Ok(())
 }
 
-fn preflight_source_info_resources(
+/// Element counts for every provenance collection, in stable reporting order.
+///
+/// Each entry is `O(1)`, so this is safe to evaluate before any collection has
+/// been bounded.
+fn source_info_collection_counts(
     source_info: &SourceInfo,
     limits: &Limits,
-) -> Result<(), ContractValidationError> {
-    for (resource, limit, observed) in [
+) -> [(&'static str, usize, usize); 7] {
+    [
         ("sources", limits.max_sources, source_info.sources.len()),
         (
             "import_edges",
@@ -374,17 +348,103 @@ fn preflight_source_info_resources(
             limits.max_function_values,
             source_info.function_arguments.len(),
         ),
+    ]
+}
+
+fn observe_source_info_collections(
+    source_info: &SourceInfo,
+    budget: &mut Budget<'_>,
+) -> Result<(), ContractValidationError> {
+    let limits = budget.limits().clone();
+    for (resource, limit, observed) in source_info_collection_counts(source_info, &limits) {
+        budget
+            .observe(resource, limit, observed)
+            .map_err(crate::budget::BudgetError::into_contract_error)?;
+    }
+    Ok(())
+}
+
+/// Bounds the four collections that reference remapping rewrites.
+///
+/// Remapping runs before validation, so it must bound the collections it walks
+/// itself. It deliberately excludes `sources` and `import_edges`: loading
+/// charges those cumulatively, and seeding a high-water mark here would be
+/// added to that later charge and reject bundles that are within their limit.
+pub(crate) fn observe_remapped_collections(
+    source_info: &SourceInfo,
+    budget: &mut Budget<'_>,
+) -> Result<(), ContractValidationError> {
+    let limits = budget.limits().clone();
+    for (resource, limit, observed) in [
         (
-            "source_string_bytes",
-            limits.max_string_bytes,
-            source_info_string_bytes(source_info),
+            "source_declarations",
+            limits.max_declarations,
+            source_info.declarations.len(),
+        ),
+        (
+            "source_field_labels",
+            limits.max_fields,
+            source_info.field_labels.len(),
+        ),
+        (
+            "source_methods",
+            limits.max_methods,
+            source_info.methods.len(),
+        ),
+        (
+            "source_function_arguments",
+            limits.max_function_values,
+            source_info.function_arguments.len(),
         ),
     ] {
+        budget
+            .observe(resource, limit, observed)
+            .map_err(crate::budget::BudgetError::into_contract_error)?;
+    }
+    Ok(())
+}
+
+fn preflight_source_info_resources(
+    source_info: &SourceInfo,
+    budget: &Budget<'_>,
+) -> Result<(), ContractValidationError> {
+    budget
+        .checkpoint()
+        .map_err(crate::budget::BudgetError::into_contract_error)?;
+    let limits = budget.limits();
+    // Element counts are O(1) and bound the traversals that follow, so they are
+    // enforced before any per-entry work is done.
+    for (resource, limit, observed) in source_info_collection_counts(source_info, limits) {
         if observed > limit {
             return Err(ContractValidationError::resource_limit(
                 resource, limit, observed,
             ));
         }
+    }
+    budget
+        .checkpoint()
+        .map_err(crate::budget::BudgetError::into_contract_error)?;
+    // Counting documentation entries is O(records) while summing their bytes is
+    // O(entries), and each entry costs at least one unit. Checking the cheap
+    // lower bound first keeps an inflated sidecar from driving the full pass.
+    let doc_entries = source_info_doc_entries(source_info);
+    if doc_entries > limits.max_string_bytes {
+        return Err(ContractValidationError::resource_limit(
+            "source_string_bytes",
+            limits.max_string_bytes,
+            doc_entries,
+        ));
+    }
+    budget
+        .checkpoint()
+        .map_err(crate::budget::BudgetError::into_contract_error)?;
+    let string_bytes = source_info_string_bytes(source_info);
+    if string_bytes > limits.max_string_bytes {
+        return Err(ContractValidationError::resource_limit(
+            "source_string_bytes",
+            limits.max_string_bytes,
+            string_bytes,
+        ));
     }
     let bundle_bytes = source_info
         .sources
@@ -412,21 +472,33 @@ fn preflight_source_info_resources(
     Ok(())
 }
 
+/// Verifies canonical ordering in place.
+///
+/// A stable sort of an already-sorted slice is the identity, so checking
+/// adjacent pairs is equivalent to the previous clone-sort-compare while
+/// allocating nothing.
+fn source_bundle_is_canonical(source_info: &SourceInfo) -> bool {
+    source_info
+        .sources
+        .windows(2)
+        .all(|pair| pair[0].name <= pair[1].name)
+        && source_info
+            .imports
+            .windows(2)
+            .all(|pair| pair[0] <= pair[1])
+}
+
 fn validate_source_bundle_identity(
     source_info: &SourceInfo,
 ) -> Result<(), ContractValidationError> {
-    let mut sources = source_info.sources.clone();
-    sources.sort_by(|left, right| left.name.cmp(&right.name));
-    let mut imports = source_info.imports.clone();
-    imports.sort();
-    if source_info.sources != sources || source_info.imports != imports {
+    if !source_bundle_is_canonical(source_info) {
         return Err(ContractValidationError::single(
             "non_canonical_source_bundle",
             "$",
             "sources and imports must be sorted canonically",
         ));
     }
-    let expected = source_bundle_id(&sources, &imports);
+    let expected = source_bundle_id(&source_info.sources, &source_info.imports);
     if source_info.source_bundle_id != expected {
         return Err(ContractValidationError::single(
             "source_bundle_id_mismatch",
@@ -440,11 +512,20 @@ fn validate_source_bundle_identity(
     Ok(())
 }
 
-fn validate_source_bundle_ids(source_info: &SourceInfo) -> Result<(), ContractValidationError> {
+fn validate_source_bundle_ids(
+    source_info: &SourceInfo,
+    budget: &Budget<'_>,
+) -> Result<(), ContractValidationError> {
     for (index, source) in source_info.sources.iter().enumerate() {
+        budget
+            .checkpoint()
+            .map_err(crate::budget::BudgetError::into_contract_error)?;
         parse_canonical_source_id(&source.name, "sources", index, "name")?;
     }
     for (index, import) in source_info.imports.iter().enumerate() {
+        budget
+            .checkpoint()
+            .map_err(crate::budget::BudgetError::into_contract_error)?;
         parse_canonical_source_id(&import.from, "imports", index, "from")?;
         parse_canonical_source_id(&import.to, "imports", index, "to")?;
     }
@@ -675,66 +756,91 @@ fn bundle_resolve_error(code: &str, message: String) -> crate::ResolveError {
     }
 }
 
+/// Total documentation entries across every provenance collection.
+///
+/// Documentation is the one provenance category whose cardinality is not
+/// implied by a collection length: a single record may carry any number of
+/// entries. This is `O(records)` because each `docs.len()` is `O(1)`, so it is
+/// a cheap lower bound on [`source_info_string_bytes`], which is
+/// `O(entries)`.
+fn source_info_doc_entries(source_info: &SourceInfo) -> usize {
+    let mut entries = 0usize;
+    let mut add = |count: usize| entries = entries.saturating_add(count);
+    for declaration in &source_info.declarations {
+        add(declaration.docs.len());
+    }
+    for actor in &source_info.actors {
+        add(actor.docs.len());
+    }
+    for field in &source_info.field_labels {
+        add(field.docs.len());
+    }
+    for method in &source_info.methods {
+        add(method.docs.len());
+    }
+    entries
+}
+
+/// Units of the string budget consumed by a documentation block.
+///
+/// Every entry costs one unit before its content, so a block of empty entries
+/// cannot inflate the sidecar for free. The per-entry cost is a fixed constant
+/// rather than the platform's `String` footprint, so the reported `observed`
+/// value stays identical on every target.
+fn docs_string_units(docs: &[String]) -> usize {
+    docs.iter()
+        .fold(docs.len(), |units, doc| units.saturating_add(doc.len()))
+}
+
 fn source_info_string_bytes(source_info: &SourceInfo) -> usize {
     let mut bytes = source_info
         .contract_id
         .len()
         .saturating_add(source_info.source_bundle_id.len());
-    let mut add = |value: &str| bytes = bytes.saturating_add(value.len());
+    let mut add = |amount: usize| bytes = bytes.saturating_add(amount);
     for source in &source_info.sources {
-        add(&source.name);
+        add(source.name.len());
     }
     for import in &source_info.imports {
-        add(&import.from);
-        add(&import.import);
-        add(&import.to);
+        add(import.from.len());
+        add(import.import.len());
+        add(import.to.len());
     }
     for declaration in &source_info.declarations {
-        add(&declaration.source);
-        add(&declaration.name);
-        for doc in &declaration.docs {
-            add(doc);
-        }
+        add(declaration.source.len());
+        add(declaration.name.len());
+        add(docs_string_units(&declaration.docs));
     }
     for actor in &source_info.actors {
-        add(&actor.source);
-        for doc in &actor.docs {
-            add(doc);
-        }
+        add(actor.source.len());
+        add(docs_string_units(&actor.docs));
     }
     for field in &source_info.field_labels {
-        add_origin_strings(&field.origin, &mut add);
-        add(&field.path);
+        add(origin_string_bytes(&field.origin));
+        add(field.path.len());
         if let crate::SourceLabel::Named { name } = &field.label {
-            add(name);
+            add(name.len());
         }
-        for doc in &field.docs {
-            add(doc);
-        }
+        add(docs_string_units(&field.docs));
     }
     for method in &source_info.methods {
-        add_origin_strings(&method.origin, &mut add);
-        add(&method.path);
-        add(&method.name);
-        for doc in &method.docs {
-            add(doc);
-        }
+        add(origin_string_bytes(&method.origin));
+        add(method.path.len());
+        add(method.name.len());
+        add(docs_string_units(&method.docs));
     }
     for argument in &source_info.function_arguments {
-        add_origin_strings(&argument.origin, &mut add);
-        add(&argument.path);
-        add(&argument.name);
+        add(origin_string_bytes(&argument.origin));
+        add(argument.path.len());
+        add(argument.name.len());
     }
     bytes
 }
 
-fn add_origin_strings(origin: &SourceOrigin, add: &mut impl FnMut(&str)) {
+fn origin_string_bytes(origin: &SourceOrigin) -> usize {
     match origin {
-        SourceOrigin::Declaration { source, name } => {
-            add(source);
-            add(name);
-        }
-        SourceOrigin::Actor { source } => add(source),
+        SourceOrigin::Declaration { source, name } => source.len().saturating_add(name.len()),
+        SourceOrigin::Actor { source } => source.len(),
     }
 }
 
