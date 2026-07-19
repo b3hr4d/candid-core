@@ -1,7 +1,7 @@
 use candid_core::{
-    compile_did, compile_did_file, compile_did_with_options, Actor, CompileOptions, Contract,
-    Declaration, Field, Limits, MethodMode, PrimitiveType, RawContract, ServiceMethod, SourceLabel,
-    SourceOrigin, TypeNode,
+    compile_did, compile_did_file, compile_did_with_options, compile_with_resolver, Actor,
+    CompileOptions, Contract, Declaration, Field, Limits, MemoryResolver, MethodMode,
+    PrimitiveType, RawContract, RuntimeContext, ServiceMethod, SourceLabel, SourceOrigin, TypeNode,
 };
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -532,16 +532,17 @@ fn byte_escapes_that_break_utf8_are_reported_not_panicked() {
         "the offending range must survive even when the token cannot be rendered"
     );
 
-    // The same escape reached through every public compile entry point, and in
-    // positions the fuzzer explored: unterminated, repeated, and embedded.
-    for source in [
+    // The same escape in the positions the fuzzer explored: unterminated,
+    // repeated, and embedded after a well-formed prefix.
+    let poisoned = [
         "\"\\B8\"",
         "\"\\B8",
         "\"\\B8\\B8\\B8\"",
         "type A = nat; service : { f: (text) -> () }; \"\\B8\"",
         "\"\\FF\\FE\"",
         "\"\\80\"",
-    ] {
+    ];
+    for source in poisoned {
         let result = compile_did(source);
         assert!(
             result.is_err(),
@@ -551,6 +552,41 @@ fn byte_escapes_that_break_utf8_are_reported_not_panicked() {
         assert!(
             !error.diagnostics.is_empty(),
             "{source:?} must produce at least one diagnostic"
+        );
+    }
+
+    // The same inputs through the resolver entry point. This shares the panic
+    // site with `compile_did` above — both reach `candid_error` via
+    // `parse_program` — so it adds no mutation coverage today; deleting the fix
+    // is already caught by the loop above. It is here to pin the *entry point*:
+    // a future change that gave the resolver route its own error rendering
+    // would otherwise reintroduce the panic with every test still green.
+    //
+    // `compile_did_file` shares this path. Neither route reaches
+    // `candid_file_error`'s `Parse` arm with these inputs, because loading
+    // parses every unit before `check_file` runs.
+    for source in poisoned {
+        let resolver = MemoryResolver::new()
+            .with_source("memory:/entry.did", source)
+            .expect("memory sources are well-formed ids");
+        let error = match compile_with_resolver(
+            "memory:/entry.did",
+            &resolver,
+            CompileOptions::default(),
+            &RuntimeContext::default(),
+        ) {
+            Ok(_) => panic!("{source:?} is not a valid program and must be rejected"),
+            Err(error) => error,
+        };
+        let diagnostic = &error.diagnostics[0];
+        let span = diagnostic
+            .span
+            .as_ref()
+            .expect("the offending range must survive the resolver route too");
+        assert_eq!(
+            span.source_name.as_deref(),
+            Some("memory:/entry.did"),
+            "the span must name the source it came from"
         );
     }
 }
