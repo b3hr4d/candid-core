@@ -515,6 +515,68 @@ fn no_actor_empty_actor_and_zero_arg_constructor_remain_distinct() {
 }
 
 #[test]
+fn byte_escapes_that_break_utf8_are_reported_not_panicked() {
+    // `candid_parser` stores an unescaped string literal by pushing raw bytes
+    // through `String::as_mut_vec`, so `\B8` leaves `Token::Text` holding a
+    // lone UTF-8 continuation byte. Rendering that token panics inside
+    // `<str as Debug>::fmt`, and `Display for candid_parser::Error` renders
+    // the token for every parse error — so this five-byte source used to abort
+    // the caller instead of returning `CompileError`.
+    let error = compile_did("\"\\B8\"").expect_err("a bare text literal is not a program");
+    let diagnostic = &error.diagnostics[0];
+    assert_eq!(diagnostic.code, "did_parse_error");
+    assert_eq!(diagnostic.phase, candid_core::DiagnosticPhase::Parse);
+    assert!(!diagnostic.message.is_empty());
+    assert!(
+        diagnostic.span.is_some(),
+        "the offending range must survive even when the token cannot be rendered"
+    );
+
+    // The same escape reached through every public compile entry point, and in
+    // positions the fuzzer explored: unterminated, repeated, and embedded.
+    for source in [
+        "\"\\B8\"",
+        "\"\\B8",
+        "\"\\B8\\B8\\B8\"",
+        "type A = nat; service : { f: (text) -> () }; \"\\B8\"",
+        "\"\\FF\\FE\"",
+        "\"\\80\"",
+    ] {
+        let result = compile_did(source);
+        assert!(
+            result.is_err(),
+            "{source:?} is not a valid program and must be rejected"
+        );
+        let error = result.unwrap_err();
+        assert!(
+            !error.diagnostics.is_empty(),
+            "{source:?} must produce at least one diagnostic"
+        );
+    }
+}
+
+#[test]
+fn well_formed_sources_are_unaffected_by_the_parse_error_rendering() {
+    // The fix changes only how a `Parse` error is described. Type-check errors
+    // still render through the upstream `Display`, so their text must be
+    // unchanged and still name the offending symbol.
+    let type_error = compile_did("service : { broken: (Missing) -> () };").unwrap_err();
+    let diagnostic = &type_error.diagnostics[0];
+    assert_eq!(diagnostic.phase, candid_core::DiagnosticPhase::TypeCheck);
+    assert!(diagnostic.message.contains("Missing") || diagnostic.message.contains("Unbound"));
+
+    // A parse error still carries a usable span and the expected-token notes.
+    let syntax = compile_did("service : { broken: (nat) -> ( };").unwrap_err();
+    let diagnostic = &syntax.diagnostics[0];
+    let span = diagnostic.span.as_ref().expect("parse errors carry a span");
+    assert!(span.end_byte > span.start_byte);
+    assert!(
+        !diagnostic.notes.is_empty(),
+        "the expected-token list must still reach the caller"
+    );
+}
+
+#[test]
 fn invalid_did_returns_actionable_structured_diagnostics() {
     let syntax = compile_did("service : { broken: (nat) -> ( };").unwrap_err();
     let diagnostic = &syntax.diagnostics[0];
