@@ -1,0 +1,186 @@
+{
+  "contract": {
+    "format": "candid-core",
+    "format_version": 1,
+    "semantics_profile": "candid-1",
+    "canonicalization_profile": "candid-core-canon-1",
+    "identities": {
+      "contract": "candid-core:contract:v1:sha256:452591a8e9831b1d3cae1eaac041d46b3d4e900dac9dcecc947f33f0a5e29f72",
+      "interface": "candid-core:interface:v1:sha256:41b5e46c15a0d65fc7bc94c80d5dc00e630f23a6e111b625e5b0802c18ac2193"
+    },
+    "producer": {
+      "name": "candid-core",
+      "version": "0.1.0",
+      "candid_version": "0.10.30",
+      "candid_parser_version": "0.4.0"
+    },
+    "types": [
+      {
+        "kind": "service",
+        "methods": [
+          {
+            "name": "run",
+            "id": 5695307,
+            "function": 1
+          }
+        ]
+      },
+      {
+        "kind": "func",
+        "args": [
+          2
+        ],
+        "results": [
+          4
+        ],
+        "mode": "update"
+      },
+      {
+        "kind": "vec",
+        "inner": 3
+      },
+      {
+        "kind": "primitive",
+        "primitive": "nat8"
+      },
+      {
+        "kind": "variant",
+        "fields": [
+          {
+            "id": 24860,
+            "type": 5
+          },
+          {
+            "id": 5048165,
+            "type": 6
+          }
+        ]
+      },
+      {
+        "kind": "primitive",
+        "primitive": "text"
+      },
+      {
+        "kind": "record",
+        "fields": [
+          {
+            "id": 5446209,
+            "type": 5
+          },
+          {
+            "id": 1103409453,
+            "type": 7
+          }
+        ]
+      },
+      {
+        "kind": "primitive",
+        "primitive": "nat32"
+      }
+    ],
+    "declarations": [
+      {
+        "name": "R",
+        "type": 4
+      }
+    ],
+    "actor": {
+      "kind": "service",
+      "service": 0
+    }
+  },
+  "source_info": {
+    "source_info_version": 1,
+    "contract_id": "candid-core:contract:v1:sha256:452591a8e9831b1d3cae1eaac041d46b3d4e900dac9dcecc947f33f0a5e29f72",
+    "source_bundle_id": "candid-core:source-bundle:v1:sha256:105df886c17cdf14fc17f9fa81d2ae405e019d63cde4a117f28ed8472e1f82a5",
+    "sources": [
+      {
+        "name": "memory:/inline.did",
+        "source": "type R = variant { ok: text; err: record { code: nat32; msg: text } }; service : { run: (vec nat8) -> (R); };"
+      }
+    ],
+    "imports": [],
+    "declarations": [
+      {
+        "source": "memory:/inline.did",
+        "name": "R",
+        "type": 4
+      }
+    ],
+    "field_labels": [
+      {
+        "origin": {
+          "kind": "declaration",
+          "source": "memory:/inline.did",
+          "name": "R"
+        },
+        "path": "type:R.fields[0]",
+        "container": 4,
+        "id": 24860,
+        "label": {
+          "kind": "named",
+          "name": "ok"
+        }
+      },
+      {
+        "origin": {
+          "kind": "declaration",
+          "source": "memory:/inline.did",
+          "name": "R"
+        },
+        "path": "type:R.fields[1]",
+        "container": 4,
+        "id": 5048165,
+        "label": {
+          "kind": "named",
+          "name": "err"
+        }
+      },
+      {
+        "origin": {
+          "kind": "declaration",
+          "source": "memory:/inline.did",
+          "name": "R"
+        },
+        "path": "type:R.fields[1].type.fields[0]",
+        "container": 6,
+        "id": 5446209,
+        "label": {
+          "kind": "named",
+          "name": "msg"
+        }
+      },
+      {
+        "origin": {
+          "kind": "declaration",
+          "source": "memory:/inline.did",
+          "name": "R"
+        },
+        "path": "type:R.fields[1].type.fields[1]",
+        "container": 6,
+        "id": 1103409453,
+        "label": {
+          "kind": "named",
+          "name": "code"
+        }
+      }
+    ],
+    "methods": [
+      {
+        "origin": {
+          "kind": "actor",
+          "source": "memory:/inline.did"
+        },
+        "path": "actor.methods[0]",
+        "service": 0,
+        "name": "run"
+      }
+    ],
+    "function_arguments": [],
+    "actors": [
+      {
+        "source": "memory:/inline.did"
+      }
+    ]
+  }
+}

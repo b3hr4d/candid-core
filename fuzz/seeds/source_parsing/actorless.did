@@ -1,0 +1,1 @@
+type A = nat; type B = vec A;

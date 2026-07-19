@@ -1,2 +1,10 @@
 /target/
 .DS_Store
+
+# `fuzz/` is a separate cargo project, so the root `/target/` rule misses it.
+# `corpus/` is the working corpus cargo-fuzz grows during a run; the tracked
+# seed and regression inputs live in `fuzz/seeds/` and `fuzz/regressions/`.
+# `artifacts/` holds crash reproducers, which CI uploads rather than commits.
+/fuzz/target/
+/fuzz/corpus/
+/fuzz/artifacts/

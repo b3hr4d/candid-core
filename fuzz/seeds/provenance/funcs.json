@@ -1,0 +1,129 @@
+{
+  "contract": {
+    "format": "candid-core",
+    "format_version": 1,
+    "semantics_profile": "candid-1",
+    "canonicalization_profile": "candid-core-canon-1",
+    "identities": {
+      "contract": "candid-core:contract:v1:sha256:c917518e059e070fe4db0abf2bf739b0705f4798cf7f87dbccb31a4e119c1e90",
+      "interface": "candid-core:interface:v1:sha256:167c0f8afd74a1eb1389ab44596ab4261403b5c266210787cf22e7996aaf7a96"
+    },
+    "producer": {
+      "name": "candid-core",
+      "version": "0.1.0",
+      "candid_version": "0.10.30",
+      "candid_parser_version": "0.4.0"
+    },
+    "types": [
+      {
+        "kind": "service",
+        "methods": [
+          {
+            "name": "get",
+            "id": 5144726,
+            "function": 1
+          },
+          {
+            "name": "reg",
+            "id": 5691732,
+            "function": 3
+          }
+        ]
+      },
+      {
+        "kind": "func",
+        "args": [],
+        "results": [
+          2
+        ],
+        "mode": "query"
+      },
+      {
+        "kind": "primitive",
+        "primitive": "principal"
+      },
+      {
+        "kind": "func",
+        "args": [
+          4
+        ],
+        "results": [],
+        "mode": "update"
+      },
+      {
+        "kind": "func",
+        "args": [
+          5
+        ],
+        "results": [
+          6
+        ],
+        "mode": "query"
+      },
+      {
+        "kind": "primitive",
+        "primitive": "text"
+      },
+      {
+        "kind": "primitive",
+        "primitive": "bool"
+      }
+    ],
+    "declarations": [
+      {
+        "name": "Cb",
+        "type": 4
+      }
+    ],
+    "actor": {
+      "kind": "service",
+      "service": 0
+    }
+  },
+  "source_info": {
+    "source_info_version": 1,
+    "contract_id": "candid-core:contract:v1:sha256:c917518e059e070fe4db0abf2bf739b0705f4798cf7f87dbccb31a4e119c1e90",
+    "source_bundle_id": "candid-core:source-bundle:v1:sha256:4e19b7d99ca32b264bb3e11407f20785eb4767d1e59855dfae6fadc7a56cf089",
+    "sources": [
+      {
+        "name": "memory:/inline.did",
+        "source": "type Cb = func (text) -> (bool) query; service : { reg: (Cb) -> (); get: () -> (principal) query; };"
+      }
+    ],
+    "imports": [],
+    "declarations": [
+      {
+        "source": "memory:/inline.did",
+        "name": "Cb",
+        "type": 4
+      }
+    ],
+    "field_labels": [],
+    "methods": [
+      {
+        "origin": {
+          "kind": "actor",
+          "source": "memory:/inline.did"
+        },
+        "path": "actor.methods[0]",
+        "service": 0,
+        "name": "get"
+      },
+      {
+        "origin": {
+          "kind": "actor",
+          "source": "memory:/inline.did"
+        },
+        "path": "actor.methods[1]",
+        "service": 0,
+        "name": "reg"
+      }
+    ],
+    "function_arguments": [],
+    "actors": [
+      {
+        "source": "memory:/inline.did"
+      }
+    ]
+  }
+}

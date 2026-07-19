@@ -1,0 +1,149 @@
+{
+  "contract": {
+    "format": "candid-core",
+    "format_version": 1,
+    "semantics_profile": "candid-1",
+    "canonicalization_profile": "candid-core-canon-1",
+    "identities": {
+      "contract": "candid-core:contract:v1:sha256:63ffbb3ccc8b8c42f65a56ac7c86500e364be72f182b33b0be2fd63c70ec33c7",
+      "interface": "candid-core:interface:v1:sha256:879f91035c3e4512f8536fc32b2fc54978743d736fa5de4cc1061086f38a9518"
+    },
+    "producer": {
+      "name": "candid-core",
+      "version": "0.1.0",
+      "candid_version": "0.10.30",
+      "candid_parser_version": "0.4.0"
+    },
+    "types": [
+      {
+        "kind": "service",
+        "methods": [
+          {
+            "name": "ping",
+            "id": 1247277682,
+            "function": 1
+          }
+        ]
+      },
+      {
+        "kind": "func",
+        "args": [
+          2
+        ],
+        "results": [
+          3
+        ],
+        "mode": "query"
+      },
+      {
+        "kind": "primitive",
+        "primitive": "text"
+      },
+      {
+        "kind": "record",
+        "fields": [
+          {
+            "id": 23515,
+            "type": 4
+          },
+          {
+            "id": 1873743348,
+            "type": 2
+          }
+        ]
+      },
+      {
+        "kind": "primitive",
+        "primitive": "nat"
+      }
+    ],
+    "declarations": [
+      {
+        "name": "Item",
+        "type": 3
+      }
+    ],
+    "actor": {
+      "kind": "service",
+      "service": 0
+    }
+  },
+  "source_info": {
+    "source_info_version": 1,
+    "contract_id": "candid-core:contract:v1:sha256:63ffbb3ccc8b8c42f65a56ac7c86500e364be72f182b33b0be2fd63c70ec33c7",
+    "source_bundle_id": "candid-core:source-bundle:v1:sha256:8cdaac59ade3c9b0a32a70f001713ed38307d97bca494977aaff4b2039264fd1",
+    "sources": [
+      {
+        "name": "memory:/inline.did",
+        "source": "type Item = record { id: nat; label: text }; service : { ping: (name: text) -> (Item) query; };"
+      }
+    ],
+    "imports": [],
+    "declarations": [
+      {
+        "source": "memory:/inline.did",
+        "name": "Item",
+        "type": 3
+      }
+    ],
+    "field_labels": [
+      {
+        "origin": {
+          "kind": "declaration",
+          "source": "memory:/inline.did",
+          "name": "Item"
+        },
+        "path": "type:Item.fields[0]",
+        "container": 3,
+        "id": 23515,
+        "label": {
+          "kind": "named",
+          "name": "id"
+        }
+      },
+      {
+        "origin": {
+          "kind": "declaration",
+          "source": "memory:/inline.did",
+          "name": "Item"
+        },
+        "path": "type:Item.fields[1]",
+        "container": 3,
+        "id": 1873743348,
+        "label": {
+          "kind": "named",
+          "name": "label"
+        }
+      }
+    ],
+    "methods": [
+      {
+        "origin": {
+          "kind": "actor",
+          "source": "memory:/inline.did"
+        },
+        "path": "actor.methods[0]",
+        "service": 0,
+        "name": "ping"
+      }
+    ],
+    "function_arguments": [
+      {
+        "origin": {
+          "kind": "actor",
+          "source": "memory:/inline.did"
+        },
+        "path": "actor.methods[0].function.args[0]",
+        "function": 1,
+        "direction": "argument",
+        "position": 0,
+        "name": "name"
+      }
+    ],
+    "actors": [
+      {
+        "source": "memory:/inline.did"
+      }
+    ]
+  }
+}

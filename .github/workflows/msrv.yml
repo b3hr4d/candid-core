@@ -83,20 +83,79 @@ jobs:
           name: benchmarks-${{ github.sha }}
           path: benchmark-artifacts
           retention-days: 90
-  fuzz:
-    name: Scheduled fuzzing
-    if: github.event_name == 'schedule'
+  fuzz-replay:
+    name: Fuzz targets build and replay
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@nightly
+      # `cargo fuzz` has no --locked passthrough, so enforce the tracked
+      # lockfile separately. Fails if fuzz/Cargo.lock is stale or incomplete.
+      - name: Verify the fuzz lockfile is current
+        run: cargo metadata --manifest-path fuzz/Cargo.toml --locked --format-version 1 > /dev/null
       - name: Install cargo-fuzz
         run: cargo +nightly install cargo-fuzz --locked
+      # Compiling every target on each pull request is the point of this job:
+      # a target that stops compiling, or is renamed without updating
+      # `fuzz/Cargo.toml`, otherwise stays invisible until the next schedule.
+      - name: Build every fuzz target
+        run: cargo +nightly fuzz build --dev
+      # `-runs=0` replays the tracked corpora without mutating, so this is
+      # deterministic: it fails only if a seed or a previously fixed crash
+      # reproduces. No new inputs are generated, so it cannot flake.
+      - name: Replay seeds and regressions
+        run: |
+          for target in $(cargo +nightly fuzz list); do
+            mkdir -p "fuzz/corpus/${target}" "fuzz/seeds/${target}" "fuzz/regressions/${target}"
+            echo "::group::replay ${target}"
+            cargo +nightly fuzz run --dev "${target}" \
+              "fuzz/corpus/${target}" "fuzz/seeds/${target}" "fuzz/regressions/${target}" \
+              -- -runs=0
+            echo "::endgroup::"
+          done
+      - name: Upload crash artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-replay-artifacts-${{ github.sha }}
+          path: fuzz/artifacts
+          if-no-files-found: ignore
+          retention-days: 30
+  fuzz:
+    name: Scheduled fuzzing
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@nightly
+      # `cargo fuzz` has no --locked passthrough, so enforce the tracked
+      # lockfile separately. Fails if fuzz/Cargo.lock is stale or incomplete.
+      - name: Verify the fuzz lockfile is current
+        run: cargo metadata --manifest-path fuzz/Cargo.toml --locked --format-version 1 > /dev/null
+      - name: Install cargo-fuzz
+        run: cargo +nightly install cargo-fuzz --locked
+      # Seeds and regressions are passed as additional read-only corpora.
+      # libFuzzer writes only to the first directory, which is gitignored, so a
+      # run never mutates tracked inputs. Seeding matters: starting cold, these
+      # targets spend their budget in the JSON syntax-error path.
       - name: Fuzz trust boundaries
         run: |
-          cargo +nightly fuzz run source_parsing -- -max_total_time=60
-          cargo +nightly fuzz run contract_json -- -max_total_time=60
-          cargo +nightly fuzz run canonicalization -- -max_total_time=60
-          cargo +nightly fuzz run resolver_ids -- -max_total_time=60
-          cargo +nightly fuzz run provenance -- -max_total_time=60
-          cargo +nightly fuzz run host_value -- -max_total_time=60
+          for target in $(cargo +nightly fuzz list); do
+            mkdir -p "fuzz/corpus/${target}" "fuzz/seeds/${target}" "fuzz/regressions/${target}"
+            echo "::group::fuzz ${target}"
+            cargo +nightly fuzz run "${target}" \
+              "fuzz/corpus/${target}" "fuzz/seeds/${target}" "fuzz/regressions/${target}" \
+              -- -max_total_time=60
+            echo "::endgroup::"
+          done
+      # Without this the reproducer dies with the runner and a red schedule is
+      # not actionable. Runs on failure and on success, because libFuzzer also
+      # writes slow-unit and oom artifacts on otherwise-passing runs.
+      - name: Upload crash artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-artifacts-${{ github.sha }}
+          path: fuzz/artifacts
+          if-no-files-found: ignore
+          retention-days: 90

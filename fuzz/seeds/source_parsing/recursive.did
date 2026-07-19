@@ -1,0 +1,1 @@
+type Node = record { value: nat; next: opt Node }; service : { head: () -> (opt Node) query; };

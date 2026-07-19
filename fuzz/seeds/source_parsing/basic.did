@@ -1,0 +1,1 @@
+type Item = record { id: nat; label: text }; service : { ping: (name: text) -> (Item) query; };

@@ -1,0 +1,38 @@
+{
+  "contract": {
+    "format": "candid-core",
+    "format_version": 1,
+    "semantics_profile": "candid-1",
+    "canonicalization_profile": "candid-core-canon-1",
+    "identities": {
+      "contract": "candid-core:contract:v1:sha256:dd78a364ac8c7ebb36c7690e51245bfdd0c3792d5ce5dc6988336c1e3c07ed6e"
+    },
+    "producer": {
+      "name": "candid-core",
+      "version": "0.1.0",
+      "candid_version": "0.10.30",
+      "candid_parser_version": "0.4.0"
+    },
+    "types": [
+      {
+        "kind": "primitive",
+        "primitive": "nat"
+      },
+      {
+        "kind": "vec",
+        "inner": 0
+      }
+    ],
+    "declarations": [
+      {
+        "name": "A",
+        "type": 0
+      },
+      {
+        "name": "B",
+        "type": 1
+      }
+    ],
+    "actor": null
+  }
+}
