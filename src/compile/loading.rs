@@ -138,11 +138,16 @@ pub(super) fn load_source_units_with_resolver(
     // keep their precedence, while a resolver that aliases a long spelling to
     // a short canonical target can no longer make the compiler emit provenance
     // that validation under the same limits rejects. The pass is one length
-    // comparison per edge, bounded by the `import_edges` charges above.
+    // comparison and cancellation/deadline checkpoint per edge, bounded by the
+    // `import_edges` charges above. The leading checkpoint also covers an empty
+    // import graph.
     budget
         .checkpoint()
         .map_err(|error| budget_error(error, DiagnosticPhase::Load, "import accounting"))?;
     for import in units.iter().flat_map(|unit| &unit.imports) {
+        budget
+            .checkpoint()
+            .map_err(|error| budget_error(error, DiagnosticPhase::Load, "import accounting"))?;
         if import.import.len() > limits.max_source_id_bytes {
             return Err(CompileError::resource_limit(
                 "source_id_bytes",
