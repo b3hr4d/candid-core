@@ -3,10 +3,11 @@ use crate::canonical::domain_hash;
 use crate::limits::Limits;
 use crate::model::{
     Contract, ContractValidationError, ContractViolation, SourceImportInfo, SourceInfo,
-    SourceOrigin, TypeNode, SOURCE_INFO_VERSION,
+    SourceOrigin, TypeNode, TypeRef, SOURCE_INFO_VERSION,
 };
 use serde::Serialize;
 use sha2::{Digest, Sha256};
+use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Serialize)]
@@ -43,7 +44,7 @@ pub(crate) fn validate_source_info_with_budget(
     preflight_source_info_resources(source_info, budget)?;
 
     validate_source_bundle_ids(source_info, budget)?;
-    validate_source_bundle_identity(source_info)?;
+    validate_source_bundle_identity(source_info, budget)?;
     let bundle = SourceBundleResolver::new(source_info)?;
     let compilation = crate::compile::rederive_source_bundle_with_budget(
         bundle.entry.as_str(),
@@ -140,27 +141,21 @@ pub(crate) fn validate_source_info_structure_with_budget(
     budget
         .checkpoint()
         .map_err(crate::budget::BudgetError::into_contract_error)?;
-    if !source_bundle_is_canonical(source_info) {
-        return Err(ContractValidationError::single(
-            "non_canonical_source_bundle",
-            "$",
-            "sources and imports must be sorted canonically",
-        ));
-    }
-    budget
-        .checkpoint()
-        .map_err(crate::budget::BudgetError::into_contract_error)?;
-    let expected_bundle_id = source_bundle_id(&source_info.sources, &source_info.imports);
-    if source_info.source_bundle_id != expected_bundle_id {
-        return Err(ContractValidationError::single(
-            "source_bundle_id_mismatch",
-            "$.source_bundle_id",
-            format!(
-                "expected {expected_bundle_id}, found {}",
-                source_info.source_bundle_id
-            ),
-        ));
-    }
+    // Bundle canonicality and identity are verified by
+    // `validate_source_bundle_identity` before this structural pass runs on the
+    // presented (untrusted) path, and the compiler emits canonical, correctly
+    // identified sidecars by construction. Re-serializing and re-hashing the
+    // whole bundle here was pure redundant work — it ran up to twice more per
+    // presented-sidecar validation — so the invariant is asserted in debug
+    // builds instead of paid for on every validation. This changes no error
+    // code or precedence: a tampered presented bundle is still rejected by
+    // `validate_source_bundle_identity`, which runs first.
+    debug_assert!(
+        source_bundle_is_canonical(source_info)
+            && source_info.source_bundle_id
+                == source_bundle_id(&source_info.sources, &source_info.imports),
+        "bundle identity must be validated before the structural pass",
+    );
 
     let mut source_names = BTreeSet::new();
     for (index, source) in source_info.sources.iter().enumerate() {
@@ -197,6 +192,15 @@ pub(crate) fn validate_source_info_structure_with_budget(
             .map_err(crate::budget::BudgetError::into_contract_error)?;
         validate_source_name(&source_names, &actor.source, "actor", index)?;
     }
+    // Target existence is checked against a per-container index rather than a
+    // linear scan. `max_fields` bounds both the field-label count and one
+    // aggregate's field count independently, so a bare `fields.iter().any(...)`
+    // per label is `O(max_fields^2)` of uncharged, uninterruptible work — and
+    // duplicate labels, which are permitted by design, each re-pay a full scan.
+    // Building each referenced container's field-ID set once turns the pass
+    // linearithmic; charging that build and every lookup against
+    // `provenance_work` bounds the total and makes it interruptible.
+    let mut container_field_ids: BTreeMap<TypeRef, BTreeSet<u32>> = BTreeMap::new();
     for (index, field) in source_info.field_labels.iter().enumerate() {
         budget
             .checkpoint()
@@ -205,18 +209,25 @@ pub(crate) fn validate_source_info_structure_with_budget(
         if field.path.is_empty() {
             return Err(empty_path("field_labels", index));
         }
-        match contract.types.get(field.container as usize) {
-            Some(TypeNode::Record { fields }) | Some(TypeNode::Variant { fields })
-                if fields.iter().any(|candidate| candidate.id == field.id) => {}
-            _ => {
-                return Err(ContractValidationError::single(
-                    "source_field_target_mismatch",
-                    format!("$.field_labels[{index}]"),
-                    "field provenance must target an existing aggregate field ID",
-                ));
+        let field_ids = match container_field_ids.entry(field.container) {
+            Entry::Occupied(entry) => entry.into_mut(),
+            Entry::Vacant(entry) => {
+                let fields = match contract.types.get(field.container as usize) {
+                    Some(TypeNode::Record { fields }) | Some(TypeNode::Variant { fields }) => {
+                        fields
+                    }
+                    _ => return Err(source_field_target_mismatch(index)),
+                };
+                charge_provenance_work(budget, fields.len())?;
+                entry.insert(fields.iter().map(|candidate| candidate.id).collect())
             }
+        };
+        charge_provenance_work(budget, 1)?;
+        if !field_ids.contains(&field.id) {
+            return Err(source_field_target_mismatch(index));
         }
     }
+    let mut service_method_names: BTreeMap<TypeRef, BTreeSet<&str>> = BTreeMap::new();
     for (index, method) in source_info.methods.iter().enumerate() {
         budget
             .checkpoint()
@@ -225,18 +236,25 @@ pub(crate) fn validate_source_info_structure_with_budget(
         if method.path.is_empty() {
             return Err(empty_path("methods", index));
         }
-        match contract.types.get(method.service as usize) {
-            Some(TypeNode::Service { methods })
-                if methods
-                    .iter()
-                    .any(|candidate| candidate.name == method.name) => {}
-            _ => {
-                return Err(ContractValidationError::single(
-                    "source_method_target_mismatch",
-                    format!("$.methods[{index}]"),
-                    "method provenance must target an existing service method",
-                ));
+        let method_names = match service_method_names.entry(method.service) {
+            Entry::Occupied(entry) => entry.into_mut(),
+            Entry::Vacant(entry) => {
+                let methods = match contract.types.get(method.service as usize) {
+                    Some(TypeNode::Service { methods }) => methods,
+                    _ => return Err(source_method_target_mismatch(index)),
+                };
+                charge_provenance_work(budget, methods.len())?;
+                entry.insert(
+                    methods
+                        .iter()
+                        .map(|candidate| candidate.name.as_str())
+                        .collect(),
+                )
             }
+        };
+        charge_provenance_work(budget, 1)?;
+        if !method_names.contains(method.name.as_str()) {
+            return Err(source_method_target_mismatch(index));
         }
     }
     for (index, argument) in source_info.function_arguments.iter().enumerate() {
@@ -469,6 +487,20 @@ fn preflight_source_info_resources(
             source.source.len(),
         ));
     }
+    // Bound each logical source ID individually, and last, so this new terminal
+    // check never preempts an existing byte/count limit. The counts above cap
+    // these loops, and running in the preflight still rejects an oversized path
+    // before the bundle is hashed, resolved, or rederived. Import spellings are
+    // paths too, so they share the bound.
+    let max_id_bytes = limits.max_source_id_bytes;
+    for source in &source_info.sources {
+        check_source_id_bytes(&source.name, max_id_bytes)?;
+    }
+    for import in &source_info.imports {
+        check_source_id_bytes(&import.from, max_id_bytes)?;
+        check_source_id_bytes(&import.import, max_id_bytes)?;
+        check_source_id_bytes(&import.to, max_id_bytes)?;
+    }
     Ok(())
 }
 
@@ -490,7 +522,14 @@ fn source_bundle_is_canonical(source_info: &SourceInfo) -> bool {
 
 fn validate_source_bundle_identity(
     source_info: &SourceInfo,
+    budget: &Budget<'_>,
 ) -> Result<(), ContractValidationError> {
+    // The bundle bytes are already bounded (preflight enforced `bundle_bytes`),
+    // but hashing them is not itself interruptible, so poll cancellation and the
+    // deadline before starting the whole-bundle serialize/hash pass.
+    budget
+        .checkpoint()
+        .map_err(crate::budget::BudgetError::into_contract_error)?;
     if !source_bundle_is_canonical(source_info) {
         return Err(ContractValidationError::single(
             "non_canonical_source_bundle",
@@ -918,4 +957,49 @@ fn empty_path(collection: &str, index: usize) -> ContractValidationError {
         format!("$.{collection}[{index}].path"),
         "source occurrence paths must not be empty",
     )
+}
+
+fn check_source_id_bytes(value: &str, limit: usize) -> Result<(), ContractValidationError> {
+    if value.len() > limit {
+        return Err(ContractValidationError::resource_limit(
+            "source_id_bytes",
+            limit,
+            value.len(),
+        ));
+    }
+    Ok(())
+}
+
+fn source_field_target_mismatch(index: usize) -> ContractValidationError {
+    ContractValidationError::single(
+        "source_field_target_mismatch",
+        format!("$.field_labels[{index}]"),
+        "field provenance must target an existing aggregate field ID",
+    )
+}
+
+fn source_method_target_mismatch(index: usize) -> ContractValidationError {
+    ContractValidationError::single(
+        "source_method_target_mismatch",
+        format!("$.methods[{index}]"),
+        "method provenance must target an existing service method",
+    )
+}
+
+/// Charge provenance target-resolution work against its own budget counter.
+///
+/// A dedicated `provenance_work` resource keeps this off `canonicalization_work`
+/// so that rederiving a large graph and then indexing its provenance cannot
+/// jointly overflow one counter and reject a bundle neither pass would reject
+/// alone. Every field-ID set built and every membership test is charged, so the
+/// fan-out and duplicate-label work is bounded and interruptible on one budget.
+fn charge_provenance_work(
+    budget: &mut Budget<'_>,
+    amount: usize,
+) -> Result<(), ContractValidationError> {
+    let limit = budget.limits().max_provenance_work;
+    budget
+        .charge("provenance_work", limit, amount)
+        .map(|_| ())
+        .map_err(crate::budget::BudgetError::into_contract_error)
 }

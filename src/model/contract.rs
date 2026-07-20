@@ -17,6 +17,24 @@ pub struct ContractIdentities {
     pub interface: Option<String>,
 }
 
+/// Untrusted, caller-supplied provenance about the tool that produced a
+/// Contract.
+///
+/// Producer metadata is deliberately **outside authenticated Contract
+/// identity**. The `candid-core:contract:v1` and `candid-core:interface:v1`
+/// hashes ([`crate::canonical`]) are computed over the type graph, declarations,
+/// actor, and format/profile markers only — never over `producer`. Two
+/// Contracts that differ only in their producer therefore share the same
+/// `contract_id` and `interface_id`, even though they are byte-different on the
+/// wire (producer *is* part of the canonical serialized JSON). A signature that
+/// authenticates a Contract by its identity does not authenticate its producer
+/// claims, and callers must treat those claims as unverified.
+///
+/// This boundary is load-bearing for compatibility: binding `producer` into the
+/// identity payload would change every existing `contract_id`. The bytes are
+/// still bounded — see [`crate::Limits::max_producer_bytes`] — so untrusted
+/// producer strings cannot grow without limit; they simply never influence an
+/// identity.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProducerInfo {

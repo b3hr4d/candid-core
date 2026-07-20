@@ -87,6 +87,33 @@ fn reject(raw: RawSourceInfo, compilation: &Compilation, limits: Limits) -> (Str
     (info.resource.clone(), info.limit, info.observed)
 }
 
+/// Smallest `max_provenance_work` under which the same validation succeeds.
+///
+/// `provenance_work` is charged cumulatively across the rederived and presented
+/// structural passes, so lowering only this counter isolates the target-scan
+/// work from every other limit.
+fn minimum_provenance_work(validate: impl Fn(&Limits) -> bool) -> usize {
+    let ceiling = Limits::default().max_provenance_work;
+    assert!(
+        validate(&Limits::default()),
+        "the probe must succeed at the default ceiling"
+    );
+    let (mut low, mut high) = (0usize, ceiling);
+    while low < high {
+        let mid = low + (high - low) / 2;
+        let limits = Limits {
+            max_provenance_work: mid,
+            ..Limits::default()
+        };
+        if validate(&limits) {
+            high = mid;
+        } else {
+            low = mid + 1;
+        }
+    }
+    low
+}
+
 #[test]
 fn sources_are_accepted_at_the_limit_and_rejected_one_over() {
     let compilation = bundle();
@@ -482,6 +509,146 @@ fn reference_remapping_observes_cancellation() {
     )
     .expect_err("cancellation must abort remapping");
     assert_eq!(error.violations[0].code, "operation_cancelled");
+}
+
+#[test]
+fn provenance_target_resolution_is_charged_at_the_exact_boundary() {
+    // Resolving every field-label and method provenance entry against its target
+    // now charges `provenance_work`. The minimum that admits a valid bundle is
+    // exactly the work the two structural passes charge; one unit under it must
+    // fail closed with that resource, proving the traversal is charged rather
+    // than free.
+    let compilation = bundle();
+    let raw = raw_of(&compilation);
+
+    let min = minimum_provenance_work(|limits| {
+        SourceInfo::try_from_raw_with_context(
+            raw.clone(),
+            compilation.contract(),
+            &RuntimeContext::new(limits.clone()),
+        )
+        .is_ok()
+    });
+    assert!(min > 0, "a bundle with provenance must charge some work");
+
+    accept(
+        raw.clone(),
+        &compilation,
+        Limits {
+            max_provenance_work: min,
+            ..Limits::default()
+        },
+    );
+    assert_eq!(
+        reject(
+            raw,
+            &compilation,
+            Limits {
+                max_provenance_work: min - 1,
+                ..Limits::default()
+            }
+        ),
+        ("provenance_work".to_string(), min - 1, min)
+    );
+}
+
+#[test]
+fn field_label_fan_out_onto_one_container_is_charged_and_bounded() {
+    // The load-bearing regression: a tampered sidecar that aims many field
+    // labels at one aggregate used to run an uncharged, uninterruptible
+    // `O(labels * fields)` scan before the rederivation mismatch rejected it.
+    // Duplicate labels are permitted by design, so each re-paid a full scan.
+    // Now the extra labels each charge `provenance_work`, so a budget that
+    // admits the genuine bundle rejects the inflated one before the scan runs
+    // to completion — and does so deterministically.
+    let compilation = bundle();
+    let genuine = raw_of(&compilation);
+
+    let min_valid = minimum_provenance_work(|limits| {
+        SourceInfo::try_from_raw_with_context(
+            genuine.clone(),
+            compilation.contract(),
+            &RuntimeContext::new(limits.clone()),
+        )
+        .is_ok()
+    });
+
+    // Concentrate extra (duplicate) labels on the same real container. The count
+    // stays well under `max_fields`, so `provenance_work`, not the count limit,
+    // is what fails.
+    let mut inflated = genuine;
+    let observed = inflated.field_labels.len();
+    grow(&mut inflated.field_labels, observed + 64);
+
+    let limits = Limits {
+        max_provenance_work: min_valid,
+        ..Limits::default()
+    };
+    let (resource, limit, over) = reject(inflated.clone(), &compilation, limits.clone());
+    assert_eq!(resource, "provenance_work");
+    assert_eq!(limit, min_valid);
+    assert!(
+        over > min_valid,
+        "the extra labels must consume charged work beyond the genuine bundle"
+    );
+
+    // Determinism: the same hostile sidecar fails identically on a second run.
+    let repeat = reject(inflated, &compilation, limits);
+    assert_eq!(repeat, (resource, limit, over));
+}
+
+#[test]
+fn tampered_source_bundle_id_is_still_rejected() {
+    // The redundant bundle-identity re-hash was removed from the structural
+    // pass because `validate_source_bundle_identity` performs it first on the
+    // presented path. This guards that the surviving check still rejects a
+    // tampered `source_bundle_id`.
+    let compilation = bundle();
+    let mut raw = raw_of(&compilation);
+    raw.source_bundle_id.push('0');
+
+    let error = SourceInfo::try_from_raw_with_context(
+        raw,
+        compilation.contract(),
+        &RuntimeContext::default(),
+    )
+    .expect_err("a tampered source_bundle_id must be rejected");
+    assert_eq!(error.violations[0].code, "source_bundle_id_mismatch");
+}
+
+#[test]
+fn source_id_length_is_bounded_at_the_limit_and_one_over() {
+    // A logical source ID is otherwise bounded only cumulatively by
+    // `max_string_bytes`. The sidecar path enforces the per-ID limit in the
+    // preflight, before the bundle is hashed or rederived.
+    let compilation = bundle();
+    let raw = raw_of(&compilation);
+    let longest = raw
+        .sources
+        .iter()
+        .map(|source| source.name.len())
+        .max()
+        .expect("the bundle has sources");
+
+    accept(
+        raw.clone(),
+        &compilation,
+        Limits {
+            max_source_id_bytes: longest,
+            ..Limits::default()
+        },
+    );
+    assert_eq!(
+        reject(
+            raw,
+            &compilation,
+            Limits {
+                max_source_id_bytes: longest - 1,
+                ..Limits::default()
+            }
+        ),
+        ("source_id_bytes".to_string(), longest - 1, longest)
+    );
 }
 
 #[test]

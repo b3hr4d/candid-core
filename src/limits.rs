@@ -15,6 +15,13 @@ pub struct Limits {
     pub max_source_bytes: usize,
     pub max_bundle_bytes: usize,
     pub max_sources: usize,
+    /// Maximum bytes in a single logical source ID (name/path).
+    ///
+    /// Source IDs are otherwise bounded only cumulatively by
+    /// [`Limits::max_string_bytes`], so one entry could carry a megabyte-long
+    /// path. This bounds each ID individually on both the resolver and the
+    /// embedded-sidecar paths.
+    pub max_source_id_bytes: usize,
     pub max_import_depth: usize,
     pub max_import_edges: usize,
     /// Maximum lexical nesting accepted before invoking the upstream parser.
@@ -63,8 +70,23 @@ pub struct Limits {
     pub max_methods: usize,
     pub max_function_values: usize,
     pub max_string_bytes: usize,
+    /// Maximum aggregate bytes across the four producer metadata strings.
+    ///
+    /// Producer metadata is untrusted, caller-supplied provenance that is
+    /// deliberately kept out of authenticated Contract identity (see
+    /// [`crate::ProducerInfo`]); this bounds the bytes it may contribute to a
+    /// validated Contract without ever affecting an identity hash.
+    pub max_producer_bytes: usize,
     pub max_diagnostics: usize,
     pub max_canonicalization_work: usize,
+    /// Maximum work units charged while resolving provenance targets.
+    ///
+    /// Kept separate from [`Limits::max_canonicalization_work`] so that
+    /// rederiving a large graph and then indexing its provenance sidecar cannot
+    /// jointly exhaust one counter. Bounds building each referenced container's
+    /// field-ID / method-name index and every membership test, so adversarial
+    /// fan-out and duplicate provenance entries cannot drive an unbounded scan.
+    pub max_provenance_work: usize,
     pub max_value_depth: usize,
     pub max_value_elements: usize,
     pub max_value_bytes: usize,
@@ -79,6 +101,7 @@ impl Default for Limits {
             max_source_bytes: 1024 * 1024,
             max_bundle_bytes: 8 * 1024 * 1024,
             max_sources: 256,
+            max_source_id_bytes: 1024,
             max_import_depth: 64,
             max_import_edges: 1024,
             max_source_nesting: 256,
@@ -95,8 +118,10 @@ impl Default for Limits {
             max_methods: 100_000,
             max_function_values: 500_000,
             max_string_bytes: 1024 * 1024,
+            max_producer_bytes: 4096,
             max_diagnostics: 100,
             max_canonicalization_work: 10_000_000,
+            max_provenance_work: 10_000_000,
             max_value_depth: 256,
             max_value_elements: 1_000_000,
             max_value_bytes: 16 * 1024 * 1024,

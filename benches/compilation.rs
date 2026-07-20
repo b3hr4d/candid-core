@@ -1,10 +1,11 @@
 mod support;
 
 use candid_core::{
-    compile_did_with_context, compile_did_with_options, compile_with_resolver, CompileOptions,
-    Contract, Limits, RuntimeContext, WorkspaceResolver,
+    compile_did, compile_did_with_context, compile_did_with_options, compile_with_resolver,
+    validate_host_value, CompileOptions, Contract, HostValue, Limits, RuntimeContext,
+    WorkspaceResolver,
 };
-use candid_parser::candid::TypeEnv;
+use candid_parser::candid::{idl_hash, TypeEnv};
 use candid_parser::{check_file, check_prog, IDLProg};
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use std::time::Duration;
@@ -152,12 +153,121 @@ fn artifact_benchmarks(criterion: &mut Criterion) {
     group.finish();
 }
 
+/// Contract-directed HostValue validation over adversarially wide type tables.
+///
+/// These two shapes are the tag/field-lookup paths hardened for the resource
+/// audit: a wide `record` exercises the field-ID matching, and a `vec variant`
+/// exercises the per-element variant-tag lookup that used to run an uncharged,
+/// unbounded scan. Charging every comparison keeps both linear in the work done
+/// rather than free, and these benchmarks make that cost observable.
+fn host_value_validation_benchmarks(criterion: &mut Criterion) {
+    const WIDTH: usize = 256;
+    const ELEMENTS: usize = 256;
+    // The wide-record value performs O(WIDTH^2) charged comparisons; raise the
+    // work ceiling so the benchmark measures the validation, not a rejection.
+    let limits = Limits {
+        max_canonicalization_work: 100_000_000,
+        max_value_elements: 10_000_000,
+        ..Limits::default()
+    };
+    let context = RuntimeContext::new(limits.clone());
+
+    let record_source = {
+        let mut source = String::from("type Wide = record {\n");
+        for index in 0..WIDTH {
+            source.push_str(&format!("  field_{index}: nat;\n"));
+        }
+        source.push_str("};\nservice : { put: (Wide) -> () };\n");
+        source
+    };
+    let record_compilation = compile_did(&record_source).expect("wide record fixture must compile");
+    let record_contract = record_compilation.contract();
+    let record_selector = record_contract
+        .bind_type(declaration_ref(record_contract, "Wide"))
+        .expect("Wide must bind");
+    let record_fields: Vec<String> = (0..WIDTH)
+        .map(|index| {
+            let id = idl_hash(&format!("field_{index}"));
+            format!(r#"{{"id":{id},"value":{{"kind":"nat","value":"1"}}}}"#)
+        })
+        .collect();
+    let record_json = format!(
+        r#"{{"kind":"record","fields":[{}]}}"#,
+        record_fields.join(",")
+    );
+    let record_value = HostValue::from_json_with_context(&record_json, &context)
+        .expect("wide record value must decode");
+
+    let variant_source = {
+        let mut source = String::from("type Tag = variant {\n");
+        for index in 0..WIDTH {
+            source.push_str(&format!("  tag_{index}: null;\n"));
+        }
+        source.push_str("};\ntype List = vec Tag;\nservice : { push: (List) -> () };\n");
+        source
+    };
+    let variant_compilation =
+        compile_did(&variant_source).expect("wide variant fixture must compile");
+    let variant_contract = variant_compilation.contract();
+    let variant_selector = variant_contract
+        .bind_type(declaration_ref(variant_contract, "List"))
+        .expect("List must bind");
+    // Every element selects the last tag, the worst case for a table scan.
+    let last_tag = idl_hash(&format!("tag_{}", WIDTH - 1));
+    let variant_elements: Vec<String> = (0..ELEMENTS)
+        .map(|_| format!(r#"{{"kind":"variant","id":{last_tag},"value":{{"kind":"null"}}}}"#))
+        .collect();
+    let variant_json = format!(
+        r#"{{"kind":"vec","values":[{}]}}"#,
+        variant_elements.join(",")
+    );
+    let variant_value = HostValue::from_json_with_context(&variant_json, &context)
+        .expect("vec-of-variants value must decode");
+
+    let mut group = criterion.benchmark_group("host_value/validate");
+    group.throughput(Throughput::Elements(WIDTH as u64));
+    group.bench_function(BenchmarkId::new("wide_record", WIDTH), |bencher| {
+        bencher.iter(|| {
+            validate_host_value(
+                black_box(record_contract),
+                black_box(&record_selector),
+                black_box(&record_value),
+                black_box(&limits),
+            )
+            .expect("wide record value must validate")
+        })
+    });
+    group.throughput(Throughput::Elements(ELEMENTS as u64));
+    group.bench_function(BenchmarkId::new("vec_variant", ELEMENTS), |bencher| {
+        bencher.iter(|| {
+            validate_host_value(
+                black_box(variant_contract),
+                black_box(&variant_selector),
+                black_box(&variant_value),
+                black_box(&limits),
+            )
+            .expect("vec-of-variants value must validate")
+        })
+    });
+    group.finish();
+}
+
+fn declaration_ref(contract: &Contract, name: &str) -> u32 {
+    contract
+        .declarations()
+        .iter()
+        .find(|declaration| declaration.name == name)
+        .unwrap_or_else(|| panic!("missing declaration {name}"))
+        .ty
+}
+
 criterion_group! {
     name = benches;
     config = Criterion::default()
         .sample_size(20)
         .warm_up_time(Duration::from_secs(1))
         .measurement_time(Duration::from_secs(3));
-    targets = compilation_benchmarks, imported_file_benchmarks, artifact_benchmarks
+    targets = compilation_benchmarks, imported_file_benchmarks, artifact_benchmarks,
+        host_value_validation_benchmarks
 }
 criterion_main!(benches);

@@ -182,3 +182,60 @@ fn validation_bounds_record_scans_by_canonicalization_work() {
     assert_eq!(info.limit, 2);
     assert_eq!(info.observed, 3);
 }
+
+#[test]
+fn validation_bounds_variant_tag_scans_by_canonicalization_work() {
+    // The variant arm resolves the tag by scanning the type's field table,
+    // exactly like the record arm resolves field IDs. A variant type may carry
+    // up to `max_fields` tags and a `vec variant` value can force one scan per
+    // element, so the scan must be charged too. A value selecting a tag that is
+    // not in the table forces a full scan; a tight budget must interrupt it and
+    // report `canonicalization_work`, not run to completion and report
+    // `unknown_variant_id`.
+    let compilation =
+        compile_did("type V = variant { a: null; b: null; c: null; d: null }; service : {};")
+            .unwrap();
+    let contract = compilation.contract();
+    let selector = contract.bind_type(declaration(contract, "V")).unwrap();
+    let value = parse(json!({
+        "kind": "variant",
+        "id": u32::MAX,
+        "value": { "kind": "null" },
+    }));
+    let limits = Limits {
+        max_canonicalization_work: 2,
+        ..Limits::default()
+    };
+
+    let error = validate_host_value(contract, &selector, &value, &limits).unwrap_err();
+    let info = error.violations[0]
+        .resource_limit
+        .as_ref()
+        .unwrap_or_else(|| panic!("variant scan must charge and fail closed: {error:#?}"));
+    assert_eq!(info.resource, "canonicalization_work");
+    assert_eq!(info.limit, 2);
+    assert_eq!(info.observed, 3);
+}
+
+#[test]
+fn variant_tag_scans_are_deterministic_across_runs() {
+    // The same hostile input must fail the same way every time.
+    let compilation =
+        compile_did("type V = variant { a: null; b: null; c: null; d: null }; service : {};")
+            .unwrap();
+    let contract = compilation.contract();
+    let selector = contract.bind_type(declaration(contract, "V")).unwrap();
+    let value = parse(json!({
+        "kind": "variant",
+        "id": u32::MAX,
+        "value": { "kind": "null" },
+    }));
+    let limits = Limits {
+        max_canonicalization_work: 2,
+        ..Limits::default()
+    };
+
+    let first = validate_host_value(contract, &selector, &value, &limits).unwrap_err();
+    let second = validate_host_value(contract, &selector, &value, &limits).unwrap_err();
+    assert_eq!(first, second);
+}

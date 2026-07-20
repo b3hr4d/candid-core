@@ -168,6 +168,21 @@ pub(super) fn accept_source(
             ),
         ));
     }
+    // Bound the logical source ID, after the pre-existing content-byte check so
+    // its precedence is unchanged, and before charging so an oversized path is
+    // rejected without consuming the source/bundle budget.
+    if id.len() > limits.max_source_id_bytes {
+        return Err(CompileError::resource_limit(
+            "source_id_bytes",
+            limits.max_source_id_bytes,
+            id.len(),
+            format!(
+                "source ID {id:?} uses {} bytes; limit is {}",
+                id.len(),
+                limits.max_source_id_bytes
+            ),
+        ));
+    }
     budget
         .charge("sources", limits.max_sources, 1)
         .map_err(|error| budget_error(error, DiagnosticPhase::Load, "source accounting"))?;
