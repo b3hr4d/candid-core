@@ -15,17 +15,20 @@ fn main() -> Result<(), Box<dyn Error>> {
         .find(|declaration| declaration.name == "Measurement")
         .ok_or("missing Measurement declaration")?;
     let selector = contract.bind_type(measurement.ty)?;
-    let value = HostValue::record(vec![
-        HostFieldValue {
-            id: candid_parser::candid::idl_hash("count"),
-            value: HostValue::nat("340282366920938463463374607431768211456")?,
-        },
-        HostFieldValue {
-            id: candid_parser::candid::idl_hash("reading"),
-            // A NaN payload preserved exactly as IEEE-754 bits.
-            value: HostValue::float64("7ff8000000000001")?,
-        },
-    ]);
+    let value = HostValue::record(
+        vec![
+            HostFieldValue::new(
+                candid_parser::candid::idl_hash("count"),
+                HostValue::nat("340282366920938463463374607431768211456")?,
+            ),
+            HostFieldValue::new(
+                candid_parser::candid::idl_hash("reading"),
+                // A NaN payload preserved exactly as IEEE-754 bits.
+                HostValue::float64("7ff8000000000001")?,
+            ),
+        ],
+        &Limits::default(),
+    )?;
 
     validate_host_value(contract, &selector, &value, &Limits::default())?;
     println!(
