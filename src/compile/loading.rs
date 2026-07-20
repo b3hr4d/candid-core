@@ -129,6 +129,34 @@ pub(super) fn load_source_units_with_resolver(
             });
         }
     }
+    // Resolved targets are bounded by `accept_source` when they load, but the
+    // original spellings are emitted verbatim into `SourceInfo.imports`, where
+    // the sidecar preflight bounds them with `max_source_id_bytes`. Enforce the
+    // same bound here, once the whole graph has loaded, so the check is
+    // terminal like the preflight's: parse and resolver errors and every
+    // per-source byte and count limit — on any unit, not just the importer —
+    // keep their precedence, while a resolver that aliases a long spelling to
+    // a short canonical target can no longer make the compiler emit provenance
+    // that validation under the same limits rejects. The pass is one length
+    // comparison per edge, bounded by the `import_edges` charges above.
+    budget
+        .checkpoint()
+        .map_err(|error| budget_error(error, DiagnosticPhase::Load, "import accounting"))?;
+    for import in units.iter().flat_map(|unit| &unit.imports) {
+        if import.import.len() > limits.max_source_id_bytes {
+            return Err(CompileError::resource_limit(
+                "source_id_bytes",
+                limits.max_source_id_bytes,
+                import.import.len(),
+                format!(
+                    "import spelling {:?} uses {} bytes; limit is {}",
+                    import.import,
+                    import.import.len(),
+                    limits.max_source_id_bytes
+                ),
+            ));
+        }
+    }
     Ok((units, entry_id))
 }
 
@@ -168,9 +196,18 @@ pub(super) fn accept_source(
             ),
         ));
     }
-    // Bound the logical source ID, after the pre-existing content-byte check so
-    // its precedence is unchanged, and before charging so an oversized path is
-    // rejected without consuming the source/bundle budget.
+    budget
+        .charge("sources", limits.max_sources, 1)
+        .map_err(|error| budget_error(error, DiagnosticPhase::Load, "source accounting"))?;
+    budget
+        .charge("bundle_bytes", limits.max_bundle_bytes, source_bytes)
+        .map_err(|error| budget_error(error, DiagnosticPhase::Load, "source accounting"))?;
+    // Bound the logical source ID last, mirroring the sidecar preflight, so
+    // this newer check never preempts one of this source's pre-existing byte
+    // or count limits: a source that was already invalid under `source_bytes`,
+    // `sources`, or `bundle_bytes` keeps reporting that resource. Rejection is
+    // terminal, so charging the cumulative budgets before failing here retains
+    // nothing.
     if id.len() > limits.max_source_id_bytes {
         return Err(CompileError::resource_limit(
             "source_id_bytes",
@@ -183,12 +220,6 @@ pub(super) fn accept_source(
             ),
         ));
     }
-    budget
-        .charge("sources", limits.max_sources, 1)
-        .map_err(|error| budget_error(error, DiagnosticPhase::Load, "source accounting"))?;
-    budget
-        .charge("bundle_bytes", limits.max_bundle_bytes, source_bytes)
-        .map_err(|error| budget_error(error, DiagnosticPhase::Load, "source accounting"))?;
     Ok(())
 }
 

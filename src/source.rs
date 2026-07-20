@@ -146,15 +146,15 @@ pub(crate) fn validate_source_info_structure_with_budget(
     // presented (untrusted) path, and the compiler emits canonical, correctly
     // identified sidecars by construction. Re-serializing and re-hashing the
     // whole bundle here was pure redundant work — it ran up to twice more per
-    // presented-sidecar validation — so the invariant is asserted in debug
-    // builds instead of paid for on every validation. This changes no error
-    // code or precedence: a tampered presented bundle is still rejected by
-    // `validate_source_bundle_identity`, which runs first.
+    // presented-sidecar validation — so only the cheap canonical-order
+    // invariant is asserted in debug builds. Recomputing the bundle hash, even
+    // in an assertion, would repeat the uninterruptible serialize/hash pass
+    // that `validate_source_bundle_identity` checkpoints before performing.
+    // This changes no error code or precedence: a tampered presented bundle is
+    // still rejected by `validate_source_bundle_identity`, which runs first.
     debug_assert!(
-        source_bundle_is_canonical(source_info)
-            && source_info.source_bundle_id
-                == source_bundle_id(&source_info.sources, &source_info.imports),
-        "bundle identity must be validated before the structural pass",
+        source_bundle_is_canonical(source_info),
+        "bundle canonical order must be established before the structural pass",
     );
 
     let mut source_names = BTreeSet::new();
