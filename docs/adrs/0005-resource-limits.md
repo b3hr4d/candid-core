@@ -14,13 +14,13 @@ Every public parse, compile, validate, canonicalize, encode, and decode entry po
 
 The policy includes at least:
 
-- input bytes, per-source bytes, total bundle bytes, and source count;
+- input bytes, per-source bytes, total bundle bytes, source count, and per-source-ID byte length;
 - import depth and import edge count;
 - source syntax nesting and checked semantic type depth;
-- type nodes, graph edges, declarations, fields, methods, arguments, results, and string bytes;
+- type nodes, graph edges, declarations, fields, methods, arguments, results, string bytes, and producer-metadata bytes;
 - diagnostics count and retained diagnostic text;
 - HostValue lexical JSON nesting, semantic depth, elements, text/blob bytes, and encoded message bytes;
-- canonicalization/refinement work units and an optional cancellation/deadline.
+- canonicalization/refinement work units, provenance target-resolution work units, and an optional cancellation/deadline.
 
 Graph and import algorithms use explicit work queues rather than call-stack recursion. Limits are checked before allocation where possible and during work otherwise. Exhaustion fails closed with a stable `resource_limit_exceeded` diagnostic containing `resource`, `limit`, and observed or attempted value. No partially validated Contract is returned.
 
@@ -64,6 +64,29 @@ It charges nodes and edges visited, signature and string bytes produced,
 comparison bounds for sorted collections, graph reindexing and rewriting, and
 the canonical bytes serialized and hashed for identities. Callers that both
 validate and consume the canonical result reuse the same canonicalization pass.
+
+Provenance validation resolves every field-label and method occurrence against
+its target aggregate or service. Because a single aggregate may legally hold up
+to `max_fields` entries and the label count is independently bounded by the same
+limit, an unindexed per-label scan would be quadratic in `max_fields` and, with
+duplicate occurrences permitted by design, would re-pay a full scan per
+duplicate. Each referenced container's field-ID set (and each service's
+method-name set) is therefore built once and consulted by membership test.
+That index construction and every lookup are charged against a dedicated
+`provenance_work` counter, kept separate from `max_canonicalization_work` so
+that rederiving a large graph and then indexing its provenance sidecar cannot
+jointly exhaust one counter. HostValue variant-tag resolution is charged
+identically to record field-ID matching, so a hostile variant table amplified
+across many values is bounded by `max_canonicalization_work` rather than
+scanning uncharged.
+
+Producer metadata is untrusted, caller-supplied provenance. Its aggregate bytes
+are bounded (`max_producer_bytes`), but it is deliberately excluded from the
+authenticated `candid-core:contract:v1` and `candid-core:interface:v1` identity
+payloads: binding it in would change every existing identity, and a signature
+over a Contract identity is not a signature over its producer claims. Producer
+metadata remains part of the canonical serialized bytes, so it is preserved
+losslessly on the wire while never influencing an identity hash.
 
 `RuntimeContext` snapshots the configured Unix deadline into a monotonic local
 deadline when work begins and carries a cloneable `CancellationToken` for

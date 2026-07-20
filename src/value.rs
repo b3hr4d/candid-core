@@ -959,7 +959,21 @@ impl HostValueValidationState<'_, '_, '_> {
                 }
             }
             (TypeNode::Variant { fields }, HostValueKind::Variant { id, value }) => {
-                let Some(field) = fields.iter().find(|field| field.id == *id) else {
+                // Charge each comparison, exactly like the record arm above.
+                // A variant type may hold up to `max_fields` entries, and a
+                // `vec variant` value can present one lookup per element, so an
+                // uncharged `fields.iter().find(...)` is `O(elements * fields)`
+                // of free, uninterruptible scan work. Charging bounds it to
+                // `max_canonicalization_work` and lets a deadline interrupt it.
+                let mut matched = None;
+                for field in fields {
+                    self.charge_work(path)?;
+                    if field.id == *id {
+                        matched = Some(field);
+                        break;
+                    }
+                }
+                let Some(field) = matched else {
                     return Err(single(
                         "unknown_variant_id",
                         path,

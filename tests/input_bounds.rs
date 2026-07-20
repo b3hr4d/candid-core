@@ -1,4 +1,7 @@
-use candid_core::{Limits, MemoryResolver, SourceId, SourceResolver, WorkspaceResolver};
+use candid_core::{
+    compile_with_resolver, CompileOptions, Limits, MemoryResolver, RuntimeContext, SourceId,
+    SourceResolver, WorkspaceResolver,
+};
 use serde_json::Value;
 use std::fs;
 use std::path::PathBuf;
@@ -85,6 +88,46 @@ fn workspace_resolver_bounds_reads_and_preserves_utf8_errors() {
         .load(&SourceId::parse("workspace:/invalid.did").unwrap(), &limits)
         .unwrap_err();
     assert_eq!(error.code, "did_file_read_error");
+}
+
+#[test]
+fn compile_bounds_source_id_length_at_the_limit_and_one_over() {
+    // A logical source ID is otherwise bounded only cumulatively by
+    // `max_string_bytes`, so one megabyte-long path could slip through. The
+    // resolver accounting seam enforces the per-ID limit before the source is
+    // hashed or parsed.
+    let entry = format!("{}.did", "a".repeat(64));
+    let mut resolver = MemoryResolver::new();
+    resolver.insert(&entry, "service : {};").unwrap();
+    let id_len = SourceId::parse(&entry).unwrap().as_str().len();
+
+    compile_with_resolver(
+        &entry,
+        &resolver,
+        CompileOptions::default(),
+        &RuntimeContext::new(Limits {
+            max_source_id_bytes: id_len,
+            ..Limits::default()
+        }),
+    )
+    .unwrap_or_else(|error| panic!("an ID exactly at the limit must compile: {error:#?}"));
+
+    let error = compile_with_resolver(
+        &entry,
+        &resolver,
+        CompileOptions::default(),
+        &RuntimeContext::new(Limits {
+            max_source_id_bytes: id_len - 1,
+            ..Limits::default()
+        }),
+    )
+    .expect_err("an ID one byte over the limit must be rejected");
+    let diagnostic = &error.diagnostics[0];
+    assert_eq!(diagnostic.code, "resource_limit_exceeded");
+    let resource = diagnostic.resource_limit.as_ref().unwrap();
+    assert_eq!(resource.resource, "source_id_bytes");
+    assert_eq!(resource.limit, id_len - 1);
+    assert_eq!(resource.observed, id_len);
 }
 
 #[test]
