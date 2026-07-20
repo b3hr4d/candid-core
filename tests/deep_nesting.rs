@@ -163,11 +163,12 @@ fn imported_alias_chain_is_rejected_before_upstream_type_checking() {
 /// What this asserts is that input nested *past* `max_value_nesting` is
 /// rejected without recursing, which the constant-stack pre-scan guarantees in
 /// every build profile. It deliberately does NOT decode a document at exactly
-/// the limit on this stack: that decode does recurse, and its per-level cost is
-/// build-profile dependent — roughly 640 bytes in release but roughly 6 KiB in
-/// debug, where 64 KiB is exhausted around ten levels. No fixed limit is safe
-/// in both profiles at this stack size, so the guarantee is scoped to what the
-/// pre-scan can actually deliver.
+/// the limit on this stack: that decode does recurse, at a per-level cost that
+/// depends on the build profile, and a debug build exhausts 64 KiB in single
+/// digits. No fixed limit is safe in both profiles at this stack size, so the
+/// guarantee is scoped to what the pre-scan can actually deliver.
+/// `Limits::max_value_nesting` states the measured costs; they are deliberately
+/// not repeated here, so the two cannot drift apart.
 #[test]
 fn small_stack_rejects_hostile_host_value_json_without_aborting() {
     if std::env::var_os("CANDID_CORE_DEEP_NESTING_JSON_CHILD").is_some() {

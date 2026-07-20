@@ -17,11 +17,11 @@
 //!
 //! What this file does NOT cover: it does not prove that decoding a document at
 //! exactly `max_value_nesting` is safe on an arbitrarily small stack. That
-//! decode still recurses, and its per-level stack cost is build-profile
-//! dependent (roughly 640 bytes in release, roughly 6 KiB in debug). The
-//! small-stack guarantee this crate makes is the one asserted in
-//! `tests/deep_nesting.rs`: input nested *past* the limit is rejected without
-//! recursing at all. See `Limits::max_value_nesting`.
+//! decode still recurses, at a per-level cost that depends on the build
+//! profile; `Limits::max_value_nesting` carries the measured figures and is the
+//! single place they are stated. The small-stack guarantee this crate makes is
+//! the one asserted in `tests/deep_nesting.rs`: input nested *past* the limit is
+//! rejected without recursing at all.
 
 use candid_core::{HostFieldValue, HostValue, HostValueJsonError, Limits};
 
@@ -211,18 +211,19 @@ fn every_container_constructor_enforces_the_depth_bound() {
 fn host_field_value_cannot_carry_an_unbounded_value_into_a_record() {
     // `HostFieldValue::new` is infallible by design, so the bound has to be
     // enforced where the field joins a record. A field is not a way around it.
-    let permissive = Limits {
+    //
+    // One policy throughout: the value is built legitimately at exactly the
+    // limit, and wrapping it in a record adds the level that breaches it. The
+    // field is what carries the already-at-limit value across, so if `record`
+    // trusted it instead of remeasuring, this would succeed at depth 5.
+    let limits = Limits {
         max_value_depth: 4,
         ..Limits::default()
     };
-    let field = HostFieldValue::new(7, nested_opt_value(4, &permissive).unwrap());
+    let field = HostFieldValue::new(7, nested_opt_value(4, &limits).unwrap());
     assert_eq!(field.id(), 7);
 
-    let strict = Limits {
-        max_value_depth: 4,
-        ..Limits::default()
-    };
-    let error = HostValue::record(vec![field], &strict).unwrap_err();
+    let error = HostValue::record(vec![field], &limits).unwrap_err();
     assert_value_limit(&error, "value_depth", 4, 5);
 }
 
