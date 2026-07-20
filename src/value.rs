@@ -17,10 +17,35 @@ pub struct ContractMethodRef {
     pub method_name: String,
 }
 
+/// One field of a [`HostValue`] record, addressed by its authoritative Candid
+/// field ID.
+///
+/// The fields are private so a record entry cannot be assembled by struct
+/// literal, which would let a caller reach [`HostValue::record`] with a value
+/// whose extent was never measured.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct HostFieldValue {
-    pub id: u32,
-    pub value: HostValue,
+    id: u32,
+    value: HostValue,
+}
+
+impl HostFieldValue {
+    /// Pair a field ID with a value.
+    ///
+    /// This is deliberately infallible: a field carries no bound of its own,
+    /// and the enclosing [`HostValue::record`] call is what measures the
+    /// combined extent against the caller's [`Limits`].
+    pub fn new(id: u32, value: HostValue) -> Self {
+        Self { id, value }
+    }
+
+    pub fn id(&self) -> u32 {
+        self.id
+    }
+
+    pub fn value(&self) -> &HostValue {
+        &self.value
+    }
 }
 
 /// A locally canonical tagged HostValue.
@@ -29,9 +54,83 @@ pub struct HostFieldValue {
 /// not implement `Deserialize`. JSON callers must use
 /// [`HostValue::from_json_with_limits`], which decodes a private raw DTO and
 /// checks locally canonical scalar encodings before exposing this value.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[serde(transparent)]
-pub struct HostValue(HostValueKind);
+///
+/// Every value carries its own [`Extent`], so the container constructors can
+/// reject an over-deep or over-large value in constant time per level. That
+/// bound is what makes the recursive operations on this type safe: `Drop`,
+/// `Clone`, `PartialEq`, `Debug`, and `Serialize` all recurse once per level,
+/// and all of them abort the process on a value deep enough to exhaust the
+/// stack. Bounding construction is the only chokepoint that covers all five,
+/// so there is deliberately no way to obtain a `HostValue` whose depth was
+/// never checked against a caller-supplied limit.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HostValue {
+    kind: HostValueKind,
+    extent: Extent,
+}
+
+/// The measured size of a value: how deeply it nests and how many nodes it
+/// contains.
+///
+/// Both counters use the same units as the JSON decode path in
+/// [`HostValueLocalValidationState::canonicalize_value`], so one value reports
+/// the same `observed` figure whether it was rejected while being decoded or
+/// while being constructed. `depth` counts container edges below a node, so a
+/// scalar and an empty container are both `0`; `elements` counts nodes
+/// inclusive of the node itself, so a scalar is `1`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Extent {
+    depth: u32,
+    elements: u32,
+}
+
+impl Extent {
+    const LEAF: Self = Self {
+        depth: 0,
+        elements: 1,
+    };
+
+    fn of(kind: &HostValueKind) -> Self {
+        match kind {
+            HostValueKind::Opt { value: Some(value) } => Self::enclosing([value.extent]),
+            HostValueKind::Vec { values } => {
+                Self::enclosing(values.iter().map(|value| value.extent))
+            }
+            HostValueKind::Record { fields } => {
+                Self::enclosing(fields.iter().map(|field| field.value.extent))
+            }
+            HostValueKind::Variant { value, .. } => Self::enclosing([value.extent]),
+            _ => Self::LEAF,
+        }
+    }
+
+    /// An empty container yields depth `0`, not `1`: it encloses nothing, so it
+    /// adds no edge, exactly as the decode path charges it no child recursion.
+    fn enclosing(children: impl IntoIterator<Item = Self>) -> Self {
+        let mut deepest: Option<u32> = None;
+        let mut elements = 1u32;
+        for child in children {
+            deepest = Some(deepest.map_or(child.depth, |depth| depth.max(child.depth)));
+            elements = elements.saturating_add(child.elements);
+        }
+        Self {
+            depth: deepest.map_or(0, |depth| depth.saturating_add(1)),
+            elements,
+        }
+    }
+}
+
+// Hand-written so the wire shape stays exactly what `#[serde(transparent)]`
+// produced before `HostValue` gained its cached extent: the tagged ABI of
+// ADR 0006, with no envelope and no extent field.
+impl Serialize for HostValue {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        self.kind.serialize(serializer)
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
@@ -81,6 +180,7 @@ impl HostValue {
         budget
             .checkpoint()
             .map_err(|error| host_json_budget_error(error, "$"))?;
+        check_value_nesting(input, &mut budget)?;
         let raw: RawHostValue = serde_json::from_str(input)
             .map_err(|error| HostValueJsonError::Malformed(error.to_string()))?;
         budget
@@ -90,35 +190,35 @@ impl HostValue {
     }
 
     pub fn null() -> Self {
-        Self(HostValueKind::Null)
+        Self::scalar(HostValueKind::Null)
     }
 
     pub fn boolean(value: bool) -> Self {
-        Self(HostValueKind::Bool { value })
+        Self::scalar(HostValueKind::Bool { value })
     }
 
     pub fn nat(value: impl Into<String>) -> Result<Self, HostValueJsonError> {
         let value = value.into();
         Self::require(canonical_nat(&value), "non-canonical nat")?;
-        Ok(Self(HostValueKind::Nat { value }))
+        Ok(Self::scalar(HostValueKind::Nat { value }))
     }
 
     pub fn int(value: impl Into<String>) -> Result<Self, HostValueJsonError> {
         let value = value.into();
         Self::require(canonical_int(&value), "non-canonical int")?;
-        Ok(Self(HostValueKind::Int { value }))
+        Ok(Self::scalar(HostValueKind::Int { value }))
     }
 
     pub fn nat8(value: u8) -> Self {
-        Self(HostValueKind::Nat8 { value })
+        Self::scalar(HostValueKind::Nat8 { value })
     }
 
     pub fn nat16(value: u16) -> Self {
-        Self(HostValueKind::Nat16 { value })
+        Self::scalar(HostValueKind::Nat16 { value })
     }
 
     pub fn nat32(value: u32) -> Self {
-        Self(HostValueKind::Nat32 { value })
+        Self::scalar(HostValueKind::Nat32 { value })
     }
 
     pub fn nat64(value: impl Into<String>) -> Result<Self, HostValueJsonError> {
@@ -127,19 +227,19 @@ impl HostValue {
             canonical_nat(&value) && value.parse::<u64>().is_ok(),
             "non-canonical nat64",
         )?;
-        Ok(Self(HostValueKind::Nat64 { value }))
+        Ok(Self::scalar(HostValueKind::Nat64 { value }))
     }
 
     pub fn int8(value: i8) -> Self {
-        Self(HostValueKind::Int8 { value })
+        Self::scalar(HostValueKind::Int8 { value })
     }
 
     pub fn int16(value: i16) -> Self {
-        Self(HostValueKind::Int16 { value })
+        Self::scalar(HostValueKind::Int16 { value })
     }
 
     pub fn int32(value: i32) -> Self {
-        Self(HostValueKind::Int32 { value })
+        Self::scalar(HostValueKind::Int32 { value })
     }
 
     pub fn int64(value: impl Into<String>) -> Result<Self, HostValueJsonError> {
@@ -148,62 +248,88 @@ impl HostValue {
             canonical_int(&value) && value.parse::<i64>().is_ok(),
             "non-canonical int64",
         )?;
-        Ok(Self(HostValueKind::Int64 { value }))
+        Ok(Self::scalar(HostValueKind::Int64 { value }))
     }
 
     pub fn float32(bits: impl Into<String>) -> Result<Self, HostValueJsonError> {
         let bits = bits.into();
         Self::require(canonical_hex(&bits, 8), "non-canonical float32 bits")?;
-        Ok(Self(HostValueKind::Float32 { bits }))
+        Ok(Self::scalar(HostValueKind::Float32 { bits }))
     }
 
     pub fn float64(bits: impl Into<String>) -> Result<Self, HostValueJsonError> {
         let bits = bits.into();
         Self::require(canonical_hex(&bits, 16), "non-canonical float64 bits")?;
-        Ok(Self(HostValueKind::Float64 { bits }))
+        Ok(Self::scalar(HostValueKind::Float64 { bits }))
     }
 
     pub fn text(value: impl Into<String>) -> Self {
-        Self(HostValueKind::Text {
+        Self::scalar(HostValueKind::Text {
             value: value.into(),
         })
     }
 
     pub fn reserved() -> Self {
-        Self(HostValueKind::Reserved)
+        Self::scalar(HostValueKind::Reserved)
     }
 
     pub fn principal(value: impl Into<String>) -> Result<Self, HostValueJsonError> {
         let value = value.into();
         Self::require_canonical_principal(&value)?;
-        Ok(Self(HostValueKind::Principal { value }))
+        Ok(Self::scalar(HostValueKind::Principal { value }))
     }
 
-    pub fn opt(value: Option<Self>) -> Self {
-        Self(HostValueKind::Opt {
-            value: value.map(Box::new),
-        })
+    /// Wrap a value in an `opt`, failing closed past `limits.max_value_depth`
+    /// or `limits.max_value_elements`.
+    ///
+    /// Container construction is fallible because every recursive operation on
+    /// the result — including `Drop`, `Clone`, and `Debug`, none of which can
+    /// signal failure — walks one stack frame per level. Refusing to build the
+    /// value is the only point at which a policy can still be applied.
+    pub fn opt(value: Option<Self>, limits: &Limits) -> Result<Self, HostValueJsonError> {
+        Self::bounded(
+            HostValueKind::Opt {
+                value: value.map(Box::new),
+            },
+            limits,
+        )
     }
 
-    pub fn vector(values: Vec<Self>) -> Self {
-        Self(HostValueKind::Vec { values })
+    /// Build a `vec`, failing closed past `limits.max_value_depth` or
+    /// `limits.max_value_elements`.
+    pub fn vector(values: Vec<Self>, limits: &Limits) -> Result<Self, HostValueJsonError> {
+        Self::bounded(HostValueKind::Vec { values }, limits)
     }
 
-    pub fn record(fields: Vec<HostFieldValue>) -> Self {
-        Self(HostValueKind::Record { fields })
+    /// Build a `record`, failing closed past `limits.max_value_depth` or
+    /// `limits.max_value_elements`.
+    ///
+    /// This does not check for duplicate field IDs or agreement with any
+    /// Contract type; that remains [`validate_host_value`]'s contract-directed
+    /// job.
+    pub fn record(
+        fields: Vec<HostFieldValue>,
+        limits: &Limits,
+    ) -> Result<Self, HostValueJsonError> {
+        Self::bounded(HostValueKind::Record { fields }, limits)
     }
 
-    pub fn variant(id: u32, value: Self) -> Self {
-        Self(HostValueKind::Variant {
-            id,
-            value: Box::new(value),
-        })
+    /// Build a `variant`, failing closed past `limits.max_value_depth` or
+    /// `limits.max_value_elements`.
+    pub fn variant(id: u32, value: Self, limits: &Limits) -> Result<Self, HostValueJsonError> {
+        Self::bounded(
+            HostValueKind::Variant {
+                id,
+                value: Box::new(value),
+            },
+            limits,
+        )
     }
 
     pub fn service(principal: impl Into<String>) -> Result<Self, HostValueJsonError> {
         let principal = principal.into();
         Self::require_canonical_principal(&principal)?;
-        Ok(Self(HostValueKind::Service { principal }))
+        Ok(Self::scalar(HostValueKind::Service { principal }))
     }
 
     pub fn func(
@@ -212,10 +338,59 @@ impl HostValue {
     ) -> Result<Self, HostValueJsonError> {
         let principal = principal.into();
         Self::require_canonical_principal(&principal)?;
-        Ok(Self(HostValueKind::Func {
+        Ok(Self::scalar(HostValueKind::Func {
             principal,
             method: method.into(),
         }))
+    }
+
+    /// Wrap a kind that encloses nothing, so its extent needs no measuring.
+    fn scalar(kind: HostValueKind) -> Self {
+        debug_assert!(
+            Extent::of(&kind) == Extent::LEAF,
+            "scalar() used for a kind that encloses children",
+        );
+        Self {
+            kind,
+            extent: Extent::LEAF,
+        }
+    }
+
+    /// Wrap a kind whose children were already bounded by the caller.
+    ///
+    /// Used only by the JSON decode path, which enforces depth and elements
+    /// through the budget as it walks, so re-checking here would report the
+    /// same exhaustion twice under two different code paths.
+    fn measured(kind: HostValueKind) -> Self {
+        let extent = Extent::of(&kind);
+        Self { kind, extent }
+    }
+
+    /// Measure an enclosing kind and reject it if it breaches the caller's
+    /// policy.
+    ///
+    /// Constant time per level: each child already carries its own extent, so a
+    /// chain built one level at a time costs O(depth) overall rather than
+    /// O(depth^2).
+    fn bounded(kind: HostValueKind, limits: &Limits) -> Result<Self, HostValueJsonError> {
+        let extent = Extent::of(&kind);
+        if usize::try_from(extent.depth).unwrap_or(usize::MAX) > limits.max_value_depth {
+            return Err(HostValueJsonError::ValueLimit {
+                resource: "value_depth",
+                limit: limits.max_value_depth,
+                observed: usize::try_from(extent.depth).unwrap_or(usize::MAX),
+                path: "$".to_string(),
+            });
+        }
+        if usize::try_from(extent.elements).unwrap_or(usize::MAX) > limits.max_value_elements {
+            return Err(HostValueJsonError::ValueLimit {
+                resource: "value_elements",
+                limit: limits.max_value_elements,
+                observed: usize::try_from(extent.elements).unwrap_or(usize::MAX),
+                path: "$".to_string(),
+            });
+        }
+        Ok(Self { kind, extent })
     }
 
     fn require(condition: bool, message: &str) -> Result<(), HostValueJsonError> {
@@ -306,6 +481,79 @@ fn host_json_budget_error(error: crate::budget::BudgetError, path: &str) -> Host
             path: path.to_string(),
         },
     }
+}
+
+/// Poll cancellation every this many input bytes rather than every byte, so a
+/// scan of a `max_value_bytes`-sized document stays responsive without paying
+/// an atomic load per byte.
+const NESTING_CHECKPOINT_INTERVAL: usize = 4096;
+
+/// Reject stack-hostile JSON nesting before `serde_json`'s recursive decoder
+/// sees it.
+///
+/// This is the HostValue analogue of `check_source_nesting`: an iterative,
+/// constant-stack scan that runs ahead of a recursive parser so hostile nesting
+/// is rejected by a crate-owned budget check instead of by exhausting the
+/// stack. `serde_json` counts recursion per JSON container too, so `observed`
+/// here is directly comparable to its fixed 128-frame ceiling; keeping
+/// `max_value_nesting` below that ceiling means this check always fires first
+/// while the ceiling remains in place as an unmodified second line of defence.
+///
+/// The scan deliberately does not validate JSON syntax. Unbalanced or malformed
+/// input keeps `serde_json`'s established diagnostic rather than gaining a
+/// second, competing one.
+///
+/// Scanning raw bytes is sound for UTF-8: a multi-byte sequence never contains
+/// an ASCII byte, so no `{`, `[`, `"`, or `\` can be mistaken for structure
+/// inside a multi-byte character.
+fn check_value_nesting(
+    input: &str,
+    budget: &mut crate::budget::Budget<'_>,
+) -> Result<(), HostValueJsonError> {
+    let limit = budget.limits().max_value_nesting;
+    let mut depth = 0usize;
+    let mut in_string = false;
+    let mut escaped = false;
+    // A comparison against a running target rather than `index % INTERVAL`:
+    // this loop runs once per input byte, and a division there is a measurable
+    // fraction of the whole scan.
+    let mut next_checkpoint = 0usize;
+
+    for (index, byte) in input.as_bytes().iter().enumerate() {
+        if index == next_checkpoint {
+            budget
+                .checkpoint()
+                .map_err(|error| host_json_budget_error(error, "$"))?;
+            next_checkpoint = index.saturating_add(NESTING_CHECKPOINT_INTERVAL);
+        }
+        if in_string {
+            if escaped {
+                escaped = false;
+            } else if *byte == b'\\' {
+                escaped = true;
+            } else if *byte == b'"' {
+                in_string = false;
+            }
+            continue;
+        }
+        match byte {
+            b'"' => in_string = true,
+            b'{' | b'[' => {
+                depth = depth.saturating_add(1);
+                if depth > limit {
+                    return Err(HostValueJsonError::ValueLimit {
+                        resource: "value_nesting",
+                        limit,
+                        observed: depth,
+                        path: "$".to_string(),
+                    });
+                }
+            }
+            b'}' | b']' => depth = depth.saturating_sub(1),
+            _ => {}
+        }
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -463,14 +711,14 @@ impl<'a, 'limits> HostValueLocalValidationState<'a, 'limits> {
                 fields: fields
                     .into_iter()
                     .map(|field| {
-                        Ok(HostFieldValue {
-                            id: field.id,
-                            value: self.canonicalize_value(
+                        Ok(HostFieldValue::new(
+                            field.id,
+                            self.canonicalize_value(
                                 field.value,
                                 &format!("{path}.fields[{}]", field.id),
                                 depth + 1,
                             )?,
-                        })
+                        ))
                     })
                     .collect::<Result<Vec<_>, HostValueJsonError>>()?,
             },
@@ -494,7 +742,7 @@ impl<'a, 'limits> HostValueLocalValidationState<'a, 'limits> {
                 HostValueKind::Func { principal, method }
             }
         };
-        Ok(HostValue(value))
+        Ok(HostValue::measured(value))
     }
 
     fn charge(&mut self, value: &str, path: &str) -> Result<(), HostValueJsonError> {
@@ -640,7 +888,7 @@ impl HostValueValidationState<'_, '_, '_> {
         self.charge_element(path)?;
         self.charge_string_bytes(value, path)?;
 
-        match (&self.contract.types()[reference as usize], &value.0) {
+        match (&self.contract.types()[reference as usize], &value.kind) {
             (TypeNode::Primitive { primitive }, value) => {
                 validate_primitive(*primitive, value, path)?;
             }
@@ -901,7 +1149,7 @@ fn validate_primitive(
 }
 
 fn value_string_bytes(value: &HostValue) -> usize {
-    match &value.0 {
+    match &value.kind {
         HostValueKind::Nat { value }
         | HostValueKind::Int { value }
         | HostValueKind::Nat64 { value }

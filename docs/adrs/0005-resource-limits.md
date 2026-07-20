@@ -19,7 +19,7 @@ The policy includes at least:
 - source syntax nesting and checked semantic type depth;
 - type nodes, graph edges, declarations, fields, methods, arguments, results, and string bytes;
 - diagnostics count and retained diagnostic text;
-- HostValue depth, elements, text/blob bytes, and encoded message bytes;
+- HostValue lexical JSON nesting, semantic depth, elements, text/blob bytes, and encoded message bytes;
 - canonicalization/refinement work units and an optional cancellation/deadline.
 
 Graph and import algorithms use explicit work queues rather than call-stack recursion. Limits are checked before allocation where possible and during work otherwise. Exhaustion fails closed with a stable `resource_limit_exceeded` diagnostic containing `resource`, `limit`, and observed or attempted value. No partially validated Contract is returned.
@@ -35,7 +35,7 @@ Default numeric values live in a versioned operational profile rather than the s
 
 ## Implementation
 
-Existing conveniences use `Limits::default`; context-aware entry points expose the policy. Contract JSON, source resolution, graph structure, canonicalization, extensions, and HostValue traversal enforce limits. Graph canonicalization and value validation use explicit work stacks. Limit failures carry structured resource, limit, and observed values.
+Existing conveniences use `Limits::default`; context-aware entry points expose the policy. Contract JSON, source resolution, graph structure, canonicalization, extensions, and HostValue traversal enforce limits. Graph canonicalization uses an explicit work stack. HostValue validation descends recursively, bounded by `max_value_depth`; it is safe because no `HostValue` exceeding that depth can be obtained, not because the traversal is iterative. Limit failures carry structured resource, limit, and observed values.
 
 The compiler revalidates every resolver result before digesting or parsing it and owns source-count, per-source-byte, and bundle-byte accounting. Resolver implementations may reject inputs earlier, but cannot bypass compiler enforcement. Inline compilation uses the same accounting and source-sidecar generation propagates validation failures without panicking.
 
@@ -43,6 +43,14 @@ Source token nesting is bounded before the recursive upstream parser or type
 checker is invoked. Checked Candid types are depth-validated with an explicit
 work stack, and Contract lowering plus provenance collection likewise use
 explicit work stacks rather than recursive descent.
+
+HostValue JSON nesting is bounded the same way and for the same reason: a
+constant-stack scan of the document rejects hostile nesting before the recursive
+`serde_json` decoder is invoked, so the rejection is a budget decision rather
+than a stack-exhaustion abort. Lexical nesting and semantic depth stay separate
+limits, mirroring `max_source_nesting` against `max_type_depth`, because one
+`vec` level costs two JSON containers and one `record` level costs three — a
+single limit could not report an honest observed value for both.
 
 Each context-aware public operation creates one internal consumable budget.
 Loading, preflight checks, lowering, Contract validation, canonicalization, and

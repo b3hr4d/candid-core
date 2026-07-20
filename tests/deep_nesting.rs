@@ -1,6 +1,6 @@
 use candid_core::{
-    compile_did_with_context, compile_with_resolver, CompileOptions, Limits, MemoryResolver,
-    RuntimeContext,
+    compile_did_with_context, compile_with_resolver, CompileOptions, HostValue, HostValueJsonError,
+    Limits, MemoryResolver, RuntimeContext,
 };
 use std::process::Command;
 
@@ -33,6 +33,19 @@ fn compile_with_limits(source: &str, limits: Limits) -> Result<(), candid_core::
         &RuntimeContext::new(limits),
     )
     .map(|_| ())
+}
+
+/// `depth` nested `opt` wrappers around a `null`, as the portable tagged ABI.
+fn nested_opt_json(depth: usize) -> String {
+    let mut json = String::new();
+    for _ in 0..depth {
+        json.push_str(r#"{"kind":"opt","value":"#);
+    }
+    json.push_str(r#"{"kind":"null"}"#);
+    for _ in 0..depth {
+        json.push('}');
+    }
+    json
 }
 
 fn compile_imported_alias_chain() -> Result<(), candid_core::CompileError> {
@@ -137,6 +150,59 @@ fn imported_alias_chain_is_rejected_before_upstream_type_checking() {
     assert_eq!(resource.resource, "type_depth");
     assert_eq!(resource.limit, 256);
     assert_eq!(resource.observed, 257);
+}
+
+/// The JSON decode path is the one route where hostile nesting is reachable
+/// from bytes alone, with no host Rust code involved.
+///
+/// This runs in a subprocess for the same reason the compiler case below does:
+/// a stack overflow aborts the process outright and cannot be caught, so a
+/// regression has to be observable as a failed child rather than as a killed
+/// test binary.
+///
+/// What this asserts is that input nested *past* `max_value_nesting` is
+/// rejected without recursing, which the constant-stack pre-scan guarantees in
+/// every build profile. It deliberately does NOT decode a document at exactly
+/// the limit on this stack: that decode does recurse, at a per-level cost that
+/// depends on the build profile, and a debug build exhausts 64 KiB in single
+/// digits. No fixed limit is safe in both profiles at this stack size, so the
+/// guarantee is scoped to what the pre-scan can actually deliver.
+/// `Limits::max_value_nesting` states the measured costs; they are deliberately
+/// not repeated here, so the two cannot drift apart.
+#[test]
+fn small_stack_rejects_hostile_host_value_json_without_aborting() {
+    if std::env::var_os("CANDID_CORE_DEEP_NESTING_JSON_CHILD").is_some() {
+        let error = std::thread::Builder::new()
+            .stack_size(SMALL_STACK_BYTES)
+            .spawn(|| HostValue::from_json_with_limits(&nested_opt_json(3_000), &Limits::default()))
+            .unwrap()
+            .join()
+            .expect("small-stack HostValue worker must not abort")
+            .unwrap_err();
+
+        let HostValueJsonError::ValueLimit {
+            resource,
+            limit,
+            observed,
+            ..
+        } = error
+        else {
+            panic!("expected a resource limit, found {error:?}");
+        };
+        assert_eq!(resource, "value_nesting");
+        assert_eq!(limit, Limits::default().max_value_nesting);
+        assert_eq!(observed, limit + 1);
+        return;
+    }
+
+    let status = Command::new(std::env::current_exe().unwrap())
+        .arg("--exact")
+        .arg("small_stack_rejects_hostile_host_value_json_without_aborting")
+        .arg("--nocapture")
+        .env("CANDID_CORE_DEEP_NESTING_JSON_CHILD", "1")
+        .status()
+        .unwrap();
+    assert!(status.success(), "small-stack subprocess failed: {status}");
 }
 
 #[test]

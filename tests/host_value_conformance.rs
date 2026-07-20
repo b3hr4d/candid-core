@@ -111,10 +111,14 @@ fn public_constructors_produce_only_canonical_scalars() {
     assert!(HostValue::service("AAAAA-AA").is_err());
     assert!(HostValue::func("AAAAA-AA", "go").is_err());
 
-    HostValue::record(vec![candid_core::HostFieldValue {
-        id: 1,
-        value: HostValue::vector(vec![HostValue::nat("1").unwrap()]),
-    }]);
+    HostValue::record(
+        vec![candid_core::HostFieldValue::new(
+            1,
+            HostValue::vector(vec![HostValue::nat("1").unwrap()], &Limits::default()).unwrap(),
+        )],
+        &Limits::default(),
+    )
+    .unwrap();
 }
 
 #[test]

@@ -21,6 +21,41 @@ pub struct Limits {
     pub max_source_nesting: usize,
     /// Maximum semantic type nesting lowered from a checked Candid program.
     pub max_type_depth: usize,
+    /// Maximum lexical JSON container nesting accepted before invoking the
+    /// recursive `serde_json` decoder on a HostValue document.
+    ///
+    /// This is the HostValue analogue of [`Limits::max_source_nesting`]: it
+    /// bounds *lexical* nesting (`{` and `[` in the JSON text) before a
+    /// recursive decoder runs, whereas [`Limits::max_value_depth`] bounds
+    /// *semantic* HostValue nesting after decoding. The two units differ — one
+    /// `vec` level costs two JSON containers and one `record` level costs
+    /// three — so a document rejected here reports `value_nesting`, never
+    /// `value_depth`.
+    ///
+    /// Raising this above 128 has no effect: `serde_json` applies a fixed
+    /// 128-frame recursion ceiling that this crate deliberately does not
+    /// disable, so documents nested deeper than 128 containers are rejected by
+    /// the decoder as malformed rather than by this limit.
+    ///
+    /// # Choosing a value for a small stack
+    ///
+    /// Rejecting a document costs constant stack, so no input can drive an
+    /// abort by being *deeper* than this limit. Accepting one still recurses,
+    /// at a cost that is build-profile dependent, so this limit is the knob for
+    /// matching decode to the stack the host actually runs on. Measured on a
+    /// 64 KiB stack with a nested-`opt` document:
+    ///
+    /// | Profile | Cost per container | Deepest safe |
+    /// |---|---|---|
+    /// | release | ~640 B | ~103 |
+    /// | debug | ~8 KiB | ~7 |
+    ///
+    /// The default of 64 is chosen to keep a release build inside a 64 KiB
+    /// stack with roughly a third of it to spare, which is the bar
+    /// `tests/deep_nesting.rs` sets. A debug build on a stack that small needs
+    /// this lowered to single digits; a host on an ordinary 8 MiB stack can
+    /// raise it to 128 without approaching either bound.
+    pub max_value_nesting: usize,
     pub max_type_nodes: usize,
     pub max_graph_edges: usize,
     pub max_declarations: usize,
@@ -48,6 +83,11 @@ impl Default for Limits {
             max_import_edges: 1024,
             max_source_nesting: 256,
             max_type_depth: 256,
+            // Deliberately below `serde_json`'s fixed 128-frame ceiling so this
+            // crate's own check is always the one that fires, and low enough
+            // that decoding a document at exactly this bound stays well inside
+            // the 64 KiB stack `tests/deep_nesting.rs` asserts elsewhere.
+            max_value_nesting: 64,
             max_type_nodes: 100_000,
             max_graph_edges: 1_000_000,
             max_declarations: 100_000,
