@@ -425,8 +425,25 @@ pub struct RawContract {
     pub types: Vec<TypeNode>,
     #[serde(default)]
     pub declarations: Vec<Declaration>,
-    #[serde(default)]
+    /// An actorless Contract omits this property entirely. `"actor": null` is
+    /// not part of the v1 wire format: serialization never emits it, the
+    /// identity payload never hashes it, and decoding rejects it.
+    #[serde(
+        default,
+        deserialize_with = "deserialize_actor_forbidding_null",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub actor: Option<Actor>,
+}
+
+/// Invoked only when the `actor` key is present; an absent key takes the
+/// `None` default. Delegating to [`Actor`] directly makes an explicit JSON
+/// `null` a decode error instead of a second spelling of "no actor".
+fn deserialize_actor_forbidding_null<'de, D>(deserializer: D) -> Result<Option<Actor>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Actor::deserialize(deserializer).map(Some)
 }
 
 impl RawContract {

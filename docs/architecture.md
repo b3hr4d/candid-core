@@ -65,7 +65,7 @@ The type arena includes exactly these semantic node families:
 
 All primitives are represented as values of `primitive`: `null`, `bool`, `nat`, `int`, `nat8`…`nat64`, `int8`…`int64`, `float32`, `float64`, `text`, `reserved`, `empty`, and `principal`.
 
-`actor` is absent when the DID declares no actor. When present, it is either `{ "kind": "service", "service": TypeRef }` or `{ "kind": "class", "class": TypeRef }`. An empty actor is distinct from no actor: it selects a service node whose `methods` array is empty. A service class retains its initialization argument types even though it produces a service.
+`actor` is omitted when the DID declares no actor: the property is absent from canonical Contract JSON and from the `contract_id` identity payload alike, and decoding rejects an explicit `"actor": null` instead of treating it as a second spelling of absence. When present, it is either `{ "kind": "service", "service": TypeRef }` or `{ "kind": "class", "class": TypeRef }`. An empty actor is distinct from no actor: it selects a service node whose `methods` array is empty. A service class retains its initialization argument types even though it produces a service.
 
 `declarations` is a provenance-oriented name table over semantic node refs. It preserves useful named declaration spellings, but a declaration name is not the identity of a type.  A structural type reachable through two aliases is still represented by its graph position and edges.
 

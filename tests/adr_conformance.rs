@@ -1221,6 +1221,120 @@ fn canonical_contracts_match_checked_in_cross_language_fixtures() {
     }
 }
 
+fn conformance_fixture(name: &str) -> String {
+    std::fs::read_to_string(format!(
+        "{}/tests/fixtures/conformance/{name}",
+        env!("CARGO_MANIFEST_DIR")
+    ))
+    .unwrap()
+}
+
+/// Issue #13: an actorless Contract's identity preimage is pinned to exact
+/// bytes that omit the `actor` property. The digest is recomputed here from
+/// the fixture's literal bytes with `sha2` alone, so a change to the payload
+/// shape, JCS writer, domain tag, or hash construction moves this test even
+/// if serialization and hashing drift in lockstep.
+#[test]
+fn actorless_identity_bytes_and_id_match_the_pinned_golden_fixture() {
+    let golden: serde_json::Value =
+        serde_json::from_str(&conformance_fixture("actorless.identity.json")).unwrap();
+    let domain = golden["domain"].as_str().unwrap();
+    let jcs = golden["jcs"].as_str().unwrap();
+    let contract_id = golden["contract_id"].as_str().unwrap();
+
+    assert_eq!(domain, "candid-core:contract:v1");
+    assert!(
+        !jcs.contains("\"actor\""),
+        "the pinned actorless identity payload must omit the actor property"
+    );
+    assert_eq!(
+        hex::decode(golden["jcs_hex"].as_str().unwrap()).unwrap(),
+        jcs.as_bytes(),
+        "the pinned JCS text and its pinned UTF-8 bytes must agree"
+    );
+
+    let mut preimage = domain.as_bytes().to_vec();
+    preimage.push(0);
+    preimage.extend_from_slice(jcs.as_bytes());
+    assert_eq!(
+        hex::decode(golden["preimage_hex"].as_str().unwrap()).unwrap(),
+        preimage,
+        "the pinned domain preimage must be domain, one zero byte, then the JCS bytes"
+    );
+    assert_eq!(
+        contract_id,
+        format!("{domain}:sha256:{}", hex::encode(Sha256::digest(&preimage))),
+        "the pinned Contract ID must be the SHA-256 of the pinned preimage"
+    );
+
+    let did = format!(
+        "{}/tests/fixtures/conformance/actorless.did",
+        env!("CARGO_MANIFEST_DIR")
+    );
+    let contract = compile_did_file(did).unwrap().into_parts().0;
+    assert_eq!(contract.contract_id(), contract_id);
+    assert_eq!(contract.interface_id(), None);
+}
+
+/// Issue #13: absence is the only v1 wire spelling of "no actor". `None`
+/// serializes as an omitted property on every serialization path, and an
+/// explicit `"actor": null` fails decoding instead of aliasing omission.
+#[test]
+fn actorless_contracts_omit_actor_on_the_wire_and_reject_explicit_null() {
+    let contract = compile("type OnlyType = nat;").contract().clone();
+
+    let wire = serde_json::to_value(&contract).unwrap();
+    assert!(
+        !wire.as_object().unwrap().contains_key("actor"),
+        "canonical serialization must omit an absent actor, not encode null"
+    );
+    let raw_wire = serde_json::to_value(RawContract::from(&contract)).unwrap();
+    assert!(!raw_wire.as_object().unwrap().contains_key("actor"));
+    assert!(!contract.to_json_pretty().unwrap().contains("\"actor\""));
+
+    let reparsed = Contract::from_json(&wire.to_string()).unwrap();
+    assert_eq!(reparsed.contract_id(), contract.contract_id());
+
+    let mut with_null = wire;
+    with_null["actor"] = serde_json::Value::Null;
+    let error = Contract::from_json(&with_null.to_string()).unwrap_err();
+    assert!(
+        matches!(error, candid_core::ContractJsonError::MalformedJson(_)),
+        "an explicit actor null must fail JSON decoding, found {error:?}"
+    );
+    assert!(
+        serde_json::from_value::<RawContract>(with_null).is_err(),
+        "the raw DTO decode path must also reject an explicit actor null"
+    );
+}
+
+/// Issue #13: omitting the absent actor must not collapse an actorless
+/// Contract into one with an explicitly empty service. The empty-actor IDs
+/// are pinned inline as the cross-release regression anchor proving the
+/// actorless encoding fix left Contracts with an actor untouched.
+#[test]
+fn actorless_and_explicitly_empty_actor_stay_distinct_on_the_wire() {
+    let actorless = compile("type OnlyType = nat;").contract().clone();
+    let empty_actor = compile("service : {};").contract().clone();
+
+    let empty_wire = serde_json::to_value(&empty_actor).unwrap();
+    assert_eq!(
+        empty_wire["actor"],
+        serde_json::json!({ "kind": "service", "service": 0 }),
+        "an explicitly empty service keeps its actor property"
+    );
+    assert_ne!(actorless.contract_id(), empty_actor.contract_id());
+
+    assert_eq!(
+        empty_actor.contract_id(),
+        "candid-core:contract:v1:sha256:edfb9052c7234db653686a79e02e317241b4ccfe74e989a2f5735aa2c8a70ba5"
+    );
+    assert_eq!(
+        empty_actor.interface_id().unwrap(),
+        "candid-core:interface:v1:sha256:ea1e1478267a0f0bdffeb8f5acc0ac91c3a496f285c46c10c104fac61698e401"
+    );
+}
+
 fn exact_manifest_dependency_version(dependency: &str) -> String {
     let manifest = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/Cargo.toml"));
     let prefix = format!("{dependency} = ");

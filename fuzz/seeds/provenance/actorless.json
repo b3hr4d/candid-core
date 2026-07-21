@@ -5,7 +5,7 @@
     "semantics_profile": "candid-1",
     "canonicalization_profile": "candid-core-canon-1",
     "identities": {
-      "contract": "candid-core:contract:v1:sha256:dd78a364ac8c7ebb36c7690e51245bfdd0c3792d5ce5dc6988336c1e3c07ed6e"
+      "contract": "candid-core:contract:v1:sha256:ab2191fcb35a37445d337bc6e720ae71ef4108a04bf2fa6271dc09f35ebd0a0f"
     },
     "producer": {
       "name": "candid-core",
@@ -32,12 +32,11 @@
         "name": "B",
         "type": 1
       }
-    ],
-    "actor": null
+    ]
   },
   "source_info": {
     "source_info_version": 1,
-    "contract_id": "candid-core:contract:v1:sha256:dd78a364ac8c7ebb36c7690e51245bfdd0c3792d5ce5dc6988336c1e3c07ed6e",
+    "contract_id": "candid-core:contract:v1:sha256:ab2191fcb35a37445d337bc6e720ae71ef4108a04bf2fa6271dc09f35ebd0a0f",
     "source_bundle_id": "candid-core:source-bundle:v1:sha256:757ffedb2b140737c1d2095c56fbaa34f4f6baaff16becc2fd41dc85ea808a50",
     "sources": [
       {

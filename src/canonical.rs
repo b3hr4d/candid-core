@@ -412,7 +412,10 @@ fn identities_for_canonical(
         canonicalization_profile: &'a str,
         types: &'a [TypeNode],
         declarations: &'a [Declaration],
-        actor: &'a Option<Actor>,
+        /// Omitted for an actorless Contract, exactly as on the wire; the
+        /// preimage never contains `"actor":null`.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        actor: Option<&'a Actor>,
     }
 
     #[derive(Serialize)]
@@ -430,7 +433,7 @@ fn identities_for_canonical(
         canonicalization_profile: &contract.canonicalization_profile,
         types: &contract.types,
         declarations: &contract.declarations,
-        actor: &contract.actor,
+        actor: contract.actor.as_ref(),
     };
     let contract_id =
         domain_hash_with_budget("candid-core:contract:v1", &contract_payload, budget)?;
