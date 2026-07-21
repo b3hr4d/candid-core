@@ -631,7 +631,9 @@ def actor_reachable_prefix(types, actor):
     reached = [False] * len(types)
     work = [actor_type_ref(actor)]
     while work:
-        reference = work.pop(0)
+        # Only the reachable *set* matters here, so pop from the end (O(1))
+        # rather than the front; traversal order is irrelevant.
+        reference = work.pop()
         if reached[reference]:
             continue
         reached[reference] = True
