@@ -474,56 +474,81 @@ fn domain_hash_with_budget(
     payload: &impl Serialize,
     budget: &mut Budget<'_>,
 ) -> Result<String, ContractValidationError> {
-    budget
-        .checkpoint()
-        .map_err(crate::budget::BudgetError::into_contract_error)?;
-    let canonical_len = measure_serialized_len_with_budget(payload, budget)?;
-    // The counting pass above charges one unit per serialized byte. Reserve
-    // another unit for materializing each canonical byte and one for hashing
-    // it before either allocation occurs. JCS key sorting changes order, not
-    // encoded length.
+    let max_work = budget.limits().max_canonicalization_work;
+    match reserve_identity_work(domain, payload, budget, "canonicalization_work", max_work) {
+        Ok(canonical_len) => {
+            let value = serde_json::to_value(payload)
+                .expect("built-in Contract identity payloads must serialize to JSON");
+            let canonical = jcs_bytes(&value);
+            debug_assert_eq!(canonical.len(), canonical_len);
+            let mut hasher = Sha256::new();
+            hasher.update(domain.as_bytes());
+            hasher.update([0]);
+            hasher.update(canonical);
+            Ok(format!(
+                "{domain}:sha256:{}",
+                hex::encode(hasher.finalize())
+            ))
+        }
+        Err(IdentityWorkError::Budget(error)) => Err(error.into_contract_error()),
+        Err(IdentityWorkError::Serialization(message)) => Err(ContractValidationError::single(
+            "contract_identity_serialization_failed",
+            "$",
+            message,
+        )),
+    }
+}
+
+pub(crate) enum IdentityWorkError {
+    Budget(crate::budget::BudgetError),
+    Serialization(String),
+}
+
+/// Charge an identity serialize/hash pass against `resource` before any of it
+/// allocates, returning the serialized payload length.
+///
+/// The counting pass charges one unit per serialized byte as it streams, so
+/// exhaustion, cancellation, and deadlines are observed between serializer
+/// chunks. The remaining reservation covers materializing each canonical byte
+/// and hashing it plus the domain tag. JCS key sorting changes order, not
+/// encoded length, so the counted length equals the canonical length.
+pub(crate) fn reserve_identity_work(
+    domain: &str,
+    payload: &impl Serialize,
+    budget: &mut Budget<'_>,
+    resource: &'static str,
+    limit: usize,
+) -> Result<usize, IdentityWorkError> {
+    budget.checkpoint().map_err(IdentityWorkError::Budget)?;
+    let canonical_len = measure_serialized_len_with_budget(payload, budget, resource, limit)?;
     let remaining_work = canonical_len
         .saturating_mul(2)
         .saturating_add(domain.len())
         .saturating_add(1);
-    let max_work = budget.limits().max_canonicalization_work;
     budget
-        .charge("canonicalization_work", max_work, remaining_work)
-        .map_err(crate::budget::BudgetError::into_contract_error)?;
-    let value = serde_json::to_value(payload)
-        .expect("built-in Contract identity payloads must serialize to JSON");
-    let canonical = jcs_bytes(&value);
-    debug_assert_eq!(canonical.len(), canonical_len);
-    let mut hasher = Sha256::new();
-    hasher.update(domain.as_bytes());
-    hasher.update([0]);
-    hasher.update(canonical);
-    Ok(format!(
-        "{domain}:sha256:{}",
-        hex::encode(hasher.finalize())
-    ))
+        .charge(resource, limit, remaining_work)
+        .map_err(IdentityWorkError::Budget)?;
+    Ok(canonical_len)
 }
 
 struct BudgetCountingWriter<'budget, 'limits> {
     budget: &'budget mut Budget<'limits>,
+    resource: &'static str,
+    limit: usize,
     bytes: usize,
     budget_error: Option<crate::budget::BudgetError>,
 }
 
 impl Write for BudgetCountingWriter<'_, '_> {
     fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
-        let max_work = self.budget.limits().max_canonicalization_work;
-        match self
-            .budget
-            .charge("canonicalization_work", max_work, buffer.len())
-        {
+        match self.budget.charge(self.resource, self.limit, buffer.len()) {
             Ok(_) => {
                 self.bytes = self.bytes.saturating_add(buffer.len());
                 Ok(buffer.len())
             }
             Err(error) => {
                 self.budget_error = Some(error);
-                Err(io::Error::other("canonicalization budget exhausted"))
+                Err(io::Error::other("identity work budget exhausted"))
             }
         }
     }
@@ -536,21 +561,21 @@ impl Write for BudgetCountingWriter<'_, '_> {
 fn measure_serialized_len_with_budget(
     payload: &impl Serialize,
     budget: &mut Budget<'_>,
-) -> Result<usize, ContractValidationError> {
+    resource: &'static str,
+    limit: usize,
+) -> Result<usize, IdentityWorkError> {
     let mut writer = BudgetCountingWriter {
         budget,
+        resource,
+        limit,
         bytes: 0,
         budget_error: None,
     };
     if let Err(error) = serde_json::to_writer(&mut writer, payload) {
         if let Some(error) = writer.budget_error {
-            return Err(error.into_contract_error());
+            return Err(IdentityWorkError::Budget(error));
         }
-        return Err(ContractValidationError::single(
-            "contract_identity_serialization_failed",
-            "$",
-            error.to_string(),
-        ));
+        return Err(IdentityWorkError::Serialization(error.to_string()));
     }
     Ok(writer.bytes)
 }
@@ -857,5 +882,57 @@ mod tests {
         assert_eq!(resource.resource, "canonicalization_work");
         assert_eq!(resource.limit, exact_work - 1);
         assert_eq!(resource.observed, exact_work);
+    }
+
+    /// Cancels its own cancellation token halfway through serialization.
+    struct CancelsMidSerialization {
+        token: crate::CancellationToken,
+    }
+
+    impl Serialize for CancelsMidSerialization {
+        fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+            use serde::ser::SerializeStruct;
+            let mut state = serializer.serialize_struct("CancelsMidSerialization", 2)?;
+            state.serialize_field("before", "written before cancellation")?;
+            self.token.cancel();
+            state.serialize_field("after", "never charged")?;
+            state.end()
+        }
+    }
+
+    #[test]
+    fn identity_work_counting_pass_observes_cancellation_between_chunks() {
+        // The streaming counting pass charges — and therefore checkpoints —
+        // per serializer chunk, so cancellation raised after serialization has
+        // begun is still observed before the pass completes. This pins the
+        // documented mid-pass granularity: only the final materialize-and-hash
+        // block is uninterruptible.
+        let token = crate::CancellationToken::new();
+        let payload = CancelsMidSerialization {
+            token: token.clone(),
+        };
+        let limits = Limits::default();
+        let mut budget = Budget::new(&limits, token);
+        let error = reserve_identity_work(
+            "test:identity:v1",
+            &payload,
+            &mut budget,
+            "source_identity_work",
+            usize::MAX,
+        );
+        match error {
+            Err(IdentityWorkError::Budget(crate::budget::BudgetError::Cancelled)) => {}
+            Err(IdentityWorkError::Budget(other)) => {
+                panic!("expected mid-pass cancellation, found {other:?}")
+            }
+            Err(IdentityWorkError::Serialization(message)) => {
+                panic!("expected mid-pass cancellation, found serialization error {message}")
+            }
+            Ok(_) => panic!("a cancelled counting pass must not complete"),
+        }
+        assert!(
+            budget.consumed("source_identity_work") > 0,
+            "the chunks written before cancellation must have been charged",
+        );
     }
 }

@@ -87,6 +87,33 @@ pub struct Limits {
     /// field-ID / method-name index and every membership test, so adversarial
     /// fan-out and duplicate provenance entries cannot drive an unbounded scan.
     pub max_provenance_work: usize,
+    /// Maximum work units charged while serializing and hashing source-bundle
+    /// identity (`candid-core:source-bundle:v1`).
+    ///
+    /// Each identity computation charges one unit per serialized payload byte
+    /// during an allocation-free counting pass, then reserves two more units
+    /// per byte (materializing and hashing the canonical bytes) plus the
+    /// domain-tag overhead before any allocation occurs. A presented sidecar
+    /// validation performs two passes on one budget — verifying the presented
+    /// `source_bundle_id` and emitting the rederived bundle's ID — while a
+    /// plain compilation performs one.
+    ///
+    /// Kept separate from [`Limits::max_canonicalization_work`] because the
+    /// serialized bundle scales with `max_bundle_bytes`: metering it on the
+    /// canonicalization counter would either starve graph work or force that
+    /// default far above what graph canonicalization needs. The default
+    /// accepts every bundle valid under the default byte/count limits: JSON
+    /// string escaping expands a byte to at most six, so one pass costs at
+    /// most `3 * 6 * (max_bundle_bytes + identity strings) + entry overhead`,
+    /// about 213M units for a compile pass and 341M for the two validation
+    /// passes together; 400M covers both with headroom.
+    ///
+    /// Compatibility: this field is additive and pre-1.0. Callers using struct
+    /// update syntax (`..Limits::default()`) are unaffected; exhaustive
+    /// literals must add it. Serialized `Limits` documents without the field
+    /// deserialize to the default, but documents that include it are rejected
+    /// by older releases (`deny_unknown_fields`).
+    pub max_source_identity_work: usize,
     pub max_value_depth: usize,
     pub max_value_elements: usize,
     pub max_value_bytes: usize,
@@ -122,6 +149,7 @@ impl Default for Limits {
             max_diagnostics: 100,
             max_canonicalization_work: 10_000_000,
             max_provenance_work: 10_000_000,
+            max_source_identity_work: 400_000_000,
             max_value_depth: 256,
             max_value_elements: 1_000_000,
             max_value_bytes: 16 * 1024 * 1024,

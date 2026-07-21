@@ -20,7 +20,7 @@ The policy includes at least:
 - type nodes, graph edges, declarations, fields, methods, arguments, results, string bytes, and producer-metadata bytes;
 - diagnostics count and retained diagnostic text;
 - HostValue lexical JSON nesting, semantic depth, elements, text/blob bytes, and encoded message bytes;
-- canonicalization/refinement work units, provenance target-resolution work units, and an optional cancellation/deadline.
+- canonicalization/refinement work units, provenance target-resolution work units, source-bundle identity work units, and an optional cancellation/deadline.
 
 Graph and import algorithms use explicit work queues rather than call-stack recursion. Limits are checked before allocation where possible and during work otherwise. Exhaustion fails closed with a stable `resource_limit_exceeded` diagnostic containing `resource`, `limit`, and observed or attempted value. No partially validated Contract is returned.
 
@@ -79,6 +79,31 @@ jointly exhaust one counter. HostValue variant-tag resolution is charged
 identically to record field-ID matching, so a hostile variant table amplified
 across many values is bounded by `max_canonicalization_work` rather than
 scanning uncharged.
+
+Source-bundle identity serialization and hashing is charged to a dedicated
+`source_identity_work` counter (`max_source_identity_work`). Exactly two
+identity passes remain: the compiler emitting `candid-core:source-bundle:v1`
+for a lowered bundle, and presented-sidecar validation verifying the presented
+ID — whose rederivation then repeats the compiler's pass on the same budget, so
+one validation charges two passes and one compilation charges one. Each pass
+charges one unit per serialized payload byte during an allocation-free
+streaming counting pass, then reserves two further units per canonical byte
+plus the domain tag before anything is materialized. The counter is separate
+from `max_canonicalization_work` because the serialized bundle scales with
+`max_bundle_bytes`; metering it on the graph counter would force one default to
+reject inputs the other must accept. The default is derived from the byte
+limits: JSON string escaping expands a byte to at most six, so the costliest
+default-valid compile pass is ~213M units and the two validation passes
+together are ~341M, and the 400M default accepts every bundle that is valid
+under the default bundle/source/import byte and count limits. The counting
+pass observes cancellation, deadlines, and exhaustion between serializer
+chunks; the final serialize-and-hash pass is one uninterruptible block — the
+unavoidable granularity — bounded because loading or the sidecar preflight has
+already enforced the bundle byte limits. Canonicality and the earlier
+malformed/byte/count checks run before the charge, so pre-existing errors keep
+their precedence; an identity mismatch is only observable after hashing, so an
+exhausted identity budget reports `source_identity_work` where a mismatch
+would otherwise have been detected.
 
 Producer metadata is untrusted, caller-supplied provenance. Its aggregate bytes
 are bounded (`max_producer_bytes`), but it is deliberately excluded from the

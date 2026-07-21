@@ -191,7 +191,10 @@ pub(super) fn lower_checked(
         sources.sort_by(|left, right| left.name.cmp(&right.name));
         let mut imports = source_imports(source_units);
         imports.sort();
-        let source_bundle_id = crate::source::source_bundle_id(&sources, &imports);
+        let source_bundle_id = crate::source::source_bundle_id_with_budget(
+            &sources, &imports, budget,
+        )
+        .map_err(|error| budget_error(error, DiagnosticPhase::Lower, "source bundle identity"))?;
         let source_info = SourceInfo {
             source_info_version: SOURCE_INFO_VERSION,
             contract_id: canonicalized.contract.contract_id().to_string(),

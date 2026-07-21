@@ -16,14 +16,53 @@ struct SourceBundlePayload<'a> {
     imports: &'a [SourceImportInfo],
 }
 
+const SOURCE_BUNDLE_DOMAIN: &str = "candid-core:source-bundle:v1";
+
 pub(crate) fn source_bundle_id(
     sources: &[crate::model::SourceFileInfo],
     imports: &[SourceImportInfo],
 ) -> String {
     domain_hash(
-        "candid-core:source-bundle:v1",
+        SOURCE_BUNDLE_DOMAIN,
         &SourceBundlePayload { sources, imports },
     )
+}
+
+/// Compute the bundle identity with its work charged to `source_identity_work`.
+///
+/// Every remaining identity pass — the compiler's emit and the presented
+/// sidecar's verification — goes through here, so each pass is charged exactly
+/// once on the caller's budget. The counting pass streams, so cancellation,
+/// deadlines, and exhaustion are observed between serializer chunks before the
+/// canonical bytes are materialized; the final serialize-and-hash pass is one
+/// uninterruptible block, which is the unavoidable granularity, bounded because
+/// loading or the preflight has already enforced the bundle byte limits.
+///
+/// Delegating to [`source_bundle_id`] keeps the identity bytes byte-identical
+/// to the unmetered computation by construction.
+pub(crate) fn source_bundle_id_with_budget(
+    sources: &[crate::model::SourceFileInfo],
+    imports: &[SourceImportInfo],
+    budget: &mut Budget<'_>,
+) -> Result<String, crate::budget::BudgetError> {
+    let payload = SourceBundlePayload { sources, imports };
+    let limit = budget.limits().max_source_identity_work;
+    crate::canonical::reserve_identity_work(
+        SOURCE_BUNDLE_DOMAIN,
+        &payload,
+        budget,
+        "source_identity_work",
+        limit,
+    )
+    .map_err(|error| match error {
+        crate::canonical::IdentityWorkError::Budget(error) => error,
+        // The payload is plain strings and enums; only the budget can fail the
+        // counting pass, exactly as `source_bundle_id` relies on below.
+        crate::canonical::IdentityWorkError::Serialization(message) => {
+            unreachable!("source bundle payloads must serialize to JSON: {message}")
+        }
+    })?;
+    Ok(source_bundle_id(sources, imports))
 }
 
 pub(crate) fn validate_source_info(
@@ -522,11 +561,13 @@ fn source_bundle_is_canonical(source_info: &SourceInfo) -> bool {
 
 fn validate_source_bundle_identity(
     source_info: &SourceInfo,
-    budget: &Budget<'_>,
+    budget: &mut Budget<'_>,
 ) -> Result<(), ContractValidationError> {
     // The bundle bytes are already bounded (preflight enforced `bundle_bytes`),
-    // but hashing them is not itself interruptible, so poll cancellation and the
-    // deadline before starting the whole-bundle serialize/hash pass.
+    // and the hash pass below charges `source_identity_work` as it counts, so
+    // cancellation and the deadline are polled here and between serializer
+    // chunks. Canonicality is checked first so a non-canonical bundle keeps
+    // its established error rather than a work-limit failure.
     budget
         .checkpoint()
         .map_err(crate::budget::BudgetError::into_contract_error)?;
@@ -537,7 +578,8 @@ fn validate_source_bundle_identity(
             "sources and imports must be sorted canonically",
         ));
     }
-    let expected = source_bundle_id(&source_info.sources, &source_info.imports);
+    let expected = source_bundle_id_with_budget(&source_info.sources, &source_info.imports, budget)
+        .map_err(crate::budget::BudgetError::into_contract_error)?;
     if source_info.source_bundle_id != expected {
         return Err(ContractValidationError::single(
             "source_bundle_id_mismatch",
@@ -1002,4 +1044,97 @@ fn charge_provenance_work(
         .charge("provenance_work", limit, amount)
         .map(|_| ())
         .map_err(crate::budget::BudgetError::into_contract_error)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::budget::BudgetError;
+    use crate::model::{SourceFileInfo, SourceImportKind};
+    use crate::CancellationToken;
+
+    fn fixture() -> (Vec<SourceFileInfo>, Vec<SourceImportInfo>) {
+        let sources = vec![
+            SourceFileInfo {
+                name: "memory:/root.did".to_string(),
+                source: "import \"types.did\";\nservice : {};".to_string(),
+            },
+            SourceFileInfo {
+                name: "memory:/types.did".to_string(),
+                source: "type Item = nat;".to_string(),
+            },
+        ];
+        let imports = vec![SourceImportInfo {
+            from: "memory:/root.did".to_string(),
+            import: "types.did".to_string(),
+            to: "memory:/types.did".to_string(),
+            kind: SourceImportKind::Type,
+        }];
+        (sources, imports)
+    }
+
+    fn exact_pass_work(sources: &[SourceFileInfo], imports: &[SourceImportInfo]) -> usize {
+        let serialized = serde_json::to_vec(&SourceBundlePayload { sources, imports }).unwrap();
+        serialized.len() * 3 + SOURCE_BUNDLE_DOMAIN.len() + 1
+    }
+
+    #[test]
+    fn bundle_identity_charges_exactly_and_matches_the_unmetered_hash() {
+        let (sources, imports) = fixture();
+        let exact_work = exact_pass_work(&sources, &imports);
+
+        let exact_limits = Limits {
+            max_source_identity_work: exact_work,
+            ..Limits::default()
+        };
+        let mut budget = Budget::from_limits(&exact_limits);
+        assert_eq!(
+            source_bundle_id_with_budget(&sources, &imports, &mut budget).unwrap(),
+            source_bundle_id(&sources, &imports),
+        );
+        assert_eq!(budget.consumed("source_identity_work"), exact_work);
+        assert_eq!(
+            budget.consumed("canonicalization_work"),
+            0,
+            "identity metering must not leak onto the canonicalization counter",
+        );
+
+        let rejected_limits = Limits {
+            max_source_identity_work: exact_work - 1,
+            ..Limits::default()
+        };
+        let mut rejected = Budget::from_limits(&rejected_limits);
+        assert_eq!(
+            source_bundle_id_with_budget(&sources, &imports, &mut rejected).unwrap_err(),
+            BudgetError::ResourceLimit {
+                resource: "source_identity_work",
+                limit: exact_work - 1,
+                observed: exact_work,
+            },
+        );
+    }
+
+    #[test]
+    fn bundle_identity_observes_cancellation_and_deadlines_before_hashing() {
+        let (sources, imports) = fixture();
+
+        let limits = Limits::default();
+        let token = CancellationToken::new();
+        token.cancel();
+        let mut cancelled = Budget::new(&limits, token);
+        assert_eq!(
+            source_bundle_id_with_budget(&sources, &imports, &mut cancelled).unwrap_err(),
+            BudgetError::Cancelled,
+        );
+
+        let elapsed = Limits {
+            deadline_unix_ms: Some(1),
+            ..Limits::default()
+        };
+        let mut expired = Budget::from_limits(&elapsed);
+        assert_eq!(
+            source_bundle_id_with_budget(&sources, &imports, &mut expired).unwrap_err(),
+            BudgetError::DeadlineExceeded,
+        );
+    }
 }
