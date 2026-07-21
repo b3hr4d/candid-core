@@ -27,7 +27,7 @@ ADR 0002 requires an implementation outside the Rust crate to reproduce every ch
 | Pull request | [#73](https://github.com/b3hr4d/candid-core/pull/73) |
 | Verified PR head | `b6d7c31de3a7ee7ea751d486f597545a19fd988c` |
 | Merge commit | `7d29eb03e1a905de66900f2c083707885c1a3963` |
-| CI evidence | [Verify run 29834439291](https://github.com/b3hr4d/candid-core/actions/runs/29834439291), including the dedicated independent-conformance job |
-| Result | All 11 canonical graphs, payload bytes, domain preimages, Contract IDs, and interface IDs reproduced; all 8 required CI checks passed |
+| CI evidence | [Verify run 29834439291](https://github.com/b3hr4d/candid-core/actions/runs/29834439291), including `conformance-reference` ("Independent conformance reference") |
+| Result | All 11 canonical graphs, payload bytes, domain preimages, Contract IDs, and interface IDs reproduced; all 8 pull-request jobs succeeded, while 2 schedule-only jobs were skipped by design |
 
 This record completes ADR 0002's independent-vector gate. ADRs 0001 and 0003–0006 remain **Implemented, verification pending** until their own required-verification lists are completed and recorded.
