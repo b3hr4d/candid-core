@@ -2,6 +2,8 @@
 
 The canonical Contract is an arena-backed directed graph.  Node references are integers into `types`, so recursion is expressed by direct edges rather than duplicating a type tree or resolving names at runtime.
 
+How a valid graph is minimized, ordered, re-indexed, serialized to canonical bytes, and hashed into `contract_id`/`interface_id` is defined normatively, byte for byte, by the [canonicalization v1 specification](canonicalization-v1.md).
+
 ```mermaid
 flowchart TD
   C["Contract v1\nprofiles · contract_id · interface_id"]
@@ -143,7 +145,7 @@ JSON decoding and graph validation reject a Contract when any of these are false
 
 1. All profiles are supported; `contract_id` matches the complete canonical Contract and `interface_id` matches the actor-reachable graph. SourceInfo is bound by `contract_id`; `source_bundle_id` identifies only its raw sources/import edges, while all derived provenance must exactly match compiler rederivation from that bundle.
 2. Every reference is an in-range integer and each constrained reference has the required node kind (`func`, `service`, etc.).
-3. Field IDs and method IDs are Candid `u32` values. Aggregate field IDs and service method names are unique. Each method ID matches the Candid hash of its name; distinct method names may share that 32-bit hash.
+3. Field IDs and method IDs are Candid `u32` values. Aggregate field IDs are unique; service method names are non-empty and unique. Each method ID matches the Candid hash of its name; distinct method names may share that 32-bit hash.
 4. Function mode is exactly one supported value: `update`, `query`, `composite_query`, or `oneway`; `oneway` has no result refs.
 5. Declarations have valid names and refs; a class service ref targets a service node; actor shape agrees with its referenced node kind; and a class is valid only as the top-level `actor.kind = "class"` root. An `actor` property, when present, must be one of those two objects — an explicit `"actor": null` fails Contract JSON decoding rather than denoting an actorless Contract.
 6. Every node is reachable from an actor or declaration root (unless `types` is empty). Cycles are accepted; dangling refs, malformed JSON, and malformed graph structure are not.

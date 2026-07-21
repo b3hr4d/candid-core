@@ -856,6 +856,187 @@ mod tests {
     use super::*;
     use crate::Limits;
 
+    /// Issue #14: the private tag tables are protocol constants of
+    /// `candid-core-canon-1` (docs/canonicalization-v1.md). Any drift here
+    /// changes partition signatures and therefore identities.
+    #[test]
+    fn primitive_tags_are_pinned_protocol_constants() {
+        let table = [
+            (PrimitiveType::Null, 0),
+            (PrimitiveType::Bool, 1),
+            (PrimitiveType::Nat, 2),
+            (PrimitiveType::Int, 3),
+            (PrimitiveType::Nat8, 4),
+            (PrimitiveType::Nat16, 5),
+            (PrimitiveType::Nat32, 6),
+            (PrimitiveType::Nat64, 7),
+            (PrimitiveType::Int8, 8),
+            (PrimitiveType::Int16, 9),
+            (PrimitiveType::Int32, 10),
+            (PrimitiveType::Int64, 11),
+            (PrimitiveType::Float32, 12),
+            (PrimitiveType::Float64, 13),
+            (PrimitiveType::Text, 14),
+            (PrimitiveType::Reserved, 15),
+            (PrimitiveType::Empty, 16),
+            (PrimitiveType::Principal, 17),
+        ];
+        assert_eq!(table.len(), 18, "v1 defines exactly 18 primitive tags");
+        for (primitive, tag) in table {
+            assert_eq!(primitive_tag(primitive), tag, "{primitive:?}");
+        }
+    }
+
+    #[test]
+    fn method_mode_tags_are_pinned_protocol_constants() {
+        let table = [
+            (MethodMode::Update, 0),
+            (MethodMode::Query, 1),
+            (MethodMode::CompositeQuery, 2),
+            (MethodMode::Oneway, 3),
+        ];
+        assert_eq!(table.len(), 4, "v1 defines exactly 4 method-mode tags");
+        for (mode, tag) in table {
+            assert_eq!(mode_tag(mode), tag, "{mode:?}");
+        }
+    }
+
+    /// Exact local-signature bytes for every node kind: node tag, u32
+    /// big-endian lengths and IDs, and UTF-8 byte-length string encoding.
+    #[test]
+    fn local_signature_bytes_are_pinned_for_every_node_kind() {
+        assert_eq!(
+            local_signature(&TypeNode::Primitive {
+                primitive: PrimitiveType::Nat,
+            }),
+            [0, 2]
+        );
+        assert_eq!(local_signature(&TypeNode::Opt { inner: 9 }), [1]);
+        assert_eq!(local_signature(&TypeNode::Vec { inner: 9 }), [2]);
+        // Fields are sorted by (id, type reference) before encoding, and the
+        // signature records the sorted IDs, not the field types.
+        assert_eq!(
+            local_signature(&TypeNode::Record {
+                fields: vec![Field { id: 2, ty: 9 }, Field { id: 1, ty: 5 }],
+            }),
+            [3, 0, 0, 0, 2, 0, 0, 0, 1, 0, 0, 0, 2]
+        );
+        assert_eq!(
+            local_signature(&TypeNode::Variant {
+                fields: vec![Field { id: 2, ty: 9 }, Field { id: 1, ty: 5 }],
+            }),
+            [4, 0, 0, 0, 2, 0, 0, 0, 1, 0, 0, 0, 2]
+        );
+        assert_eq!(
+            local_signature(&TypeNode::Func {
+                args: vec![7, 8],
+                results: vec![9],
+                mode: MethodMode::Query,
+            }),
+            [5, 1, 0, 0, 0, 2, 0, 0, 0, 1]
+        );
+        // "é" is one Unicode scalar but two UTF-8 bytes; the string encoding
+        // is u32 big-endian *byte* length followed by UTF-8 bytes.
+        assert_eq!(
+            local_signature(&TypeNode::Service {
+                methods: vec![ServiceMethod {
+                    name: "é".to_string(),
+                    id: 0x0102_0304,
+                    function: 9,
+                }],
+            }),
+            [6, 0, 0, 0, 1, 1, 2, 3, 4, 0, 0, 0, 2, 0xc3, 0xa9]
+        );
+        assert_eq!(
+            local_signature(&TypeNode::Class {
+                init: vec![1, 2],
+                service: 3,
+            }),
+            [7, 0, 0, 0, 2]
+        );
+    }
+
+    /// The refinement signature is the local signature, the 0xff separator,
+    /// then the node's own class and each sorted child's class as u32
+    /// big-endian values.
+    #[test]
+    fn refined_signature_bytes_pin_the_separator_and_class_encoding() {
+        let node = TypeNode::Record {
+            fields: vec![Field { id: 2, ty: 0 }, Field { id: 1, ty: 1 }],
+        };
+        let classes = [7, 3];
+        assert_eq!(
+            refined_signature(&node, 5, &classes),
+            [
+                3, 0, 0, 0, 2, 0, 0, 0, 1, 0, 0, 0, 2,    // local signature
+                0xff, // refinement separator
+                0, 0, 0, 5, // own class
+                0, 0, 0, 3, // child class of field id 1 (ty 1)
+                0, 0, 0, 7, // child class of field id 2 (ty 0)
+            ]
+        );
+    }
+
+    #[test]
+    fn partition_ids_are_assigned_by_lexicographic_signature_bytes() {
+        assert_eq!(
+            assign_partition_ids(vec![vec![9], vec![1, 0xff], vec![1], vec![9]]),
+            // Sorted distinct signatures: [1] < [1, 0xff] < [9].
+            vec![2, 1, 0, 2]
+        );
+    }
+
+    /// The constrained canonical JSON writer: object keys sorted by UTF-8
+    /// bytes, the exact RFC 8785 string escape set (two-char escapes plus
+    /// lowercase \u00xx for remaining controls), raw UTF-8 for everything
+    /// else, and no Unicode normalization.
+    #[test]
+    fn canonical_json_writer_escaping_and_key_order_are_pinned() {
+        let value = serde_json::json!({
+            "zz": 1,
+            "aa": "e\u{301}",
+            "q": "\"\\\n\t\u{1}",
+            "s": "\u{10000}",
+        });
+        assert_eq!(
+            jcs_bytes(&value),
+            "{\"aa\":\"e\u{301}\",\"q\":\"\\\"\\\\\\n\\t\\u0001\",\"s\":\"\u{10000}\",\"zz\":1}"
+                .as_bytes()
+        );
+        assert_eq!(
+            jcs_bytes(&serde_json::json!(u32::MAX)),
+            b"4294967295",
+            "u32 values render as plain decimal"
+        );
+    }
+
+    /// The writer orders object keys by UTF-8 bytes, so a supplementary-plane
+    /// key sorts *after* U+FF61 — the opposite of RFC 8785's UTF-16 code-unit
+    /// order. This is unobservable in v1 identity payloads (every object key
+    /// is a fixed ASCII schema key, where the two orders coincide); the pin
+    /// documents the constrained-profile boundary rather than claiming
+    /// general JCS behavior.
+    #[test]
+    fn canonical_json_key_order_is_utf8_bytes_which_ascii_keys_make_jcs_compatible() {
+        let value = serde_json::json!({ "\u{10000}": 1, "\u{ff61}": 0 });
+        assert_eq!(
+            jcs_bytes(&value),
+            "{\"\u{ff61}\":0,\"\u{10000}\":1}".as_bytes()
+        );
+    }
+
+    #[test]
+    fn u32_protocol_encodings_are_big_endian() {
+        let mut output = Vec::new();
+        write_u32(&mut output, 0x0102_0304);
+        write_len(&mut output, 5);
+        write_string(&mut output, "hé");
+        assert_eq!(
+            output,
+            [1, 2, 3, 4, 0, 0, 0, 5, 0, 0, 0, 3, b'h', 0xc3, 0xa9]
+        );
+    }
+
     #[test]
     fn identity_hash_reserves_serialization_and_hashing_before_materializing() {
         let domain = "test:identity:v1";

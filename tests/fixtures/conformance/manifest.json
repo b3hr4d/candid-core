@@ -1,0 +1,131 @@
+{
+  "format": "candid-core-conformance-manifest",
+  "version": 1,
+  "required_cases": [
+    "actorless",
+    "empty_actor",
+    "class",
+    "basic",
+    "recursive",
+    "mutual_recursion",
+    "hash_collision",
+    "unicode",
+    "duplicate_semantic_nodes",
+    "arena_permutation",
+    "declaration_root_order"
+  ],
+  "cases": [
+    {
+      "name": "actorless",
+      "description": "Declaration-only Contract; the identity payload and wire JSON omit the actor property entirely.",
+      "inputs": [
+        "raw/actorless.canonical.json",
+        "raw/actorless.permuted.json"
+      ],
+      "expected": "expected/actorless.expected.json",
+      "did": "actorless.did",
+      "wire": "actorless.contract.json",
+      "identity_pins": "actorless.identity.json"
+    },
+    {
+      "name": "empty_actor",
+      "description": "An explicitly empty service actor stays distinct from an actorless Contract.",
+      "inputs": [
+        "raw/empty_actor.canonical.json",
+        "raw/empty_actor.no_declarations_key.json"
+      ],
+      "expected": "expected/empty_actor.expected.json",
+      "did": "empty_actor.did",
+      "wire": "empty_actor.contract.json"
+    },
+    {
+      "name": "class",
+      "description": "Class actor root with init arguments; class nodes are valid only as the actor root.",
+      "inputs": [
+        "raw/class.canonical.json",
+        "raw/class.permuted.json"
+      ],
+      "expected": "expected/class.expected.json",
+      "did": "class.did",
+      "wire": "class.contract.json"
+    },
+    {
+      "name": "basic",
+      "description": "Service actor with one update method and a named record declaration.",
+      "inputs": [
+        "raw/basic.canonical.json",
+        "raw/basic.permuted.json"
+      ],
+      "expected": "expected/basic.expected.json",
+      "did": "basic.did",
+      "wire": "basic.contract.json"
+    },
+    {
+      "name": "recursive",
+      "description": "Directly recursive record through an opt edge.",
+      "inputs": [
+        "raw/recursive.canonical.json",
+        "raw/recursive.permuted.json"
+      ],
+      "expected": "expected/recursive.expected.json",
+      "did": "recursive.did",
+      "wire": "recursive.contract.json"
+    },
+    {
+      "name": "mutual_recursion",
+      "description": "Two records referencing each other through opt edges; the cycle crosses node boundaries.",
+      "inputs": [
+        "raw/mutual_recursion.direct.json",
+        "raw/mutual_recursion.permuted.json"
+      ],
+      "expected": "expected/mutual_recursion.expected.json"
+    },
+    {
+      "name": "hash_collision",
+      "description": "Two distinct method names sharing one Candid idl_hash u32 (name bytes break the tie), plus a third method whose alphabetical and id orders diverge, pinning id as the primary method sort key; duplicate funcs merge.",
+      "inputs": [
+        "raw/hash_collision.split_funcs.json",
+        "raw/hash_collision.shared_func.json"
+      ],
+      "expected": "expected/hash_collision.expected.json"
+    },
+    {
+      "name": "unicode",
+      "description": "UTF-8/scalar declaration ordering (supplementary plane after U+FF61, unlike UTF-16), canonically equivalent non-normalized spellings kept distinct, and JSON string escaping.",
+      "inputs": [
+        "raw/unicode.canonical_arena.json",
+        "raw/unicode.permuted.json"
+      ],
+      "expected": "expected/unicode.expected.json"
+    },
+    {
+      "name": "duplicate_semantic_nodes",
+      "description": "Bisimilar duplicate nodes collapse to one canonical node; several distinct raw arenas converge.",
+      "inputs": [
+        "raw/duplicate_semantic_nodes.duplicated.json",
+        "raw/duplicate_semantic_nodes.interleaved.json",
+        "raw/duplicate_semantic_nodes.minimal.json"
+      ],
+      "expected": "expected/duplicate_semantic_nodes.expected.json"
+    },
+    {
+      "name": "arena_permutation",
+      "description": "One graph exercising every non-class node kind under three arena permutations with scrambled collection listings.",
+      "inputs": [
+        "raw/arena_permutation.ordered.json",
+        "raw/arena_permutation.reversed.json",
+        "raw/arena_permutation.interleaved.json"
+      ],
+      "expected": "expected/arena_permutation.expected.json"
+    },
+    {
+      "name": "declaration_root_order",
+      "description": "Actor-unreachable declaration targets whose quotient class-ID traversal order is the reverse of declaration-name order, and whose interface payload is a strict prefix of the canonical arena.",
+      "inputs": [
+        "raw/declaration_root_order.direct.json",
+        "raw/declaration_root_order.permuted.json"
+      ],
+      "expected": "expected/declaration_root_order.expected.json"
+    }
+  ]
+}

@@ -1229,6 +1229,44 @@ fn conformance_fixture(name: &str) -> String {
     .unwrap()
 }
 
+/// Issue #14: the fixture test above reparses expectations through
+/// `Contract::from_json`, which canonicalizes what it decodes and can
+/// therefore repair — and hide — a noncanonical checked-in fixture. This
+/// test performs no repair: the raw DTO decode preserves the checked-in
+/// structure (JSON text formatting aside), `try_from_raw` *verifies* the
+/// checked-in identities against recomputation instead of overwriting them,
+/// and re-serializing the verified Contract must reproduce the checked-in
+/// structure exactly, so a noncanonical arena, collection order, or identity
+/// cannot pass. The identity *bytes* are separately pinned by the
+/// conformance vectors and `actorless.identity.json`.
+#[test]
+fn checked_in_fixtures_are_structurally_canonical_without_repair() {
+    for name in ["actorless", "empty_actor", "class", "basic", "recursive"] {
+        let raw: RawContract =
+            serde_json::from_str(&conformance_fixture(&format!("{name}.contract.json"))).unwrap();
+        let verified = Contract::try_from_raw(raw.clone())
+            .unwrap_or_else(|error| panic!("fixture {name} failed verification: {error:#?}"));
+        assert_eq!(
+            RawContract::from(&verified),
+            raw,
+            "fixture {name} is not structurally canonical"
+        );
+
+        let compiled = compile_did_file(format!(
+            "{}/tests/fixtures/conformance/{name}.did",
+            env!("CARGO_MANIFEST_DIR")
+        ))
+        .unwrap()
+        .into_parts()
+        .0;
+        assert_eq!(
+            RawContract::from(&compiled),
+            raw,
+            "fixture {name} drifted from its .did source"
+        );
+    }
+}
+
 /// Issue #13: an actorless Contract's identity preimage is pinned to exact
 /// bytes that omit the `actor` property. The digest is recomputed here from
 /// the fixture's literal bytes with `sha2` alone, so a change to the payload

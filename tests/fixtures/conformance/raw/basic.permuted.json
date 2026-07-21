@@ -1,0 +1,53 @@
+{
+  "types": [
+    {
+      "kind": "primitive",
+      "primitive": "nat"
+    },
+    {
+      "kind": "primitive",
+      "primitive": "principal"
+    },
+    {
+      "kind": "record",
+      "fields": [
+        {
+          "id": 3573748184,
+          "type": 0
+        },
+        {
+          "id": 947296307,
+          "type": 1
+        }
+      ]
+    },
+    {
+      "kind": "func",
+      "args": [
+        2
+      ],
+      "results": [],
+      "mode": "update"
+    },
+    {
+      "kind": "service",
+      "methods": [
+        {
+          "name": "transfer",
+          "id": 3664621355,
+          "function": 3
+        }
+      ]
+    }
+  ],
+  "declarations": [
+    {
+      "name": "Payload",
+      "type": 2
+    }
+  ],
+  "actor": {
+    "kind": "service",
+    "service": 4
+  }
+}

@@ -1,0 +1,40 @@
+{
+  "types": [
+    {
+      "kind": "record",
+      "fields": [
+        {
+          "id": 834174833,
+          "type": 1
+        }
+      ]
+    },
+    {
+      "kind": "primitive",
+      "primitive": "nat"
+    },
+    {
+      "kind": "record",
+      "fields": [
+        {
+          "id": 834174833,
+          "type": 3
+        }
+      ]
+    },
+    {
+      "kind": "primitive",
+      "primitive": "nat"
+    }
+  ],
+  "declarations": [
+    {
+      "name": "First",
+      "type": 0
+    },
+    {
+      "name": "Second",
+      "type": 2
+    }
+  ]
+}

@@ -1,6 +1,10 @@
 /target/
 .DS_Store
 
+# Running the Python conformance reference (tests/fixtures/conformance/
+# verify_vectors.py) compiles bytecode next to the script.
+__pycache__/
+
 # `fuzz/` is a separate cargo project, so the root `/target/` rule misses it.
 # `corpus/` is the working corpus cargo-fuzz grows during a run; the tracked
 # seed and regression inputs live in `fuzz/seeds/` and `fuzz/regressions/`.

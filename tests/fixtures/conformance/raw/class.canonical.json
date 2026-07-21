@@ -1,0 +1,38 @@
+{
+  "types": [
+    {
+      "kind": "class",
+      "init": [
+        1
+      ],
+      "service": 2
+    },
+    {
+      "kind": "primitive",
+      "primitive": "nat"
+    },
+    {
+      "kind": "service",
+      "methods": [
+        {
+          "name": "get",
+          "id": 5144726,
+          "function": 3
+        }
+      ]
+    },
+    {
+      "kind": "func",
+      "args": [],
+      "results": [
+        1
+      ],
+      "mode": "query"
+    }
+  ],
+  "declarations": [],
+  "actor": {
+    "kind": "class",
+    "class": 0
+  }
+}
