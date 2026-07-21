@@ -1,6 +1,6 @@
 # ADR 0002: Version schema, semantics, and canonical bytes independently
 
-- Status: Implemented, verification pending
+- Status: Verified
 - Date: 2026-07-10
 - Owners: Contract runtime maintainers
 
@@ -44,11 +44,13 @@ The [canonicalization v1 specification](../canonicalization-v1.md) and its golde
 
 The envelope carries all four profile fields. Domain-separated identity hashes use the `candid-core-canon-1` graph normalization and constrained canonical JSON writer, both specified normatively in [canonicalization v1](../canonicalization-v1.md). Canonical Contract fixtures are checked in under `tests/fixtures/conformance` behind an asserted manifest of required scenarios, and an independent standard-library Python reference (`tests/fixtures/conformance/verify_vectors.py`) recomputes every canonical graph, payload byte, and ID from the raw vectors as a dedicated CI job.
 
-## Required verification
+## Verification
 
 - Checked-in canonical payload and digest fixtures.
 - Property tests for idempotence and input-arena permutation invariance.
 - Cross-language canonical-bytes and graph-labeling conformance tests.
 - Tests that unknown format, semantics, and canonicalization profiles fail.
 
-The status above stays **Implemented, verification pending** until the release gates in [verification](../verification.md) record a GitHub CI result for the independent-implementation job; the local command and CI wiring exist, but the recorded CI evidence does not yet.
+All four gates completed on 2026-07-21. The independent standard-library Python reference reproduced every canonical graph, payload byte, domain preimage, Contract ID, and interface ID across the 11 required scenarios in [PR #73](https://github.com/b3hr4d/candid-core/pull/73). The dedicated independent-conformance job passed in [Verify run 29834439291](https://github.com/b3hr4d/candid-core/actions/runs/29834439291) at PR head `b6d7c31de3a7ee7ea751d486f597545a19fd988c`, which merged as `7d29eb03e1a905de66900f2c083707885c1a3963`. See the durable evidence record in [verification](../verification.md).
+
+This evidence verifies ADR 0002 and profile `candid-core-canon-1`; it does not change the readiness status of other ADRs whose own required-verification lists remain incomplete.
