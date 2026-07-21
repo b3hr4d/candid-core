@@ -40,6 +40,19 @@ jobs:
         run: cargo clippy --all-targets --all-features --locked -- -D warnings
       - name: Test
         run: cargo test --all-targets --locked
+  conformance-reference:
+    name: Independent conformance reference
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      # A standard-library Python canonicalizer recomputes every manifest
+      # vector's canonical graph, payload bytes, preimage, and IDs from the
+      # raw noncanonical inputs, entirely outside the Rust implementation.
+      # Kept as its own job: the Rust suites do not run Python transitively,
+      # and a Python subprocess inside cross-platform Rust tests would be
+      # brittle.
+      - name: Reproduce every conformance vector without Rust
+        run: python3 tests/fixtures/conformance/verify_vectors.py
   wasm:
     name: Stable WASM
     runs-on: ubuntu-latest

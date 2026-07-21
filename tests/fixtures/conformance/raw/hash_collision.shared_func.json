@@ -1,0 +1,35 @@
+{
+  "types": [
+    {
+      "kind": "func",
+      "args": [],
+      "results": [],
+      "mode": "update"
+    },
+    {
+      "kind": "service",
+      "methods": [
+        {
+          "name": "jhwlzguu",
+          "id": 2823597088,
+          "function": 0
+        },
+        {
+          "name": "commit",
+          "id": 3341709303,
+          "function": 0
+        },
+        {
+          "name": "jsyrjsvk",
+          "id": 2823597088,
+          "function": 0
+        }
+      ]
+    }
+  ],
+  "declarations": [],
+  "actor": {
+    "kind": "service",
+    "service": 1
+  }
+}

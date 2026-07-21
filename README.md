@@ -9,7 +9,7 @@ cargo run --bin candid-core -- validate ./contract.json
 
 The compile command emits JSON containing a canonical validated `contract` and an optional, identity-bound `source_info` sidecar. The Contract exposes a full `contract_id` and an actor-only `interface_id`; source spelling/comments are identified separately by `source_bundle_id`. That source identity covers only the raw source files and import edges. At an external trust boundary, `SourceInfo::try_from_raw` recompiles that bundle and requires every presented provenance field to match the compiler-derived sidecar.
 
-See [architecture](docs/architecture.md) and the [Contract graph](docs/contract-graph.md) for the v1 model, constraints, and the explicitly deferred host-value ↔ Candid binary bridge. See [release verification gates](docs/verification.md) for the checks required before declaring the format stable across implementations. See [performance benchmarks](docs/benchmarks.md) for reproducible comparisons with the pinned official Candid checker and for allocation measurements.
+See [architecture](docs/architecture.md) and the [Contract graph](docs/contract-graph.md) for the v1 model, constraints, and the explicitly deferred host-value ↔ Candid binary bridge. The byte-level identity algorithm is specified normatively in [canonicalization v1](docs/canonicalization-v1.md). See [release verification gates](docs/verification.md) for the checks required before declaring the format stable across implementations. See [performance benchmarks](docs/benchmarks.md) for reproducible comparisons with the pinned official Candid checker and for allocation measurements.
 
 ## Runnable examples
 

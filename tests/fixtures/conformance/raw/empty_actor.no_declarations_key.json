@@ -1,0 +1,12 @@
+{
+  "types": [
+    {
+      "kind": "service",
+      "methods": []
+    }
+  ],
+  "actor": {
+    "kind": "service",
+    "service": 0
+  }
+}

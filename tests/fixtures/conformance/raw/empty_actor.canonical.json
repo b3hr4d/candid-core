@@ -1,0 +1,13 @@
+{
+  "types": [
+    {
+      "kind": "service",
+      "methods": []
+    }
+  ],
+  "declarations": [],
+  "actor": {
+    "kind": "service",
+    "service": 0
+  }
+}

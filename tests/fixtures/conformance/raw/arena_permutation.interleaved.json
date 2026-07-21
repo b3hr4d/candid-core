@@ -1,0 +1,99 @@
+{
+  "types": [
+    {
+      "kind": "func",
+      "args": [
+        2
+      ],
+      "results": [
+        8
+      ],
+      "mode": "query"
+    },
+    {
+      "kind": "record",
+      "fields": [
+        {
+          "id": 23515,
+          "type": 2
+        },
+        {
+          "id": 1291236569,
+          "type": 9
+        }
+      ]
+    },
+    {
+      "kind": "primitive",
+      "primitive": "nat"
+    },
+    {
+      "kind": "primitive",
+      "primitive": "text"
+    },
+    {
+      "kind": "service",
+      "methods": [
+        {
+          "name": "store",
+          "id": 2216039393,
+          "function": 7
+        },
+        {
+          "name": "load",
+          "id": 1203214886,
+          "function": 0
+        }
+      ]
+    },
+    {
+      "kind": "primitive",
+      "primitive": "null"
+    },
+    {
+      "kind": "variant",
+      "fields": [
+        {
+          "id": 5048165,
+          "type": 3
+        },
+        {
+          "id": 24860,
+          "type": 5
+        }
+      ]
+    },
+    {
+      "kind": "func",
+      "args": [
+        1
+      ],
+      "results": [
+        6
+      ],
+      "mode": "update"
+    },
+    {
+      "kind": "opt",
+      "inner": 1
+    },
+    {
+      "kind": "vec",
+      "inner": 3
+    }
+  ],
+  "declarations": [
+    {
+      "name": "Status",
+      "type": 6
+    },
+    {
+      "name": "Item",
+      "type": 1
+    }
+  ],
+  "actor": {
+    "kind": "service",
+    "service": 4
+  }
+}

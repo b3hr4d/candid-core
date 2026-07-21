@@ -1,0 +1,31 @@
+{
+  "types": [
+    {
+      "kind": "primitive",
+      "primitive": "nat"
+    },
+    {
+      "kind": "primitive",
+      "primitive": "text"
+    },
+    {
+      "kind": "record",
+      "fields": [
+        {
+          "id": 1225398258,
+          "type": 1
+        },
+        {
+          "id": 834174833,
+          "type": 0
+        }
+      ]
+    }
+  ],
+  "declarations": [
+    {
+      "name": "LibraryValue",
+      "type": 2
+    }
+  ]
+}

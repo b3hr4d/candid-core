@@ -1,0 +1,64 @@
+{
+  "types": [
+    {
+      "kind": "service",
+      "methods": [
+        {
+          "name": "swap",
+          "id": 1281239699,
+          "function": 1
+        }
+      ]
+    },
+    {
+      "kind": "func",
+      "args": [
+        2
+      ],
+      "results": [
+        4
+      ],
+      "mode": "update"
+    },
+    {
+      "kind": "record",
+      "fields": [
+        {
+          "id": 98,
+          "type": 3
+        }
+      ]
+    },
+    {
+      "kind": "opt",
+      "inner": 4
+    },
+    {
+      "kind": "record",
+      "fields": [
+        {
+          "id": 97,
+          "type": 5
+        }
+      ]
+    },
+    {
+      "kind": "opt",
+      "inner": 2
+    }
+  ],
+  "declarations": [
+    {
+      "name": "A",
+      "type": 2
+    },
+    {
+      "name": "B",
+      "type": 4
+    }
+  ],
+  "actor": {
+    "kind": "service",
+    "service": 0
+  }
+}

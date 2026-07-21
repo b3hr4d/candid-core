@@ -1,0 +1,52 @@
+{
+  "types": [
+    {
+      "kind": "service",
+      "methods": [
+        {
+          "name": "méthode",
+          "id": 2838631337,
+          "function": 1
+        }
+      ]
+    },
+    {
+      "kind": "func",
+      "args": [],
+      "results": [
+        2
+      ],
+      "mode": "query"
+    },
+    {
+      "kind": "primitive",
+      "primitive": "text"
+    }
+  ],
+  "declarations": [
+    {
+      "name": "𐀀",
+      "type": 2
+    },
+    {
+      "name": "é",
+      "type": 2
+    },
+    {
+      "name": "esc\"\\\n\u0001ape",
+      "type": 2
+    },
+    {
+      "name": "é",
+      "type": 2
+    },
+    {
+      "name": "｡",
+      "type": 2
+    }
+  ],
+  "actor": {
+    "kind": "service",
+    "service": 0
+  }
+}

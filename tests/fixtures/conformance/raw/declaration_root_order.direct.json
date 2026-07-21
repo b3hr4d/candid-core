@@ -1,0 +1,62 @@
+{
+  "types": [
+    {
+      "kind": "service",
+      "methods": [
+        {
+          "name": "ping",
+          "id": 1247277682,
+          "function": 1
+        }
+      ]
+    },
+    {
+      "kind": "func",
+      "args": [],
+      "results": [
+        2
+      ],
+      "mode": "query"
+    },
+    {
+      "kind": "primitive",
+      "primitive": "nat"
+    },
+    {
+      "kind": "record",
+      "fields": [
+        {
+          "id": 0,
+          "type": 4
+        }
+      ]
+    },
+    {
+      "kind": "primitive",
+      "primitive": "text"
+    },
+    {
+      "kind": "record",
+      "fields": [
+        {
+          "id": 0,
+          "type": 2
+        }
+      ]
+    }
+  ],
+  "declarations": [
+    {
+      "name": "a",
+      "type": 3
+    },
+    {
+      "name": "b",
+      "type": 5
+    }
+  ],
+  "actor": {
+    "kind": "service",
+    "service": 0
+  }
+}

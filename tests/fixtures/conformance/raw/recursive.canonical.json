@@ -1,0 +1,53 @@
+{
+  "types": [
+    {
+      "kind": "service",
+      "methods": [
+        {
+          "name": "get",
+          "id": 5144726,
+          "function": 1
+        }
+      ]
+    },
+    {
+      "kind": "func",
+      "args": [],
+      "results": [
+        2
+      ],
+      "mode": "query"
+    },
+    {
+      "kind": "opt",
+      "inner": 3
+    },
+    {
+      "kind": "record",
+      "fields": [
+        {
+          "id": 1158359328,
+          "type": 4
+        },
+        {
+          "id": 1291237008,
+          "type": 2
+        }
+      ]
+    },
+    {
+      "kind": "primitive",
+      "primitive": "nat"
+    }
+  ],
+  "declarations": [
+    {
+      "name": "List",
+      "type": 2
+    }
+  ],
+  "actor": {
+    "kind": "service",
+    "service": 0
+  }
+}

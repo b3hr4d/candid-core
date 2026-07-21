@@ -1,0 +1,47 @@
+{
+  "types": [
+    {
+      "kind": "service",
+      "methods": [
+        {
+          "name": "commit",
+          "id": 3341709303,
+          "function": 3
+        },
+        {
+          "name": "jsyrjsvk",
+          "id": 2823597088,
+          "function": 2
+        },
+        {
+          "name": "jhwlzguu",
+          "id": 2823597088,
+          "function": 1
+        }
+      ]
+    },
+    {
+      "kind": "func",
+      "args": [],
+      "results": [],
+      "mode": "update"
+    },
+    {
+      "kind": "func",
+      "args": [],
+      "results": [],
+      "mode": "update"
+    },
+    {
+      "kind": "func",
+      "args": [],
+      "results": [],
+      "mode": "update"
+    }
+  ],
+  "declarations": [],
+  "actor": {
+    "kind": "service",
+    "service": 0
+  }
+}
