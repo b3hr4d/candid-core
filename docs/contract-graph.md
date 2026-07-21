@@ -116,7 +116,9 @@ type SourceLabel =
   | { kind: "positional" };
 ```
 
-`actor` is omitted for a DID containing only declarations.  An empty actor is different: it is a `service` node with an empty `methods` array and `{ kind: "service", service: TypeRef }` selects that node.
+`actor` is omitted for a DID containing only declarations.  Omission is the only canonical spelling of absence, in the wire Contract and in the identity payload hashed for `contract_id` alike; an explicit `"actor": null` is rejected at decode. An empty actor is different: it is a `service` node with an empty `methods` array and `{ kind: "service", service: TypeRef }` selects that node.
+
+Pre-release note: before this was fixed, unreleased development builds encoded an absent actor as `"actor": null` in both the wire JSON and the identity preimage. That spelling was removed as a pre-v1 format correction, so actorless `contract_id` values calculated by those builds do not match v1, and no null-accepting compatibility decode path is kept — no released artifact ever carried the old encoding.
 
 ## Wire IDs, names, and cycles
 
@@ -143,7 +145,7 @@ JSON decoding and graph validation reject a Contract when any of these are false
 2. Every reference is an in-range integer and each constrained reference has the required node kind (`func`, `service`, etc.).
 3. Field IDs and method IDs are Candid `u32` values. Aggregate field IDs and service method names are unique. Each method ID matches the Candid hash of its name; distinct method names may share that 32-bit hash.
 4. Function mode is exactly one supported value: `update`, `query`, `composite_query`, or `oneway`; `oneway` has no result refs.
-5. Declarations have valid names and refs; a class service ref targets a service node; actor shape agrees with its referenced node kind; and a class is valid only as the top-level `actor.kind = "class"` root.
+5. Declarations have valid names and refs; a class service ref targets a service node; actor shape agrees with its referenced node kind; and a class is valid only as the top-level `actor.kind = "class"` root. An `actor` property, when present, must be one of those two objects — an explicit `"actor": null` fails Contract JSON decoding rather than denoting an actorless Contract.
 6. Every node is reachable from an actor or declaration root (unless `types` is empty). Cycles are accepted; dangling refs, malformed JSON, and malformed graph structure are not.
 
 ## What is intentionally outside this graph
