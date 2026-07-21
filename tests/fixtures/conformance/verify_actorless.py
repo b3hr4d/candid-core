@@ -76,12 +76,14 @@ def assert_within_jcs_subset(value):
 
 def jcs_bytes(payload):
     assert_within_jcs_subset(payload)
-    return json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
+    return json.dumps(
+        payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+    ).encode("utf-8")
 
 
 def main():
-    wire = json.loads((HERE / "actorless.contract.json").read_text())
-    pins = json.loads((HERE / "actorless.identity.json").read_text())
+    wire = json.loads((HERE / "actorless.contract.json").read_text(encoding="utf-8"))
+    pins = json.loads((HERE / "actorless.identity.json").read_text(encoding="utf-8"))
 
     failures = []
 
@@ -95,10 +97,10 @@ def main():
     payload = {name: wire[name] for name in IDENTITY_PAYLOAD_PROPERTIES}
     jcs = jcs_bytes(payload)
     domain = pins["domain"]
-    preimage = domain.encode() + b"\x00" + jcs
+    preimage = domain.encode("utf-8") + b"\x00" + jcs
     contract_id = f"{domain}:sha256:{hashlib.sha256(preimage).hexdigest()}"
 
-    expect("canonical JCS text", jcs.decode(), pins["jcs"])
+    expect("canonical JCS text", jcs.decode("utf-8"), pins["jcs"])
     expect("canonical JCS bytes (hex)", jcs.hex(), pins["jcs_hex"])
     expect("domain preimage bytes (hex)", preimage.hex(), pins["preimage_hex"])
     expect("contract ID", contract_id, pins["contract_id"])
