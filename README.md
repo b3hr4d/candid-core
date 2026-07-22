@@ -11,6 +11,47 @@ The compile command emits JSON containing a canonical validated `contract` and a
 
 See [architecture](docs/architecture.md) and the [Contract graph](docs/contract-graph.md) for the v1 model, constraints, and the explicitly deferred host-value ↔ Candid binary bridge. The byte-level identity algorithm is specified normatively in [canonicalization v1](docs/canonicalization-v1.md). See [release verification gates](docs/verification.md) for the checks required before declaring the format stable across implementations. See [performance benchmarks](docs/benchmarks.md) for reproducible comparisons with the pinned official Candid checker and for allocation measurements.
 
+## Command-line interface
+
+The `candid-core` binary accepts exactly this grammar, and nothing else:
+
+```text
+candid-core compile <path> [--no-source-info]
+candid-core validate <path>
+```
+
+```sh
+cargo run --bin candid-core -- compile ./service.did
+cargo run --bin candid-core -- compile ./service.did --no-source-info
+cargo run --bin candid-core -- validate ./contract.json
+```
+
+Anything outside the grammar — an unknown command, an unknown option, a missing path, an option before the path, a flag on `validate`, a duplicate `--no-source-info`, or any trailing argument — is a usage error: the process writes nothing to stdout, exits with status 64, and prints exactly this usage text on stderr:
+
+```text
+usage: candid-core compile <path> [--no-source-info]
+       candid-core validate <path>
+```
+
+A token that begins with `-` is always treated as an option in the path position, never as a path; spell a dash-leading relative file with a `./` prefix (`candid-core compile ./-service.did`). Path arguments are taken as OS-native bytes, so a non-Unicode path is never an argument-parsing failure: `validate` hands the bytes to the filesystem unchanged, while `compile` additionally requires the entry file name to be valid UTF-8 — it becomes the source ID — and reports a `did_invalid_source_id` diagnostic otherwise. There are no other commands or flags — in particular no flags for custom limits; pass custom `Limits` through the library APIs instead.
+
+Every non-usage outcome is one pretty-printed JSON document on stdout with an empty stderr:
+
+| Outcome | Exit status | stdout | stderr |
+| --- | --- | --- | --- |
+| success | 0 | JSON with `"ok": true` | empty |
+| read, parse, validation, or resource-limit failure | 1 | JSON with `"ok": false` | empty |
+| usage error | 64 | empty | the usage text above |
+
+`compile <path>` emits `{"ok": true, "contract": …, "source_info": …}` on success and `{"ok": false, "diagnostics": […]}` on failure. `--no-source-info` suppresses the provenance sidecar; the key stays present as `"source_info": null`. `validate <path>` emits `{"ok": true, "contract": …}` on success, `{"ok": false, "diagnostics": […]}` when the document cannot be read or is not JSON, and `{"ok": false, "violations": […]}` when it parses but fails validation or when the read exceeds the input byte bound (a single `resource_limit_exceeded` violation at path `$`). Codes are stable identifiers such as `did_parse_error`, `did_file_read_error`, `contract_file_read_error`, `malformed_contract_json`, and `resource_limit_exceeded`.
+
+Both commands bound their reads under `Limits::default()` before decoding, so an oversized file fails with a `resource_limit_exceeded` code carrying `{resource, limit, observed}` metadata instead of allocating without bound, and the byte bound takes precedence over UTF-8 and parse errors:
+
+- `compile` reads every source file through the workspace resolver: each file is bounded by `max_source_bytes` (1 MiB, resource `source_bytes`), and the import bundle in aggregate by `max_bundle_bytes` (8 MiB, resource `bundle_bytes`); an over-limit source fails in the `diagnostics` shape.
+- `validate` reads the contract document bounded by `max_input_bytes` (4 MiB, resource `input_bytes`); an over-limit document fails in the `violations` shape.
+
+The real-binary suite in `tests/cli.rs` pins this contract: the argument matrix, exit statuses, output channels, JSON shapes and codes, source-info suppression, and both byte bounds at the exact limit and one byte over.
+
 ## Runnable examples
 
 The examples show why the Contract is a graph, how semantically equivalent DID sources share an identity, and how strict JSON validation protects the core:

@@ -2,10 +2,8 @@ use candid_core::{
     compile_with_resolver, CompileOptions, Limits, MemoryResolver, RawSourceInfo, ResolveError,
     ResolvedSource, RuntimeContext, SourceId, SourceInfo, SourceResolver, WorkspaceResolver,
 };
-use serde_json::Value;
 use std::fs;
 use std::path::PathBuf;
-use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 static NEXT_FIXTURE: AtomicU64 = AtomicU64::new(0);
@@ -324,43 +322,4 @@ fn compile_reports_bundle_bytes_before_source_id_bytes_on_mixed_invalid_input() 
     assert_eq!(resource.resource, "bundle_bytes");
     assert_eq!(resource.limit, bundle_bytes - 1);
     assert_eq!(resource.observed, bundle_bytes);
-}
-
-#[test]
-fn cli_validation_bounds_contract_files_before_decoding() {
-    let fixture = Fixture::new();
-    let limit = Limits::default().max_input_bytes;
-    let fixture_json = fs::read_to_string(format!(
-        "{}/tests/fixtures/conformance/empty_actor.contract.json",
-        env!("CARGO_MANIFEST_DIR")
-    ))
-    .unwrap();
-    let mut exact = fixture_json.into_bytes();
-    exact.resize(limit, b' ');
-    let exact_path = fixture.path.join("exact.json");
-    fs::write(&exact_path, exact).unwrap();
-
-    let output = Command::new(env!("CARGO_BIN_EXE_candid-core"))
-        .args(["validate", exact_path.to_str().unwrap()])
-        .output()
-        .unwrap();
-    assert!(output.status.success());
-
-    let over_path = fixture.path.join("over.json");
-    fs::write(&over_path, vec![0xff; limit + 1]).unwrap();
-    let output = Command::new(env!("CARGO_BIN_EXE_candid-core"))
-        .args(["validate", over_path.to_str().unwrap()])
-        .output()
-        .unwrap();
-    assert!(!output.status.success());
-    let response: Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(response["violations"][0]["code"], "resource_limit_exceeded");
-    assert_eq!(
-        response["violations"][0]["resource_limit"],
-        serde_json::json!({
-            "resource": "input_bytes",
-            "limit": limit,
-            "observed": limit + 1,
-        })
-    );
 }
