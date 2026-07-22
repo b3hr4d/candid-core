@@ -239,7 +239,10 @@ fn source_info_rejects_invalid_and_noncanonical_logical_ids() {
     )
     .unwrap_err();
     assert_eq!(error.violations[0].code, "invalid_source_id");
-    assert_eq!(error.violations[0].path, "$.sources[0].name");
+    assert_eq!(
+        error.violations[0].path.as_deref(),
+        Some("$.sources[0].name")
+    );
 
     let mut resolver = MemoryResolver::new();
     resolver
@@ -267,7 +270,10 @@ fn source_info_rejects_invalid_and_noncanonical_logical_ids() {
         )
         .unwrap_err();
         assert_eq!(error.violations[0].code, "invalid_source_id");
-        assert_eq!(error.violations[0].path, format!("$.imports[0].{field}"));
+        assert_eq!(
+            error.violations[0].path,
+            Some(format!("$.imports[0].{field}"))
+        );
     }
 }
 
@@ -287,18 +293,21 @@ fn source_info_raw_construction_is_fallible_and_contract_bound() {
     let error = SourceInfo::try_from_raw(unsupported, compilation.contract(), &Limits::default())
         .unwrap_err();
     assert_eq!(error.violations[0].code, "unsupported_source_info_version");
-    assert_eq!(error.violations[0].path, "$.source_info_version");
+    assert_eq!(
+        error.violations[0].path.as_deref(),
+        Some("$.source_info_version")
+    );
 
     let other = compile("service : { ping: () -> () };");
     let error = SourceInfo::try_from_raw(raw, other.contract(), &Limits::default()).unwrap_err();
     assert_eq!(error.violations[0].code, "source_contract_id_mismatch");
-    assert_eq!(error.violations[0].path, "$.contract_id");
+    assert_eq!(error.violations[0].path.as_deref(), Some("$.contract_id"));
 }
 
 fn assert_provenance_mismatch(raw: RawSourceInfo, contract: &Contract, path: &str) {
     let error = SourceInfo::try_from_raw(raw, contract, &Limits::default()).unwrap_err();
     assert_eq!(error.violations[0].code, "source_info_provenance_mismatch");
-    assert_eq!(error.violations[0].path, path);
+    assert_eq!(error.violations[0].path.as_deref(), Some(path));
 }
 
 #[test]
@@ -339,7 +348,10 @@ fn source_info_rederivation_rejects_every_derived_provenance_category() {
         compilation_error.violations[0].code,
         "source_info_provenance_mismatch"
     );
-    assert_eq!(compilation_error.violations[0].path, "$.declarations");
+    assert_eq!(
+        compilation_error.violations[0].path.as_deref(),
+        Some("$.declarations")
+    );
 
     let honest_field = raw
         .field_labels

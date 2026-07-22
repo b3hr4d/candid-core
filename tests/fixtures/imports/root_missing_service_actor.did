@@ -1,0 +1,3 @@
+import service "types.did";
+
+service : { local_method: () -> () };

@@ -1,5 +1,5 @@
 use crate::canonical;
-use crate::diagnostics::{CompileError, Diagnostic, DiagnosticPhase, Severity, SourceSpan};
+use crate::diagnostics::{CompileError, Diagnostic, DiagnosticPhase, SourceSpan};
 use crate::limits::RuntimeContext;
 use crate::model::{
     Actor, Contract, Declaration, Field, FieldLabelProvenance, MethodMode, PrimitiveType,
@@ -154,7 +154,8 @@ pub fn compile_with_resolver(
     budget
         .checkpoint()
         .map_err(|error| budget_error(error, DiagnosticPhase::TypeCheck, "Candid type checking"))?;
-    let (environment, actor, _) = check_file(&materialized.entry).map_err(candid_file_error)?;
+    let (environment, actor, _) =
+        check_file(&materialized.entry).map_err(|error| candid_file_error(error, &materialized))?;
     budget
         .checkpoint()
         .map_err(|error| budget_error(error, DiagnosticPhase::TypeCheck, "Candid type checking"))?;

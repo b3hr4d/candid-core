@@ -525,7 +525,7 @@ fn byte_escapes_that_break_utf8_are_reported_not_panicked() {
     let error = compile_did("\"\\B8\"").expect_err("a bare text literal is not a program");
     let diagnostic = &error.diagnostics[0];
     assert_eq!(diagnostic.code, "did_parse_error");
-    assert_eq!(diagnostic.phase, candid_core::DiagnosticPhase::Parse);
+    assert_eq!(diagnostic.phase, Some(candid_core::DiagnosticPhase::Parse));
     assert!(!diagnostic.message.is_empty());
     assert!(
         diagnostic.span.is_some(),
@@ -598,14 +598,17 @@ fn well_formed_sources_are_unaffected_by_the_parse_error_rendering() {
     // unchanged and still name the offending symbol.
     let type_error = compile_did("service : { broken: (Missing) -> () };").unwrap_err();
     let diagnostic = &type_error.diagnostics[0];
-    assert_eq!(diagnostic.phase, candid_core::DiagnosticPhase::TypeCheck);
+    assert_eq!(
+        diagnostic.phase,
+        Some(candid_core::DiagnosticPhase::TypeCheck)
+    );
     assert!(diagnostic.message.contains("Missing") || diagnostic.message.contains("Unbound"));
 
     // A parse error still carries a usable span and the expected-token notes.
     let syntax = compile_did("service : { broken: (nat) -> ( };").unwrap_err();
     let diagnostic = &syntax.diagnostics[0];
     let span = diagnostic.span.as_ref().expect("parse errors carry a span");
-    assert!(span.end_byte > span.start_byte);
+    assert!(span.end_byte.unwrap() > span.start_byte.unwrap());
     assert!(
         !diagnostic.notes.is_empty(),
         "the expected-token list must still reach the caller"
@@ -616,21 +619,24 @@ fn well_formed_sources_are_unaffected_by_the_parse_error_rendering() {
 fn invalid_did_returns_actionable_structured_diagnostics() {
     let syntax = compile_did("service : { broken: (nat) -> ( };").unwrap_err();
     let diagnostic = &syntax.diagnostics[0];
-    assert_eq!(diagnostic.phase, candid_core::DiagnosticPhase::Parse);
+    assert_eq!(diagnostic.phase, Some(candid_core::DiagnosticPhase::Parse));
     assert_eq!(diagnostic.code, "did_parse_error");
     assert!(diagnostic.span.is_some());
     assert!(!diagnostic.message.is_empty());
 
     let type_error = compile_did("service : { broken: (Missing) -> () };").unwrap_err();
     let diagnostic = &type_error.diagnostics[0];
-    assert_eq!(diagnostic.phase, candid_core::DiagnosticPhase::TypeCheck);
+    assert_eq!(
+        diagnostic.phase,
+        Some(candid_core::DiagnosticPhase::TypeCheck)
+    );
     assert_eq!(diagnostic.code, "did_type_check_error");
     assert!(diagnostic.message.contains("Missing") || diagnostic.message.contains("Unbound"));
 
     let oneway = compile_did("service : { broken: () -> (nat) oneway };").unwrap_err();
     assert_eq!(
         oneway.diagnostics[0].phase,
-        candid_core::DiagnosticPhase::TypeCheck
+        Some(candid_core::DiagnosticPhase::TypeCheck)
     );
 }
 
@@ -671,7 +677,7 @@ fn file_compilation_uses_the_authoritative_import_resolver() {
     let error = compile_did_file(invalid).unwrap_err();
     assert_eq!(
         error.diagnostics[0].phase,
-        candid_core::DiagnosticPhase::TypeCheck
+        Some(candid_core::DiagnosticPhase::TypeCheck)
     );
 
     let invalid_syntax = format!(
@@ -681,7 +687,7 @@ fn file_compilation_uses_the_authoritative_import_resolver() {
     let error = compile_did_file(invalid_syntax).unwrap_err();
     assert_eq!(
         error.diagnostics[0].phase,
-        candid_core::DiagnosticPhase::Parse
+        Some(candid_core::DiagnosticPhase::Parse)
     );
     assert!(error.diagnostics[0]
         .span
