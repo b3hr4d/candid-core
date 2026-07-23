@@ -108,10 +108,7 @@ fn host_value_resource_chain_preserves_the_exact_triple_and_path() {
         contract,
         &selector,
         &value,
-        &Limits {
-            max_value_depth: 3,
-            ..Limits::default()
-        },
+        &Limits::default().with_max_value_depth(3),
     )
     .unwrap_err();
     // The {resource, limit, observed} triple survives untouched, and the
@@ -133,10 +130,7 @@ fn compile_lowering_converts_structured_violations_without_stringification() {
     // surfaced as one "contract_lowering_error" whose message was the count-only
     // Display of the structured error; now every violation converts
     // item-by-item with its code, structured path, and resource triple.
-    let context = RuntimeContext::new(Limits {
-        max_canonicalization_work: 1,
-        ..Limits::default()
-    });
+    let context = RuntimeContext::new(Limits::default().with_max_canonicalization_work(1));
     let error =
         compile_did_with_context("service : {};", CompileOptions::default(), &context).unwrap_err();
     assert_eq!(
@@ -213,10 +207,7 @@ fn lowering_structure_validation_converts_resource_failures_item_by_item() {
     // The sibling of the canonicalization chain: exhaust a limit that only
     // `validate_structure` observes (`type_nodes`), so the conversion at the
     // structure-validation seam is exercised, not just the canonicalize seam.
-    let context = RuntimeContext::new(Limits {
-        max_type_nodes: 1,
-        ..Limits::default()
-    });
+    let context = RuntimeContext::new(Limits::default().with_max_type_nodes(1));
     let error = compile_did_with_context(
         "type Pair = record { first: nat; second: text }; service : {};",
         CompileOptions::default(),
@@ -390,10 +381,7 @@ fn provenance_rederivation_preserves_resource_metadata() {
     let error = candid_core::SourceInfo::try_from_raw(
         raw,
         compilation.contract(),
-        &Limits {
-            max_type_depth: 2,
-            ..Limits::default()
-        },
+        &Limits::default().with_max_type_depth(2),
     )
     .unwrap_err();
     let violation = &error.violations[0];
@@ -432,10 +420,7 @@ fn invalid_contract_error(
 fn zero_diagnostics_limit_yields_one_bounded_sentinel() {
     // An error collection is never empty: at max_diagnostics = 0 the first
     // observed violation produces exactly one structured sentinel.
-    let limits = Limits {
-        max_diagnostics: 0,
-        ..Limits::default()
-    };
+    let limits = Limits::default().with_max_diagnostics(0);
     let error = invalid_contract_error(
         |json| json["identities"]["contract"] = json!("not-a-valid-id"),
         &limits,
@@ -478,10 +463,7 @@ fn positive_diagnostics_limits_truncate_exactly_as_before() {
             json["format"] = json!("bogus-format");
             json["identities"]["contract"] = json!("not-a-valid-id");
         },
-        &Limits {
-            max_diagnostics: 1,
-            ..Limits::default()
-        },
+        &Limits::default().with_max_diagnostics(1),
     );
     assert_eq!(
         serde_json::to_value(&error.violations).unwrap(),
@@ -499,10 +481,7 @@ fn positive_diagnostics_limits_truncate_exactly_as_before() {
             json["format"] = json!("bogus-format");
             json["identities"]["contract"] = json!("not-a-valid-id");
         },
-        &Limits {
-            max_diagnostics: 2,
-            ..Limits::default()
-        },
+        &Limits::default().with_max_diagnostics(2),
     );
     assert_eq!(
         serde_json::to_value(&error.violations).unwrap(),

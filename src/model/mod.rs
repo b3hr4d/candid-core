@@ -4,8 +4,8 @@ mod type_graph;
 mod validation_error;
 
 pub use contract::{
-    Contract, ContractIdentities, ProducerInfo, RawContract, CANONICALIZATION_PROFILE,
-    CONTRACT_FORMAT, FORMAT_VERSION, SEMANTICS_PROFILE,
+    Contract, ContractDraft, ContractIdentities, ProducerInfo, RawContract,
+    CANONICALIZATION_PROFILE, CONTRACT_FORMAT, FORMAT_VERSION, SEMANTICS_PROFILE,
 };
 pub use source_info::{
     FieldLabelProvenance, RawSourceInfo, SourceActorInfo, SourceDeclaration, SourceFileInfo,

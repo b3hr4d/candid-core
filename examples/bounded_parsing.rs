@@ -35,10 +35,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     // is rejected without being decoded. This bounds peak allocation against
     // the chosen ceiling; it does not reject element-by-element during decode.
     // Decode-time element charging is a named follow-up.
-    let context = RuntimeContext::new(Limits {
-        max_input_bytes: 64,
-        ..Limits::default()
-    });
+    let context = RuntimeContext::new(Limits::default().with_max_input_bytes(64));
     let rejected =
         Contract::from_slice_with_context(contract_json.as_bytes(), &context).unwrap_err();
     println!("oversized Contract rejected: {}", resource_limit(&rejected));
@@ -55,10 +52,8 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     // Raised limits admit both documents. The byte gate, decode, and validation
     // share one budget, so the whole parse is charged against this policy.
-    let raised = Limits {
-        max_input_bytes: contract_json.len().max(compilation_json.len()) + 1,
-        ..Limits::default()
-    };
+    let raised =
+        Limits::default().with_max_input_bytes(contract_json.len().max(compilation_json.len()) + 1);
     let context = RuntimeContext::new(raised.clone());
     let contract = Contract::from_slice_with_context(contract_json.as_bytes(), &context)?;
     let parsed = Compilation::from_slice_with_context(compilation_json.as_bytes(), &context)?;
@@ -72,8 +67,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     // construction, rendering additionally charges the emitted byte length
     // against `max_canonicalization_work`, so a caller who raised only
     // `max_input_bytes` to parse a document may still fail to render it.
-    let mut render = raised.clone();
-    render.max_canonicalization_work = 16;
+    let render = raised.clone().with_max_canonicalization_work(16);
     let starved_render = contract.to_json_pretty_with_limits(&render).unwrap_err();
     let metadata = starved_render
         .violations
@@ -85,7 +79,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         metadata.resource, metadata.limit, metadata.observed
     );
 
-    render.max_canonicalization_work = Limits::default().max_canonicalization_work;
+    let render =
+        render.with_max_canonicalization_work(Limits::default().max_canonicalization_work());
     let round_tripped = contract.to_json_pretty_with_limits(&render)?;
     println!("round-trip stable: {}", round_tripped == contract_json);
     Ok(())

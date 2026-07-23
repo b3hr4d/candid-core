@@ -1,10 +1,10 @@
 use candid_core::{
     compile_did, compile_did_file, compile_did_file_with_context, compile_did_with_context,
     compile_with_resolver, validate_host_value, Actor, CancellationToken, Compilation,
-    CompileError, CompileOptions, Contract, ContractEnvelope, ContractMethodRef, ContractTypeRef,
-    Declaration, Field, HostValue, Limits, MemoryResolver, PrimitiveType, RawContract,
-    RawSourceInfo, ResolveError, ResolvedSource, RuntimeContext, SourceId, SourceInfo, SourceLabel,
-    SourceOrigin, SourceResolver, TypeNode, CANONICALIZATION_PROFILE, CONTRACT_FORMAT,
+    CompileError, CompileOptions, Contract, ContractDraft, ContractEnvelope, ContractMethodRef,
+    ContractTypeRef, Declaration, Field, HostValue, Limits, MemoryResolver, PrimitiveType,
+    RawContract, RawSourceInfo, ResolveError, ResolvedSource, RuntimeContext, SourceId, SourceInfo,
+    SourceLabel, SourceOrigin, SourceResolver, TypeNode, CANONICALIZATION_PROFILE, CONTRACT_FORMAT,
     FORMAT_VERSION, SEMANTICS_PROFILE,
 };
 use sha2::{Digest, Sha256};
@@ -613,7 +613,7 @@ fn diamond_imports_are_snapshotted_and_loaded_once() {
 
 #[test]
 fn contract_validation_caps_retained_diagnostics() {
-    let raw = RawContract::new(
+    let draft = ContractDraft::new(
         vec![
             TypeNode::Record {
                 fields: (0..16).map(|_| Field { id: 0, ty: 1 }).collect(),
@@ -628,18 +628,15 @@ fn contract_validation_caps_retained_diagnostics() {
         }],
         None,
     );
-    let limits = Limits {
-        max_diagnostics: 3,
-        ..Limits::default()
-    };
-    let error = Contract::build_raw(raw, &limits).unwrap_err();
-    assert_eq!(error.violations.len(), limits.max_diagnostics);
+    let limits = Limits::default().with_max_diagnostics(3);
+    let error = draft.build_with_limits(&limits).unwrap_err();
+    assert_eq!(error.violations.len(), limits.max_diagnostics());
     let cap = error.violations.last().unwrap();
     assert_eq!(cap.code, "resource_limit_exceeded");
     let info = cap.resource_limit.as_ref().unwrap();
     assert_eq!(info.resource, "diagnostics");
-    assert_eq!(info.limit, limits.max_diagnostics);
-    assert!(info.observed > limits.max_diagnostics);
+    assert_eq!(info.limit, limits.max_diagnostics() as u64);
+    assert!(info.observed > limits.max_diagnostics() as u64);
 }
 
 #[test]
@@ -674,10 +671,7 @@ fn resolver_rejects_authority_escape_and_import_cycles() {
 
 #[test]
 fn operational_limits_fail_with_machine_stable_diagnostics() {
-    let context = RuntimeContext::new(Limits {
-        max_source_bytes: 8,
-        ..Limits::default()
-    });
+    let context = RuntimeContext::new(Limits::default().with_max_source_bytes(8));
     let error =
         compile_did_with_context("service : {};", CompileOptions::default(), &context).unwrap_err();
     assert_eq!(error.diagnostics[0].code, "resource_limit_exceeded");
@@ -694,10 +688,7 @@ fn operational_limits_fail_with_machine_stable_diagnostics() {
         .contract()
         .to_json_pretty()
         .unwrap();
-    let limits = Limits {
-        max_input_bytes: json.len() - 1,
-        ..Limits::default()
-    };
+    let limits = Limits::default().with_max_input_bytes(json.len() - 1);
     let error = Contract::from_json_with_limits(&json, &limits).unwrap_err();
     assert!(error.to_string().contains("validation failed"));
 }
@@ -754,8 +745,8 @@ fn assert_source_limit(error: CompileError, limit: usize, observed: usize) {
     assert_eq!(diagnostic.code, "resource_limit_exceeded");
     let resource = diagnostic.resource_limit.as_ref().unwrap();
     assert_eq!(resource.resource, "source_bytes");
-    assert_eq!(resource.limit, limit);
-    assert_eq!(resource.observed, observed);
+    assert_eq!(resource.limit, limit as u64);
+    assert_eq!(resource.observed, observed as u64);
 }
 
 #[test]
@@ -764,10 +755,7 @@ fn compiler_owns_source_limit_enforcement_for_every_resolver_path() {
 
     let source = "service : {};";
     let limit = source.len() - 1;
-    let context = RuntimeContext::new(Limits {
-        max_source_bytes: limit,
-        ..Limits::default()
-    });
+    let context = RuntimeContext::new(Limits::default().with_max_source_bytes(limit));
 
     let mut memory = MemoryResolver::new();
     memory.insert("entry.did", source).unwrap();
@@ -820,29 +808,18 @@ fn compiler_source_accounting_accepts_exact_boundaries_and_rejects_next_source()
         source: source.to_string(),
         digest: None,
     };
-    let exact = RuntimeContext::new(Limits {
-        max_source_bytes: source.len(),
-        max_bundle_bytes: source.len(),
-        max_sources: 1,
-        ..Limits::default()
-    });
+    let exact = RuntimeContext::new(
+        Limits::default()
+            .with_max_source_bytes(source.len())
+            .with_max_bundle_bytes(source.len())
+            .with_max_sources(1),
+    );
     compile_with_resolver("entry.did", &resolver, CompileOptions::default(), &exact).unwrap();
 
     for (limits, resource, limit, observed) in [
+        (Limits::default().with_max_sources(0), "sources", 0, 1),
         (
-            Limits {
-                max_sources: 0,
-                ..Limits::default()
-            },
-            "sources",
-            0,
-            1,
-        ),
-        (
-            Limits {
-                max_bundle_bytes: source.len() - 1,
-                ..Limits::default()
-            },
+            Limits::default().with_max_bundle_bytes(source.len() - 1),
             "bundle_bytes",
             source.len() - 1,
             source.len(),
@@ -859,8 +836,8 @@ fn compiler_source_accounting_accepts_exact_boundaries_and_rejects_next_source()
             .unwrap_err();
             let info = error.diagnostics[0].resource_limit.as_ref().unwrap();
             assert_eq!(info.resource, resource);
-            assert_eq!(info.limit, limit);
-            assert_eq!(info.observed, observed);
+            assert_eq!(info.limit, limit as u64);
+            assert_eq!(info.observed, observed as u64);
         }
     }
 }
@@ -873,10 +850,7 @@ fn compiler_checks_source_limits_before_digesting_resolver_content() {
         digest: Some("sha256:not-a-digest".to_string()),
     };
     let limit = source.len() - 1;
-    let context = RuntimeContext::new(Limits {
-        max_source_bytes: limit,
-        ..Limits::default()
-    });
+    let context = RuntimeContext::new(Limits::default().with_max_source_bytes(limit));
     let error = compile_with_resolver("entry.did", &resolver, CompileOptions::default(), &context)
         .unwrap_err();
     assert_source_limit(error, limit, source.len());
@@ -884,10 +858,7 @@ fn compiler_checks_source_limits_before_digesting_resolver_content() {
 
 #[test]
 fn elapsed_deadlines_abort_work_without_partial_artifacts() {
-    let context = RuntimeContext::new(Limits {
-        deadline_unix_ms: Some(1),
-        ..Limits::default()
-    });
+    let context = RuntimeContext::new(Limits::default().with_deadline_unix_ms(Some(1)));
     let error =
         compile_did_with_context("service : {};", CompileOptions::default(), &context).unwrap_err();
     assert_eq!(error.diagnostics[0].code, "operation_deadline_exceeded");
@@ -900,10 +871,7 @@ fn resolver_context_methods_enforce_elapsed_deadlines() {
         .insert("memory:/entry.did", "service : {};")
         .unwrap();
     let id = SourceId::parse("memory:/entry.did").unwrap();
-    let context = RuntimeContext::new(Limits {
-        deadline_unix_ms: Some(1),
-        ..Limits::default()
-    });
+    let context = RuntimeContext::new(Limits::default().with_deadline_unix_ms(Some(1)));
 
     let load_error = resolver.load_with_context(&id, &context).unwrap_err();
     assert_eq!(load_error.code, "operation_deadline_exceeded");
@@ -969,10 +937,7 @@ fn provenance_budget_failures_retain_stable_resource_metadata() {
         serde_json::from_value(serde_json::to_value(compilation.source_info().unwrap()).unwrap())
             .unwrap();
     assert_eq!(raw.methods.len(), 1);
-    let context = RuntimeContext::new(Limits {
-        max_methods: 0,
-        ..Limits::default()
-    });
+    let context = RuntimeContext::new(Limits::default().with_max_methods(0));
     let error =
         SourceInfo::try_from_raw_with_context(raw, compilation.contract(), &context).unwrap_err();
     let violation = &error.violations[0];
@@ -990,17 +955,14 @@ fn one_operation_cannot_reset_canonicalization_work_between_stages() {
     let nodes = raw.types.len();
     assert_eq!(nodes, 1);
     let limit = nodes * 3;
-    let context = RuntimeContext::new(Limits {
-        max_canonicalization_work: limit,
-        ..Limits::default()
-    });
+    let context = RuntimeContext::new(Limits::default().with_max_canonicalization_work(limit));
     let error = Contract::try_from_raw_with_context(raw, &context).unwrap_err();
     let violation = &error.violations[0];
     assert_eq!(violation.code, "resource_limit_exceeded");
     let resource = violation.resource_limit.as_ref().unwrap();
     assert_eq!(resource.resource, "canonicalization_work");
-    assert_eq!(resource.limit, limit);
-    assert_eq!(resource.observed, nodes * 4);
+    assert_eq!(resource.limit, limit as u64);
+    assert_eq!(resource.observed, (nodes * 4) as u64);
 }
 
 #[test]
@@ -1012,7 +974,7 @@ fn iterative_canonical_traversal_handles_deep_graphs_and_honors_work_limits() {
     types.push(TypeNode::Primitive {
         primitive: PrimitiveType::Nat,
     });
-    let raw = RawContract::new(
+    let draft = ContractDraft::new(
         types,
         vec![Declaration {
             name: "Deep".to_string(),
@@ -1020,14 +982,11 @@ fn iterative_canonical_traversal_handles_deep_graphs_and_honors_work_limits() {
         }],
         None,
     );
-    let contract = Contract::build_raw(raw.clone(), &Limits::default()).unwrap();
+    let contract = draft.clone().build().unwrap();
     assert_eq!(contract.types().len(), depth as usize + 1);
 
-    let limits = Limits {
-        max_canonicalization_work: 10,
-        ..Limits::default()
-    };
-    let error = Contract::build_raw(raw, &limits).unwrap_err();
+    let limits = Limits::default().with_max_canonicalization_work(10);
+    let error = draft.build_with_limits(&limits).unwrap_err();
     assert!(error
         .violations
         .iter()
@@ -1194,8 +1153,8 @@ fn jcs_identity_is_independent_of_input_object_key_order() {
 }
 
 #[test]
-fn raw_graph_builder_calculates_identities_for_producers() {
-    let raw = RawContract::new(
+fn contract_draft_calculates_identities_for_producers() {
+    let draft = ContractDraft::new(
         vec![
             TypeNode::Record {
                 fields: vec![Field { id: 0, ty: 1 }],
@@ -1210,7 +1169,7 @@ fn raw_graph_builder_calculates_identities_for_producers() {
         }],
         None,
     );
-    let contract = Contract::build_raw(raw, &Limits::default()).unwrap();
+    let contract = draft.build().unwrap();
     assert!(contract.interface_id().is_none());
     assert!(contract.validate().is_ok());
 }

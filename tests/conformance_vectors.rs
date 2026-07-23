@@ -9,7 +9,7 @@
 //! the two implementations fails one side or the other.
 
 use candid_core::{
-    compile_did_file, Actor, Contract, Declaration, Limits, RawContract, TypeNode, TypeRef,
+    compile_did_file, Actor, Contract, ContractDraft, Declaration, RawContract, TypeNode, TypeRef,
     CANONICALIZATION_PROFILE, CONTRACT_FORMAT, FORMAT_VERSION, SEMANTICS_PROFILE,
 };
 use serde::Deserialize;
@@ -136,11 +136,9 @@ fn expected(case: &Case) -> Expected {
 fn build(case: &Case, input: &str) -> Contract {
     let raw: RawGraph = serde_json::from_str(&read(input))
         .unwrap_or_else(|error| panic!("{}: decoding {input}: {error}", case.name));
-    Contract::build_raw(
-        RawContract::new(raw.types, raw.declarations, raw.actor),
-        &Limits::default(),
-    )
-    .unwrap_or_else(|error| panic!("{}: canonicalizing {input}: {error:?}", case.name))
+    ContractDraft::new(raw.types, raw.declarations, raw.actor)
+        .build()
+        .unwrap_or_else(|error| panic!("{}: canonicalizing {input}: {error:?}", case.name))
 }
 
 #[test]

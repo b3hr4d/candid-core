@@ -1,11 +1,12 @@
 use candid_core::{
-    Actor, Contract, ContractIdentities, ContractJsonError, ContractValidationError,
-    ContractViolation, Declaration, Field, FieldLabelProvenance, MethodMode, PrimitiveType,
-    ProducerInfo, RawContract, RawSourceInfo, ServiceMethod, SourceActorInfo, SourceDeclaration,
-    SourceFileInfo, SourceFunctionArgumentDirection, SourceFunctionArgumentInfo, SourceImportInfo,
+    Actor, Contract, ContractDraft, ContractIdentities, ContractJsonError, ContractValidationError,
+    ContractViolation, Declaration, Field, FieldLabelProvenance, Limits, LimitsConfig,
+    LimitsConfigError, LimitsProfile, MethodMode, PrimitiveType, ProducerInfo, RawContract,
+    RawSourceInfo, ServiceMethod, SourceActorInfo, SourceDeclaration, SourceFileInfo,
+    SourceFunctionArgumentDirection, SourceFunctionArgumentInfo, SourceImportInfo,
     SourceImportKind, SourceInfo, SourceLabel, SourceMethodInfo, SourceOrigin, TypeNode, TypeRef,
-    CANONICALIZATION_PROFILE, CONTRACT_FORMAT, FORMAT_VERSION, SEMANTICS_PROFILE,
-    SOURCE_INFO_VERSION,
+    CANONICALIZATION_PROFILE, CONTRACT_FORMAT, FORMAT_VERSION, LIMITS_CONFIG_VERSION,
+    SEMANTICS_PROFILE, SOURCE_INFO_VERSION,
 };
 
 fn assert_public_type<T: 'static>() {}
@@ -14,6 +15,7 @@ fn assert_public_type<T: 'static>() {}
 fn model_api_remains_available_at_the_crate_root() {
     assert_public_type::<Actor>();
     assert_public_type::<Contract>();
+    assert_public_type::<ContractDraft>();
     assert_public_type::<ContractIdentities>();
     assert_public_type::<ContractJsonError>();
     assert_public_type::<ContractValidationError>();
@@ -21,6 +23,10 @@ fn model_api_remains_available_at_the_crate_root() {
     assert_public_type::<Declaration>();
     assert_public_type::<Field>();
     assert_public_type::<FieldLabelProvenance>();
+    assert_public_type::<Limits>();
+    assert_public_type::<LimitsConfig>();
+    assert_public_type::<LimitsConfigError>();
+    assert_public_type::<LimitsProfile>();
     assert_public_type::<MethodMode>();
     assert_public_type::<PrimitiveType>();
     assert_public_type::<ProducerInfo>();
@@ -46,4 +52,5 @@ fn model_api_remains_available_at_the_crate_root() {
     assert_eq!(SEMANTICS_PROFILE, "candid-1");
     assert_eq!(CANONICALIZATION_PROFILE, "candid-core-canon-1");
     assert_eq!(SOURCE_INFO_VERSION, 1);
+    assert_eq!(LIMITS_CONFIG_VERSION, 1);
 }

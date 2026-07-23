@@ -85,11 +85,9 @@ fn compile_imported_alias_chain() -> Result<(), candid_core::CompileError> {
 
 #[test]
 fn source_nesting_accepts_exact_limit_and_rejects_one_over() {
-    let limits = Limits {
-        max_source_nesting: 32,
-        max_type_depth: 64,
-        ..Limits::default()
-    };
+    let limits = Limits::default()
+        .with_max_source_nesting(32)
+        .with_max_type_depth(64);
     compile_with_limits(&nested_opts(32), limits.clone()).unwrap();
 
     let error = compile_with_limits(&nested_opts(33), limits).unwrap_err();
@@ -103,17 +101,12 @@ fn source_nesting_accepts_exact_limit_and_rejects_one_over() {
 
 #[test]
 fn checked_type_depth_accepts_exact_limit_and_rejects_one_over() {
-    let limits = Limits {
-        max_source_nesting: 64,
-        max_type_depth: 32,
-        ..Limits::default()
-    };
+    let limits = Limits::default()
+        .with_max_source_nesting(64)
+        .with_max_type_depth(32);
     compile_with_limits(&nested_opts(32), limits.clone()).unwrap();
 
-    let limits = Limits {
-        max_type_depth: 31,
-        ..limits
-    };
+    let limits = limits.with_max_type_depth(31);
     let error = compile_with_limits(&nested_opts(32), limits).unwrap_err();
     let resource = error.diagnostics[0].resource_limit.as_ref().unwrap();
     assert_eq!(resource.resource, "type_depth");
@@ -190,7 +183,7 @@ fn small_stack_rejects_hostile_host_value_json_without_aborting() {
             panic!("expected a resource limit, found {error:?}");
         };
         assert_eq!(resource, "value_nesting");
-        assert_eq!(limit, Limits::default().max_value_nesting);
+        assert_eq!(limit, Limits::default().max_value_nesting());
         assert_eq!(observed, limit + 1);
         return;
     }

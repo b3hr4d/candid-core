@@ -71,7 +71,7 @@ fn accept(raw: RawSourceInfo, compilation: &Compilation, limits: Limits) {
 }
 
 /// Returns `(resource, limit, observed)` from the first violation.
-fn reject(raw: RawSourceInfo, compilation: &Compilation, limits: Limits) -> (String, usize, usize) {
+fn reject(raw: RawSourceInfo, compilation: &Compilation, limits: Limits) -> (String, u64, u64) {
     let error = SourceInfo::try_from_raw_with_context(
         raw,
         compilation.contract(),
@@ -93,7 +93,7 @@ fn reject(raw: RawSourceInfo, compilation: &Compilation, limits: Limits) -> (Str
 /// structural passes, so lowering only this counter isolates the target-scan
 /// work from every other limit.
 fn minimum_provenance_work(validate: impl Fn(&Limits) -> bool) -> usize {
-    let ceiling = Limits::default().max_provenance_work;
+    let ceiling = Limits::default().max_provenance_work();
     assert!(
         validate(&Limits::default()),
         "the probe must succeed at the default ceiling"
@@ -101,10 +101,7 @@ fn minimum_provenance_work(validate: impl Fn(&Limits) -> bool) -> usize {
     let (mut low, mut high) = (0usize, ceiling);
     while low < high {
         let mid = low + (high - low) / 2;
-        let limits = Limits {
-            max_provenance_work: mid,
-            ..Limits::default()
-        };
+        let limits = Limits::default().with_max_provenance_work(mid);
         if validate(&limits) {
             high = mid;
         } else {
@@ -124,10 +121,7 @@ fn sources_are_accepted_at_the_limit_and_rejected_one_over() {
     accept(
         raw.clone(),
         &compilation,
-        Limits {
-            max_sources: observed,
-            ..Limits::default()
-        },
+        Limits::default().with_max_sources(observed),
     );
 
     let mut inflated = raw;
@@ -136,12 +130,13 @@ fn sources_are_accepted_at_the_limit_and_rejected_one_over() {
         reject(
             inflated,
             &compilation,
-            Limits {
-                max_sources: observed,
-                ..Limits::default()
-            }
+            Limits::default().with_max_sources(observed)
         ),
-        ("sources".to_string(), observed, observed + 1)
+        (
+            "sources".to_string(),
+            observed as u64,
+            (observed + 1) as u64
+        )
     );
 }
 
@@ -155,10 +150,7 @@ fn import_edges_are_accepted_at_the_limit_and_rejected_one_over() {
     accept(
         raw.clone(),
         &compilation,
-        Limits {
-            max_import_edges: observed,
-            ..Limits::default()
-        },
+        Limits::default().with_max_import_edges(observed),
     );
 
     let mut inflated = raw;
@@ -167,12 +159,13 @@ fn import_edges_are_accepted_at_the_limit_and_rejected_one_over() {
         reject(
             inflated,
             &compilation,
-            Limits {
-                max_import_edges: observed,
-                ..Limits::default()
-            }
+            Limits::default().with_max_import_edges(observed)
         ),
-        ("import_edges".to_string(), observed, observed + 1)
+        (
+            "import_edges".to_string(),
+            observed as u64,
+            (observed + 1) as u64
+        )
     );
 }
 
@@ -186,10 +179,7 @@ fn source_declarations_are_accepted_at_the_limit_and_rejected_one_over() {
     accept(
         raw.clone(),
         &compilation,
-        Limits {
-            max_declarations: observed,
-            ..Limits::default()
-        },
+        Limits::default().with_max_declarations(observed),
     );
 
     let mut inflated = raw;
@@ -198,12 +188,13 @@ fn source_declarations_are_accepted_at_the_limit_and_rejected_one_over() {
         reject(
             inflated,
             &compilation,
-            Limits {
-                max_declarations: observed,
-                ..Limits::default()
-            }
+            Limits::default().with_max_declarations(observed)
         ),
-        ("source_declarations".to_string(), observed, observed + 1)
+        (
+            "source_declarations".to_string(),
+            observed as u64,
+            (observed + 1) as u64
+        )
     );
 }
 
@@ -221,10 +212,7 @@ fn source_actors_are_accepted_at_the_limit_and_rejected_one_over() {
     accept(
         raw.clone(),
         &compilation,
-        Limits {
-            max_sources: observed,
-            ..Limits::default()
-        },
+        Limits::default().with_max_sources(observed),
     );
 
     let mut inflated = raw;
@@ -233,12 +221,13 @@ fn source_actors_are_accepted_at_the_limit_and_rejected_one_over() {
         reject(
             inflated,
             &compilation,
-            Limits {
-                max_sources: observed,
-                ..Limits::default()
-            }
+            Limits::default().with_max_sources(observed)
         ),
-        ("source_actors".to_string(), observed, observed + 1)
+        (
+            "source_actors".to_string(),
+            observed as u64,
+            (observed + 1) as u64
+        )
     );
 }
 
@@ -252,10 +241,7 @@ fn source_field_labels_are_accepted_at_the_limit_and_rejected_one_over() {
     accept(
         raw.clone(),
         &compilation,
-        Limits {
-            max_fields: observed,
-            ..Limits::default()
-        },
+        Limits::default().with_max_fields(observed),
     );
 
     let mut inflated = raw;
@@ -264,12 +250,13 @@ fn source_field_labels_are_accepted_at_the_limit_and_rejected_one_over() {
         reject(
             inflated,
             &compilation,
-            Limits {
-                max_fields: observed,
-                ..Limits::default()
-            }
+            Limits::default().with_max_fields(observed)
         ),
-        ("source_field_labels".to_string(), observed, observed + 1)
+        (
+            "source_field_labels".to_string(),
+            observed as u64,
+            (observed + 1) as u64
+        )
     );
 }
 
@@ -283,10 +270,7 @@ fn source_methods_are_accepted_at_the_limit_and_rejected_one_over() {
     accept(
         raw.clone(),
         &compilation,
-        Limits {
-            max_methods: observed,
-            ..Limits::default()
-        },
+        Limits::default().with_max_methods(observed),
     );
 
     let mut inflated = raw;
@@ -295,12 +279,13 @@ fn source_methods_are_accepted_at_the_limit_and_rejected_one_over() {
         reject(
             inflated,
             &compilation,
-            Limits {
-                max_methods: observed,
-                ..Limits::default()
-            }
+            Limits::default().with_max_methods(observed)
         ),
-        ("source_methods".to_string(), observed, observed + 1)
+        (
+            "source_methods".to_string(),
+            observed as u64,
+            (observed + 1) as u64
+        )
     );
 }
 
@@ -316,10 +301,7 @@ fn source_function_arguments_are_accepted_at_the_limit_and_rejected_one_over() {
     accept(
         raw.clone(),
         &compilation,
-        Limits {
-            max_function_values: observed,
-            ..Limits::default()
-        },
+        Limits::default().with_max_function_values(observed),
     );
 
     let mut inflated = raw;
@@ -328,15 +310,12 @@ fn source_function_arguments_are_accepted_at_the_limit_and_rejected_one_over() {
         reject(
             inflated,
             &compilation,
-            Limits {
-                max_function_values: observed,
-                ..Limits::default()
-            }
+            Limits::default().with_max_function_values(observed)
         ),
         (
             "source_function_arguments".to_string(),
-            observed,
-            observed + 1
+            observed as u64,
+            (observed + 1) as u64
         )
     );
 }
@@ -352,44 +331,38 @@ fn source_string_bytes_are_accepted_at_the_limit_and_rejected_one_under() {
     let (resource, _, doc_entries) = reject(
         raw.clone(),
         &compilation,
-        Limits {
-            max_string_bytes: 0,
-            ..Limits::default()
-        },
+        Limits::default().with_max_string_bytes(0),
     );
     assert_eq!(resource, "source_string_bytes");
     assert!(doc_entries > 0);
+    let doc_entries = doc_entries as usize;
 
     let (resource, _, observed) = reject(
         raw.clone(),
         &compilation,
-        Limits {
-            max_string_bytes: doc_entries,
-            ..Limits::default()
-        },
+        Limits::default().with_max_string_bytes(doc_entries),
     );
     assert_eq!(resource, "source_string_bytes");
-    assert!(observed > doc_entries);
+    assert!(observed > doc_entries as u64);
+    let observed = observed as usize;
 
     accept(
         raw.clone(),
         &compilation,
-        Limits {
-            max_string_bytes: observed,
-            ..Limits::default()
-        },
+        Limits::default().with_max_string_bytes(observed),
     );
 
     assert_eq!(
         reject(
             raw,
             &compilation,
-            Limits {
-                max_string_bytes: observed - 1,
-                ..Limits::default()
-            }
+            Limits::default().with_max_string_bytes(observed - 1)
         ),
-        ("source_string_bytes".to_string(), observed - 1, observed)
+        (
+            "source_string_bytes".to_string(),
+            (observed - 1) as u64,
+            observed as u64
+        )
     );
 }
 
@@ -421,14 +394,11 @@ fn empty_documentation_entries_cannot_inflate_a_sidecar_for_free() {
     let (resource, reported_limit, observed) = reject(
         inflated,
         &compilation,
-        Limits {
-            max_string_bytes: limit,
-            ..Limits::default()
-        },
+        Limits::default().with_max_string_bytes(limit),
     );
     assert_eq!(resource, "source_string_bytes");
-    assert_eq!(reported_limit, limit);
-    assert_eq!(observed, expected_entries);
+    assert_eq!(reported_limit, limit as u64);
+    assert_eq!(observed, expected_entries as u64);
 }
 
 #[test]
@@ -448,18 +418,15 @@ fn provenance_limits_are_enforced_before_reference_remapping() {
     let error = Compilation::try_from_raw_with_context(
         RawContract::from(compilation.contract()),
         Some(inflated),
-        &RuntimeContext::new(Limits {
-            max_fields: observed,
-            ..Limits::default()
-        }),
+        &RuntimeContext::new(Limits::default().with_max_fields(observed)),
     )
     .expect_err("oversized provenance must be rejected");
     let violation = &error.violations[0];
     assert_eq!(violation.code, "resource_limit_exceeded", "{error:#?}");
     let info = violation.resource_limit.as_ref().unwrap();
     assert_eq!(info.resource, "source_field_labels");
-    assert_eq!(info.limit, observed);
-    assert_eq!(info.observed, observed + 1);
+    assert_eq!(info.limit, observed as u64);
+    assert_eq!(info.observed, (observed + 1) as u64);
 }
 
 #[test]
@@ -484,10 +451,7 @@ fn provenance_validation_observes_elapsed_deadlines() {
         .unwrap()
         .as_millis() as u64
         - 1;
-    let context = RuntimeContext::new(Limits {
-        deadline_unix_ms: Some(elapsed),
-        ..Limits::default()
-    });
+    let context = RuntimeContext::new(Limits::default().with_deadline_unix_ms(Some(elapsed)));
 
     let error = SourceInfo::try_from_raw_with_context(raw, compilation.contract(), &context)
         .expect_err("an elapsed deadline must abort provenance validation");
@@ -534,21 +498,15 @@ fn provenance_target_resolution_is_charged_at_the_exact_boundary() {
     accept(
         raw.clone(),
         &compilation,
-        Limits {
-            max_provenance_work: min,
-            ..Limits::default()
-        },
+        Limits::default().with_max_provenance_work(min),
     );
     assert_eq!(
         reject(
             raw,
             &compilation,
-            Limits {
-                max_provenance_work: min - 1,
-                ..Limits::default()
-            }
+            Limits::default().with_max_provenance_work(min - 1)
         ),
-        ("provenance_work".to_string(), min - 1, min)
+        ("provenance_work".to_string(), (min - 1) as u64, min as u64)
     );
 }
 
@@ -580,15 +538,12 @@ fn field_label_fan_out_onto_one_container_is_charged_and_bounded() {
     let observed = inflated.field_labels.len();
     grow(&mut inflated.field_labels, observed + 64);
 
-    let limits = Limits {
-        max_provenance_work: min_valid,
-        ..Limits::default()
-    };
+    let limits = Limits::default().with_max_provenance_work(min_valid);
     let (resource, limit, over) = reject(inflated.clone(), &compilation, limits.clone());
     assert_eq!(resource, "provenance_work");
-    assert_eq!(limit, min_valid);
+    assert_eq!(limit, min_valid as u64);
     assert!(
-        over > min_valid,
+        over > min_valid as u64,
         "the extra labels must consume charged work beyond the genuine bundle"
     );
 
@@ -633,21 +588,19 @@ fn source_id_length_is_bounded_at_the_limit_and_one_over() {
     accept(
         raw.clone(),
         &compilation,
-        Limits {
-            max_source_id_bytes: longest,
-            ..Limits::default()
-        },
+        Limits::default().with_max_source_id_bytes(longest),
     );
     assert_eq!(
         reject(
             raw,
             &compilation,
-            Limits {
-                max_source_id_bytes: longest - 1,
-                ..Limits::default()
-            }
+            Limits::default().with_max_source_id_bytes(longest - 1)
         ),
-        ("source_id_bytes".to_string(), longest - 1, longest)
+        (
+            "source_id_bytes".to_string(),
+            (longest - 1) as u64,
+            longest as u64
+        )
     );
 }
 
@@ -665,11 +618,11 @@ fn remapping_does_not_double_count_cumulative_source_charges() {
     Compilation::try_from_raw_with_context(
         RawContract::from(compilation.contract()),
         Some(raw),
-        &RuntimeContext::new(Limits {
-            max_sources: sources,
-            max_import_edges: imports,
-            ..Limits::default()
-        }),
+        &RuntimeContext::new(
+            Limits::default()
+                .with_max_sources(sources)
+                .with_max_import_edges(imports),
+        ),
     )
     .unwrap_or_else(|error| {
         panic!("a bundle exactly at its source limits must remain valid: {error:#?}")

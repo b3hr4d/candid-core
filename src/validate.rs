@@ -44,8 +44,8 @@ impl ViolationCollector {
         )
         .with_resource_limit(crate::ResourceLimitInfo {
             resource: "diagnostics".to_string(),
-            limit: self.limit,
-            observed: self.observed,
+            limit: crate::limits::portable_count(self.limit),
+            observed: crate::limits::portable_count(self.observed),
         });
         match self.violations.last_mut() {
             Some(last) => *last = sentinel,

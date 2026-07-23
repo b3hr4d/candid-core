@@ -68,7 +68,7 @@ fn accept(raw: RawSourceInfo, compilation: &Compilation, limits: Limits) {
 }
 
 /// Returns `(resource, limit, observed)` from the first violation.
-fn reject(raw: RawSourceInfo, compilation: &Compilation, limits: Limits) -> (String, usize, usize) {
+fn reject(raw: RawSourceInfo, compilation: &Compilation, limits: Limits) -> (String, u64, u64) {
     let error = SourceInfo::try_from_raw_with_context(
         raw,
         compilation.contract(),
@@ -93,10 +93,7 @@ fn compile_charges_one_identity_pass_at_the_exact_boundary() {
         "root.did",
         &resolver(),
         CompileOptions::default(),
-        &RuntimeContext::new(Limits {
-            max_source_identity_work: work,
-            ..Limits::default()
-        }),
+        &RuntimeContext::new(Limits::default().with_max_source_identity_work(work)),
     )
     .unwrap_or_else(|error| panic!("the exact identity budget must compile: {error:#?}"));
     assert_eq!(
@@ -114,18 +111,15 @@ fn compile_charges_one_identity_pass_at_the_exact_boundary() {
         "root.did",
         &resolver(),
         CompileOptions::default(),
-        &RuntimeContext::new(Limits {
-            max_source_identity_work: work - 1,
-            ..Limits::default()
-        }),
+        &RuntimeContext::new(Limits::default().with_max_source_identity_work(work - 1)),
     )
     .expect_err("one unit under the identity budget must fail during compilation");
     let diagnostic = &error.diagnostics[0];
     assert_eq!(diagnostic.code, "resource_limit_exceeded");
     let resource = diagnostic.resource_limit.as_ref().unwrap();
     assert_eq!(resource.resource, "source_identity_work");
-    assert_eq!(resource.limit, work - 1);
-    assert_eq!(resource.observed, work);
+    assert_eq!(resource.limit, (work - 1) as u64);
+    assert_eq!(resource.observed, work as u64);
 }
 
 #[test]
@@ -143,21 +137,19 @@ fn validation_charges_exactly_two_identity_passes_at_the_exact_boundary() {
     accept(
         raw.clone(),
         &compilation,
-        Limits {
-            max_source_identity_work: exact,
-            ..Limits::default()
-        },
+        Limits::default().with_max_source_identity_work(exact),
     );
     assert_eq!(
         reject(
             raw,
             &compilation,
-            Limits {
-                max_source_identity_work: exact - 1,
-                ..Limits::default()
-            },
+            Limits::default().with_max_source_identity_work(exact - 1),
         ),
-        ("source_identity_work".to_string(), exact - 1, exact)
+        (
+            "source_identity_work".to_string(),
+            (exact - 1) as u64,
+            exact as u64
+        )
     );
 }
 
@@ -172,20 +164,14 @@ fn compilation_sidecar_parse_charges_the_same_two_passes() {
     Compilation::try_from_raw_with_context(
         RawContract::from(compilation.contract()),
         Some(raw_of(&compilation)),
-        &RuntimeContext::new(Limits {
-            max_source_identity_work: exact,
-            ..Limits::default()
-        }),
+        &RuntimeContext::new(Limits::default().with_max_source_identity_work(exact)),
     )
     .unwrap_or_else(|error| panic!("expected acceptance at the exact limit: {error:#?}"));
 
     let error = Compilation::try_from_raw_with_context(
         RawContract::from(compilation.contract()),
         Some(raw_of(&compilation)),
-        &RuntimeContext::new(Limits {
-            max_source_identity_work: exact - 1,
-            ..Limits::default()
-        }),
+        &RuntimeContext::new(Limits::default().with_max_source_identity_work(exact - 1)),
     )
     .expect_err("one unit under the identity budget must be rejected");
     let violation = &error.violations[0];
@@ -193,7 +179,7 @@ fn compilation_sidecar_parse_charges_the_same_two_passes() {
     let info = violation.resource_limit.as_ref().unwrap();
     assert_eq!(
         (info.resource.as_str(), info.limit, info.observed),
-        ("source_identity_work", exact - 1, exact)
+        ("source_identity_work", (exact - 1) as u64, exact as u64)
     );
 }
 
@@ -210,22 +196,20 @@ fn repeated_validation_accounts_identity_work_deterministically() {
         accept(
             raw.clone(),
             &compilation,
-            Limits {
-                max_source_identity_work: exact,
-                ..Limits::default()
-            },
+            Limits::default().with_max_source_identity_work(exact),
         );
     }
-    let starved = Limits {
-        max_source_identity_work: exact - 1,
-        ..Limits::default()
-    };
+    let starved = Limits::default().with_max_source_identity_work(exact - 1);
     let first = reject(raw.clone(), &compilation, starved.clone());
     let second = reject(raw, &compilation, starved);
     assert_eq!(first, second);
     assert_eq!(
         first,
-        ("source_identity_work".to_string(), exact - 1, exact)
+        (
+            "source_identity_work".to_string(),
+            (exact - 1) as u64,
+            exact as u64
+        )
     );
 }
 
@@ -244,15 +228,12 @@ fn identity_counting_pass_interrupts_mid_serialization() {
     let (resource, limit, observed) = reject(
         raw,
         &compilation,
-        Limits {
-            max_source_identity_work: serialized_len - 1,
-            ..Limits::default()
-        },
+        Limits::default().with_max_source_identity_work(serialized_len - 1),
     );
     assert_eq!(resource, "source_identity_work");
-    assert_eq!(limit, serialized_len - 1);
+    assert_eq!(limit, (serialized_len - 1) as u64);
     assert!(
-        observed <= serialized_len,
+        observed <= serialized_len as u64,
         "exhaustion must be observed during the counting pass, \
          not after the whole reservation: observed {observed} of {per_pass}",
     );
@@ -274,26 +255,26 @@ fn default_budget_covers_worst_case_default_valid_bundles() {
     let source_overhead = r#"{"name":"","source":""}"#.len() + 1;
     let import_overhead = r#"{"from":"","import":"","to":"","kind":"service"}"#.len() + 1;
     let structural = shell
-        + defaults.max_sources * source_overhead
-        + defaults.max_import_edges * import_overhead;
+        + defaults.max_sources() * source_overhead
+        + defaults.max_import_edges() * import_overhead;
 
     // Presented-sidecar validation: two identity passes on one budget.
     let validation_pass =
-        MAX_ESCAPE * (defaults.max_bundle_bytes + defaults.max_string_bytes) + structural;
+        MAX_ESCAPE * (defaults.max_bundle_bytes() + defaults.max_string_bytes()) + structural;
     let validation_work = 2 * (3 * validation_pass + domain_overhead);
     assert!(
-        validation_work <= defaults.max_source_identity_work,
+        validation_work <= defaults.max_source_identity_work(),
         "two default-valid validation passes ({validation_work}) must fit the default budget",
     );
 
     // Compilation: one identity pass; names and import spellings are each
     // bounded by `max_source_id_bytes` rather than the aggregate string limit.
-    let compile_strings = defaults.max_sources * defaults.max_source_id_bytes
-        + 3 * defaults.max_import_edges * defaults.max_source_id_bytes;
-    let compile_pass = MAX_ESCAPE * (defaults.max_bundle_bytes + compile_strings) + structural;
+    let compile_strings = defaults.max_sources() * defaults.max_source_id_bytes()
+        + 3 * defaults.max_import_edges() * defaults.max_source_id_bytes();
+    let compile_pass = MAX_ESCAPE * (defaults.max_bundle_bytes() + compile_strings) + structural;
     let compile_work = 3 * compile_pass + domain_overhead;
     assert!(
-        compile_work <= defaults.max_source_identity_work,
+        compile_work <= defaults.max_source_identity_work(),
         "a default-valid compile pass ({compile_work}) must fit the default budget",
     );
 }
@@ -305,10 +286,7 @@ fn zero_identity_budget_fails_closed_with_stable_metadata() {
     let (resource, limit, observed) = reject(
         raw,
         &compilation,
-        Limits {
-            max_source_identity_work: 0,
-            ..Limits::default()
-        },
+        Limits::default().with_max_source_identity_work(0),
     );
     assert_eq!(resource, "source_identity_work");
     assert_eq!(limit, 0);
@@ -318,10 +296,7 @@ fn zero_identity_budget_fails_closed_with_stable_metadata() {
         "root.did",
         &resolver(),
         CompileOptions::default(),
-        &RuntimeContext::new(Limits {
-            max_source_identity_work: 0,
-            ..Limits::default()
-        }),
+        &RuntimeContext::new(Limits::default().with_max_source_identity_work(0)),
     )
     .expect_err("a zero identity budget must fail compilation");
     let diagnostic = &error.diagnostics[0];
@@ -336,10 +311,7 @@ fn zero_identity_budget_fails_closed_with_stable_metadata() {
 fn preexisting_errors_keep_precedence_over_identity_work() {
     let compilation = bundle();
     let raw = raw_of(&compilation);
-    let starved = |limits: Limits| Limits {
-        max_source_identity_work: 1,
-        ..limits
-    };
+    let starved = |limits: Limits| limits.with_max_source_identity_work(1);
 
     // A header mismatch keeps its error: the header is validated before the
     // preflight and every identity charge.
@@ -358,14 +330,11 @@ fn preexisting_errors_keep_precedence_over_identity_work() {
     let (resource, limit, observed) = reject(
         raw.clone(),
         &compilation,
-        starved(Limits {
-            max_sources: 1,
-            ..Limits::default()
-        }),
+        starved(Limits::default().with_max_sources(1)),
     );
     assert_eq!(
         (resource.as_str(), limit, observed),
-        ("sources", 1, raw.sources.len())
+        ("sources", 1, raw.sources.len() as u64)
     );
 
     // An oversized bundle keeps its byte-limit error: the preflight runs
@@ -374,13 +343,10 @@ fn preexisting_errors_keep_precedence_over_identity_work() {
     let (resource, _, observed) = reject(
         raw.clone(),
         &compilation,
-        starved(Limits {
-            max_bundle_bytes: bundle_bytes - 1,
-            ..Limits::default()
-        }),
+        starved(Limits::default().with_max_bundle_bytes(bundle_bytes - 1)),
     );
     assert_eq!(resource, "bundle_bytes");
-    assert_eq!(observed, bundle_bytes);
+    assert_eq!(observed, bundle_bytes as u64);
 
     // A malformed logical source ID is rejected before the bundle is hashed.
     let mut malformed = raw.clone();
@@ -420,10 +386,7 @@ fn tampered_bundle_id_is_rejected_whenever_the_hash_can_complete() {
     let error = SourceInfo::try_from_raw_with_context(
         tampered.clone(),
         compilation.contract(),
-        &RuntimeContext::new(Limits {
-            max_source_identity_work: per_pass,
-            ..Limits::default()
-        }),
+        &RuntimeContext::new(Limits::default().with_max_source_identity_work(per_pass)),
     )
     .expect_err("a tampered source_bundle_id must be rejected");
     assert_eq!(error.violations[0].code, "source_bundle_id_mismatch");
@@ -432,12 +395,13 @@ fn tampered_bundle_id_is_rejected_whenever_the_hash_can_complete() {
         reject(
             tampered,
             &compilation,
-            Limits {
-                max_source_identity_work: per_pass - 1,
-                ..Limits::default()
-            },
+            Limits::default().with_max_source_identity_work(per_pass - 1),
         ),
-        ("source_identity_work".to_string(), per_pass - 1, per_pass)
+        (
+            "source_identity_work".to_string(),
+            (per_pass - 1) as u64,
+            per_pass as u64
+        )
     );
 }
 
@@ -464,10 +428,7 @@ fn identity_validation_observes_cancellation_and_deadlines() {
     let error = SourceInfo::try_from_raw_with_context(
         raw,
         compilation.contract(),
-        &RuntimeContext::new(Limits {
-            deadline_unix_ms: Some(1),
-            ..Limits::default()
-        }),
+        &RuntimeContext::new(Limits::default().with_deadline_unix_ms(Some(1))),
     )
     .expect_err("an elapsed deadline must abort sidecar validation");
     assert_eq!(error.violations[0].code, "operation_deadline_exceeded");

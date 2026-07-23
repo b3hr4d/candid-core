@@ -300,7 +300,7 @@ fn validate_reports_invalid_utf8_within_the_limit() {
 #[test]
 fn compile_bounds_source_bytes_at_the_limit_and_one_over() {
     let fixture = Fixture::new();
-    let limit = Limits::default().max_source_bytes;
+    let limit = Limits::default().max_source_bytes();
 
     // Valid source padded with trailing whitespace to exactly the limit.
     let mut exact = fs::read(DID_FIXTURE).unwrap();
@@ -332,7 +332,7 @@ fn compile_bounds_source_bytes_at_the_limit_and_one_over() {
 #[test]
 fn validate_bounds_input_bytes_at_the_limit_and_one_over() {
     let fixture = Fixture::new();
-    let limit = Limits::default().max_input_bytes;
+    let limit = Limits::default().max_input_bytes();
 
     // Valid contract JSON padded with trailing whitespace to exactly the limit.
     let mut exact = fs::read(CONTRACT_FIXTURE).unwrap();

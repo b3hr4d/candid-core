@@ -144,8 +144,8 @@ impl ResolveError {
             message,
             resource_limit: Some(crate::ResourceLimitInfo {
                 resource: resource.to_string(),
-                limit,
-                observed,
+                limit: crate::limits::portable_count(limit),
+                observed: crate::limits::portable_count(observed),
             }),
         }
     }
@@ -174,12 +174,16 @@ impl ResolveError {
 
     pub(crate) fn into_compile_error(self) -> CompileError {
         match self.resource_limit {
-            Some(info) => CompileError::resource_limit(
-                &info.resource,
-                info.limit,
-                info.observed,
-                self.message,
-            ),
+            // The triple is already portable u64; attach it verbatim rather
+            // than narrowing back through the usize-taking constructor.
+            Some(info) => CompileError {
+                diagnostics: vec![crate::Diagnostic::compiler(
+                    "resource_limit_exceeded",
+                    DiagnosticPhase::Load,
+                    self.message,
+                )
+                .with_resource_limit(info)],
+            },
             None => CompileError::single(self.code, DiagnosticPhase::Load, self.message),
         }
     }

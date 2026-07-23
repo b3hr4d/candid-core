@@ -90,10 +90,7 @@ fn json_boundary_validates_nested_values_and_resource_limits() {
     }
 
     let value = json!({ "kind": "vec", "values": [{ "kind": "nat", "value": "1" }, { "kind": "nat", "value": "2" }] });
-    let limits = Limits {
-        max_value_elements: 2,
-        ..Limits::default()
-    };
+    let limits = Limits::default().with_max_value_elements(2);
     assert!(
         HostValue::from_json_with_limits(&serde_json::to_string(&value).unwrap(), &limits).is_err()
     );
@@ -141,10 +138,7 @@ fn validation_preserves_wide_container_resource_diagnostics() {
         "kind": "vec",
         "values": (0..100).map(|_| json!({ "kind": "nat", "value": "1" })).collect::<Vec<_>>(),
     }));
-    let limits = Limits {
-        max_value_elements: 10,
-        ..Limits::default()
-    };
+    let limits = Limits::default().with_max_value_elements(10);
 
     let error = validate_host_value(contract, &selector, &value, &limits).unwrap_err();
     let violation = &error.violations[0];
@@ -171,10 +165,7 @@ fn validation_bounds_record_scans_by_canonicalization_work() {
             field("d", json!({ "kind": "nat", "value": "1" })),
         ],
     }));
-    let limits = Limits {
-        max_canonicalization_work: 2,
-        ..Limits::default()
-    };
+    let limits = Limits::default().with_max_canonicalization_work(2);
 
     let error = validate_host_value(contract, &selector, &value, &limits).unwrap_err();
     let info = error.violations[0].resource_limit.as_ref().unwrap();
@@ -202,10 +193,7 @@ fn validation_bounds_variant_tag_scans_by_canonicalization_work() {
         "id": u32::MAX,
         "value": { "kind": "null" },
     }));
-    let limits = Limits {
-        max_canonicalization_work: 2,
-        ..Limits::default()
-    };
+    let limits = Limits::default().with_max_canonicalization_work(2);
 
     let error = validate_host_value(contract, &selector, &value, &limits).unwrap_err();
     let info = error.violations[0]
@@ -230,10 +218,7 @@ fn variant_tag_scans_are_deterministic_across_runs() {
         "id": u32::MAX,
         "value": { "kind": "null" },
     }));
-    let limits = Limits {
-        max_canonicalization_work: 2,
-        ..Limits::default()
-    };
+    let limits = Limits::default().with_max_canonicalization_work(2);
 
     let first = validate_host_value(contract, &selector, &value, &limits).unwrap_err();
     let second = validate_host_value(contract, &selector, &value, &limits).unwrap_err();

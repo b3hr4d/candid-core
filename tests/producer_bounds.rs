@@ -5,7 +5,9 @@
 //! string budget, and it stays *outside* authenticated Contract identity so that
 //! rewriting it cannot forge — or is forced to break — a signed `contract_id`.
 
-use candid_core::{compile_did, Contract, Limits, ProducerInfo, RawContract, RuntimeContext};
+use candid_core::{
+    compile_did, Contract, ContractDraft, Limits, ProducerInfo, RawContract, RuntimeContext,
+};
 
 fn producer_bytes(producer: &ProducerInfo) -> usize {
     producer.name.len()
@@ -33,10 +35,7 @@ fn producer_bytes_accepted_at_the_limit_and_rejected_one_over() {
 
     Contract::try_from_raw_with_context(
         raw.clone(),
-        &RuntimeContext::new(Limits {
-            max_producer_bytes: baseline,
-            ..Limits::default()
-        }),
+        &RuntimeContext::new(Limits::default().with_max_producer_bytes(baseline)),
     )
     .unwrap_or_else(|error| {
         panic!("producer bytes exactly at the limit must validate: {error:#?}")
@@ -44,18 +43,15 @@ fn producer_bytes_accepted_at_the_limit_and_rejected_one_over() {
 
     let error = Contract::try_from_raw_with_context(
         raw,
-        &RuntimeContext::new(Limits {
-            max_producer_bytes: baseline - 1,
-            ..Limits::default()
-        }),
+        &RuntimeContext::new(Limits::default().with_max_producer_bytes(baseline - 1)),
     )
     .expect_err("producer bytes one over the limit must be rejected");
     let violation = &error.violations[0];
     assert_eq!(violation.code, "resource_limit_exceeded");
     let info = violation.resource_limit.as_ref().unwrap();
     assert_eq!(info.resource, "producer_bytes");
-    assert_eq!(info.limit, baseline - 1);
-    assert_eq!(info.observed, baseline);
+    assert_eq!(info.limit, (baseline - 1) as u64);
+    assert_eq!(info.observed, baseline as u64);
 }
 
 #[test]
@@ -72,8 +68,8 @@ fn a_single_oversized_producer_field_is_rejected_before_identity_checks() {
     assert_eq!(violation.code, "resource_limit_exceeded");
     let info = violation.resource_limit.as_ref().unwrap();
     assert_eq!(info.resource, "producer_bytes");
-    assert_eq!(info.limit, Limits::default().max_producer_bytes);
-    assert_eq!(info.observed, observed);
+    assert_eq!(info.limit, Limits::default().max_producer_bytes() as u64);
+    assert_eq!(info.observed, observed as u64);
 }
 
 #[test]
@@ -96,12 +92,23 @@ fn producer_stays_outside_authenticated_identity() {
     // byte-different on the wire. Binding producer into identity would change
     // every existing `contract_id`; this test would catch that regression.
     let base = raw_contract();
-    let mut forked = base.clone();
-    forked.producer.name = format!("{}-fork", forked.producer.name);
-    forked.producer.version = format!("{}-1", forked.producer.version);
+    let draft = ContractDraft::new(
+        base.types.clone(),
+        base.declarations.clone(),
+        base.actor.clone(),
+    );
+    let rebranded_producer = ProducerInfo {
+        name: format!("{}-fork", base.producer.name),
+        version: format!("{}-1", base.producer.version),
+        ..base.producer.clone()
+    };
 
-    let original = Contract::build_raw(base, &Limits::default()).unwrap();
-    let rebranded = Contract::build_raw(forked, &Limits::default()).unwrap();
+    let original = draft
+        .clone()
+        .with_producer(base.producer.clone())
+        .build()
+        .unwrap();
+    let rebranded = draft.with_producer(rebranded_producer).build().unwrap();
 
     assert_ne!(
         original.producer(),

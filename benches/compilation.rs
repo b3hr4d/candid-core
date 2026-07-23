@@ -26,10 +26,7 @@ fn compile_trusted_benchmark(
 }
 
 fn compilation_benchmarks(criterion: &mut Criterion) {
-    let context = RuntimeContext::new(Limits {
-        max_type_depth: 1_024,
-        ..Limits::default()
-    });
+    let context = RuntimeContext::new(Limits::default().with_max_type_depth(1_024));
     for case in support::import_free_cases() {
         official_check(&case.source);
         compile_trusted_benchmark(
@@ -165,11 +162,9 @@ fn host_value_validation_benchmarks(criterion: &mut Criterion) {
     const ELEMENTS: usize = 256;
     // The wide-record value performs O(WIDTH^2) charged comparisons; raise the
     // work ceiling so the benchmark measures the validation, not a rejection.
-    let limits = Limits {
-        max_canonicalization_work: 100_000_000,
-        max_value_elements: 10_000_000,
-        ..Limits::default()
-    };
+    let limits = Limits::default()
+        .with_max_canonicalization_work(100_000_000)
+        .with_max_value_elements(10_000_000);
     let context = RuntimeContext::new(limits.clone());
 
     let record_source = {

@@ -102,20 +102,22 @@ fn compile(path: &Path, include_source_info: bool) -> ExitCode {
 fn validate(path: &Path) -> ExitCode {
     match fs::File::open(path)
         .map_err(BoundedUtf8Error::Io)
-        .and_then(|file| read_bounded_utf8(file, Limits::default().max_input_bytes))
+        .and_then(|file| read_bounded_utf8(file, Limits::default().max_input_bytes()))
     {
         Ok(input) => match Contract::from_json(&input) {
             Ok(contract) => write_json(&json!({ "ok": true, "contract": contract })),
             Err(error) => write_error(json_error(error)),
         },
         Err(BoundedUtf8Error::LimitExceeded { observed }) => {
-            let limit = Limits::default().max_input_bytes;
+            let limit = Limits::default().max_input_bytes();
             write_error(json_error(ContractJsonError::InvalidContract(
                 ContractValidationError {
+                    // Exact on every supported target; the library refuses to
+                    // compile where usize exceeds 64 bits.
                     violations: vec![ContractViolation::resource_violation(
                         "input_bytes",
-                        limit,
-                        observed,
+                        limit as u64,
+                        observed as u64,
                     )],
                 },
             )))

@@ -16,12 +16,20 @@ pub enum Severity {
     Error,
 }
 
+/// The `{resource, limit, observed}` triple attached to every
+/// `resource_limit_exceeded` failure.
+///
+/// `limit` and `observed` are fixed-width `u64` so the serialized triple
+/// means the same thing on every platform; the internal `usize` counters they
+/// are widened from convert exactly on every supported (32- and 64-bit)
+/// target. The JSON numeric text is identical to what the previous
+/// platform-width fields produced.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ResourceLimitInfo {
     pub resource: String,
-    pub limit: usize,
-    pub observed: usize,
+    pub limit: u64,
+    pub observed: u64,
 }
 
 /// A logical source location.
@@ -39,15 +47,19 @@ pub struct ResourceLimitInfo {
 /// carries a source name, offsets, or both — deserialization rejects
 /// half-spans and empty spans. Offsets are omitted from JSON when absent, so
 /// pre-existing exact-span output is unchanged.
+///
+/// Offsets are fixed-width `u64` so serialized spans are platform-neutral;
+/// producers widen `usize` byte offsets exactly, and any consumer that
+/// indexes text with them must narrow with a checked conversion.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(try_from = "RawSourceSpan")]
 pub struct SourceSpan {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub start_byte: Option<usize>,
+    pub start_byte: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub end_byte: Option<usize>,
+    pub end_byte: Option<u64>,
 }
 
 /// Decode-side mirror of [`SourceSpan`] so the two-forms invariant is checked
@@ -58,9 +70,9 @@ struct RawSourceSpan {
     #[serde(default)]
     source_name: Option<String>,
     #[serde(default)]
-    start_byte: Option<usize>,
+    start_byte: Option<u64>,
     #[serde(default)]
-    end_byte: Option<usize>,
+    end_byte: Option<u64>,
 }
 
 impl TryFrom<RawSourceSpan> for SourceSpan {
@@ -85,7 +97,7 @@ impl TryFrom<RawSourceSpan> for SourceSpan {
 
 impl SourceSpan {
     /// An exact byte range into the original text of `source_name`.
-    pub fn exact(source_name: Option<String>, start_byte: usize, end_byte: usize) -> Self {
+    pub fn exact(source_name: Option<String>, start_byte: u64, end_byte: u64) -> Self {
         Self {
             source_name,
             start_byte: Some(start_byte),
@@ -194,7 +206,7 @@ impl Diagnostic {
     /// The canonical resource-limit violation shared by every validation
     /// domain: code `resource_limit_exceeded`, path `$`, the standard message
     /// template, and the exact `{resource, limit, observed}` triple.
-    pub fn resource_violation(resource: &str, limit: usize, observed: usize) -> Self {
+    pub fn resource_violation(resource: &str, limit: u64, observed: u64) -> Self {
         Self::violation(
             "resource_limit_exceeded",
             "$",
@@ -263,8 +275,8 @@ impl CompileError {
             )
             .with_resource_limit(ResourceLimitInfo {
                 resource: resource.to_string(),
-                limit,
-                observed,
+                limit: crate::limits::portable_count(limit),
+                observed: crate::limits::portable_count(observed),
             })],
         }
     }
