@@ -47,7 +47,7 @@ Every non-usage outcome is one pretty-printed JSON document on stdout with an em
 
 Diagnostics and violations share one item schema (see the Diagnostics section of `docs/architecture.md`): codes, paths, and resource metadata are the stable machine surface, message text is not. Items may additionally carry an optional structured `path`, a `span` naming the logical source ID (with byte offsets only when they are exact for the original text), and ordered `related` locations; these keys are omitted when the data does not exist, so pre-existing output shapes are unchanged. Locations always name logical source IDs (`workspace:/…`) — never the temporary files the compiler materializes for import checking.
 
-Both commands bound their reads under `Limits::default()` before decoding, so an oversized file fails with a `resource_limit_exceeded` code carrying `{resource, limit, observed}` metadata instead of allocating without bound, and the byte bound takes precedence over UTF-8 and parse errors:
+Both commands bound their reads under `Limits::default()` — the versioned `interactive_v1` profile — before decoding, so an oversized file fails with a `resource_limit_exceeded` code carrying `{resource, limit, observed}` metadata (fixed-width `u64` values, identical on every platform) instead of allocating without bound, and the byte bound takes precedence over UTF-8 and parse errors:
 
 - `compile` reads every source file through the workspace resolver: each file is bounded by `max_source_bytes` (1 MiB, resource `source_bytes`), and the import bundle in aggregate by `max_bundle_bytes` (8 MiB, resource `bundle_bytes`); an over-limit source fails in the `diagnostics` shape.
 - `validate` reads the contract document bounded by `max_input_bytes` (4 MiB, resource `input_bytes`); an over-limit document fails in the `violations` shape.
@@ -88,16 +88,68 @@ The crate advertises Rust 1.78 as its minimum supported Rust version (MSRV). Dir
 
 ## Platform APIs
 
-- `RawContract` → `Contract::try_from_raw` validates an external artifact.
-- `Contract::build_raw` is the producer path that calculates fresh identities.
+- `ContractDraft` → `build`/`build_with_limits`/`build_with_context` is the
+  producer path: a draft carries only types, declarations, an optional actor,
+  and optional producer metadata — never format markers or identities — and
+  building calculates fresh identities under the same budgets as every other
+  entry point.
+- `RawContract` → `Contract::try_from_raw` validates a decoded external
+  artifact, verifying its presented identities against recomputation.
 - `RawSourceInfo` → `SourceInfo::try_from_raw` recompiles the embedded source
   bundle and rejects any derived provenance that does not match exactly.
 - `compile_with_resolver` compiles an immutable logical source bundle through `MemoryResolver` or sandboxed `WorkspaceResolver`.
 - `Limits` and constructor-based `RuntimeContext` bound untrusted compilation
   and validation with one shared budget, monotonic deadlines, and cooperative
-  `CancellationToken` support.
+  `CancellationToken` support. Defaults come from the versioned
+  `LimitsProfile::InteractiveV1`; individual fields are overridden with
+  `with_*` builders, and the serialized form is the versioned portable
+  configuration `{"version":1,"profile":"interactive_v1","overrides":{…}}`
+  with fixed-width `u64` override values (see the architecture doc for the
+  full wire contract, including zero, overflow, and unknown-version
+  behavior).
 - `HostValue` plus `validate_host_value` provide the lossless tagged value ABI.
 - `ContractEnvelope` keeps namespaced extensions outside the strict core.
+
+### Migrating from the pre-cleanup producer APIs
+
+`RawContract::new` and `Contract::build_raw`/`build_raw_with_context` were
+removed in the pre-1.0 API cleanup ([issue #23]): a producer-facing
+constructor that fabricated placeholder zero identities made the intuitive
+`RawContract::new` → `Contract::try_from_raw` pairing fail by construction.
+`ContractDraft` has no identity fields at all, so the mistake is now
+unrepresentable.
+
+```rust,ignore
+// Before:
+let raw = RawContract::new(types, declarations, actor);
+let contract = Contract::build_raw(raw, &limits)?;
+// After:
+let contract = ContractDraft::new(types, declarations, actor)
+    .build_with_limits(&limits)?;               // .build() for Limits::default()
+// A caller-supplied producer used to travel inside the RawContract; now:
+let contract = ContractDraft::new(types, declarations, actor)
+    .with_producer(producer)
+    .build_with_limits(&limits)?;
+```
+
+`Limits` no longer exposes public fields or exhaustive struct literals;
+construction goes through a profile plus builders, and reads through getters:
+
+```rust,ignore
+// Before:
+let limits = Limits { max_input_bytes: 512, ..Limits::default() };
+let ceiling = limits.max_canonicalization_work;
+// After:
+let limits = Limits::default().with_max_input_bytes(512);
+let ceiling = limits.max_canonicalization_work();
+```
+
+`ResourceLimitInfo.limit`/`.observed` and `SourceSpan.start_byte`/`.end_byte`
+changed from platform-width `usize` to fixed-width `u64`; the serialized JSON
+numeric text is unchanged. Serialized `Limits` documents changed from a bare
+field map to the versioned portable configuration shown above.
+
+[issue #23]: https://github.com/b3hr4d/candid-core/issues/23
 
 ## Bounded parsing and trusted serde integration
 

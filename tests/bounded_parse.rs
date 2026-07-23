@@ -68,14 +68,11 @@ fn envelope_json() -> String {
 }
 
 fn limits_with_input_bytes(max_input_bytes: usize) -> Limits {
-    Limits {
-        max_input_bytes,
-        ..Limits::default()
-    }
+    Limits::default().with_max_input_bytes(max_input_bytes)
 }
 
 /// Returns `(resource, limit, observed)` from the first violation.
-fn resource_metadata(error: ContractJsonError) -> (String, usize, usize) {
+fn resource_metadata(error: ContractJsonError) -> (String, u64, u64) {
     let ContractJsonError::InvalidContract(error) = error else {
         panic!("oversized input must fail validation, not JSON syntax: {error:?}");
     };
@@ -100,7 +97,7 @@ fn contract_json_is_accepted_at_the_limit_and_rejected_one_over() {
         .expect_err("input one byte over max_input_bytes must be rejected");
     assert_eq!(
         resource_metadata(error),
-        ("input_bytes".to_string(), exact - 1, exact)
+        ("input_bytes".to_string(), (exact - 1) as u64, exact as u64)
     );
 }
 
@@ -119,7 +116,7 @@ fn contract_slice_parsing_matches_the_string_entry_point() {
             .expect_err("the byte entry point must enforce the same gate");
     assert_eq!(
         resource_metadata(error),
-        ("input_bytes".to_string(), exact - 1, exact)
+        ("input_bytes".to_string(), (exact - 1) as u64, exact as u64)
     );
 }
 
@@ -135,7 +132,7 @@ fn compilation_json_is_accepted_at_the_limit_and_rejected_one_over() {
         .expect_err("input one byte over max_input_bytes must be rejected");
     assert_eq!(
         resource_metadata(error),
-        ("input_bytes".to_string(), exact - 1, exact)
+        ("input_bytes".to_string(), (exact - 1) as u64, exact as u64)
     );
 }
 
@@ -168,7 +165,7 @@ fn envelope_json_is_accepted_at_the_limit_and_rejected_one_over() {
         .expect_err("input one byte over max_input_bytes must be rejected");
     assert_eq!(
         resource_metadata(error),
-        ("input_bytes".to_string(), exact - 1, exact)
+        ("input_bytes".to_string(), (exact - 1) as u64, exact as u64)
     );
 }
 
@@ -206,11 +203,9 @@ fn oversized_input_is_rejected_before_structural_limits_are_consulted() {
     // gate runs before decoding, so `input_bytes` must be the reported
     // resource — structural limits are only reachable after materialization.
     let json = contract_json();
-    let limits = Limits {
-        max_input_bytes: json.len() - 1,
-        max_type_nodes: 1,
-        ..Limits::default()
-    };
+    let limits = Limits::default()
+        .with_max_input_bytes(json.len() - 1)
+        .with_max_type_nodes(1);
 
     let error = Contract::from_json_with_limits(&json, &limits)
         .expect_err("an oversized document must be rejected");
@@ -226,7 +221,7 @@ fn oversized_input_is_rejected_before_structural_limits_are_consulted() {
 /// `canonicalization_work` is charged cumulatively on a single budget, so this
 /// is a direct proxy for how many validation passes an entry point performs.
 fn minimum_canonicalization_work(parse: impl Fn(&Limits) -> bool) -> usize {
-    let ceiling = Limits::default().max_canonicalization_work;
+    let ceiling = Limits::default().max_canonicalization_work();
     assert!(
         parse(&Limits::default()),
         "the probe must succeed at the default ceiling"
@@ -234,10 +229,7 @@ fn minimum_canonicalization_work(parse: impl Fn(&Limits) -> bool) -> usize {
     let (mut low, mut high) = (0usize, ceiling);
     while low < high {
         let mid = low + (high - low) / 2;
-        let limits = Limits {
-            max_canonicalization_work: mid,
-            ..Limits::default()
-        };
+        let limits = Limits::default().with_max_canonicalization_work(mid);
         if parse(&limits) {
             high = mid;
         } else {
@@ -304,7 +296,7 @@ fn every_bounded_entry_point_reports_the_same_input_bytes_metadata() {
         let exact = json.len();
         assert_eq!(
             resource_metadata(error),
-            ("input_bytes".to_string(), exact - 1, exact),
+            ("input_bytes".to_string(), (exact - 1) as u64, exact as u64),
             "{name} must report the observed length exactly, not a truncated or clamped value"
         );
     }
@@ -343,13 +335,11 @@ fn raised_limits_round_trip_and_pin_the_serialization_coupling() {
     let long_name = "A".repeat(2 * 1024 * 1024);
     let source = format!("type {long_name} = nat; service : {{}};");
 
-    let construction_limits = Limits {
-        max_input_bytes: 64 * 1024 * 1024,
-        max_source_bytes: 8 * 1024 * 1024,
-        max_bundle_bytes: 64 * 1024 * 1024,
-        max_string_bytes: 8 * 1024 * 1024,
-        ..Limits::default()
-    };
+    let construction_limits = Limits::default()
+        .with_max_input_bytes(64 * 1024 * 1024)
+        .with_max_source_bytes(8 * 1024 * 1024)
+        .with_max_bundle_bytes(64 * 1024 * 1024)
+        .with_max_string_bytes(8 * 1024 * 1024);
     let compilation = compile_did_with_limits(&source, &construction_limits);
     let contract = compilation.contract().clone();
 
@@ -381,10 +371,9 @@ fn raised_limits_round_trip_and_pin_the_serialization_coupling() {
     );
 
     // Raising both succeeds, and the result parses back to the same identity.
-    let serialization_limits = Limits {
-        max_canonicalization_work: 100_000_000,
-        ..construction_limits.clone()
-    };
+    let serialization_limits = construction_limits
+        .clone()
+        .with_max_canonicalization_work(100_000_000);
     let json = contract
         .to_json_pretty_with_limits(&serialization_limits)
         .expect("raising both limits must render");
@@ -420,10 +409,7 @@ fn compilation_serialization_charges_the_rendered_length_on_top_of_validation() 
     );
 
     // A starved structural limit proves validation runs before rendering.
-    let unvalidatable = Limits {
-        max_type_nodes: 1,
-        ..Limits::default()
-    };
+    let unvalidatable = Limits::default().with_max_type_nodes(1);
     let error = compilation
         .to_json_pretty_with_limits(&unvalidatable)
         .expect_err("serialization must validate before rendering");
@@ -460,10 +446,7 @@ fn envelope_serialization_charges_the_rendered_length_on_top_of_validation() {
         "serialization must charge exactly the rendered byte length on top of validation"
     );
 
-    let unvalidatable = Limits {
-        max_type_nodes: 1,
-        ..Limits::default()
-    };
+    let unvalidatable = Limits::default().with_max_type_nodes(1);
     let error = envelope
         .to_json_pretty_with_limits(&unvalidatable)
         .expect_err("serialization must validate before rendering");
@@ -485,7 +468,7 @@ fn envelope_slice_parsing_matches_the_string_entry_point() {
     .expect_err("the byte entry point must enforce the same gate");
     assert_eq!(
         resource_metadata(error),
-        ("input_bytes".to_string(), exact - 1, exact)
+        ("input_bytes".to_string(), (exact - 1) as u64, exact as u64)
     );
 }
 
@@ -502,23 +485,17 @@ fn compilation_slice_parsing_matches_the_string_entry_point() {
             .expect_err("the byte entry point must enforce the same gate");
     assert_eq!(
         resource_metadata(error),
-        ("input_bytes".to_string(), exact - 1, exact)
+        ("input_bytes".to_string(), (exact - 1) as u64, exact as u64)
     );
 }
 
 #[test]
 fn raised_max_input_bytes_accepts_a_document_larger_than_the_default() {
     let json = contract_json();
-    let below_default = Limits {
-        max_input_bytes: json.len() - 1,
-        ..Limits::default()
-    };
+    let below_default = Limits::default().with_max_input_bytes(json.len() - 1);
     assert!(Contract::from_json_with_limits(&json, &below_default).is_err());
 
-    let raised = Limits {
-        max_input_bytes: json.len(),
-        ..Limits::default()
-    };
+    let raised = Limits::default().with_max_input_bytes(json.len());
     Contract::from_json_with_limits(&json, &raised)
         .expect("a raised max_input_bytes must actually take effect");
 }

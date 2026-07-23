@@ -1064,8 +1064,11 @@ mod tests {
         let error = domain_hash_with_budget(domain, &payload, &mut rejected_budget).unwrap_err();
         let resource = error.violations[0].resource_limit.as_ref().unwrap();
         assert_eq!(resource.resource, "canonicalization_work");
-        assert_eq!(resource.limit, exact_work - 1);
-        assert_eq!(resource.observed, exact_work);
+        assert_eq!(
+            resource.limit,
+            crate::limits::portable_count(exact_work - 1)
+        );
+        assert_eq!(resource.observed, crate::limits::portable_count(exact_work));
     }
 
     /// Cancels its own cancellation token halfway through serialization.

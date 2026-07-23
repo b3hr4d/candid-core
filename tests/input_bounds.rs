@@ -35,10 +35,7 @@ fn memory_resolver_checks_borrowed_sources_before_cloning() {
     let mut resolver = MemoryResolver::new();
     resolver.insert("exact.did", "1234").unwrap();
     resolver.insert("over.did", "12345").unwrap();
-    let limits = Limits {
-        max_source_bytes: 4,
-        ..Limits::default()
-    };
+    let limits = Limits::default().with_max_source_bytes(4);
 
     assert_eq!(
         resolver
@@ -61,10 +58,7 @@ fn workspace_resolver_bounds_reads_and_preserves_utf8_errors() {
     fs::write(fixture.path.join("over.did"), b"12345").unwrap();
     fs::write(fixture.path.join("invalid.did"), [0xff]).unwrap();
     let resolver = WorkspaceResolver::new(&fixture.path).unwrap();
-    let limits = Limits {
-        max_source_bytes: 4,
-        ..Limits::default()
-    };
+    let limits = Limits::default().with_max_source_bytes(4);
 
     assert_eq!(
         resolver
@@ -103,10 +97,7 @@ fn compile_bounds_source_id_length_at_the_limit_and_one_over() {
         &entry,
         &resolver,
         CompileOptions::default(),
-        &RuntimeContext::new(Limits {
-            max_source_id_bytes: id_len,
-            ..Limits::default()
-        }),
+        &RuntimeContext::new(Limits::default().with_max_source_id_bytes(id_len)),
     )
     .unwrap_or_else(|error| panic!("an ID exactly at the limit must compile: {error:#?}"));
 
@@ -114,18 +105,15 @@ fn compile_bounds_source_id_length_at_the_limit_and_one_over() {
         &entry,
         &resolver,
         CompileOptions::default(),
-        &RuntimeContext::new(Limits {
-            max_source_id_bytes: id_len - 1,
-            ..Limits::default()
-        }),
+        &RuntimeContext::new(Limits::default().with_max_source_id_bytes(id_len - 1)),
     )
     .expect_err("an ID one byte over the limit must be rejected");
     let diagnostic = &error.diagnostics[0];
     assert_eq!(diagnostic.code, "resource_limit_exceeded");
     let resource = diagnostic.resource_limit.as_ref().unwrap();
     assert_eq!(resource.resource, "source_id_bytes");
-    assert_eq!(resource.limit, id_len - 1);
-    assert_eq!(resource.observed, id_len);
+    assert_eq!(resource.limit, (id_len - 1) as u64);
+    assert_eq!(resource.observed, id_len as u64);
 }
 
 /// Maps one aliased import spelling to a fixed canonical target and delegates
@@ -167,10 +155,7 @@ fn compile_bounds_import_spellings_that_resolve_to_short_targets() {
         target: SourceId::parse("memory:/dep.did").unwrap(),
     };
 
-    let at_limit = Limits {
-        max_source_id_bytes: alias.len(),
-        ..Limits::default()
-    };
+    let at_limit = Limits::default().with_max_source_id_bytes(alias.len());
     let compilation = compile_with_resolver(
         "root.did",
         &resolver,
@@ -195,18 +180,15 @@ fn compile_bounds_import_spellings_that_resolve_to_short_targets() {
         "root.did",
         &resolver,
         CompileOptions::default(),
-        &RuntimeContext::new(Limits {
-            max_source_id_bytes: alias.len() - 1,
-            ..Limits::default()
-        }),
+        &RuntimeContext::new(Limits::default().with_max_source_id_bytes(alias.len() - 1)),
     )
     .expect_err("a spelling one byte over the limit must fail during compilation");
     let diagnostic = &error.diagnostics[0];
     assert_eq!(diagnostic.code, "resource_limit_exceeded");
     let resource = diagnostic.resource_limit.as_ref().unwrap();
     assert_eq!(resource.resource, "source_id_bytes");
-    assert_eq!(resource.limit, alias.len() - 1);
-    assert_eq!(resource.observed, alias.len());
+    assert_eq!(resource.limit, (alias.len() - 1) as u64);
+    assert_eq!(resource.observed, alias.len() as u64);
 }
 
 #[test]
@@ -232,26 +214,26 @@ fn compile_reports_downstream_source_limits_before_import_spelling_bytes() {
         "root.did",
         &resolver,
         CompileOptions::default(),
-        &RuntimeContext::new(Limits {
-            max_source_bytes: dep_source.len() - 1,
-            max_source_id_bytes: alias.len() - 1,
-            ..Limits::default()
-        }),
+        &RuntimeContext::new(
+            Limits::default()
+                .with_max_source_bytes(dep_source.len() - 1)
+                .with_max_source_id_bytes(alias.len() - 1),
+        ),
     )
     .expect_err("the oversized imported source must be rejected");
     let resource = error.diagnostics[0].resource_limit.as_ref().unwrap();
     assert_eq!(resource.resource, "source_bytes");
-    assert_eq!(resource.observed, dep_source.len());
+    assert_eq!(resource.observed, dep_source.len() as u64);
 
     let error = compile_with_resolver(
         "root.did",
         &resolver,
         CompileOptions::default(),
-        &RuntimeContext::new(Limits {
-            max_sources: 1,
-            max_source_id_bytes: alias.len() - 1,
-            ..Limits::default()
-        }),
+        &RuntimeContext::new(
+            Limits::default()
+                .with_max_sources(1)
+                .with_max_source_id_bytes(alias.len() - 1),
+        ),
     )
     .expect_err("the second source must be rejected");
     let resource = error.diagnostics[0].resource_limit.as_ref().unwrap();
@@ -277,11 +259,11 @@ fn compile_reports_sources_before_source_id_bytes_on_mixed_invalid_input() {
         "root.did",
         &resolver,
         CompileOptions::default(),
-        &RuntimeContext::new(Limits {
-            max_sources: 1,
-            max_source_id_bytes: dep_id_len - 1,
-            ..Limits::default()
-        }),
+        &RuntimeContext::new(
+            Limits::default()
+                .with_max_sources(1)
+                .with_max_source_id_bytes(dep_id_len - 1),
+        ),
     )
     .expect_err("the second source must be rejected");
     let diagnostic = &error.diagnostics[0];
@@ -309,17 +291,17 @@ fn compile_reports_bundle_bytes_before_source_id_bytes_on_mixed_invalid_input() 
         "root.did",
         &resolver,
         CompileOptions::default(),
-        &RuntimeContext::new(Limits {
-            max_bundle_bytes: bundle_bytes - 1,
-            max_source_id_bytes: dep_id_len - 1,
-            ..Limits::default()
-        }),
+        &RuntimeContext::new(
+            Limits::default()
+                .with_max_bundle_bytes(bundle_bytes - 1)
+                .with_max_source_id_bytes(dep_id_len - 1),
+        ),
     )
     .expect_err("the bundle overflow must be rejected");
     let diagnostic = &error.diagnostics[0];
     assert_eq!(diagnostic.code, "resource_limit_exceeded");
     let resource = diagnostic.resource_limit.as_ref().unwrap();
     assert_eq!(resource.resource, "bundle_bytes");
-    assert_eq!(resource.limit, bundle_bytes - 1);
-    assert_eq!(resource.observed, bundle_bytes);
+    assert_eq!(resource.limit, (bundle_bytes - 1) as u64);
+    assert_eq!(resource.observed, bundle_bytes as u64);
 }

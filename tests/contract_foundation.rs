@@ -1,7 +1,8 @@
 use candid_core::{
     compile_did, compile_did_file, compile_did_with_options, compile_with_resolver, Actor,
-    CompileOptions, Contract, Declaration, Field, Limits, MemoryResolver, MethodMode,
+    CompileOptions, Contract, ContractDraft, Declaration, Field, MemoryResolver, MethodMode,
     PrimitiveType, RawContract, RuntimeContext, ServiceMethod, SourceLabel, SourceOrigin, TypeNode,
+    CANONICALIZATION_PROFILE, CONTRACT_FORMAT, FORMAT_VERSION, SEMANTICS_PROFILE,
 };
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -819,7 +820,7 @@ fn graph_validator_rejects_each_constrained_edge_kind_and_duplicate_id() {
         .iter()
         .any(|violation| violation.code == "rootless_type_arena"));
 
-    let class_as_argument = RawContract::new(
+    let class_as_argument = ContractDraft::new(
         vec![
             TypeNode::Class {
                 init: vec![],
@@ -842,7 +843,8 @@ fn graph_validator_rejects_each_constrained_edge_kind_and_duplicate_id() {
         vec![],
         Some(Actor::Service { service: 2 }),
     );
-    assert!(Contract::build_raw(class_as_argument, &Limits::default())
+    assert!(class_as_argument
+        .build()
         .unwrap_err()
         .violations
         .iter()
@@ -924,70 +926,84 @@ fn interface_ids_are_deterministic_and_ignore_provenance_but_track_wire_semantic
 
 #[test]
 fn contract_id_is_invariant_under_type_ref_reindexing_and_duplicate_semantic_nodes() {
-    let first_raw = RawContract::new(
-        vec![
-            TypeNode::Record {
-                fields: vec![Field { id: 0, ty: 2 }, Field { id: 1, ty: 2 }],
-            },
-            TypeNode::Record {
-                fields: vec![Field { id: 0, ty: 3 }, Field { id: 1, ty: 4 }],
-            },
-            TypeNode::Primitive {
-                primitive: PrimitiveType::Nat,
-            },
-            TypeNode::Primitive {
-                primitive: PrimitiveType::Nat,
-            },
-            TypeNode::Primitive {
-                primitive: PrimitiveType::Nat,
-            },
-        ],
-        vec![
-            Declaration {
-                name: "A".to_string(),
-                ty: 0,
-            },
-            Declaration {
-                name: "B".to_string(),
-                ty: 1,
-            },
-        ],
+    let first_types = vec![
+        TypeNode::Record {
+            fields: vec![Field { id: 0, ty: 2 }, Field { id: 1, ty: 2 }],
+        },
+        TypeNode::Record {
+            fields: vec![Field { id: 0, ty: 3 }, Field { id: 1, ty: 4 }],
+        },
+        TypeNode::Primitive {
+            primitive: PrimitiveType::Nat,
+        },
+        TypeNode::Primitive {
+            primitive: PrimitiveType::Nat,
+        },
+        TypeNode::Primitive {
+            primitive: PrimitiveType::Nat,
+        },
+    ];
+    let first_declarations = vec![
+        Declaration {
+            name: "A".to_string(),
+            ty: 0,
+        },
+        Declaration {
+            name: "B".to_string(),
+            ty: 1,
+        },
+    ];
+    let reindexed_types = vec![
+        TypeNode::Record {
+            fields: vec![Field { id: 0, ty: 1 }, Field { id: 1, ty: 2 }],
+        },
+        TypeNode::Primitive {
+            primitive: PrimitiveType::Nat,
+        },
+        TypeNode::Primitive {
+            primitive: PrimitiveType::Nat,
+        },
+        TypeNode::Record {
+            fields: vec![Field { id: 0, ty: 4 }, Field { id: 1, ty: 4 }],
+        },
+        TypeNode::Primitive {
+            primitive: PrimitiveType::Nat,
+        },
+    ];
+    let reindexed_declarations = vec![
+        Declaration {
+            name: "A".to_string(),
+            ty: 3,
+        },
+        Declaration {
+            name: "B".to_string(),
+            ty: 0,
+        },
+    ];
+    let first = ContractDraft::new(first_types, first_declarations, None)
+        .build()
+        .unwrap();
+    let reindexed = ContractDraft::new(
+        reindexed_types.clone(),
+        reindexed_declarations.clone(),
         None,
-    );
-    let reindexed_raw = RawContract::new(
-        vec![
-            TypeNode::Record {
-                fields: vec![Field { id: 0, ty: 1 }, Field { id: 1, ty: 2 }],
-            },
-            TypeNode::Primitive {
-                primitive: PrimitiveType::Nat,
-            },
-            TypeNode::Primitive {
-                primitive: PrimitiveType::Nat,
-            },
-            TypeNode::Record {
-                fields: vec![Field { id: 0, ty: 4 }, Field { id: 1, ty: 4 }],
-            },
-            TypeNode::Primitive {
-                primitive: PrimitiveType::Nat,
-            },
-        ],
-        vec![
-            Declaration {
-                name: "A".to_string(),
-                ty: 3,
-            },
-            Declaration {
-                name: "B".to_string(),
-                ty: 0,
-            },
-        ],
-        None,
-    );
-    let first = Contract::build_raw(first_raw, &Limits::default()).unwrap();
-    let reindexed = Contract::build_raw(reindexed_raw.clone(), &Limits::default()).unwrap();
-    let mut reindexed_input = reindexed_raw;
-    reindexed_input.identities = first.identities().clone();
+    )
+    .build()
+    .unwrap();
+    // The decoded-artifact shape: a noncanonical arena presented together with
+    // the identities its canonical form hashes to, exactly as another tool's
+    // export would arrive. `try_from_raw` canonicalizes, then verifies them.
+    let reindexed_input = RawContract {
+        format: CONTRACT_FORMAT.to_string(),
+        format_version: FORMAT_VERSION,
+        semantics_profile: SEMANTICS_PROFILE.to_string(),
+        canonicalization_profile: CANONICALIZATION_PROFILE.to_string(),
+        identities: first.identities().clone(),
+        producer: first.producer().clone(),
+        types: reindexed_types,
+        declarations: reindexed_declarations,
+        actor: None,
+    };
     assert!(Contract::try_from_raw(reindexed_input.clone()).is_ok());
     assert_eq!(
         Contract::from_json(&serde_json::to_string(&reindexed_input).unwrap()).unwrap(),

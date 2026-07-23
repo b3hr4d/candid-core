@@ -801,8 +801,8 @@ impl crate::SourceResolver for SourceBundleResolver {
                 ),
                 resource_limit: Some(crate::ResourceLimitInfo {
                     resource: "source_bytes".to_string(),
-                    limit: limits.max_source_bytes,
-                    observed: source.len(),
+                    limit: crate::limits::portable_count(limits.max_source_bytes),
+                    observed: crate::limits::portable_count(source.len()),
                 }),
             });
         }

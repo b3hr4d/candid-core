@@ -84,10 +84,7 @@ fn assert_value_limit(
 
 #[test]
 fn value_nesting_accepts_exact_limit_and_rejects_one_over() {
-    let limits = Limits {
-        max_value_nesting: 16,
-        ..Limits::default()
-    };
+    let limits = Limits::default().with_max_value_nesting(16);
 
     // 15 options plus the terminating `null` object is exactly 16 containers.
     HostValue::from_json_with_limits(&nested_opt_json(15), &limits).unwrap();
@@ -128,10 +125,7 @@ fn decoded_value_depth_accepts_exact_limit_and_rejects_one_over() {
     // The post-decode semantic depth check has never had coverage: at default
     // limits it cannot fire, because `max_value_depth` is 256 while nesting is
     // capped far below that. Lowering `max_value_depth` reaches it.
-    let limits = Limits {
-        max_value_depth: 5,
-        ..Limits::default()
-    };
+    let limits = Limits::default().with_max_value_depth(5);
 
     HostValue::from_json_with_limits(&nested_opt_json(5), &limits).unwrap();
 
@@ -143,10 +137,7 @@ fn decoded_value_depth_accepts_exact_limit_and_rejects_one_over() {
 
 #[test]
 fn constructed_value_depth_accepts_exact_limit_and_rejects_one_over() {
-    let limits = Limits {
-        max_value_depth: 5,
-        ..Limits::default()
-    };
+    let limits = Limits::default().with_max_value_depth(5);
 
     nested_opt_value(5, &limits).unwrap();
 
@@ -156,10 +147,7 @@ fn constructed_value_depth_accepts_exact_limit_and_rejects_one_over() {
 
 #[test]
 fn constructed_value_elements_accepts_exact_limit_and_rejects_one_over() {
-    let limits = Limits {
-        max_value_elements: 8,
-        ..Limits::default()
-    };
+    let limits = Limits::default().with_max_value_elements(8);
 
     // The vector node counts as one element alongside its children.
     let leaves = || (0..7).map(|_| HostValue::null()).collect::<Vec<_>>();
@@ -173,10 +161,7 @@ fn constructed_value_elements_accepts_exact_limit_and_rejects_one_over() {
 
 #[test]
 fn every_container_constructor_enforces_the_depth_bound() {
-    let limits = Limits {
-        max_value_depth: 1,
-        ..Limits::default()
-    };
+    let limits = Limits::default().with_max_value_depth(1);
     let deep = || HostValue::opt(Some(HostValue::null()), &limits).unwrap();
 
     // Each container is at depth 1 on its own, and rejected once it encloses
@@ -216,10 +201,7 @@ fn host_field_value_cannot_carry_an_unbounded_value_into_a_record() {
     // limit, and wrapping it in a record adds the level that breaches it. The
     // field is what carries the already-at-limit value across, so if `record`
     // trusted it instead of remeasuring, this would succeed at depth 5.
-    let limits = Limits {
-        max_value_depth: 4,
-        ..Limits::default()
-    };
+    let limits = Limits::default().with_max_value_depth(4);
     let field = HostFieldValue::new(7, nested_opt_value(4, &limits).unwrap());
     assert_eq!(field.id(), 7);
 
@@ -235,10 +217,7 @@ fn decoding_and_constructing_report_the_same_depth_for_the_same_value() {
     // route produced it. The decode path counts container edges as it recurses
     // and the constructors read a cached extent; if those units ever drift, the
     // public metadata becomes route-dependent.
-    let limits = Limits {
-        max_value_depth: 9,
-        ..Limits::default()
-    };
+    let limits = Limits::default().with_max_value_depth(9);
 
     let decoded = HostValue::from_json_with_limits(&nested_opt_json(10), &limits).unwrap_err();
     let constructed = nested_opt_value(10, &limits).unwrap_err();
@@ -263,10 +242,7 @@ fn a_value_at_the_limit_round_trips_through_every_recursive_operation() {
     // the bound. It is kept as plain regression cover for the hand-written
     // `Serialize` impl and the derived `PartialEq` that the cached extent
     // introduced — neither of which existed to be broken previously.
-    let limits = Limits {
-        max_value_depth: 32,
-        ..Limits::default()
-    };
+    let limits = Limits::default().with_max_value_depth(32);
     let value = nested_opt_value(32, &limits).unwrap();
 
     let cloned = value.clone();

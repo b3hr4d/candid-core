@@ -1238,8 +1238,8 @@ fn resource_single(
             crate::Diagnostic::violation("resource_limit_exceeded", path, message)
                 .with_resource_limit(crate::ResourceLimitInfo {
                     resource: resource.to_string(),
-                    limit,
-                    observed,
+                    limit: crate::limits::portable_count(limit),
+                    observed: crate::limits::portable_count(observed),
                 }),
         ],
     }

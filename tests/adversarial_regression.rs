@@ -1,6 +1,6 @@
-use candid_core::{Contract, Declaration, Field, Limits, PrimitiveType, RawContract, TypeNode};
+use candid_core::{ContractDraft, Declaration, Field, Limits, PrimitiveType, TypeNode};
 
-fn deep_record(depth: u32) -> RawContract {
+fn deep_record(depth: u32) -> ContractDraft {
     let mut types = (0..depth)
         .map(|index| TypeNode::Record {
             fields: vec![Field {
@@ -12,7 +12,7 @@ fn deep_record(depth: u32) -> RawContract {
     types.push(TypeNode::Primitive {
         primitive: PrimitiveType::Nat,
     });
-    RawContract::new(
+    ContractDraft::new(
         types,
         vec![Declaration {
             name: "AdversarialDepth".to_string(),
@@ -22,14 +22,14 @@ fn deep_record(depth: u32) -> RawContract {
     )
 }
 
-fn wide_record(width: u32) -> RawContract {
+fn wide_record(width: u32) -> ContractDraft {
     let mut types = vec![TypeNode::Primitive {
         primitive: PrimitiveType::Nat,
     }];
     types.push(TypeNode::Record {
         fields: (0..width).map(|id| Field { id, ty: 0 }).collect(),
     });
-    RawContract::new(
+    ContractDraft::new(
         types,
         vec![Declaration {
             name: "AdversarialWidth".to_string(),
@@ -39,28 +39,22 @@ fn wide_record(width: u32) -> RawContract {
     )
 }
 
-fn assert_work_limit(input: RawContract, accepted_limit: usize, rejected_limit: usize) {
-    let accepted = Limits {
-        max_canonicalization_work: accepted_limit,
-        ..Limits::default()
-    };
+fn assert_work_limit(input: ContractDraft, accepted_limit: usize, rejected_limit: usize) {
+    let accepted = Limits::default().with_max_canonicalization_work(accepted_limit);
     assert!(
-        Contract::build_raw(input.clone(), &accepted).is_ok(),
+        input.clone().build_with_limits(&accepted).is_ok(),
         "graph must remain within its canonicalization regression threshold"
     );
 
-    let rejected = Limits {
-        max_canonicalization_work: rejected_limit,
-        ..Limits::default()
-    };
-    let error = Contract::build_raw(input, &rejected).unwrap_err();
+    let rejected = Limits::default().with_max_canonicalization_work(rejected_limit);
+    let error = input.build_with_limits(&rejected).unwrap_err();
     let limit = error
         .violations
         .iter()
         .find_map(|violation| violation.resource_limit.as_ref())
         .expect("canonicalization work must be charged");
     assert_eq!(limit.resource, "canonicalization_work");
-    assert_eq!(limit.limit, rejected.max_canonicalization_work);
+    assert_eq!(limit.limit, rejected.max_canonicalization_work() as u64);
     assert!(limit.observed > limit.limit);
 }
 

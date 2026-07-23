@@ -45,7 +45,11 @@ pub struct ProducerInfo {
 }
 
 impl ProducerInfo {
-    pub(crate) fn current() -> Self {
+    /// The producer metadata describing this build of `candid-core` itself:
+    /// the crate name and version plus the exact pinned `candid` and
+    /// `candid_parser` dependency versions. This is the producer a
+    /// [`ContractDraft`] builds with when none is supplied explicitly.
+    pub fn current() -> Self {
         Self {
             name: env!("CARGO_PKG_NAME").to_string(),
             version: env!("CARGO_PKG_VERSION").to_string(),
@@ -303,39 +307,6 @@ impl Contract {
         Ok(Self::from_raw_with_mapping_and_budget(raw, &mut budget)?.0)
     }
 
-    /// Validate the raw graph structure, canonicalize it, and calculate fresh
-    /// identities. This producer API intentionally ignores supplied identity
-    /// values; trust boundaries should use [`Self::try_from_raw`] instead.
-    pub fn build_raw(raw: RawContract, limits: &Limits) -> Result<Self, ContractValidationError> {
-        let mut budget = crate::budget::Budget::from_limits(limits);
-        Self::build_raw_with_budget(raw, &mut budget)
-    }
-
-    pub fn build_raw_with_context(
-        raw: RawContract,
-        context: &crate::RuntimeContext,
-    ) -> Result<Self, ContractValidationError> {
-        let mut budget = context.budget();
-        Self::build_raw_with_budget(raw, &mut budget)
-    }
-
-    pub(crate) fn build_raw_with_budget(
-        raw: RawContract,
-        budget: &mut crate::budget::Budget<'_>,
-    ) -> Result<Self, ContractValidationError> {
-        let mut contract = Self::new_unchecked(raw.types, raw.declarations, raw.actor);
-        contract.format = raw.format;
-        contract.format_version = raw.format_version;
-        contract.semantics_profile = raw.semantics_profile;
-        contract.canonicalization_profile = raw.canonicalization_profile;
-        contract.producer = raw.producer;
-        crate::validate::validate_structure_with_budget(&contract, budget)?;
-        Ok(
-            crate::canonical::canonicalize_with_mapping_unchecked_with_budget(&contract, budget)?
-                .contract,
-        )
-    }
-
     fn from_raw_with_limits(
         raw: RawContract,
         limits: &Limits,
@@ -395,7 +366,139 @@ impl Contract {
     }
 }
 
-/// Unvalidated Contract data.
+/// A producer-side Contract draft: the parts an authoring tool supplies, and
+/// nothing it must not.
+///
+/// A draft carries only the type graph, named declarations, an optional
+/// actor, and optional producer metadata. It deliberately has **no**
+/// format/version/profile markers and **no** identity fields: building stamps
+/// the current [`CONTRACT_FORMAT`]/[`FORMAT_VERSION`]/[`SEMANTICS_PROFILE`]/
+/// [`CANONICALIZATION_PROFILE`] constants and calculates fresh identities
+/// under the same validation and canonicalization budgets as every other
+/// entry point, so a draft can never carry a fake, stale, or placeholder
+/// identity. [`RawContract`] is the opposite boundary — the serde DTO for
+/// *decoded external* artifacts, whose supplied identities
+/// [`Contract::try_from_raw`] verifies instead of recalculating.
+///
+/// # Serialized shape
+///
+/// A serialized draft contains exactly the four fields above. Unknown keys
+/// are rejected; `declarations` defaults to empty when absent; `actor` is
+/// omitted when absent, and an explicit `"actor": null` is rejected just as
+/// [`RawContract`] rejects it; `producer` is omitted when absent and defaults
+/// at build time to [`ProducerInfo::current`], while a present `producer`
+/// overrides that default.
+///
+/// ```
+/// use candid_core::{ContractDraft, PrimitiveType, TypeNode};
+///
+/// let contract = ContractDraft::new(
+///     vec![TypeNode::Primitive { primitive: PrimitiveType::Nat }],
+///     vec![candid_core::Declaration { name: "Amount".to_string(), ty: 0 }],
+///     None,
+/// )
+/// .build()?;
+/// assert!(contract.contract_id().starts_with("candid-core:contract:v1:sha256:"));
+/// assert_eq!(contract.producer(), &candid_core::ProducerInfo::current());
+/// # Ok::<(), candid_core::ContractValidationError>(())
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ContractDraft {
+    pub types: Vec<TypeNode>,
+    #[serde(default)]
+    pub declarations: Vec<Declaration>,
+    /// An actorless draft omits this property entirely; `"actor": null` is
+    /// rejected on decode, exactly as [`RawContract`] rejects it.
+    #[serde(
+        default,
+        deserialize_with = "deserialize_actor_forbidding_null",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub actor: Option<Actor>,
+    /// Untrusted provenance about the authoring tool. `None` builds with
+    /// [`ProducerInfo::current`]. Never part of authenticated identity; see
+    /// [`ProducerInfo`]. An explicit `"producer": null` is rejected on
+    /// decode: absence is the only spelling of "default producer", mirroring
+    /// the `actor` rule.
+    #[serde(
+        default,
+        deserialize_with = "deserialize_producer_forbidding_null",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub producer: Option<ProducerInfo>,
+}
+
+/// Invoked only when the `producer` key is present; an absent key takes the
+/// `None` default. Delegating to [`ProducerInfo`] directly makes an explicit
+/// JSON `null` a decode error instead of a second spelling of "default
+/// producer".
+fn deserialize_producer_forbidding_null<'de, D>(
+    deserializer: D,
+) -> Result<Option<ProducerInfo>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    ProducerInfo::deserialize(deserializer).map(Some)
+}
+
+impl ContractDraft {
+    pub fn new(types: Vec<TypeNode>, declarations: Vec<Declaration>, actor: Option<Actor>) -> Self {
+        Self {
+            types,
+            declarations,
+            actor,
+            producer: None,
+        }
+    }
+
+    /// Returns `self` with an explicit producer, overriding the
+    /// [`ProducerInfo::current`] default applied at build time.
+    #[must_use]
+    pub fn with_producer(mut self, producer: ProducerInfo) -> Self {
+        self.producer = Some(producer);
+        self
+    }
+
+    /// Validate the draft graph, canonicalize it, and calculate its
+    /// identities under [`Limits::default`].
+    pub fn build(self) -> Result<Contract, ContractValidationError> {
+        self.build_with_limits(&Limits::default())
+    }
+
+    /// Build under caller-supplied limits.
+    pub fn build_with_limits(self, limits: &Limits) -> Result<Contract, ContractValidationError> {
+        let mut budget = crate::budget::Budget::from_limits(limits);
+        self.build_with_budget(&mut budget)
+    }
+
+    /// Build under the caller's context, sharing its budget, deadline, and
+    /// cancellation token.
+    pub fn build_with_context(
+        self,
+        context: &crate::RuntimeContext,
+    ) -> Result<Contract, ContractValidationError> {
+        let mut budget = context.budget();
+        self.build_with_budget(&mut budget)
+    }
+
+    fn build_with_budget(
+        self,
+        budget: &mut crate::budget::Budget<'_>,
+    ) -> Result<Contract, ContractValidationError> {
+        let mut contract = Contract::new_unchecked(self.types, self.declarations, self.actor);
+        if let Some(producer) = self.producer {
+            contract.producer = producer;
+        }
+        crate::validate::validate_structure_with_budget(&contract, budget)?;
+        Ok(
+            crate::canonical::canonicalize_with_mapping_unchecked_with_budget(&contract, budget)?
+                .contract,
+        )
+    }
+}
+
+/// Unvalidated Contract data decoded from an external artifact.
 ///
 /// This is the serde entry point for Contract JSON. [`Contract`] itself
 /// deliberately does not implement [`Deserialize`]: a trait impl has no
@@ -408,6 +511,13 @@ impl Contract {
 ///
 /// Decoding this DTO is *not* a trust boundary and carries no allocation
 /// bound; gate the byte length yourself, or use the bounded parse APIs.
+///
+/// This type is reserved for artifacts that already carry format markers and
+/// identities: [`Contract::try_from_raw`] verifies the supplied identities
+/// against recomputation, and [`From<&Contract>`] projects a validated
+/// Contract back onto the wire shape. To *author* a Contract — where no
+/// trustworthy identity exists yet — use [`ContractDraft`], which carries no
+/// identity fields at all and calculates them on build.
 ///
 /// ```compile_fail
 /// // A validated Contract cannot be produced by serde alone.
@@ -444,12 +554,6 @@ where
     D: serde::Deserializer<'de>,
 {
     Actor::deserialize(deserializer).map(Some)
-}
-
-impl RawContract {
-    pub fn new(types: Vec<TypeNode>, declarations: Vec<Declaration>, actor: Option<Actor>) -> Self {
-        Self::from(&Contract::new_unchecked(types, declarations, actor))
-    }
 }
 
 impl From<&Contract> for RawContract {

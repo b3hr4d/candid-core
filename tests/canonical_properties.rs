@@ -1,6 +1,6 @@
 use candid_core::{
-    Actor, Contract, Declaration, Field, Limits, MethodMode, PrimitiveType, RawContract,
-    ServiceMethod, SourceId, TypeNode, TypeRef,
+    Actor, Contract, ContractDraft, Declaration, Field, MethodMode, PrimitiveType, ServiceMethod,
+    SourceId, TypeNode, TypeRef,
 };
 use proptest::prelude::*;
 
@@ -33,37 +33,33 @@ fn permuted_contract(left_is_text: bool, right_is_text: bool, permuted: bool) ->
         ]
     };
     let root = if permuted { 2 } else { 0 };
-    Contract::build_raw(
-        RawContract::new(
-            types,
-            vec![Declaration {
-                name: "Payload".to_string(),
-                ty: root,
-            }],
-            None,
-        ),
-        &Limits::default(),
+    ContractDraft::new(
+        types,
+        vec![Declaration {
+            name: "Payload".to_string(),
+            ty: root,
+        }],
+        None,
     )
+    .build()
     .unwrap()
 }
 
 fn declarations_only_contract(names: &[&str]) -> Contract {
-    Contract::build_raw(
-        RawContract::new(
-            vec![TypeNode::Primitive {
-                primitive: PrimitiveType::Nat,
-            }],
-            names
-                .iter()
-                .map(|name| Declaration {
-                    name: name.to_string(),
-                    ty: 0,
-                })
-                .collect(),
-            None,
-        ),
-        &Limits::default(),
+    ContractDraft::new(
+        vec![TypeNode::Primitive {
+            primitive: PrimitiveType::Nat,
+        }],
+        names
+            .iter()
+            .map(|name| Declaration {
+                name: name.to_string(),
+                ty: 0,
+            })
+            .collect(),
+        None,
     )
+    .build()
     .unwrap()
 }
 
@@ -131,33 +127,31 @@ fn serialized_contract_object_keys_stay_fixed_ascii_schema_keys() {
         }
     }
 
-    let contract = Contract::build_raw(
-        RawContract::new(
-            vec![
-                TypeNode::Service {
-                    methods: vec![ServiceMethod {
-                        name: "m\u{e9}thode".to_string(),
-                        id: candid_parser::candid::idl_hash("m\u{e9}thode"),
-                        function: 1,
-                    }],
-                },
-                TypeNode::Func {
-                    args: vec![],
-                    results: vec![2],
-                    mode: MethodMode::Query,
-                },
-                TypeNode::Primitive {
-                    primitive: PrimitiveType::Text,
-                },
-            ],
-            vec![Declaration {
-                name: "\u{10000}\u{ff61}\"\\\n".to_string(),
-                ty: 2,
-            }],
-            Some(Actor::Service { service: 0 }),
-        ),
-        &Limits::default(),
+    let contract = ContractDraft::new(
+        vec![
+            TypeNode::Service {
+                methods: vec![ServiceMethod {
+                    name: "m\u{e9}thode".to_string(),
+                    id: candid_parser::candid::idl_hash("m\u{e9}thode"),
+                    function: 1,
+                }],
+            },
+            TypeNode::Func {
+                args: vec![],
+                results: vec![2],
+                mode: MethodMode::Query,
+            },
+            TypeNode::Primitive {
+                primitive: PrimitiveType::Text,
+            },
+        ],
+        vec![Declaration {
+            name: "\u{10000}\u{ff61}\"\\\n".to_string(),
+            ty: 2,
+        }],
+        Some(Actor::Service { service: 0 }),
     )
+    .build()
     .unwrap();
     assert_ascii_keys(&serde_json::to_value(&contract).unwrap());
 }
@@ -279,11 +273,9 @@ proptest! {
         declaration_order in Just(vec![0usize, 1]).prop_shuffle(),
     ) {
         let (types, declarations, actor) = nasty_graph();
-        let baseline = Contract::build_raw(
-            RawContract::new(types.clone(), declarations.clone(), actor.clone()),
-            &Limits::default(),
-        )
-        .unwrap();
+        let baseline = ContractDraft::new(types.clone(), declarations.clone(), actor.clone())
+            .build()
+            .unwrap();
 
         // placement[new] = old; old_to_new inverts it.
         let mut old_to_new = vec![0 as TypeRef; placement.len()];
@@ -307,11 +299,9 @@ proptest! {
             Actor::Class { class } => Actor::Class { class: remap(class) },
         });
 
-        let permuted = Contract::build_raw(
-            RawContract::new(permuted_types, permuted_declarations, permuted_actor),
-            &Limits::default(),
-        )
-        .unwrap();
+        let permuted = ContractDraft::new(permuted_types, permuted_declarations, permuted_actor)
+            .build()
+            .unwrap();
         prop_assert_eq!(&permuted, &baseline);
         prop_assert_eq!(permuted.contract_id(), baseline.contract_id());
         prop_assert_eq!(permuted.interface_id(), baseline.interface_id());

@@ -14,7 +14,12 @@ Extensions and agents will frequently handle partially trusted JSON. Invalid sta
 
 The model layer will distinguish:
 
-- `RawContract`: serde DTO with no validity claim.
+- `ContractDraft`: producer-side authoring DTO carrying only types,
+  declarations, an optional actor, and optional producer metadata — no format
+  markers and no identity fields. Building calculates fresh identities; a
+  draft cannot carry a fake or placeholder identity because the fields do not
+  exist.
+- `RawContract`: serde DTO for decoded external artifacts, with no validity claim.
 - `Contract`: immutable, validated, canonical Contract with private fields.
 - `RawSourceInfo`: serde DTO with no binding claim.
 - `SourceInfo`: validated provenance bound to a `contract_id` and `source_bundle_id`.
@@ -44,7 +49,7 @@ Extensions are namespaced, versioned, size-limited, and excluded from core ident
 
 ## Implementation
 
-`Contract` and `Compilation` fields are private and exposed through immutable accessors. `RawContract` and `RawSourceInfo` are explicit DTOs. `Compilation::from_json_with_limits` and its context and slice variants are its only entry points from bytes; they enforce `max_input_bytes` before decoding, then canonicalize the Contract, remap provenance, and rederive the bound sidecar from its source bundle under the same budget. `try_from_raw` and `try_from_raw_with_context` remain for callers who already hold decoded DTOs; they take a policy but no byte gate applies, because there are no bytes left to gate. `Contract` and `ContractEnvelope` expose the same bounded pairs. `Serialize` and the derived `Deserialize` on `RawContract` and `RawSourceInfo` are the trusted serde integration: they consult no limits and revalidate nothing. `source_bundle_id` authenticates only sorted raw sources and import edges; it does not independently identify the derived sidecar. A `SourceInfo` validity claim therefore means that the complete presented sidecar matched rederivation during construction. `ContractEnvelope` owns namespaced extensions.
+`Contract` and `Compilation` fields are private and exposed through immutable accessors. `RawContract` and `RawSourceInfo` are explicit DTOs reserved for decoded external artifacts; `ContractDraft` is the producer entry point, and its `build`/`build_with_limits`/`build_with_context` methods validate, canonicalize, and calculate identities under the same budgets as the bounded parse paths, defaulting absent producer metadata to `ProducerInfo::current()`. The earlier `RawContract::new`/`Contract::build_raw` pairing — which fabricated placeholder zero identities that the intuitively paired `Contract::try_from_raw` then rejected — was removed pre-1.0 in favor of that draft type. `Compilation::from_json_with_limits` and its context and slice variants are its only entry points from bytes; they enforce `max_input_bytes` before decoding, then canonicalize the Contract, remap provenance, and rederive the bound sidecar from its source bundle under the same budget. `try_from_raw` and `try_from_raw_with_context` remain for callers who already hold decoded DTOs; they take a policy but no byte gate applies, because there are no bytes left to gate. `Contract` and `ContractEnvelope` expose the same bounded pairs. `Serialize` and the derived `Deserialize` on `RawContract` and `RawSourceInfo` are the trusted serde integration: they consult no limits and revalidate nothing. `source_bundle_id` authenticates only sorted raw sources and import edges; it does not independently identify the derived sidecar. A `SourceInfo` validity claim therefore means that the complete presented sidecar matched rederivation during construction. `ContractEnvelope` owns namespaced extensions.
 
 ## Required verification
 

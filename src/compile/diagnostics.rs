@@ -57,8 +57,8 @@ pub(super) fn exact_labels_to_locations(
     let span = labels.next().map(|label| {
         SourceSpan::exact(
             source_name.map(str::to_string),
-            label.range.start,
-            label.range.end,
+            crate::limits::portable_count(label.range.start),
+            crate::limits::portable_count(label.range.end),
         )
     });
     let related = labels
@@ -66,8 +66,8 @@ pub(super) fn exact_labels_to_locations(
             message: label.message,
             span: Some(SourceSpan::exact(
                 source_name.map(str::to_string),
-                label.range.start,
-                label.range.end,
+                crate::limits::portable_count(label.range.start),
+                crate::limits::portable_count(label.range.end),
             )),
         })
         .collect();

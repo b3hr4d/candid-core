@@ -27,7 +27,11 @@ impl ContractValidationError {
 
     pub(crate) fn resource_limit(resource: &str, limit: usize, observed: usize) -> Self {
         Self {
-            violations: vec![Diagnostic::resource_violation(resource, limit, observed)],
+            violations: vec![Diagnostic::resource_violation(
+                resource,
+                crate::limits::portable_count(limit),
+                crate::limits::portable_count(observed),
+            )],
         }
     }
 
