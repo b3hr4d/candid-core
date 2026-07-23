@@ -97,10 +97,10 @@ pub(super) fn lower_checked(
     // canonicalizer then computes the real identities.
     let raw_contract = Contract::new_unchecked(types, declarations, actor);
     crate::validate::validate_structure_with_budget(&raw_contract, budget)
-        .map_err(|error| lower_error(format!("lowered Contract violated an invariant: {error}")))?;
+        .map_err(|error| error.into_compile_error(DiagnosticPhase::Lower))?;
     let canonicalized =
         canonical::canonicalize_with_mapping_unchecked_with_budget(&raw_contract, budget)
-            .map_err(|error| lower_error(format!("canonicalization failed: {error}")))?;
+            .map_err(|error| error.into_compile_error(DiagnosticPhase::Lower))?;
 
     let source_info = if options.include_source_info {
         // Remapping and sorting the collected provenance is proportional to the

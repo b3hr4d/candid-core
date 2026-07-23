@@ -386,3 +386,58 @@ fn non_unicode_paths_are_reported_as_json_errors() {
         json!("did_invalid_source_id")
     );
 }
+
+/// Issue #19: identities from the materialized `check_file` bundle must map
+/// back to logical source IDs at the CLI boundary — never a numeric `N.did`,
+/// a temp directory, or byte offsets into pretty-printed text — while the
+/// failure envelope keys stay frozen.
+#[test]
+fn compile_maps_materialized_identities_back_to_logical_sources() {
+    let fixture = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/imports/root_missing_service_actor.did"
+    );
+    let response = json_stdout(&run(["compile", fixture]), 1);
+    assert_eq!(
+        response.as_object().unwrap().keys().collect::<Vec<_>>(),
+        ["diagnostics", "ok"],
+        "the compile failure envelope keys are frozen"
+    );
+    assert_eq!(response["ok"], json!(false));
+    assert_eq!(
+        response["diagnostics"],
+        json!([{
+            "code": "did_type_check_error",
+            "phase": "type_check",
+            "severity": "error",
+            "message": "Imported service file \"workspace:/types.did\" has no main service",
+            "span": { "source_name": "workspace:/types.did" },
+        }])
+    );
+}
+
+/// Issue #19: the validate failure envelope and its violation items keep the
+/// legacy shape exactly — `violations` under `ok`, items carrying only
+/// code/path/message (+ resource_limit when structured), never phase or
+/// severity keys.
+#[test]
+fn validate_violation_envelope_and_item_shape_remain_frozen() {
+    let mut contract = contract_fixture();
+    contract["identities"]["contract"] = json!("not-a-valid-id");
+    let fixture = Fixture::new();
+    let path = fixture.write("contract.json", serde_json::to_string(&contract).unwrap());
+    let response = json_stdout(&run([OsStr::new("validate"), path.as_os_str()]), 1);
+    assert_eq!(
+        response.as_object().unwrap().keys().collect::<Vec<_>>(),
+        ["ok", "violations"],
+        "the validate failure envelope keys are frozen"
+    );
+    assert_eq!(
+        response["violations"],
+        json!([{
+            "code": "invalid_contract_id_format",
+            "path": "$.identities.contract",
+            "message": "contract identity must use candid-core:contract:v1:sha256:<64 lowercase hex>",
+        }])
+    );
+}

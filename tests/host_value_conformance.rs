@@ -149,7 +149,7 @@ fn validation_preserves_wide_container_resource_diagnostics() {
     let error = validate_host_value(contract, &selector, &value, &limits).unwrap_err();
     let violation = &error.violations[0];
     assert_eq!(violation.code, "resource_limit_exceeded");
-    assert_eq!(violation.path, "$");
+    assert_eq!(violation.path.as_deref(), Some("$"));
     let info = violation.resource_limit.as_ref().unwrap();
     assert_eq!(info.resource, "value_elements");
     assert_eq!(info.limit, 10);

@@ -30,26 +30,29 @@ impl ViolationCollector {
     ) {
         self.observed = self.observed.saturating_add(1);
         if self.violations.len() < self.limit {
-            self.violations.push(ContractViolation {
-                code: code.into(),
-                path: path.into(),
-                message: message.into(),
-                resource_limit: None,
-            });
-        } else if let Some(last) = self.violations.last_mut() {
-            *last = ContractViolation {
-                code: "resource_limit_exceeded".to_string(),
-                path: "$".to_string(),
-                message: format!(
-                    "resource diagnostics exceeded limit {}; observed at least {}",
-                    self.limit, self.observed
-                ),
-                resource_limit: Some(crate::ResourceLimitInfo {
-                    resource: "diagnostics".to_string(),
-                    limit: self.limit,
-                    observed: self.observed,
-                }),
-            };
+            self.violations
+                .push(crate::Diagnostic::violation(code, path, message));
+            return;
+        }
+        let sentinel = crate::Diagnostic::violation(
+            "resource_limit_exceeded",
+            "$",
+            format!(
+                "resource diagnostics exceeded limit {}; observed at least {}",
+                self.limit, self.observed
+            ),
+        )
+        .with_resource_limit(crate::ResourceLimitInfo {
+            resource: "diagnostics".to_string(),
+            limit: self.limit,
+            observed: self.observed,
+        });
+        match self.violations.last_mut() {
+            Some(last) => *last = sentinel,
+            // A zero cap can hold no real violation, but an invalid input must
+            // never yield an empty error collection: the sentinel itself is
+            // the one guaranteed item, updated in place on later observations.
+            None => self.violations.push(sentinel),
         }
     }
 

@@ -25,7 +25,8 @@ pub use compile::{
     CompileOptions,
 };
 pub use diagnostics::{
-    CompileError, Diagnostic, DiagnosticPhase, ResourceLimitInfo, Severity, SourceSpan,
+    CompileError, Diagnostic, DiagnosticPhase, RelatedLocation, ResourceLimitInfo, Severity,
+    SourceSpan,
 };
 pub use envelope::ContractEnvelope;
 pub use limits::{CancellationToken, Limits, RuntimeContext};

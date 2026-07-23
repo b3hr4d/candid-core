@@ -1,14 +1,13 @@
-use serde::Serialize;
+use crate::diagnostics::{CompileError, Diagnostic, DiagnosticPhase, Severity};
 use std::fmt;
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct ContractViolation {
-    pub code: String,
-    pub path: String,
-    pub message: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub resource_limit: Option<crate::diagnostics::ResourceLimitInfo>,
-}
+/// Compatibility name for the shared diagnostic item in the Contract
+/// validation domain.
+///
+/// Contract violations are [`Diagnostic`] values that always carry `path` and
+/// never carry `phase`/`severity`, so their serialized shape is unchanged:
+/// `{code, path, message, resource_limit?}` plus any optional location data.
+pub type ContractViolation = Diagnostic;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ContractValidationError {
@@ -22,27 +21,40 @@ impl ContractValidationError {
         message: impl Into<String>,
     ) -> Self {
         Self {
-            violations: vec![ContractViolation {
-                code: code.into(),
-                path: path.into(),
-                message: message.into(),
-                resource_limit: None,
-            }],
+            violations: vec![Diagnostic::violation(code, path, message)],
         }
     }
 
     pub(crate) fn resource_limit(resource: &str, limit: usize, observed: usize) -> Self {
         Self {
-            violations: vec![ContractViolation {
-                code: "resource_limit_exceeded".to_string(),
-                path: "$".to_string(),
-                message: format!("resource {resource} exceeded limit {limit}; observed {observed}"),
-                resource_limit: Some(crate::diagnostics::ResourceLimitInfo {
-                    resource: resource.to_string(),
-                    limit,
-                    observed,
-                }),
-            }],
+            violations: vec![Diagnostic::resource_violation(resource, limit, observed)],
+        }
+    }
+
+    /// Lossless item-by-item conversion into a [`CompileError`].
+    ///
+    /// Every violation keeps its code, structured path, span, related
+    /// locations, notes, and resource metadata, and gains the compile-domain
+    /// `phase`/`severity`. The message keeps the pre-existing `{path}:
+    /// {message}` rendering so compile output stays byte-compatible.
+    pub(crate) fn into_compile_error(self, phase: DiagnosticPhase) -> CompileError {
+        CompileError {
+            diagnostics: self
+                .violations
+                .into_iter()
+                .map(|violation| {
+                    let message = match &violation.path {
+                        Some(path) => format!("{}: {}", path, violation.message),
+                        None => violation.message.clone(),
+                    };
+                    Diagnostic {
+                        phase: Some(phase.clone()),
+                        severity: Some(Severity::Error),
+                        message,
+                        ..violation
+                    }
+                })
+                .collect(),
         }
     }
 }

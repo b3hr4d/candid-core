@@ -4,7 +4,7 @@ mod bounded;
 use bounded::{read_bounded_utf8, BoundedUtf8Error};
 use candid_core::{
     compile_did_file_with_options, CompileOptions, Contract, ContractJsonError,
-    ContractValidationError, ContractViolation, Limits, ResourceLimitInfo,
+    ContractValidationError, ContractViolation, Limits,
 };
 use serde_json::json;
 use std::env;
@@ -112,19 +112,11 @@ fn validate(path: &Path) -> ExitCode {
             let limit = Limits::default().max_input_bytes;
             write_error(json_error(ContractJsonError::InvalidContract(
                 ContractValidationError {
-                    violations: vec![ContractViolation {
-                        code: "resource_limit_exceeded".to_string(),
-                        path: "$".to_string(),
-                        message: format!(
-                            "resource input_bytes exceeded limit {limit}; observed {}",
-                            observed
-                        ),
-                        resource_limit: Some(ResourceLimitInfo {
-                            resource: "input_bytes".to_string(),
-                            limit,
-                            observed,
-                        }),
-                    }],
+                    violations: vec![ContractViolation::resource_violation(
+                        "input_bytes",
+                        limit,
+                        observed,
+                    )],
                 },
             )))
         }

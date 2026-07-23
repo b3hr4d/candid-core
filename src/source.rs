@@ -651,14 +651,25 @@ fn rederivation_error(error: crate::CompileError) -> ContractValidationError {
         violations: error
             .diagnostics
             .into_iter()
-            .map(|diagnostic| ContractViolation {
-                code: diagnostic.code,
-                path: "$".to_string(),
-                message: format!(
+            .map(|diagnostic| {
+                // Item-by-item, lossless where the violation domain has a
+                // field for it: path, span, related locations, notes, and
+                // resource metadata all survive; compile-only phase/severity
+                // are dropped because violations never carry them. Most
+                // compile diagnostics carry no path, and those keep the
+                // domain root `$` this conversion has always reported.
+                let message = format!(
                     "the embedded source bundle could not rederive provenance: {}",
                     diagnostic.message
-                ),
-                resource_limit: diagnostic.resource_limit,
+                );
+                let path = diagnostic.path.clone().unwrap_or_else(|| "$".to_string());
+                ContractViolation {
+                    phase: None,
+                    severity: None,
+                    path: Some(path),
+                    message,
+                    ..diagnostic
+                }
             })
             .collect(),
     }
@@ -1052,6 +1063,70 @@ mod tests {
     use crate::budget::BudgetError;
     use crate::model::{SourceFileInfo, SourceImportKind};
     use crate::CancellationToken;
+
+    #[test]
+    fn rederivation_conversion_preserves_every_structured_field() {
+        let diagnostic = crate::Diagnostic::compiler(
+            "did_parse_error",
+            crate::DiagnosticPhase::Parse,
+            "Candid parser error: Unexpected token at bytes 3..4",
+        )
+        .with_span(crate::SourceSpan::exact(
+            Some("memory:/lib.did".to_string()),
+            3,
+            4,
+        ))
+        .with_related(vec![crate::RelatedLocation {
+            message: "related".to_string(),
+            span: Some(crate::SourceSpan::exact(
+                Some("memory:/lib.did".to_string()),
+                8,
+                9,
+            )),
+        }])
+        .with_notes(vec!["note".to_string()])
+        .with_resource_limit(crate::ResourceLimitInfo {
+            resource: "type_depth".to_string(),
+            limit: 1,
+            observed: 2,
+        });
+        let error = rederivation_error(crate::CompileError {
+            diagnostics: vec![diagnostic.clone()],
+        });
+
+        let violation = &error.violations[0];
+        assert_eq!(violation.code, "did_parse_error");
+        assert_eq!(
+            violation.path.as_deref(),
+            Some("$"),
+            "a path-less compile diagnostic keeps the domain root"
+        );
+        assert_eq!(
+            violation.message,
+            format!(
+                "the embedded source bundle could not rederive provenance: {}",
+                diagnostic.message
+            )
+        );
+        assert_eq!(violation.span, diagnostic.span);
+        assert_eq!(violation.related, diagnostic.related);
+        assert_eq!(violation.notes, diagnostic.notes);
+        assert_eq!(violation.resource_limit, diagnostic.resource_limit);
+        assert_eq!(violation.phase, None, "violations never carry a phase");
+        assert_eq!(violation.severity, None, "violations never carry severity");
+
+        // A converted structured violation that does carry a path keeps it.
+        let with_path = crate::Diagnostic::compiler(
+            "dangling_type_ref",
+            crate::DiagnosticPhase::Lower,
+            "$.types[3]: node references out-of-range type",
+        )
+        .with_path("$.types[3]");
+        let error = rederivation_error(crate::CompileError {
+            diagnostics: vec![with_path],
+        });
+        assert_eq!(error.violations[0].path.as_deref(), Some("$.types[3]"));
+    }
 
     fn fixture() -> (Vec<SourceFileInfo>, Vec<SourceImportInfo>) {
         let sources = vec![

@@ -782,14 +782,13 @@ impl<'a, 'limits> HostValueLocalValidationState<'a, 'limits> {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct HostValueViolation {
-    pub code: String,
-    pub path: String,
-    pub message: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub resource_limit: Option<crate::ResourceLimitInfo>,
-}
+/// Compatibility name for the shared diagnostic item in the HostValue
+/// validation domain.
+///
+/// HostValue violations are [`crate::Diagnostic`] values that always carry
+/// `path` and never carry `phase`/`severity`, so their serialized shape is
+/// unchanged: `{code, path, message, resource_limit?}`.
+pub type HostValueViolation = crate::Diagnostic;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HostValueValidationError {
@@ -1223,12 +1222,7 @@ fn single(
     message: impl Into<String>,
 ) -> HostValueValidationError {
     HostValueValidationError {
-        violations: vec![HostValueViolation {
-            code: code.into(),
-            path: path.into(),
-            message: message.into(),
-            resource_limit: None,
-        }],
+        violations: vec![crate::Diagnostic::violation(code, path, message)],
     }
 }
 
@@ -1240,16 +1234,14 @@ fn resource_single(
     message: impl Into<String>,
 ) -> HostValueValidationError {
     HostValueValidationError {
-        violations: vec![HostValueViolation {
-            code: "resource_limit_exceeded".to_string(),
-            path: path.into(),
-            message: message.into(),
-            resource_limit: Some(crate::ResourceLimitInfo {
-                resource: resource.to_string(),
-                limit,
-                observed,
-            }),
-        }],
+        violations: vec![
+            crate::Diagnostic::violation("resource_limit_exceeded", path, message)
+                .with_resource_limit(crate::ResourceLimitInfo {
+                    resource: resource.to_string(),
+                    limit,
+                    observed,
+                }),
+        ],
     }
 }
 
