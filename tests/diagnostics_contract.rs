@@ -7,18 +7,24 @@
 //! exists, materialized file identities never leak, and resource metadata
 //! survives every conversion chain.
 
+#[cfg(feature = "compiler")]
+use candid_core::{compile_did, compile_did_with_context, CompileOptions, RuntimeContext};
+#[cfg(feature = "filesystem-compiler")]
+use candid_core::{compile_with_resolver, MemoryResolver};
+#[cfg(all(feature = "compiler", feature = "host-value"))]
+use candid_core::{validate_host_value, HostValue};
 use candid_core::{
-    compile_did, compile_did_with_context, compile_with_resolver, validate_host_value,
-    CompileOptions, Contract, ContractJsonError, Diagnostic, DiagnosticPhase, HostValue, Limits,
-    MemoryResolver, RuntimeContext, Severity, SourceSpan,
+    Contract, ContractJsonError, Diagnostic, DiagnosticPhase, Limits, Severity, SourceSpan,
 };
 use serde_json::json;
 
+#[cfg(feature = "compiler")]
 fn compile_error_json(source: &str) -> serde_json::Value {
     let error = compile_did(source).expect_err("source must fail to compile");
     serde_json::to_value(&error.diagnostics).expect("diagnostics serialize")
 }
 
+#[cfg(feature = "compiler")]
 #[test]
 fn compile_diagnostics_keep_the_legacy_serialized_shape_exactly() {
     // The pre-#19 shape: code/phase/severity/message always present, exact
@@ -64,6 +70,7 @@ fn contract_violations_keep_the_legacy_serialized_shape_exactly() {
     );
 }
 
+#[cfg(all(feature = "compiler", feature = "host-value"))]
 #[test]
 fn host_value_violations_keep_the_legacy_serialized_shape_exactly() {
     let compilation = compile_did("type Deep = opt Deep; service : {};").unwrap();
@@ -88,6 +95,7 @@ fn host_value_violations_keep_the_legacy_serialized_shape_exactly() {
     );
 }
 
+#[cfg(all(feature = "compiler", feature = "host-value"))]
 #[test]
 fn host_value_resource_chain_preserves_the_exact_triple_and_path() {
     let compilation = compile_did("type Deep = opt Deep; service : {};").unwrap();
@@ -124,6 +132,7 @@ fn host_value_resource_chain_preserves_the_exact_triple_and_path() {
     );
 }
 
+#[cfg(feature = "compiler")]
 #[test]
 fn compile_lowering_converts_structured_violations_without_stringification() {
     // Exhaust the canonicalization budget inside lowering. Before #19 this
@@ -146,6 +155,7 @@ fn compile_lowering_converts_structured_violations_without_stringification() {
     );
 }
 
+#[cfg(feature = "filesystem-compiler")]
 #[test]
 fn imported_type_check_failures_name_logical_sources_only() {
     // A service import without a main service is only discovered by
@@ -202,6 +212,7 @@ fn imported_type_check_failures_name_logical_sources_only() {
     );
 }
 
+#[cfg(feature = "compiler")]
 #[test]
 fn lowering_structure_validation_converts_resource_failures_item_by_item() {
     // The sibling of the canonicalization chain: exhaust a limit that only
@@ -237,6 +248,7 @@ fn lowering_structure_validation_converts_resource_failures_item_by_item() {
     );
 }
 
+#[cfg(feature = "filesystem-compiler")]
 #[test]
 fn quoted_user_labels_survive_the_materialized_boundary_untouched() {
     // `"0.did"` is a legal Candid text field label, and upstream renders it
@@ -345,6 +357,7 @@ fn half_and_empty_spans_are_rejected_on_deserialization() {
     }
 }
 
+#[cfg(feature = "filesystem-compiler")]
 #[test]
 fn resolver_route_parse_errors_keep_exact_original_offsets() {
     let resolver = MemoryResolver::new()
@@ -368,6 +381,7 @@ fn resolver_route_parse_errors_keep_exact_original_offsets() {
     assert_eq!(span.end_byte, Some(15));
 }
 
+#[cfg(feature = "compiler")]
 #[test]
 fn provenance_rederivation_preserves_resource_metadata() {
     // Chain: compile → embed source bundle → revalidate the sidecar under a

@@ -1,3 +1,15 @@
+//! The lossless tagged HostValue ABI and graph-directed value validation.
+//!
+//! Gated on the `host-value` feature. Principal text is checked with
+//! `ic_principal`, taken as a direct dependency rather than reached through
+//! `candid_parser::Principal`: that re-export chain is
+//! `candid_parser` → `candid` → `ic_principal`, so borrowing it would put the
+//! whole Candid source engine in the graph of a host that only ever validates
+//! values. `candid::Principal` *is* `ic_principal::Principal` — a plain
+//! `pub use`, not a wrapper — so accepted and rejected principal text, the
+//! `PrincipalError` variants, and their rendered messages are the same type's,
+//! unchanged.
+
 use crate::limits::Limits;
 use crate::model::{Contract, PrimitiveType, TypeNode, TypeRef};
 use serde::{Deserialize, Serialize};
@@ -55,7 +67,7 @@ impl HostFieldValue {
 /// [`HostValue::from_json_with_limits`], which decodes a private raw DTO and
 /// checks locally canonical scalar encodings before exposing this value.
 ///
-/// Every value carries its own [`Extent`], so the container constructors can
+/// Every value carries its own measured extent, so the container constructors can
 /// reject an over-deep or over-large value in constant time per level. That
 /// bound is what makes the recursive operations on this type safe: `Drop`,
 /// `Clone`, `PartialEq`, `Debug`, and `Serialize` all recurse once per level,
@@ -402,7 +414,7 @@ impl HostValue {
     }
 
     fn require_canonical_principal(value: &str) -> Result<(), HostValueJsonError> {
-        let principal = candid_parser::Principal::from_text(value).map_err(|error| {
+        let principal = ic_principal::Principal::from_text(value).map_err(|error| {
             HostValueJsonError::Malformed(format!("$: invalid principal {value:?}: {error}"))
         })?;
         Self::require(principal.to_text() == value, "non-canonical principal")
@@ -771,7 +783,7 @@ impl<'a, 'limits> HostValueLocalValidationState<'a, 'limits> {
         value: &str,
         path: &str,
     ) -> Result<(), HostValueJsonError> {
-        let principal = candid_parser::Principal::from_text(value).map_err(|error| {
+        let principal = ic_principal::Principal::from_text(value).map_err(|error| {
             HostValueJsonError::Malformed(format!("{path}: invalid principal {value:?}: {error}"))
         })?;
         self.require(
@@ -1199,7 +1211,7 @@ fn canonical_hex(value: &str, length: usize) -> bool {
 }
 
 fn validate_principal(value: &str, path: &str) -> Result<(), HostValueValidationError> {
-    let principal = candid_parser::Principal::from_text(value).map_err(|error| {
+    let principal = ic_principal::Principal::from_text(value).map_err(|error| {
         single(
             "invalid_principal",
             path,

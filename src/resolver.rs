@@ -1,19 +1,28 @@
-#[cfg(not(target_os = "unknown"))]
+//! Logical source identity and resolution.
+//!
+//! [`SourceId`], [`SourceResolver`], [`ResolvedSource`], and [`MemoryResolver`]
+//! are `compiler` surface: they describe a self-contained source bundle and
+//! need no host filesystem. [`WorkspaceResolver`] is the one resolver that
+//! converts logical segments to native paths, so it — and the `cap-std`
+//! capability it holds — lives behind `filesystem-compiler`.
+
+#[cfg(all(feature = "filesystem-compiler", not(target_os = "unknown")))]
 use crate::bounded::{read_bounded_utf8, BoundedUtf8Error};
 use crate::diagnostics::{CompileError, DiagnosticPhase};
 use crate::limits::Limits;
-#[cfg(not(target_os = "unknown"))]
+#[cfg(all(feature = "filesystem-compiler", not(target_os = "unknown")))]
 use cap_std::{ambient_authority, fs::Dir};
 use serde::{Deserialize, Deserializer, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::fmt;
-#[cfg(not(target_os = "unknown"))]
+#[cfg(all(feature = "filesystem-compiler", not(target_os = "unknown")))]
 use std::fs;
-#[cfg(not(target_os = "unknown"))]
+#[cfg(all(feature = "filesystem-compiler", not(target_os = "unknown")))]
 use std::io;
+#[cfg(feature = "filesystem-compiler")]
 use std::path::{Path, PathBuf};
-#[cfg(not(target_os = "unknown"))]
+#[cfg(all(feature = "filesystem-compiler", not(target_os = "unknown")))]
 use std::sync::Arc;
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
@@ -321,6 +330,13 @@ impl SourceResolver for MemoryResolver {
     }
 }
 
+/// A resolver rooted at one explicitly authorized native directory.
+///
+/// Requires the `filesystem-compiler` feature. On `target_os = "unknown"` —
+/// browser WASM — there is no filesystem to authorize and `cap-std` is not in
+/// the graph, so construction fails with `did_workspace_root_error` even when
+/// the feature is on; use [`MemoryResolver`] there.
+#[cfg(feature = "filesystem-compiler")]
 #[derive(Debug, Clone)]
 pub struct WorkspaceResolver {
     root: PathBuf,
@@ -328,6 +344,7 @@ pub struct WorkspaceResolver {
     directory: Arc<Dir>,
 }
 
+#[cfg(feature = "filesystem-compiler")]
 impl WorkspaceResolver {
     pub fn new(root: impl AsRef<Path>) -> Result<Self, ResolveError> {
         #[cfg(target_os = "unknown")]
@@ -377,6 +394,7 @@ impl WorkspaceResolver {
     }
 }
 
+#[cfg(feature = "filesystem-compiler")]
 impl SourceResolver for WorkspaceResolver {
     fn identify(&self, from: Option<&SourceId>, import: &str) -> Result<SourceId, ResolveError> {
         if from.is_some_and(|from| from.scheme() != "workspace") {
@@ -453,7 +471,7 @@ impl SourceResolver for WorkspaceResolver {
     }
 }
 
-#[cfg(not(target_os = "unknown"))]
+#[cfg(all(feature = "filesystem-compiler", not(target_os = "unknown")))]
 fn workspace_open_error(id: &SourceId, error: io::Error) -> ResolveError {
     if is_cap_std_escape(&error) {
         ResolveError::new(
@@ -471,7 +489,7 @@ fn workspace_open_error(id: &SourceId, error: io::Error) -> ResolveError {
     }
 }
 
-#[cfg(not(target_os = "unknown"))]
+#[cfg(all(feature = "filesystem-compiler", not(target_os = "unknown")))]
 fn is_cap_std_escape(error: &io::Error) -> bool {
     // cap-std 4.0.2 represents capability escapes with this synthetic error;
     // ordinary filesystem denials retain their OS error code and message.
@@ -578,7 +596,7 @@ fn check_source_size(id: &SourceId, source: &str, limits: &Limits) -> Result<(),
     Ok(())
 }
 
-#[cfg(all(test, unix))]
+#[cfg(all(test, unix, feature = "filesystem-compiler"))]
 mod workspace_tests {
     use super::*;
     use std::os::unix::fs::{symlink, PermissionsExt};

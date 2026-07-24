@@ -41,9 +41,9 @@ cargo bench --benches --locked -- --test
 
 Fixture construction, validation of the fixture itself, and Criterion setup occur outside timed loops. Returned values pass through `black_box`. A fresh mutable checker environment is required because reusing it would give the official baseline an invalid cache advantage.
 
-`compile/imported_bundle` is separate because it includes file access and import processing. `official_check_file` reads the checked-in bundle directly. `core_compile_with_resolver` reads the same bundle through `WorkspaceResolver`, materializes the hermetic checked view, invokes the official file checker, and projects the result. This is an end-to-end comparison, not a parser microbench.
+`compile/imported_bundle` is separate because it includes file access and import processing; it is `filesystem-compiler` work. `official_check_file` reads the checked-in bundle directly. `core_compile_with_resolver` reads the same bundle through `WorkspaceResolver`, materializes the hermetic checked view, invokes the official file checker, and projects the result. This is an end-to-end comparison, not a parser microbench.
 
-`artifact/ledger` isolates operations on one already compiled Contract:
+`artifact/ledger` isolates operations on one already compiled Contract — this group is entirely base-feature work, so its costs are what a `default-features = false` consumer pays:
 
 - structural/identity validation;
 - canonicalization;
@@ -62,13 +62,13 @@ The suite deliberately combines:
 - deterministic generated record-width, method-count, and recursive-depth cases;
 - a three-file imported ledger/archive bundle.
 
-The generated wide and long-chain cases provide performance signals relevant to Issue #6. They do not replace its deterministic work-accounting regression test and should not drive an optimization until repeated measurements identify a bottleneck. The benchmark crate split may need adjustment when Issue #24 is implemented, but the comparison boundaries should remain stable.
+The generated wide and long-chain cases provide performance signals relevant to Issue #6. They do not replace its deterministic work-accounting regression test and should not drive an optimization until repeated measurements identify a bottleneck. Issue #24 split the build surface with Cargo features rather than into separate crates, so the corpus and the comparison boundaries are unchanged; only the `required-features` declarations noted above were added.
 
 Fixture contents and generator sizes are part of the benchmark definition. Changing them requires an explicit note because results before and after the change are not directly comparable.
 
 ## Compare a branch with `main`
 
-Build both revisions with the same Rust toolchain, Cargo lockfile, target CPU settings, power mode, and allocator. Minimize other host activity and use the same checkout path when practical.
+Build both revisions with the same Rust toolchain, Cargo lockfile, feature set, target CPU settings, power mode, and allocator. Minimize other host activity and use the same checkout path when practical.
 
 On `main`, save a named Criterion baseline:
 

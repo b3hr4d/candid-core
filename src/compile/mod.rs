@@ -9,29 +9,35 @@ use crate::model::{
     TypeNode, TypeRef, SOURCE_INFO_VERSION,
 };
 use candid_parser::candid::types::{FuncMode, Label, Type, TypeEnv, TypeInner};
-use candid_parser::syntax::{pretty_print, Dec, IDLMergedProg, IDLProg, IDLType};
+#[cfg(feature = "filesystem-compiler")]
+use candid_parser::check_file;
+use candid_parser::check_prog;
+use candid_parser::syntax::{Dec, IDLMergedProg, IDLProg, IDLType};
 use candid_parser::token::{Token, Tokenizer};
 use candid_parser::typing::ast_to_type;
-use candid_parser::{check_file, check_prog};
 use serde::{Deserialize, Serialize, Serializer};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
-use std::fs;
-use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
+#[cfg(feature = "filesystem-compiler")]
+use std::path::Path;
 
 mod artifact;
 mod diagnostics;
 mod loading;
 mod lower;
+/// Materialization writes the resolved bundle into a private temporary
+/// directory so the official file checker can read it back, so it is
+/// `filesystem-compiler` surface, not `compiler` surface.
+#[cfg(feature = "filesystem-compiler")]
 mod materialize;
 mod nesting;
 
 pub use artifact::{Compilation, CompileOptions};
-use diagnostics::{
-    budget_error, candid_error, candid_file_error, lower_error, source_info_compile_error,
-};
+#[cfg(feature = "filesystem-compiler")]
+use diagnostics::candid_file_error;
+use diagnostics::{budget_error, candid_error, lower_error, source_info_compile_error};
 use loading::{accept_source, load_source_units_with_resolver, SourceUnit};
 use lower::lower_checked;
+#[cfg(feature = "filesystem-compiler")]
 use materialize::MaterializedBundle;
 use nesting::{check_programs_type_depth, check_source_nesting};
 
@@ -104,10 +110,15 @@ pub fn compile_did_with_context(
 
 /// Compile a DID file through `candid_parser::check_file`, including its
 /// official filesystem import-resolution path.
+///
+/// Requires the `filesystem-compiler` feature. A host with no filesystem
+/// compiles a self-contained source with [`compile_did`] instead.
+#[cfg(feature = "filesystem-compiler")]
 pub fn compile_did_file(path: impl AsRef<Path>) -> Result<Compilation, CompileError> {
     compile_did_file_with_options(path, CompileOptions::default())
 }
 
+#[cfg(feature = "filesystem-compiler")]
 pub fn compile_did_file_with_options(
     path: impl AsRef<Path>,
     options: CompileOptions,
@@ -115,6 +126,7 @@ pub fn compile_did_file_with_options(
     compile_did_file_with_context(path, options, &RuntimeContext::default())
 }
 
+#[cfg(feature = "filesystem-compiler")]
 pub fn compile_did_file_with_context(
     path: impl AsRef<Path>,
     options: CompileOptions,
@@ -140,6 +152,15 @@ pub fn compile_did_file_with_context(
     compile_with_resolver(entry, &resolver, options, context)
 }
 
+/// Compile an immutable logical source bundle through the official file
+/// checker.
+///
+/// Requires the `filesystem-compiler` feature even for an in-memory resolver:
+/// the resolved bundle is materialized into a private temporary directory so
+/// `candid_parser::check_file` — the authoritative import-aware checker — can
+/// read it back. Deciding how imported bundles are compiled without that step
+/// is issue #21's subject, not this one's.
+#[cfg(feature = "filesystem-compiler")]
 pub fn compile_with_resolver(
     entry: &str,
     resolver: &dyn crate::SourceResolver,

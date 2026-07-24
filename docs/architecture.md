@@ -22,9 +22,43 @@ Contract builder ──> Contract graph validator ──> canonical JSON Contrac
                                                         └── future transports
 ```
 
-The Rust boundary is the only component permitted to parse DID text or apply Candid type rules.  TypeScript (and any other host) consumes already validated Contract JSON and must not grow a second handwritten Candid parser, type checker, or codec.
+The Rust boundary is the only component permitted to parse DID text or apply Candid type rules, and only when the `compiler` feature is enabled (it is by default).  TypeScript (and any other host) consumes already validated Contract JSON and must not grow a second handwritten Candid parser, type checker, or codec.
 
 `candid_parser` is authoritative for the source program's meaning.  The builder only projects its checked semantic result into the Contract arena.  It does not reimplement alias resolution, field hashing, recursive-type handling, function/service references, service-class constructors, or method-mode validation.
+
+### Feature layering
+
+The diagram above is also the dependency layering, and it is enforced by Cargo features rather than by convention. Everything above the "Contract builder" line is the `compiler` feature; everything below it is the base a `default-features = false` consumer gets. All features are enabled by default, so this changes nothing for an existing dependency.
+
+```text
+                       cap-std                candid + candid_parser
+                          │                            │
+filesystem-compiler ──────┘                            │
+  WorkspaceResolver, compile_did_file,                 │
+  compile_with_resolver, materialization, CLI          │
+        │                                              │
+        └── implies ──> compiler ──────────────────────┘
+                          compile_did*, Compilation, SourceId/
+                          SourceResolver/MemoryResolver, SourceInfo
+                                    │
+                                    ▼
+  host-value ──> ic_principal    (base)  serde, serde_json, sha2, hex
+    HostValue, validate_host_value,        Contract, ContractDraft, RawContract,
+    Contract::bind_type/bind_method        validation, canonicalization,
+                                           identities, Limits/RuntimeContext,
+                                           Diagnostic, ContractEnvelope
+```
+
+Two consequences are load-bearing:
+
+* **The base validates Candid method IDs without a Candid source engine.** Validation used to call `candid_parser::candid::idl_hash`; it now calls a normative eight-line implementation of the same specified function (`src/name_hash.rs`), pinned against the upstream reference by `tests/candid_name_hash.rs` and by unit tests, in every feature configuration. Canonical bytes, `contract_id`, and `interface_id` are unchanged by construction.
+* **Provenance is `compiler` surface.** `SourceInfo`/`RawSourceInfo` and the `Source*` types live behind `compiler` because authenticating a presented sidecar means recompiling its embedded bundle — that is compiler logic, not model logic. The rederivation path reconstructs one virtual merged program in memory and never touches a filesystem, which is why `SourceInfo::try_from_raw` works under `compiler` alone.
+
+`ic_principal` is a direct dependency rather than a re-export borrowed from `candid_parser::Principal`. `candid::Principal` *is* `ic_principal::Principal` — a plain `pub use` — so accepted and rejected principal text, the error variants, and their rendered messages are unchanged; taking it directly is what keeps a host that only validates values out of the parser stack.
+
+`tests/fixtures/packaging/verify_feature_graph.py` checks these claims against `cargo metadata` for each feature set and for `wasm32-unknown-unknown`, following only normal and build edges (dev-dependencies never reach a downstream consumer).
+
+Two limits of the mechanism are worth stating plainly. Cargo **unifies** features across a build graph: if any other crate in a build depends on `candid-core` with defaults, the full surface is compiled once for everyone in that build, so feature selection bounds what a dependency graph *must* contain rather than what a mixed graph produces. And feature selection does not change the published `.crate` archive — every source file ships regardless — which is separate release-hardening work.
 
 ## Contract v1
 
@@ -92,7 +126,7 @@ This separation is deliberate:
 
 Loading DID produces either a valid Contract (and optional SourceInfo) or structured diagnostics.  Parser and semantic errors remain distinguishable so a host can render an actionable editor error without guessing Candid rules itself.
 
-One serializable item type, `Diagnostic`, backs every failure domain in the crate. The outer error types stay domain-specific for Rust ergonomics — `CompileError` for compilation, `ContractValidationError` for Contract/provenance validation, `HostValueValidationError` for HostValue validation — but their items are all the same algebra; `ContractViolation` and `HostValueViolation` are compatibility aliases for `Diagnostic`. An item carries:
+One serializable item type, `Diagnostic`, backs every failure domain in the crate. The outer error types stay domain-specific for Rust ergonomics — `CompileError` for compilation (`compiler`), `ContractValidationError` for Contract/provenance validation, `HostValueValidationError` for HostValue validation (`host-value`) — but their items are all the same algebra; `ContractViolation` and `HostValueViolation` are compatibility aliases for `Diagnostic`. `Diagnostic` itself, and every field it can carry — `phase`, `severity`, `span`, `related`, `resource_limit` — is base surface, so a `default-features = false` consumer sees the identical serialized item shape. An item carries:
 
 - `code` and `message` — always present. Codes and structured `path` values are the stable, machine-matchable surface; human-readable `message` text is not a stable interface and may be reworded.
 - `phase` and `severity` — present on every compile-domain diagnostic, never on validation violations. Serialized spellings are unchanged (`parse`, `type_check`, `load`, `lower`; `error`).
@@ -104,7 +138,7 @@ One serializable item type, `Diagnostic`, backs every failure domain in the crat
 
 Every optional field is omitted from JSON when absent, which keeps each domain's pre-existing serialized shape byte-compatible: compile diagnostics still serialize as `{code, phase, severity, message, span?, notes?, resource_limit?}` and violations as `{code, path, message, resource_limit?}`; the new fields appear only where the data genuinely exists. All diagnostic item types derive `Deserialize` with unknown keys rejected; fields that were previously mandatory in one domain (`phase`, `severity`, `path`) are optional in the shared item, so deserialization is strictly more permissive than before, never less.
 
-A source location (`SourceSpan`) comes in two forms. An **exact** span carries `start_byte`/`end_byte` offsets — fixed-width `u64` on the wire, widened exactly from the parser's byte offsets — valid for the named source's original text — parse errors report these, byte-precise, against the logical source ID (`memory:/…`, `workspace:/…`). A **source-scoped** location names a logical source with no offsets. The compiler type-checks imports by materializing pretty-printed sources into a private temp directory under numeric names, and errors crossing that boundary would otherwise leak rewritten offsets and `N.did` file names; instead, the compiler maps every materialized identity back to its logical source ID and withholds byte offsets it cannot prove correct for the original text. No diagnostic ever exposes a temp directory, a numeric materialized name, or a rewritten offset presented as an original one.
+A source location (`SourceSpan`) comes in two forms. An **exact** span carries `start_byte`/`end_byte` offsets — fixed-width `u64` on the wire, widened exactly from the parser's byte offsets — valid for the named source's original text — parse errors report these, byte-precise, against the logical source ID (`memory:/…`, `workspace:/…`). A **source-scoped** location names a logical source with no offsets. The compiler type-checks imports (`filesystem-compiler`) by materializing pretty-printed sources into a private temp directory under numeric names, and errors crossing that boundary would otherwise leak rewritten offsets and `N.did` file names; instead, the compiler maps every materialized identity back to its logical source ID and withholds byte offsets it cannot prove correct for the original text. No diagnostic ever exposes a temp directory, a numeric materialized name, or a rewritten offset presented as an original one.
 
 The CLI envelopes are unchanged: compile and operational failures appear under `"diagnostics"`, Contract and HostValue validation failures under their existing `"violations"` envelopes, with the same top-level keys as before. `tests/diagnostics_contract.rs` pins the exact serialized shapes, the logical-source mapping, related-location ordering, and resource-metadata preservation across every conversion chain.
 
@@ -144,7 +178,7 @@ The host-only runtime bookkeeping stays outside this portable contract: `Runtime
 
 ## Explicit non-goals for this slice
 
-This slice implements the lossless tagged HostValue ABI and graph-directed validation, but not defaults, coercions, forms, widgets, UI metadata, workflow projections, transport adapters, agent calls, code generation, or Candid binary encoding/decoding. It also does not introduce `blob`, `tuple`, or `Result` nodes: those remain derived semantic views over the canonical graph.
+This slice implements the lossless tagged HostValue ABI and graph-directed validation behind the `host-value` feature, but not defaults, coercions, forms, widgets, UI metadata, workflow projections, transport adapters, agent calls, code generation, or Candid binary encoding/decoding. It also does not introduce `blob`, `tuple`, or `Result` nodes: those remain derived semantic views over the canonical graph.
 
 ## Next slice
 

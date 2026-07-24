@@ -461,6 +461,11 @@ fn identities_for_canonical(
     })
 }
 
+/// The unmetered identity hash. Contract and interface identities go through
+/// [`domain_hash_with_budget`]; this is the source-bundle identity's entry
+/// point, which is compiler surface, plus the reference the tests compare the
+/// metered pass against.
+#[cfg(any(feature = "compiler", test))]
 pub(crate) fn domain_hash(domain: &str, payload: &impl Serialize) -> String {
     let value = serde_json::to_value(payload)
         .expect("built-in Contract identity payloads must serialize to JSON");

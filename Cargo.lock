@@ -183,6 +183,7 @@ dependencies = [
  "cap-std",
  "criterion",
  "hex",
+ "ic_principal",
  "proptest",
  "serde",
  "serde_json",

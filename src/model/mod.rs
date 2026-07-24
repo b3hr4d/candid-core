@@ -1,4 +1,5 @@
 mod contract;
+#[cfg(feature = "compiler")]
 mod source_info;
 mod type_graph;
 mod validation_error;
@@ -7,6 +8,7 @@ pub use contract::{
     Contract, ContractDraft, ContractIdentities, ProducerInfo, RawContract,
     CANONICALIZATION_PROFILE, CONTRACT_FORMAT, FORMAT_VERSION, SEMANTICS_PROFILE,
 };
+#[cfg(feature = "compiler")]
 pub use source_info::{
     FieldLabelProvenance, RawSourceInfo, SourceActorInfo, SourceDeclaration, SourceFileInfo,
     SourceFunctionArgumentDirection, SourceFunctionArgumentInfo, SourceImportInfo,
