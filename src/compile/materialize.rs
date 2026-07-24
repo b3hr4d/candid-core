@@ -1,4 +1,10 @@
 use super::*;
+// Imported here rather than through `super::*` so the parent module never
+// needs a filesystem-only import in a `compiler`-only build.
+use candid_parser::syntax::pretty_print;
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 
 pub(super) struct MaterializedBundle {
     pub(super) root: PathBuf,

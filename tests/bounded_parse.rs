@@ -12,10 +12,15 @@
 //! in addition to whichever structural limit gated construction.
 
 use candid_core::{
-    compile_did, compile_with_resolver, Compilation, CompileOptions, Contract, ContractEnvelope,
-    ContractJsonError, Limits, MemoryResolver, RawContract, RuntimeContext,
+    compile_did, Compilation, CompileOptions, Contract, ContractEnvelope, ContractJsonError,
+    Limits, RuntimeContext,
 };
+// Only the two-source `Compilation` bundle needs the materializing resolver
+// path; the Contract and envelope entry points are `compiler`-level.
+#[cfg(feature = "filesystem-compiler")]
+use candid_core::{compile_with_resolver, MemoryResolver, RawContract};
 
+#[cfg(feature = "filesystem-compiler")]
 const ROOT: &str = r#"import "types.did";
 /// Root service documentation.
 service : {
@@ -23,6 +28,7 @@ service : {
   ping: (name: text, tag: nat) -> (item: Item) query;
 };"#;
 
+#[cfg(feature = "filesystem-compiler")]
 const TYPES: &str = r#"/// Item documentation.
 type Item = record {
   /// Identifier documentation.
@@ -31,6 +37,7 @@ type Item = record {
   label: text;
 };"#;
 
+#[cfg(feature = "filesystem-compiler")]
 /// A two-source bundle that populates every provenance collection.
 fn bundle() -> Compilation {
     let mut resolver = MemoryResolver::new();
@@ -55,6 +62,7 @@ fn contract_json() -> String {
         .expect("must serialize")
 }
 
+#[cfg(feature = "filesystem-compiler")]
 fn compilation_json() -> String {
     serde_json::to_string_pretty(&bundle()).expect("must serialize")
 }
@@ -120,6 +128,7 @@ fn contract_slice_parsing_matches_the_string_entry_point() {
     );
 }
 
+#[cfg(feature = "filesystem-compiler")]
 #[test]
 fn compilation_json_is_accepted_at_the_limit_and_rejected_one_over() {
     let json = compilation_json();
@@ -136,6 +145,7 @@ fn compilation_json_is_accepted_at_the_limit_and_rejected_one_over() {
     );
 }
 
+#[cfg(feature = "filesystem-compiler")]
 #[test]
 fn compilation_round_trips_through_its_bounded_parse_entry_point() {
     let original = bundle();
@@ -288,6 +298,7 @@ fn envelope_parsing_validates_the_nested_contract_exactly_once() {
     // single-pass property above is what is actually enforced.
 }
 
+#[cfg(feature = "filesystem-compiler")]
 #[test]
 fn every_bounded_entry_point_reports_the_same_input_bytes_metadata() {
     // One helper emits `input_bytes` for all three types. If any entry point
@@ -382,6 +393,7 @@ fn raised_limits_round_trip_and_pin_the_serialization_coupling() {
     assert_eq!(reparsed.contract_id(), contract.contract_id());
 }
 
+#[cfg(feature = "filesystem-compiler")]
 #[test]
 fn compilation_serialization_charges_the_rendered_length_on_top_of_validation() {
     // Isolating the render charge needs an independent measurement of the
@@ -472,6 +484,7 @@ fn envelope_slice_parsing_matches_the_string_entry_point() {
     );
 }
 
+#[cfg(feature = "filesystem-compiler")]
 #[test]
 fn compilation_slice_parsing_matches_the_string_entry_point() {
     let json = compilation_json();
@@ -524,6 +537,7 @@ fn malformed_json_is_reported_as_syntax_not_as_a_resource_limit() {
     );
 }
 
+#[cfg(feature = "filesystem-compiler")]
 #[test]
 fn bounded_parsing_does_not_change_identity_bytes() {
     // The whole change is additive to the parse path; nothing may perturb the

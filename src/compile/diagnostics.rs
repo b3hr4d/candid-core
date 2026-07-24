@@ -80,6 +80,7 @@ pub(super) fn exact_labels_to_locations(
 /// for any original source and the report carries no file identity, so no
 /// span is published and the later labels keep only their messages, in report
 /// order.
+#[cfg(any(feature = "filesystem-compiler", test))]
 pub(super) fn suppressed_labels_to_locations(
     labels: Vec<ReportLabel>,
 ) -> (Option<SourceSpan>, Vec<RelatedLocation>) {
@@ -93,10 +94,12 @@ pub(super) fn suppressed_labels_to_locations(
 /// label message — the primary included — is retained as an ordered related
 /// entry, so no upstream label message is ever silently lost; offsets stay
 /// suppressed.
+#[cfg(any(feature = "filesystem-compiler", test))]
 pub(super) fn all_suppressed_labels_to_related(labels: Vec<ReportLabel>) -> Vec<RelatedLocation> {
     suppressed_related(labels.into_iter())
 }
 
+#[cfg(any(feature = "filesystem-compiler", test))]
 fn suppressed_related(labels: impl Iterator<Item = ReportLabel>) -> Vec<RelatedLocation> {
     labels
         .map(|label| RelatedLocation {
@@ -138,6 +141,7 @@ fn report_parts(error: &candid_parser::Error) -> (Vec<ReportLabel>, Vec<String>)
 /// they were original offsets, and file identities are mapped back to logical
 /// source IDs — both in the message text and as a source-scoped span when the
 /// error names exactly one source.
+#[cfg(feature = "filesystem-compiler")]
 pub(super) fn candid_file_error(
     error: candid_parser::Error,
     bundle: &MaterializedBundle,
@@ -402,6 +406,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "filesystem-compiler")]
     #[test]
     fn materialized_parse_errors_suppress_rewritten_offsets() {
         // A parse error crossing the check_file boundary carries a range into

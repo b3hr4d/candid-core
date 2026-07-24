@@ -459,7 +459,7 @@ fn validate_service_methods(
                 format!("duplicate service method name {:?}", method.name),
             );
         }
-        let expected_id = candid_parser::candid::idl_hash(&method.name);
+        let expected_id = crate::name_hash::candid_name_hash(&method.name);
         if method.id != expected_id {
             violation(
                 violations,

@@ -10,7 +10,7 @@ The next runtime slice will bridge host values and Candid binary messages. Ordin
 
 ## Decision
 
-`candid-codec` will define a closed, lossless semantic `HostValue` algebra:
+A closed, lossless semantic `HostValue` algebra (implemented in `candid-core` behind the `host-value` feature, which is enabled by default):
 
 ```text
 null · bool
@@ -38,11 +38,24 @@ The core validator performs no UI defaults, string-to-number coercion, tuple gue
 ## Consequences
 
 - Values round-trip across Rust, WASM, JavaScript, storage, and agents.
+- The ABI is usable without a Candid source engine: `host-value` adds only
+  `ic_principal` (for canonical principal text) to the base graph, so a host
+  that validates values but never compiles DID source builds no parser.
 - The portable ABI is verbose by design; UI-friendly JSON is a separate view.
 - Core validation errors can use stable value paths and expected/actual kinds.
 - Derived conveniences cannot silently change wire semantics.
 
 ## Implementation
+
+`HostValue` and everything named in this ADR live behind the `host-value`
+feature. Principal text is checked with `ic_principal` taken as a direct
+dependency; `candid::Principal` is a plain `pub use` of the same type, so the
+accepted and rejected principal text, the error variants, and their rendered
+messages are unchanged — only the path into the dependency graph is. Packaging
+`HostValue` as an independent crate is deliberately **deferred**: issue #24
+isolates it as a feature so that decision stays open, and taking it now would
+mean a second published package, a second version line, and a cross-crate
+`Contract` dependency before the ABI has any downstream users.
 
 `HostValue` serializes the tagged JSON ABI, including canonical decimal big integers, IEEE float bits, principal/service/function values, field IDs, and variant IDs. It intentionally does not implement serde `Deserialize`: callers must use `HostValue::from_json_with_limits`, which decodes a private raw DTO and exposes `HostValue` only after local canonical validation. Public Rust constructors enforce the same scalar canonical forms. This is a deliberate pre-release API break from direct enum construction. No binary encode/decode or lossy `serde_json::Value` shortcut is exposed yet.
 
@@ -56,4 +69,7 @@ The core validator performs no UI defaults, string-to-number coercion, tuple gue
 - Big-integer, integer-boundary, NaN payload, infinity, and signed-zero tests.
 - Recursive Contract validation with bounded HostValue depth.
 - Cross-language Rust/WASM/TypeScript conformance fixtures.
+- A dependency-graph check that a `host-value`-only build contains
+  `ic_principal` and no Candid source engine
+  (`tests/fixtures/packaging/verify_feature_graph.py`).
 - Negative tests proving convenience coercions are outside the core codec.
