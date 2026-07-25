@@ -18,13 +18,16 @@ license = "Apache-2.0"
 # single unified build produces; see docs/architecture.md.
 [features]
 default = ["compiler", "filesystem-compiler", "host-value"]
-# Source compilation: parsing, type checking, `compile_did` and its variants,
-# logical source identity (`SourceId`/`SourceResolver`/`MemoryResolver`),
-# `Compilation`, and the `SourceInfo` provenance sidecar.
+# Source compilation with no host filesystem: parsing, type checking,
+# `compile_did` and its variants, `compile_with_resolver` for an imported
+# logical bundle the host supplies, logical source identity
+# (`SourceId`/`SourceResolver`/`MemoryResolver`), `Compilation`, and the
+# `SourceInfo` provenance sidecar. This is the surface a browser-WASM host
+# builds; see the target notes in the crate rustdoc.
 compiler = ["dep:candid", "dep:candid_parser"]
 # Native filesystem access on top of `compiler`: `WorkspaceResolver`,
-# `compile_did_file`, `compile_with_resolver`, source materialization, and the
-# `candid-core` binary.
+# `compile_did_file` and its variants, source materialization for
+# `candid_parser::check_file`, and the `candid-core` binary.
 filesystem-compiler = ["compiler", "dep:cap-std"]
 # The lossless host value ABI and graph-directed value validation.
 host-value = ["dep:ic_principal"]
@@ -59,9 +62,26 @@ cap-std = { version = "=4.0.2", optional = true }
 # library itself never links it. Dev-dependencies are not part of any
 # downstream consumer's graph, which is what the feature boundaries bound.
 candid_parser = "=0.4.0"
+serde_json = "=1.0.150"
+
+# Cargo builds *every* dev-dependency of a package when it builds any of that
+# package's test targets, so a dev-dependency that cannot compile for a target
+# breaks every test on it. `proptest` (through `rand`/`getrandom` 0.2) and
+# `criterion` do not build for `wasm32-unknown-unknown`, and the browser suite
+# uses neither, so they are declared for every target except bare WASM. The
+# suites that use them are gated to match.
+[target.'cfg(not(all(target_arch = "wasm32", target_os = "unknown")))'.dev-dependencies]
 criterion = { version = "=0.5.1", default-features = false, features = ["cargo_bench_support"] }
 proptest = "=1.6.0"
-serde_json = "=1.0.150"
+
+# Browser runtime evidence, and the only place this crate takes a
+# `wasm-bindgen` dependency at all. Target-specific so no native build — MSRV
+# included — resolves or compiles it, and exact-pinned like every other
+# dependency here. `wasm-bindgen-test` 0.3.58 declares `rust-version = "1.71"`
+# and pins `wasm-bindgen =0.2.108`, so the browser job's toolchain requirement
+# stays below this crate's own 1.78 MSRV.
+[target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dev-dependencies]
+wasm-bindgen-test = "=0.3.58"
 
 [[bin]]
 name = "candid-core"
@@ -88,7 +108,7 @@ required-features = ["compiler"]
 
 [[example]]
 name = "hermetic_bundle"
-required-features = ["filesystem-compiler"]
+required-features = ["compiler"]
 
 [[example]]
 name = "host_value_validation"
@@ -113,6 +133,14 @@ required-features = ["compiler"]
 name = "bounded_parse"
 required-features = ["compiler"]
 
+# The browser runtime suite. Each case is a `wasm_bindgen_test` on bare WASM
+# and an ordinary `#[test]` everywhere else, from one shared body — running it
+# natively as well is what keeps the identities it pins from drifting between
+# the two targets.
+[[test]]
+name = "browser_wasm"
+required-features = ["compiler"]
+
 [[test]]
 name = "cli"
 required-features = ["filesystem-compiler"]
@@ -133,9 +161,11 @@ required-features = ["host-value"]
 name = "host_value_conformance"
 required-features = ["host-value"]
 
+# Mostly `MemoryResolver` bounds, which are `compiler`-level since issue #21;
+# the one `WorkspaceResolver` case inside is gated on `filesystem-compiler`.
 [[test]]
 name = "input_bounds"
-required-features = ["filesystem-compiler"]
+required-features = ["compiler"]
 
 [[test]]
 name = "producer_bounds"
@@ -143,8 +173,8 @@ required-features = ["compiler"]
 
 [[test]]
 name = "provenance_bounds"
-required-features = ["filesystem-compiler"]
+required-features = ["compiler"]
 
 [[test]]
 name = "source_identity_bounds"
-required-features = ["filesystem-compiler"]
+required-features = ["compiler"]

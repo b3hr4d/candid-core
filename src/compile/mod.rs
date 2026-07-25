@@ -21,7 +21,14 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::Path;
 
 mod artifact;
+/// The filesystem-free imported-bundle backend shared by `compile_with_resolver`
+/// and provenance rederivation.
+mod bundle;
 mod diagnostics;
+/// Holds the two compilation backends to each other: the promoted in-memory
+/// `bundle` one and the native materialized/`check_file` one below.
+#[cfg(all(test, feature = "filesystem-compiler"))]
+mod differential;
 mod loading;
 mod lower;
 /// Materialization writes the resolved bundle into a private temporary
@@ -32,6 +39,7 @@ mod materialize;
 mod nesting;
 
 pub use artifact::{Compilation, CompileOptions};
+use bundle::compile_resolved_bundle;
 #[cfg(feature = "filesystem-compiler")]
 use diagnostics::candid_file_error;
 use diagnostics::{budget_error, candid_error, lower_error, source_info_compile_error};
@@ -74,7 +82,7 @@ pub fn compile_did_with_context(
         let mut error = CompileError::single(
             "did_import_requires_file",
             DiagnosticPhase::Load,
-            "DID source contains imports; compile it with compile_did_file so candid_parser can resolve them",
+            "DID source contains imports; supply the bundle through a SourceResolver and compile it with compile_with_resolver, or use compile_did_file to read it from a native workspace",
         );
         error.diagnostics[0].notes = imports
             .into_iter()
@@ -112,7 +120,8 @@ pub fn compile_did_with_context(
 /// official filesystem import-resolution path.
 ///
 /// Requires the `filesystem-compiler` feature. A host with no filesystem
-/// compiles a self-contained source with [`compile_did`] instead.
+/// compiles a self-contained source with [`compile_did`], or a logical source
+/// bundle it already holds with [`compile_with_resolver`].
 #[cfg(feature = "filesystem-compiler")]
 pub fn compile_did_file(path: impl AsRef<Path>) -> Result<Compilation, CompileError> {
     compile_did_file_with_options(path, CompileOptions::default())
@@ -149,19 +158,23 @@ pub fn compile_did_file_with_context(
         })?;
     let resolver =
         crate::WorkspaceResolver::new(parent).map_err(crate::ResolveError::into_compile_error)?;
-    compile_with_resolver(entry, &resolver, options, context)
+    compile_materialized_bundle(entry, &resolver, options, context)
 }
 
-/// Compile an immutable logical source bundle through the official file
-/// checker.
+/// The native materialized backend: resolve the bundle, write it into a
+/// private temporary directory under numeric names, and hand the entry to
+/// `candid_parser::check_file`.
 ///
-/// Requires the `filesystem-compiler` feature even for an in-memory resolver:
-/// the resolved bundle is materialized into a private temporary directory so
-/// `candid_parser::check_file` — the authoritative import-aware checker — can
-/// read it back. Deciding how imported bundles are compiled without that step
-/// is issue #21's subject, not this one's.
+/// [`compile_did_file`] deliberately keeps this path rather than routing
+/// through the promoted in-memory [`compile_with_resolver`]. Native file
+/// compilation keeps the official file checker as its authority, and with it
+/// the filesystem diagnostic mapping (`Cannot open`/`Cannot import` classified
+/// as [`DiagnosticPhase::Load`], numeric materialized names mapped back to
+/// logical source IDs, rewritten offsets suppressed) and the source snapshot
+/// the workspace resolver already took. Issue #21 promotes the in-memory
+/// backend; it does not retire this one.
 #[cfg(feature = "filesystem-compiler")]
-pub fn compile_with_resolver(
+fn compile_materialized_bundle(
     entry: &str,
     resolver: &dyn crate::SourceResolver,
     options: CompileOptions,
@@ -189,68 +202,66 @@ pub fn compile_with_resolver(
     )
 }
 
+/// Compile an immutable logical source bundle with no filesystem access.
+///
+/// This is the platform primitive for imported bundles, and it requires only
+/// the `compiler` feature. The resolver supplies every source as data; the
+/// bundle is merged into one virtual program and type-checked in memory
+/// through the official `candid_parser` merged-program APIs. Nothing is
+/// materialized, no directory is opened, and no ambient authority is used, so
+/// it works on `wasm32-unknown-unknown` — in a browser — where
+/// `compile_did_file` and `WorkspaceResolver` need the `filesystem-compiler`
+/// feature and, even with it, have no filesystem to reach.
+///
+/// [`crate::MemoryResolver`] covers a bundle the host already holds; a custom
+/// [`crate::SourceResolver`] covers one the host can produce synchronously.
+/// Resolution stays synchronous and host-supplied: this function never fetches
+/// anything itself.
+///
+/// ```
+/// use candid_core::{compile_with_resolver, CompileOptions, MemoryResolver, RuntimeContext};
+///
+/// let resolver = MemoryResolver::new()
+///     .with_source("memory:/entry.did", "import \"types.did\";\nservice : { get: () -> (Item) query };")?
+///     .with_source("memory:/types.did", "type Item = record { id: nat };")?;
+/// let compilation = compile_with_resolver(
+///     "memory:/entry.did",
+///     &resolver,
+///     CompileOptions::default(),
+///     &RuntimeContext::default(),
+/// )?;
+/// assert_eq!(compilation.source_info().unwrap().sources().len(), 2);
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
+pub fn compile_with_resolver(
+    entry: &str,
+    resolver: &dyn crate::SourceResolver,
+    options: CompileOptions,
+    context: &RuntimeContext,
+) -> Result<Compilation, CompileError> {
+    let mut budget = context.budget();
+    compile_resolved_bundle(entry, resolver, options, context, &mut budget)
+}
+
+/// Rederive a presented `SourceInfo`'s embedded bundle on the caller's budget.
+///
+/// Deliberately the same backend [`compile_with_resolver`] uses, with
+/// provenance forced on: authentication compares a presented sidecar against
+/// what compilation produces, so the two must be one code path rather than two
+/// that agree today.
 pub(crate) fn rederive_source_bundle_with_budget(
     entry: &str,
     resolver: &dyn crate::SourceResolver,
     context: &RuntimeContext,
     budget: &mut crate::budget::Budget<'_>,
 ) -> Result<Compilation, CompileError> {
-    let (source_units, entry_id) =
-        load_source_units_with_resolver(entry, resolver, context, budget)?;
-    check_programs_type_depth(source_units.iter().map(|unit| &unit.program), budget)?;
-    let entry_unit = source_units
-        .iter()
-        .find(|unit| unit.name == entry_id.as_str())
-        .ok_or_else(|| {
-            CompileError::single(
-                "did_source_not_found",
-                DiagnosticPhase::Load,
-                "entry source is missing from the resolved bundle",
-            )
-        })?;
-    let entry_program = parse_program(&entry_unit.source, Some(entry_unit.name.clone()), budget)?;
-    let mut merged = IDLMergedProg::new(entry_program);
-    for unit in source_units
-        .iter()
-        .filter(|unit| unit.name != entry_id.as_str())
-    {
-        let program = parse_program(&unit.source, Some(unit.name.clone()), budget)?;
-        merged
-            .merge(unit.include_actor, unit.name.clone(), program)
-            .map_err(|error| {
-                candid_error(
-                    candid_parser::Error::Custom(error),
-                    DiagnosticPhase::TypeCheck,
-                    None,
-                )
-            })?;
-    }
-    let program = IDLProg {
-        decs: merged.decs(),
-        actor: merged.resolve_actor().map_err(|error| {
-            candid_error(
-                candid_parser::Error::Custom(error),
-                DiagnosticPhase::TypeCheck,
-                None,
-            )
-        })?,
-    };
-    budget
-        .checkpoint()
-        .map_err(|error| budget_error(error, DiagnosticPhase::TypeCheck, "Candid type checking"))?;
-    let mut environment = TypeEnv::new();
-    let actor = check_prog(&mut environment, &program)
-        .map_err(|error| candid_error(error, DiagnosticPhase::TypeCheck, None))?;
-    budget
-        .checkpoint()
-        .map_err(|error| budget_error(error, DiagnosticPhase::TypeCheck, "Candid type checking"))?;
-    lower_checked(
-        &source_units,
-        &environment,
-        actor.as_ref(),
+    compile_resolved_bundle(
+        entry,
+        resolver,
         CompileOptions {
             include_source_info: true,
         },
+        context,
         budget,
     )
 }

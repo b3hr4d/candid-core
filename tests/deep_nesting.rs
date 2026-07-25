@@ -1,7 +1,6 @@
 use candid_core::{
     compile_did_with_context, CompileOptions, HostValue, HostValueJsonError, Limits, RuntimeContext,
 };
-#[cfg(feature = "filesystem-compiler")]
 use candid_core::{compile_with_resolver, MemoryResolver};
 use std::process::Command;
 
@@ -49,7 +48,6 @@ fn nested_opt_json(depth: usize) -> String {
     json
 }
 
-#[cfg(feature = "filesystem-compiler")]
 fn compile_imported_alias_chain() -> Result<(), candid_core::CompileError> {
     const FILES: usize = 40;
     const OPTS_PER_FILE: usize = 8;
@@ -138,7 +136,6 @@ fn shallow_alias_chain_is_rejected_before_upstream_type_checking() {
     assert_eq!(resource.observed, 257);
 }
 
-#[cfg(feature = "filesystem-compiler")]
 #[test]
 fn imported_alias_chain_is_rejected_before_upstream_type_checking() {
     let error = compile_imported_alias_chain().unwrap_err();
@@ -201,7 +198,6 @@ fn small_stack_rejects_hostile_host_value_json_without_aborting() {
     assert!(status.success(), "small-stack subprocess failed: {status}");
 }
 
-#[cfg(feature = "filesystem-compiler")]
 #[test]
 fn small_stack_rejects_hostile_nesting_without_aborting() {
     if std::env::var_os("CANDID_CORE_DEEP_NESTING_CHILD").is_some() {

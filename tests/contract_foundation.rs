@@ -2,13 +2,15 @@
 //! `contract_id_is_invariant_under_type_ref_reindexing_and_duplicate_semantic_nodes`,
 //! which is pure model behaviour and stays runnable with defaults disabled.
 
+#[cfg(feature = "filesystem-compiler")]
+use candid_core::compile_did_file;
 #[cfg(feature = "compiler")]
 use candid_core::{
     compile_did, compile_did_with_options, Actor, CompileOptions, MethodMode, ServiceMethod,
     SourceLabel, SourceOrigin,
 };
-#[cfg(feature = "filesystem-compiler")]
-use candid_core::{compile_did_file, compile_with_resolver, MemoryResolver, RuntimeContext};
+#[cfg(feature = "compiler")]
+use candid_core::{compile_with_resolver, MemoryResolver, RuntimeContext};
 use candid_core::{
     Contract, ContractDraft, Declaration, Field, PrimitiveType, RawContract, TypeNode,
     CANONICALIZATION_PROFILE, CONTRACT_FORMAT, FORMAT_VERSION, SEMANTICS_PROFILE,
@@ -543,7 +545,7 @@ fn no_actor_empty_actor_and_zero_arg_constructor_remain_distinct() {
     );
 }
 
-#[cfg(feature = "filesystem-compiler")]
+#[cfg(feature = "compiler")]
 #[test]
 fn byte_escapes_that_break_utf8_are_reported_not_panicked() {
     // `candid_parser` stores an unescaped string literal by pushing raw bytes
@@ -592,9 +594,9 @@ fn byte_escapes_that_break_utf8_are_reported_not_panicked() {
     // a future change that gave the resolver route its own error rendering
     // would otherwise reintroduce the panic with every test still green.
     //
-    // `compile_did_file` shares this path. Neither route reaches
-    // `candid_file_error`'s `Parse` arm with these inputs, because loading
-    // parses every unit before `check_file` runs.
+    // `compile_did_file` shares this path. Neither route reaches the
+    // materialized backend's `Parse` arm with these inputs, because loading
+    // parses every unit before either checker runs.
     for source in poisoned {
         let resolver = MemoryResolver::new()
             .with_source("memory:/entry.did", source)

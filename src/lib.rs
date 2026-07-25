@@ -14,11 +14,28 @@
 //! | --- | --- | --- |
 //! | *(base)* `default-features = false` | `Contract`, `ContractDraft`, `RawContract`, validation, canonicalization, identities, `Limits`/`RuntimeContext`, `Diagnostic`, `ContractEnvelope` | `serde`, `serde_json`, `sha2`, `hex` |
 //! | `host-value` | `HostValue` and graph-directed value validation | `ic_principal` |
-//! | `compiler` | `compile_did`, `Compilation`, `SourceId`/`SourceResolver`/`MemoryResolver`, `SourceInfo` provenance | `candid`, `candid_parser` |
-//! | `filesystem-compiler` (implies `compiler`) | `WorkspaceResolver`, `compile_did_file`, `compile_with_resolver`, the `candid-core` binary | `cap-std` |
+//! | `compiler` | `compile_did`, `compile_with_resolver`, `Compilation`, `SourceId`/`SourceResolver`/`MemoryResolver`, `SourceInfo` provenance | `candid`, `candid_parser` |
+//! | `filesystem-compiler` (implies `compiler`) | `WorkspaceResolver`, `compile_did_file`, source materialization, the `candid-core` binary | `cap-std` |
 //!
 //! Items outside the enabled set are absent at compile time rather than
 //! present as failing stubs, so a build error names the feature to turn on.
+//!
+//! # Targets
+//!
+//! The `compiler` surface — self-contained sources through `compile_did` and
+//! imported logical bundles through `compile_with_resolver` — needs no
+//! filesystem and builds *and runs* on `wasm32-unknown-unknown`, which is where
+//! browser WASM lands. `filesystem-compiler` items still compile there (the
+//! `cap-std` capability is target-conditional), but `WorkspaceResolver` has no
+//! directory to open on that target and its construction fails.
+//!
+//! Bare `wasm32-unknown-unknown` has no clock. Cancellation and every
+//! quantitative limit in [`Limits`] behave exactly as they do natively; an
+//! explicit `Limits::deadline_unix_ms` cannot be measured there and therefore
+//! fails closed with `operation_deadline_exceeded` instead of calling an
+//! unsupported clock. No deadline configured stays unbounded, as it is
+//! everywhere else. The crate takes no browser clock dependency to change
+//! that.
 //!
 //! Cargo unifies features across a dependency graph: if anything in a build
 //! also depends on `candid-core` with defaults, the whole surface is compiled
@@ -60,13 +77,11 @@ mod value;
 
 #[cfg(feature = "compiler")]
 pub use compile::{
-    compile_did, compile_did_with_context, compile_did_with_options, Compilation, CompileOptions,
+    compile_did, compile_did_with_context, compile_did_with_options, compile_with_resolver,
+    Compilation, CompileOptions,
 };
 #[cfg(feature = "filesystem-compiler")]
-pub use compile::{
-    compile_did_file, compile_did_file_with_context, compile_did_file_with_options,
-    compile_with_resolver,
-};
+pub use compile::{compile_did_file, compile_did_file_with_context, compile_did_file_with_options};
 #[cfg(feature = "compiler")]
 pub use diagnostics::CompileError;
 pub use diagnostics::{
@@ -119,6 +134,10 @@ mod compiler_surface_is_absent_without_its_feature {
     //! ```compile_fail
     //! fn takes(_: candid_core::SourceInfo) {}
     //! ```
+    //!
+    //! ```compile_fail
+    //! let _ = candid_core::compile_with_resolver;
+    //! ```
 }
 
 #[cfg(all(feature = "compiler", not(feature = "filesystem-compiler")))]
@@ -129,6 +148,13 @@ mod filesystem_surface_is_absent_without_its_feature {
     //!
     //! ```compile_fail
     //! let _ = candid_core::WorkspaceResolver::new(".");
+    //! ```
+    //!
+    //! Imported-bundle compilation is on the other side of this boundary: it
+    //! is `compiler` surface since issue #21, so it must still resolve here.
+    //!
+    //! ```
+    //! let _ = candid_core::compile_with_resolver;
     //! ```
 }
 

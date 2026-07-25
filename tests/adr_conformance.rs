@@ -3,35 +3,29 @@
 //! exact-pin audit of the identity-relevant dependencies — are pure model
 //! behaviour and stay runnable with defaults disabled.
 
-#[cfg(any(
-    feature = "filesystem-compiler",
-    all(feature = "compiler", feature = "host-value")
-))]
+#[cfg(feature = "compiler")]
 use candid_core::CancellationToken;
 #[cfg(feature = "compiler")]
 use candid_core::{
-    compile_did, compile_did_with_context, Actor, Compilation, CompileOptions, Contract,
-    MemoryResolver, RawContract, RawSourceInfo, RuntimeContext, SourceId, SourceInfo, SourceLabel,
-    SourceOrigin, SourceResolver, CANONICALIZATION_PROFILE, CONTRACT_FORMAT, FORMAT_VERSION,
-    SEMANTICS_PROFILE,
+    compile_did, compile_did_with_context, compile_with_resolver, Actor, Compilation, CompileError,
+    CompileOptions, Contract, MemoryResolver, RawContract, RawSourceInfo, ResolveError,
+    ResolvedSource, RuntimeContext, SourceId, SourceInfo, SourceLabel, SourceOrigin,
+    SourceResolver, CANONICALIZATION_PROFILE, CONTRACT_FORMAT, FORMAT_VERSION, SEMANTICS_PROFILE,
 };
 #[cfg(feature = "filesystem-compiler")]
-use candid_core::{
-    compile_did_file, compile_did_file_with_context, compile_with_resolver, CompileError,
-    ResolveError, ResolvedSource,
-};
+use candid_core::{compile_did_file, compile_did_file_with_context};
 #[cfg(all(feature = "compiler", feature = "host-value"))]
 use candid_core::{
     validate_host_value, ContractEnvelope, ContractMethodRef, ContractTypeRef, HostValue,
 };
 use candid_core::{ContractDraft, Declaration, Field, Limits, PrimitiveType, TypeNode};
-#[cfg(feature = "filesystem-compiler")]
+#[cfg(feature = "compiler")]
 use sha2::{Digest, Sha256};
-#[cfg(feature = "filesystem-compiler")]
+#[cfg(feature = "compiler")]
 use std::collections::BTreeMap;
-#[cfg(feature = "filesystem-compiler")]
+#[cfg(feature = "compiler")]
 use std::sync::atomic::{AtomicUsize, Ordering};
-#[cfg(feature = "filesystem-compiler")]
+#[cfg(feature = "compiler")]
 use std::sync::Arc;
 
 #[cfg(feature = "compiler")]
@@ -258,7 +252,7 @@ fn logical_source_path_grammar_is_platform_independent() {
     }
 }
 
-#[cfg(feature = "filesystem-compiler")]
+#[cfg(feature = "compiler")]
 #[test]
 fn source_info_rejects_invalid_and_noncanonical_logical_ids() {
     let compilation = compile("service : {};");
@@ -485,7 +479,7 @@ fn source_info_rederivation_verifies_imported_actor_relationships() {
     assert_provenance_mismatch(raw, compilation.contract(), "$.actors");
 }
 
-#[cfg(feature = "filesystem-compiler")]
+#[cfg(feature = "compiler")]
 #[test]
 fn memory_resolver_compiles_one_immutable_logical_source_bundle() {
     let mut resolver = MemoryResolver::new();
@@ -519,12 +513,12 @@ fn memory_resolver_compiles_one_immutable_logical_source_bundle() {
         .starts_with("candid-core:source-bundle:v1:sha256:"));
 }
 
-#[cfg(feature = "filesystem-compiler")]
+#[cfg(feature = "compiler")]
 struct AliasResolver {
     sources: BTreeMap<SourceId, String>,
 }
 
-#[cfg(feature = "filesystem-compiler")]
+#[cfg(feature = "compiler")]
 impl AliasResolver {
     fn new() -> Self {
         let mut sources = BTreeMap::new();
@@ -540,7 +534,7 @@ impl AliasResolver {
     }
 }
 
-#[cfg(feature = "filesystem-compiler")]
+#[cfg(feature = "compiler")]
 impl SourceResolver for AliasResolver {
     fn identify(&self, from: Option<&SourceId>, import: &str) -> Result<SourceId, ResolveError> {
         match (from.map(SourceId::as_str), import) {
@@ -571,9 +565,13 @@ impl SourceResolver for AliasResolver {
     }
 }
 
-#[cfg(feature = "filesystem-compiler")]
+#[cfg(feature = "compiler")]
 #[test]
-fn materialization_honors_custom_resolver_aliases() {
+fn imported_compilation_honors_custom_resolver_aliases() {
+    // A synchronous host-supplied resolver — no filesystem, no `memory:/`
+    // scheme — is the supported browser boundary: the compiler consumes the
+    // canonical targets the resolver decides and records the caller's original
+    // import spellings verbatim.
     let compilation = compile_with_resolver(
         "entry",
         &AliasResolver::new(),
@@ -596,14 +594,14 @@ fn materialization_honors_custom_resolver_aliases() {
     );
 }
 
-#[cfg(feature = "filesystem-compiler")]
+#[cfg(feature = "compiler")]
 #[derive(Clone)]
 struct CountingResolver {
     inner: MemoryResolver,
     loads: Arc<AtomicUsize>,
 }
 
-#[cfg(feature = "filesystem-compiler")]
+#[cfg(feature = "compiler")]
 impl SourceResolver for CountingResolver {
     fn identify(&self, from: Option<&SourceId>, import: &str) -> Result<SourceId, ResolveError> {
         self.inner.identify(from, import)
@@ -615,7 +613,7 @@ impl SourceResolver for CountingResolver {
     }
 }
 
-#[cfg(feature = "filesystem-compiler")]
+#[cfg(feature = "compiler")]
 #[test]
 fn diamond_imports_are_snapshotted_and_loaded_once() {
     let mut inner = MemoryResolver::new();
@@ -683,7 +681,7 @@ fn contract_validation_caps_retained_diagnostics() {
     assert!(info.observed > limits.max_diagnostics() as u64);
 }
 
-#[cfg(feature = "filesystem-compiler")]
+#[cfg(feature = "compiler")]
 #[test]
 fn resolver_rejects_authority_escape_and_import_cycles() {
     let mut escape = MemoryResolver::new();
@@ -739,19 +737,19 @@ fn operational_limits_fail_with_machine_stable_diagnostics() {
     assert!(error.to_string().contains("validation failed"));
 }
 
-#[cfg(feature = "filesystem-compiler")]
+#[cfg(feature = "compiler")]
 struct IgnoringLimitsResolver {
     source: String,
     digest: Option<String>,
 }
 
-#[cfg(feature = "filesystem-compiler")]
+#[cfg(feature = "compiler")]
 struct CancellingResolver {
     source: String,
     cancellation: CancellationToken,
 }
 
-#[cfg(feature = "filesystem-compiler")]
+#[cfg(feature = "compiler")]
 impl SourceResolver for CancellingResolver {
     fn identify(&self, _from: Option<&SourceId>, import: &str) -> Result<SourceId, ResolveError> {
         SourceId::parse(import)
@@ -770,7 +768,7 @@ impl SourceResolver for CancellingResolver {
     }
 }
 
-#[cfg(feature = "filesystem-compiler")]
+#[cfg(feature = "compiler")]
 impl SourceResolver for IgnoringLimitsResolver {
     fn identify(&self, _from: Option<&SourceId>, import: &str) -> Result<SourceId, ResolveError> {
         SourceId::parse(import)
@@ -790,7 +788,7 @@ impl SourceResolver for IgnoringLimitsResolver {
     }
 }
 
-#[cfg(feature = "filesystem-compiler")]
+#[cfg(feature = "compiler")]
 fn assert_source_limit(error: CompileError, limit: usize, observed: usize) {
     let diagnostic = &error.diagnostics[0];
     assert_eq!(diagnostic.code, "resource_limit_exceeded");
@@ -853,7 +851,7 @@ fn compiler_owns_source_limit_enforcement_for_every_resolver_path() {
     std::fs::remove_dir_all(directory).unwrap();
 }
 
-#[cfg(feature = "filesystem-compiler")]
+#[cfg(feature = "compiler")]
 #[test]
 fn compiler_source_accounting_accepts_exact_boundaries_and_rejects_next_source() {
     let source = "service : {};";
@@ -895,7 +893,7 @@ fn compiler_source_accounting_accepts_exact_boundaries_and_rejects_next_source()
     }
 }
 
-#[cfg(feature = "filesystem-compiler")]
+#[cfg(feature = "compiler")]
 #[test]
 fn compiler_checks_source_limits_before_digesting_resolver_content() {
     let source = "service : {};";
@@ -969,7 +967,7 @@ fn runtime_context_cancellation_is_cooperative_and_not_serialized() {
     ));
 }
 
-#[cfg(feature = "filesystem-compiler")]
+#[cfg(feature = "compiler")]
 #[test]
 fn resolver_cancellation_is_observed_before_accepting_loaded_content() {
     let token = CancellationToken::new();

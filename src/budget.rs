@@ -1,5 +1,6 @@
 use crate::{CancellationToken, Limits};
 use std::collections::BTreeMap;
+#[cfg(not(target_os = "unknown"))]
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -15,7 +16,7 @@ pub(crate) enum BudgetError {
 
 pub(crate) struct Budget<'a> {
     limits: &'a Limits,
-    deadline: Option<Instant>,
+    deadline: Deadline,
     cancellation: CancellationToken,
     consumed: BTreeMap<&'static str, usize>,
 }
@@ -24,7 +25,7 @@ impl<'a> Budget<'a> {
     pub(crate) fn new(limits: &'a Limits, cancellation: CancellationToken) -> Self {
         Self {
             limits,
-            deadline: monotonic_deadline(limits.deadline_unix_ms),
+            deadline: Deadline::snapshot(limits.deadline_unix_ms),
             cancellation,
             consumed: BTreeMap::new(),
         }
@@ -51,10 +52,7 @@ impl<'a> Budget<'a> {
         if self.cancellation.is_cancelled() {
             return Err(BudgetError::Cancelled);
         }
-        if self
-            .deadline
-            .is_some_and(|deadline| Instant::now() >= deadline)
-        {
+        if self.deadline.exceeded() {
             return Err(BudgetError::DeadlineExceeded);
         }
         Ok(())
@@ -186,6 +184,57 @@ impl BudgetError {
     }
 }
 
+/// The configured deadline, snapshotted once when a budget is created.
+///
+/// A deadline is configured in Unix milliseconds but enforced against a
+/// monotonic clock, so wall-clock adjustments cannot extend or shorten an
+/// operation mid-flight.
+///
+/// Bare `wasm32-unknown-unknown` (`target_os = "unknown"`) supplies no clock at
+/// all: `SystemTime::now` and `Instant::now` panic there rather than returning
+/// an error, so a deadline cannot be measured. An explicit deadline must not
+/// become unbounded and must not abort the process either, so on that target
+/// the snapshot records only *whether* one was configured and reports it as
+/// already elapsed — the fail-closed direction, reaching callers through the
+/// same `operation_deadline_exceeded` result an elapsed native deadline
+/// produces. `None` stays unbounded exactly as it does natively, and neither
+/// cancellation nor any quantitative limit is affected.
+#[derive(Clone, Copy)]
+struct Deadline {
+    #[cfg(not(target_os = "unknown"))]
+    instant: Option<Instant>,
+    #[cfg(target_os = "unknown")]
+    configured: bool,
+}
+
+impl Deadline {
+    #[cfg(not(target_os = "unknown"))]
+    fn snapshot(deadline_unix_ms: Option<u64>) -> Self {
+        Self {
+            instant: monotonic_deadline(deadline_unix_ms),
+        }
+    }
+
+    #[cfg(target_os = "unknown")]
+    fn snapshot(deadline_unix_ms: Option<u64>) -> Self {
+        Self {
+            configured: deadline_unix_ms.is_some(),
+        }
+    }
+
+    #[cfg(not(target_os = "unknown"))]
+    fn exceeded(&self) -> bool {
+        self.instant
+            .is_some_and(|deadline| Instant::now() >= deadline)
+    }
+
+    #[cfg(target_os = "unknown")]
+    fn exceeded(&self) -> bool {
+        self.configured
+    }
+}
+
+#[cfg(not(target_os = "unknown"))]
 fn monotonic_deadline(deadline_unix_ms: Option<u64>) -> Option<Instant> {
     let deadline_unix_ms = deadline_unix_ms?;
     let now = SystemTime::now()
@@ -206,6 +255,7 @@ fn monotonic_deadline(deadline_unix_ms: Option<u64>) -> Option<Instant> {
 mod tests {
     use super::*;
 
+    #[cfg(not(target_os = "unknown"))]
     fn unix_ms() -> u64 {
         u64::try_from(
             SystemTime::now()
@@ -216,6 +266,28 @@ mod tests {
         .unwrap()
     }
 
+    /// On a clockless target every explicit deadline — past, future, or
+    /// unrepresentable — fails closed, and no deadline stays unbounded. The
+    /// native cases below cover the measured behaviour.
+    #[cfg(target_os = "unknown")]
+    #[test]
+    fn explicit_deadlines_fail_closed_without_a_clock() {
+        for deadline_unix_ms in [0, 1, u64::MAX] {
+            let limits = Limits {
+                deadline_unix_ms: Some(deadline_unix_ms),
+                ..Limits::default()
+            };
+            assert_eq!(
+                Budget::from_limits(&limits).checkpoint(),
+                Err(BudgetError::DeadlineExceeded)
+            );
+        }
+        let unbounded = Limits::default();
+        assert_eq!(unbounded.deadline_unix_ms, None);
+        assert_eq!(Budget::from_limits(&unbounded).checkpoint(), Ok(()));
+    }
+
+    #[cfg(not(target_os = "unknown"))]
     #[test]
     fn deadline_is_snapshotted_into_monotonic_time() {
         let future = Limits {
@@ -234,6 +306,7 @@ mod tests {
         );
     }
 
+    #[cfg(not(target_os = "unknown"))]
     #[test]
     fn extreme_deadline_is_accepted_when_representable_and_fails_closed_otherwise() {
         let remaining_ms = u64::MAX.saturating_sub(unix_ms());

@@ -1,17 +1,33 @@
+//! Byte and count bounds at the resolver accounting seam.
+//!
+//! Every case here drives `MemoryResolver` or a custom `SourceResolver`, which
+//! is `compiler` surface — the suite therefore runs under `--no-default-
+//! features --features compiler`. The single `WorkspaceResolver` case is the
+//! exception and is gated on `filesystem-compiler`, along with the temporary
+//! directory it needs.
+
+#[cfg(feature = "filesystem-compiler")]
+use candid_core::WorkspaceResolver;
 use candid_core::{
     compile_with_resolver, CompileOptions, Limits, MemoryResolver, RawSourceInfo, ResolveError,
-    ResolvedSource, RuntimeContext, SourceId, SourceInfo, SourceResolver, WorkspaceResolver,
+    ResolvedSource, RuntimeContext, SourceId, SourceInfo, SourceResolver,
 };
+#[cfg(feature = "filesystem-compiler")]
 use std::fs;
+#[cfg(feature = "filesystem-compiler")]
 use std::path::PathBuf;
+#[cfg(feature = "filesystem-compiler")]
 use std::sync::atomic::{AtomicU64, Ordering};
 
+#[cfg(feature = "filesystem-compiler")]
 static NEXT_FIXTURE: AtomicU64 = AtomicU64::new(0);
 
+#[cfg(feature = "filesystem-compiler")]
 struct Fixture {
     path: PathBuf,
 }
 
+#[cfg(feature = "filesystem-compiler")]
 impl Fixture {
     fn new() -> Self {
         let sequence = NEXT_FIXTURE.fetch_add(1, Ordering::Relaxed);
@@ -24,6 +40,7 @@ impl Fixture {
     }
 }
 
+#[cfg(feature = "filesystem-compiler")]
 impl Drop for Fixture {
     fn drop(&mut self) {
         fs::remove_dir_all(&self.path).unwrap();
@@ -51,6 +68,7 @@ fn memory_resolver_checks_borrowed_sources_before_cloning() {
     assert_eq!(error.resource_limit.unwrap().observed, 5);
 }
 
+#[cfg(feature = "filesystem-compiler")]
 #[test]
 fn workspace_resolver_bounds_reads_and_preserves_utf8_errors() {
     let fixture = Fixture::new();

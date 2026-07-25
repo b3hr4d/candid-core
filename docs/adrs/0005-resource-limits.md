@@ -123,9 +123,30 @@ be preempted safely; the runtime checks immediately before and after them, and
 custom resolvers may override `load_with_context` to checkpoint during their
 own long-running work.
 
+Deadlines have one target caveat, and it is a caveat about clocks rather than
+about policy. Bare `wasm32-unknown-unknown` (`target_os = "unknown"`) supplies
+no clock: `SystemTime::now` and `Instant::now` **panic** there rather than
+returning an error, so a deadline cannot be measured and a failed measurement
+cannot be reported. Reading the clock anyway would abort the module — the one
+outcome this ADR's fail-closed rule exists to prevent — so on that target the
+budget snapshot records only whether an explicit deadline was configured and
+reports any such deadline as already elapsed. Callers see the ordinary
+`operation_deadline_exceeded` result at the ordinary checkpoint;
+`Limits::deadline_exceeded` agrees. No deadline configured stays unbounded,
+exactly as on a native host, and cancellation and every quantitative byte,
+count, depth, and work limit are unaffected — those need no clock. Native
+monotonic behaviour is unchanged. This is deliberately solved by narrowing the
+claim rather than by taking a `web-time`, `js-sys`, or `wasm-bindgen`
+production dependency to synthesize a clock; hosts that need a measured
+browser deadline should drive `CancellationToken` from their own timer.
+
 ## Required verification
 
 - Boundary tests at and one unit over every limit.
 - Fuzzing for parser, validator, canonicalizer, source resolver, and codec.
 - Deep acyclic and cyclic graphs proving no stack overflow.
 - Benchmarks and regression thresholds for adversarial partition refinement.
+- Browser execution proving the clockless-target deadline rule: an explicit
+  future deadline must reach the caller as `operation_deadline_exceeded`
+  without panicking, while no deadline stays unbounded and cancellation and
+  quantitative limits keep working (`tests/browser_wasm.rs`, headless Chrome).

@@ -354,6 +354,11 @@ impl Limits {
     /// `None` means no deadline. A value at or before the current time makes
     /// every bounded operation fail closed with
     /// `operation_deadline_exceeded` before performing work.
+    ///
+    /// Bare `wasm32-unknown-unknown` has no clock, so a deadline cannot be
+    /// measured there: *any* explicit deadline fails closed on that target,
+    /// while `None` stays unbounded. Cancellation and every quantitative limit
+    /// are unaffected. See [`Limits::deadline_exceeded`].
     pub fn deadline_unix_ms(&self) -> Option<u64> {
         self.deadline_unix_ms
     }
@@ -366,16 +371,32 @@ impl Limits {
         self
     }
 
+    /// Whether the configured deadline has already elapsed.
+    ///
+    /// No deadline is never exceeded. On bare `wasm32-unknown-unknown` there
+    /// is no clock to compare against — `SystemTime::now` panics rather than
+    /// failing — so an explicit deadline is reported as elapsed instead of
+    /// aborting the process. That is the same fail-closed direction the
+    /// internal budget takes, and it keeps an explicit deadline from silently
+    /// becoming unbounded on the one target that cannot honour it.
     pub fn deadline_exceeded(&self) -> bool {
         let Some(deadline) = self.deadline_unix_ms else {
             return false;
         };
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(u64::MAX, |duration| {
-                u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
-            });
-        now >= deadline
+        #[cfg(target_os = "unknown")]
+        {
+            let _ = deadline;
+            true
+        }
+        #[cfg(not(target_os = "unknown"))]
+        {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(u64::MAX, |duration| {
+                    u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
+                });
+            now >= deadline
+        }
     }
 }
 

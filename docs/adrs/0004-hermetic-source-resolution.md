@@ -50,29 +50,53 @@ Resolution detects cycles and duplicate logical identities, records import edges
 
 ## Implementation
 
-`compile_did` remains the self-contained convenience. `compile_did_file` is a thin `WorkspaceResolver` adapter, while `compile_with_resolver` is the platform primitive. `MemoryResolver` and `WorkspaceResolver` produce one immutable logical-URI bundle which is materialized into an isolated temporary root for the authoritative checker.
+`compile_did` remains the self-contained convenience. `compile_did_file` is a thin `WorkspaceResolver` adapter, while `compile_with_resolver` is the platform primitive. `MemoryResolver` and `WorkspaceResolver` each produce one immutable logical-URI bundle, and the authoritative Candid checker consumes that exact bundle.
 
 Since issue #24 that split is also a Cargo feature boundary. `SourceId`,
 `SourceResolver`, `ResolvedSource`, and `MemoryResolver` — the logical half,
 which needs no host filesystem — are `compiler` surface, along with
 `compile_did` and its option/context variants. `WorkspaceResolver`,
-`compile_did_file` and its variants, `compile_with_resolver`, materialization,
-the `cap-std` capability crate, and the `candid-core` binary are
-`filesystem-compiler` surface. `compile_with_resolver` sits on the filesystem
-side even for a purely in-memory `MemoryResolver`, because its current
-implementation materializes the resolved bundle for `candid_parser::check_file`;
-whether imported bundles can be checked without that step is issue #21's
-subject, and nothing in issue #24 claims imported browser compilation. The
-in-memory merged-program reconstruction used to authenticate a presented
-`SourceInfo` is unchanged and stays available under `compiler` alone; it is an
-internal provenance path, not a promoted compilation entry point.
+`compile_did_file` and its variants, materialization, the `cap-std` capability
+crate, and the `candid-core` binary are `filesystem-compiler` surface.
+
+Issue #21 moved `compile_with_resolver` to the `compiler` side, which is what
+this ADR's "if the upstream checker cannot consume virtual sources directly"
+escape clause was reserved for: it turns out it need not. The resolved bundle is
+merged into one virtual program in memory through the public `candid_parser`
+0.4.0 merged-program APIs (`IDLMergedProg::new`/`merge`/`decs`/`resolve_actor`)
+and type-checked with `check_prog`, which is precisely the tail
+`candid_parser::check_file` runs after it has read the files itself. No
+materialization, no temporary root, no `cap-std`, no ambient authority, and no
+fork of the upstream parser. That backend is exactly the one that already
+authenticated a presented `SourceInfo`, so promoting it removed a second
+implementation rather than adding one, and public compilation and provenance
+rederivation cannot drift apart by construction.
+
+`compile_did_file` deliberately did **not** move onto the promoted entry point.
+Native file compilation keeps `candid_parser::check_file` over a materialized
+copy of the bundle as its authority, and with it the filesystem diagnostic
+mapping and the workspace snapshot semantics this ADR specifies. The two
+backends are held to each other by `src/compile/differential.rs`, which requires
+byte-identical Contracts, identities, and provenance for every valid bundle and
+identical stable diagnostic codes, phases, and resource triples for invalid
+ones.
+
+The supported browser boundary is synchronous immutable source data supplied by
+the host. Asynchronous resolution, network access, and registry semantics stay
+out of scope here; the "future content-addressed registry resolvers" line above
+remains future work.
 
 On native hosts, `WorkspaceResolver` retains an open directory capability and opens every logical path relative to it. Relative symlinks are permitted only when their resolution remains beneath that capability; absolute symlinks and escapes are rejected. Authorization and reading use the same opened file handle so concurrent path replacement cannot substitute a file outside the workspace. `cap-std` is both target-conditional (`cfg(not(target_os = "unknown"))`) and feature-gated, so a browser-WASM graph never contains it and a `compiler`-only graph never contains it either. Hosts without the `filesystem-compiler` feature, and bare `wasm32-unknown-unknown` hosts regardless of features, have no workspace filesystem resolver and must use a memory or host-provided resolver.
 
 ## Required verification
 
-- In-memory multi-file and diamond-import tests (`filesystem-compiler`, since
-  they route through `compile_with_resolver`).
+- In-memory multi-file and diamond-import tests (`compiler`, since they route
+  through `compile_with_resolver`, which no longer needs a filesystem).
+- A differential suite comparing the in-memory backend against the materialized
+  `check_file` backend on the same logical bundles — valid multi-file, diamond
+  and repeated imports, type plus service inclusion, recursion, actorless and
+  class actors, plus representative invalid merge and type-check cases
+  (`src/compile/differential.rs`).
 - Path traversal, absolute path, symlink escape, cycle, and duplicate-ID tests
   (`filesystem-compiler`).
 - A test that mutating workspace files after snapshot creation has no effect
@@ -81,3 +105,10 @@ On native hosts, `WorkspaceResolver` retains an open directory capability and op
 - A dependency-graph check that `cap-std` is absent from the base,
   `host-value`, and `compiler` graphs and from every browser-WASM graph
   (`tests/fixtures/packaging/verify_feature_graph.py`).
+- Real browser execution of imported-bundle compilation, not only a
+  `wasm32-unknown-unknown` build check: `tests/browser_wasm.rs` under
+  `wasm-pack test --headless --chrome --chromedriver <driver>` with
+  `--no-default-features --features compiler`, against an exactly pinned Chrome
+  for Testing build and the ChromeDriver from that same build, pinning Contract
+  identities and provenance and asserting that resolver, resource,
+  cancellation, and deadline failures stay structured.
