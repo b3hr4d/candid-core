@@ -1,3 +1,12 @@
+//! Generated-input properties over canonicalization.
+//!
+//! `proptest` is a native-only dev-dependency — its `getrandom` 0.2 dependency
+//! refuses to build for `wasm32-unknown-unknown` — and Cargo builds every
+//! dev-dependency of a package when it builds any of that package's test
+//! targets. This suite is therefore empty on bare WASM; the properties it pins
+//! are target-independent pure-model behaviour, covered natively.
+#![cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
+
 use candid_core::{
     Actor, Contract, ContractDraft, Declaration, Field, MethodMode, PrimitiveType, ServiceMethod,
     TypeNode, TypeRef,

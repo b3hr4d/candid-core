@@ -113,9 +113,11 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
-      # A build check, not a runtime claim. The default build still succeeds
-      # here because `cap-std` is declared under `cfg(not(target_os =
-      # "unknown"))` as well as behind `filesystem-compiler`.
+          components: clippy
+      # A build check, not a runtime claim — the runtime claim is the `browser`
+      # job below. The default build still succeeds here because `cap-std` is
+      # declared under `cfg(not(target_os = "unknown"))` as well as behind
+      # `filesystem-compiler`.
       - name: Check WASM library across feature sets
         run: |
           set -euxo pipefail
@@ -123,6 +125,62 @@ jobs:
           cargo check --lib --target wasm32-unknown-unknown --locked --no-default-features --features host-value
           cargo check --lib --target wasm32-unknown-unknown --locked --no-default-features --features compiler
           cargo check --lib --target wasm32-unknown-unknown --locked
+      # `compiler` on `wasm32-unknown-unknown` is the configuration a browser
+      # host actually ships since issue #21, so it is the one held to
+      # warnings-denied — including the browser suite itself, which no other
+      # job lints for that target.
+      - name: Lint the browser configuration with warnings denied
+        run: |
+          set -euxo pipefail
+          cargo clippy --lib --target wasm32-unknown-unknown --locked --no-default-features --features compiler -- -D warnings
+          cargo clippy --test browser_wasm --target wasm32-unknown-unknown --locked --no-default-features --features compiler -- -D warnings
+  browser:
+    name: Browser runtime (headless Chrome)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      # Pin the browser exactly, not a rolling channel: `150.0.7871.124` is a
+      # specific Chrome for Testing build, and `install-chromedriver` takes the
+      # ChromeDriver from that same build, so the pair is matched by
+      # construction. A browser upgrade then becomes a deliberate edit to this
+      # file rather than a silent change to what the runtime evidence was
+      # collected on. The action puts that browser on `PATH`, which is where
+      # ChromeDriver resolves it from.
+      - uses: browser-actions/setup-chrome@v2
+        id: chrome
+        with:
+          chrome-version: '150.0.7871.124'
+          install-chromedriver: true
+          install-dependencies: true
+      - name: Install the pinned wasm-pack
+        run: cargo install wasm-pack --version 0.14.0 --locked
+      # The real runtime claim: `tests/browser_wasm.rs` compiles a
+      # self-contained source *and* an imported multi-file bundle — both import
+      # kinds plus a diamond — inside headless Chrome, pins the resulting
+      # Contract identities and provenance, and proves that resolver, resource,
+      # cancellation, and deadline failures stay structured on a target with no
+      # filesystem and no clock. `--no-default-features --features compiler` is
+      # exactly what a browser host builds.
+      #
+      # `--chromedriver` is what makes the pin hold: without it `wasm-pack`
+      # downloads its own latest ChromeDriver, which can be a different major
+      # version from the browser installed above and fails the WebDriver
+      # session before a single test runs. `--chrome` is passed explicitly
+      # alongside it: `wasm-pack test --help` says `--chromedriver` implies
+      # `--chrome`, but 0.14.0 does not apply that implication and exits with
+      # "Must specify at least one of `--node`, `--chrome`, `--firefox`, or
+      # `--safari`" when only the driver path is given. A non-zero exit from
+      # wasm-pack — a build failure, a browser that will not start, or a failed
+      # assertion inside Chrome — fails this job.
+      - name: Compile imported bundles in headless Chrome
+        run: |
+          set -euxo pipefail
+          '${{ steps.chrome.outputs.chrome-path }}' --version
+          '${{ steps.chrome.outputs.chromedriver-path }}' --version
+          wasm-pack test --headless --chrome --chromedriver '${{ steps.chrome.outputs.chromedriver-path }}' -- --locked --test browser_wasm --no-default-features --features compiler
   benchmark-smoke:
     name: Benchmark smoke test
     runs-on: ubuntu-latest

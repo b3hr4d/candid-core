@@ -9,7 +9,7 @@
 
 #[cfg(feature = "compiler")]
 use candid_core::{compile_did, compile_did_with_context, CompileOptions, RuntimeContext};
-#[cfg(feature = "filesystem-compiler")]
+#[cfg(feature = "compiler")]
 use candid_core::{compile_with_resolver, MemoryResolver};
 #[cfg(all(feature = "compiler", feature = "host-value"))]
 use candid_core::{validate_host_value, HostValue};
@@ -155,15 +155,16 @@ fn compile_lowering_converts_structured_violations_without_stringification() {
     );
 }
 
-#[cfg(feature = "filesystem-compiler")]
+#[cfg(feature = "compiler")]
 #[test]
 fn imported_type_check_failures_name_logical_sources_only() {
-    // A service import without a main service is only discovered by
-    // `check_file` over the materialized bundle, where the importing text
-    // spells the target as a numeric "N.did" inside a private temp directory.
-    // The diagnostic must speak in logical source IDs, with a source-scoped
-    // span whose offsets are absent (pretty-printed offsets are not original
-    // offsets).
+    // A service import without a main service is discovered while merging the
+    // bundle, and the diagnostic must speak in logical source IDs with a
+    // source-scoped span carrying no offsets — the merge report has none, and
+    // an offset that is not exact for the original text is never published.
+    // The native `compile_did_file` backend reaches the same conclusion the
+    // long way, by mapping the numeric "N.did" names it materializes back; the
+    // leak assertions below hold for both.
     let resolver = MemoryResolver::new()
         .with_source(
             "memory:/entry.did",
@@ -248,12 +249,15 @@ fn lowering_structure_validation_converts_resource_failures_item_by_item() {
     );
 }
 
-#[cfg(feature = "filesystem-compiler")]
+#[cfg(feature = "compiler")]
 #[test]
-fn quoted_user_labels_survive_the_materialized_boundary_untouched() {
+fn quoted_user_labels_are_never_read_as_source_identities() {
     // `"0.did"` is a legal Candid text field label, and upstream renders it
-    // raw-quoted inside type errors. The materialized-identity mapping must
-    // not rewrite it into a source ID or fabricate a span from it.
+    // raw-quoted inside type errors. Neither backend may read it as a source
+    // identity: the in-memory path never inspects a message for one, and the
+    // materialized path anchors its mapping to whole upstream templates.
+    // Either way, no source ID is spliced into user text and no span is
+    // fabricated from it.
     let resolver = MemoryResolver::new()
         .with_source(
             "memory:/entry.did",
@@ -357,7 +361,7 @@ fn half_and_empty_spans_are_rejected_on_deserialization() {
     }
 }
 
-#[cfg(feature = "filesystem-compiler")]
+#[cfg(feature = "compiler")]
 #[test]
 fn resolver_route_parse_errors_keep_exact_original_offsets() {
     let resolver = MemoryResolver::new()

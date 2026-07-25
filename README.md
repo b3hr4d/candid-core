@@ -63,13 +63,13 @@ cargo run --example contract_walkthrough    # compiler
 cargo run --example semantic_equivalence    # compiler
 cargo run --example trust_boundary          # compiler
 cargo run --example bounded_parsing         # compiler
-cargo run --example hermetic_bundle         # filesystem-compiler
+cargo run --example hermetic_bundle         # compiler
 cargo run --example host_value_validation   # compiler + host-value
 ```
 
 Each example declares its `required-features`, so `cargo run --example …` under a reduced feature set reports that the example was skipped rather than failing to compile.
 
-`contract_walkthrough` prints a canonical recursive Contract and its provenance summary. `semantic_equivalence` compares interface identity with source identity. `trust_boundary` demonstrates rejection of injected metadata and a tampered identity. `hermetic_bundle` shows filesystem-free import resolution, while `host_value_validation` preserves a large `nat` and an IEEE NaN payload. `bounded_parsing` rejects oversized untrusted documents before decoding and shows the second limit serialization consumes.
+`contract_walkthrough` prints a canonical recursive Contract and its provenance summary. `semantic_equivalence` compares interface identity with source identity. `trust_boundary` demonstrates rejection of injected metadata and a tampered identity. `hermetic_bundle` shows filesystem-free import resolution — the browser path, which is why it needs only `compiler` — while `host_value_validation` preserves a large `nat` and an IEEE NaN payload. `bounded_parsing` rejects oversized untrusted documents before decoding and shows the second limit serialization consumes.
 
 ## Foundation decisions
 
@@ -96,8 +96,8 @@ The crate advertises Rust 1.78 as its minimum supported Rust version (MSRV). Dir
 | --- | --- | --- |
 | *(base)* | `Contract`, `ContractDraft`, `RawContract`, `ContractEnvelope`, validation, canonicalization, identities, `Limits`/`RuntimeContext`/`CancellationToken`, `Diagnostic` | `serde`, `serde_json`, `sha2`, `hex` |
 | `host-value` | `HostValue`, `HostFieldValue`, `validate_host_value`, `ContractTypeRef`/`ContractMethodRef`, `Contract::bind_type`/`bind_method` | `ic_principal` |
-| `compiler` | `compile_did` and its option/context variants, `Compilation`, `CompileOptions`, `CompileError`, `SourceId`/`SourceResolver`/`ResolvedSource`/`MemoryResolver`, `SourceInfo`/`RawSourceInfo` provenance | `candid`, `candid_parser` |
-| `filesystem-compiler` (implies `compiler`) | `WorkspaceResolver`, `compile_did_file` and its variants, `compile_with_resolver`, the `candid-core` binary | `cap-std` |
+| `compiler` | `compile_did` and its option/context variants, `compile_with_resolver`, `Compilation`, `CompileOptions`, `CompileError`, `SourceId`/`SourceResolver`/`ResolvedSource`/`MemoryResolver`, `SourceInfo`/`RawSourceInfo` provenance | `candid`, `candid_parser` |
+| `filesystem-compiler` (implies `compiler`) | `WorkspaceResolver`, `compile_did_file` and its variants, source materialization for `candid_parser::check_file`, the `candid-core` binary | `cap-std` |
 
 Because every feature is on by default, an existing dependency needs no change:
 
@@ -111,22 +111,53 @@ candid-core = { version = "0.1", default-features = false }
 # ... plus the lossless tagged host value ABI
 candid-core = { version = "0.1", default-features = false, features = ["host-value"] }
 
-# a browser/WASM host that compiles self-contained DID source it already has
+# a browser/WASM host that compiles DID source it already has — self-contained
+# or a multi-file bundle with imports
 candid-core = { version = "0.1", default-features = false, features = ["compiler"] }
 
 # a native tool that reads .did files, or uses the CLI
 candid-core = { version = "0.1", default-features = false, features = ["filesystem-compiler"] }
 ```
 
-Items outside the selected set are **absent at compile time**, not runtime stubs: a build error names the missing item, and turning on the feature it belongs to is the fix. `tests/model_public_api.rs` pins the root exports of each surface, and `tests/fixtures/packaging/verify_feature_graph.py` proves the dependency claims in the table above against `cargo metadata` — the base graph resolves to 23 packages where the default graph resolves to 125.
+Items outside the selected set are **absent at compile time**, not runtime stubs: a build error names the missing item, and turning on the feature it belongs to is the fix. `tests/model_public_api.rs` pins the root exports of each surface, and `tests/fixtures/packaging/verify_feature_graph.py` proves the dependency claims in the table above against `cargo metadata` — the base graph resolves to 23 packages where the default graph resolves to 126, and a `compiler`-only browser-WASM graph to 106.
 
-Three caveats, all deliberate:
+Two caveats, both deliberate:
 
 - **Cargo unifies features across a build.** If anything else in your dependency graph depends on `candid-core` with defaults, the whole surface is compiled once for every consumer in that build. Feature selection bounds what a *dependency graph* must contain; it cannot subtract from a graph that already asked for more.
 - **Feature selection does not shrink the published `.crate` archive.** Every source file ships regardless of which features a consumer enables. Bounding archive contents is separate release-hardening work.
-- **`compile_with_resolver` needs `filesystem-compiler` even with an in-memory `MemoryResolver`**, because its current implementation materializes the resolved bundle into a private temporary directory for the authoritative import-aware checker. Whether imported bundles can be compiled without that step is [issue #21]'s subject; nothing here claims imported browser compilation.
 
 Producer metadata is unaffected by any of this: `ProducerInfo::current` reports the same `name`, `version`, `candid_version`, and `candid_parser_version` in every configuration, because it reads the pinned versions from this package's manifest at compile time rather than from a linked crate. It remains **unauthenticated** provenance held outside the semantic identities — see the [identity ADR](docs/adrs/0001-contract-identities.md).
+
+## Browsers and bare WASM
+
+`compiler` is the browser surface, and it now covers imported bundles as well as self-contained sources ([issue #21]). `compile_with_resolver` takes an entry ID plus a `SourceResolver` and compiles the whole bundle in memory: the sources are merged into one virtual program and type-checked through the official `candid_parser` merged-program APIs. There is no materialization, no temporary directory, no `cap-std`, and no ambient authority anywhere on that path.
+
+```rust,ignore
+use candid_core::{compile_with_resolver, CompileOptions, MemoryResolver, RuntimeContext};
+
+// Sources the host already holds — fetched, bundled, typed into an editor.
+let resolver = MemoryResolver::new()
+    .with_source("memory:/entry.did", r#"import service "api.did"; import "types.did";
+                                         service : { local: (Item) -> () };"#)?
+    .with_source("memory:/api.did", "service : { imported: () -> (nat) query };")?
+    .with_source("memory:/types.did", "type Item = record { id: nat };")?;
+
+let compilation = compile_with_resolver(
+    "memory:/entry.did",
+    &resolver,
+    CompileOptions::default(),
+    &RuntimeContext::default(),
+)?;
+```
+
+The supported boundary is **synchronous immutable source data supplied by the host**. Implement `SourceResolver` yourself when the bundle is not a `MemoryResolver` — the resolver decides identity and returns bytes, and the compiler owns every limit. `candid-core` never fetches anything, resolves asynchronously, consults a registry, or generates bindings.
+
+Two target facts, stated plainly:
+
+- **`WorkspaceResolver` and `compile_did_file` are native.** They still compile for `wasm32-unknown-unknown` (`cap-std` is declared under `cfg(not(target_os = "unknown"))`), but there is no directory to open there, so `WorkspaceResolver::new` fails with `did_workspace_root_error`. Use a memory or host-provided resolver.
+- **Bare `wasm32-unknown-unknown` has no clock.** Cancellation and every quantitative limit work exactly as they do natively. An explicit `Limits::with_deadline_unix_ms` cannot be measured there, so it fails closed with `operation_deadline_exceeded` rather than calling an unsupported `std::time` function and aborting the module; `Limits::deadline_exceeded` reports the same. No deadline configured stays unbounded, as everywhere else. The crate takes no `web-time`, `js-sys`, or `wasm-bindgen` production dependency to paper over this.
+
+This is a runtime claim, not a build claim: `tests/browser_wasm.rs` compiles a self-contained source and an imported multi-file bundle — both import kinds plus a diamond — inside headless Chrome, pins the resulting `contract_id`, `interface_id`, `source_bundle_id`, logical sources and import edges, and asserts that resolver, resource, cancellation, and deadline failures stay structured. CI runs it against an exactly pinned Chrome for Testing build (`150.0.7871.124`) driven by the ChromeDriver from that same build, not against a rolling channel. The same file's assertions run natively in every other job, which is what keeps the two in step. See [release verification gates](docs/verification.md).
 
 [issue #21]: https://github.com/b3hr4d/candid-core/issues/21
 
@@ -142,12 +173,21 @@ Each item below is tagged with the feature that provides it; untagged items are 
 - `RawContract` → `Contract::try_from_raw` validates a decoded external
   artifact, verifying its presented identities against recomputation.
 - *(`compiler`)* `compile_did` compiles one self-contained DID source with no
-  filesystem and no import resolution; it is the entry point that stays
-  available on `wasm32-unknown-unknown`.
+  filesystem and no import resolution. A source that declares imports is
+  rejected with `did_import_requires_file`, which points at
+  `compile_with_resolver`.
+- *(`compiler`)* `compile_with_resolver` compiles an immutable logical source
+  bundle — imports included — through `MemoryResolver` or any host-supplied
+  synchronous `SourceResolver`, with no filesystem. Together with `compile_did`
+  this is the surface that runs on `wasm32-unknown-unknown`.
 - *(`compiler`)* `RawSourceInfo` → `SourceInfo::try_from_raw` recompiles the
   embedded source bundle and rejects any derived provenance that does not match
-  exactly.
-- *(`filesystem-compiler`)* `compile_with_resolver` compiles an immutable logical source bundle through `MemoryResolver` or sandboxed `WorkspaceResolver`; `compile_did_file` is the thin `WorkspaceResolver` adapter over it, and the `candid-core` binary is built on the same path.
+  exactly. It shares one backend with `compile_with_resolver`, so authentication
+  cannot drift from compilation.
+- *(`filesystem-compiler`)* `compile_did_file` compiles a `.did` file from a
+  sandboxed `WorkspaceResolver` through `candid_parser::check_file` over a
+  materialized copy of the resolved bundle; the `candid-core` binary is built on
+  that path.
 - `Limits` and constructor-based `RuntimeContext` bound untrusted compilation
   and validation with one shared budget, monotonic deadlines, and cooperative
   `CancellationToken` support. Defaults come from the versioned

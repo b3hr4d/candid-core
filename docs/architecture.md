@@ -35,11 +35,12 @@ The diagram above is also the dependency layering, and it is enforced by Cargo f
                           │                            │
 filesystem-compiler ──────┘                            │
   WorkspaceResolver, compile_did_file,                 │
-  compile_with_resolver, materialization, CLI          │
+  materialization + check_file, CLI                    │
         │                                              │
         └── implies ──> compiler ──────────────────────┘
-                          compile_did*, Compilation, SourceId/
-                          SourceResolver/MemoryResolver, SourceInfo
+                          compile_did*, compile_with_resolver,
+                          Compilation, SourceId/SourceResolver/
+                          MemoryResolver, SourceInfo
                                     │
                                     ▼
   host-value ──> ic_principal    (base)  serde, serde_json, sha2, hex
@@ -49,10 +50,13 @@ filesystem-compiler ──────┘                            │
                                            Diagnostic, ContractEnvelope
 ```
 
-Two consequences are load-bearing:
+Three consequences are load-bearing:
 
 * **The base validates Candid method IDs without a Candid source engine.** Validation used to call `candid_parser::candid::idl_hash`; it now calls a normative eight-line implementation of the same specified function (`src/name_hash.rs`), pinned against the upstream reference by `tests/candid_name_hash.rs` and by unit tests, in every feature configuration. Canonical bytes, `contract_id`, and `interface_id` are unchanged by construction.
 * **Provenance is `compiler` surface.** `SourceInfo`/`RawSourceInfo` and the `Source*` types live behind `compiler` because authenticating a presented sidecar means recompiling its embedded bundle — that is compiler logic, not model logic. The rederivation path reconstructs one virtual merged program in memory and never touches a filesystem, which is why `SourceInfo::try_from_raw` works under `compiler` alone.
+* **Imported-bundle compilation is `compiler` surface too** ([issue #21]). `compile_with_resolver` loads the bundle once through the resolver, merges it into one virtual program with the public `candid_parser` merged-program APIs (`IDLMergedProg::new`/`merge`/`decs`/`resolve_actor`), type-checks it with `check_prog`, and lowers it — the same backend provenance rederivation uses, so the two cannot drift. `filesystem-compiler` is what a *native file* caller needs: `compile_did_file` reads through `WorkspaceResolver` and keeps `candid_parser::check_file` over a materialized copy of the bundle as its authority. `src/compile/differential.rs` compares the two backends on the same logical bundles and requires byte-identical Contracts and provenance for valid input and identical stable codes and phases for invalid input.
+
+[issue #21]: https://github.com/b3hr4d/candid-core/issues/21
 
 `ic_principal` is a direct dependency rather than a re-export borrowed from `candid_parser::Principal`. `candid::Principal` *is* `ic_principal::Principal` — a plain `pub use` — so accepted and rejected principal text, the error variants, and their rendered messages are unchanged; taking it directly is what keeps a host that only validates values out of the parser stack.
 
@@ -138,7 +142,9 @@ One serializable item type, `Diagnostic`, backs every failure domain in the crat
 
 Every optional field is omitted from JSON when absent, which keeps each domain's pre-existing serialized shape byte-compatible: compile diagnostics still serialize as `{code, phase, severity, message, span?, notes?, resource_limit?}` and violations as `{code, path, message, resource_limit?}`; the new fields appear only where the data genuinely exists. All diagnostic item types derive `Deserialize` with unknown keys rejected; fields that were previously mandatory in one domain (`phase`, `severity`, `path`) are optional in the shared item, so deserialization is strictly more permissive than before, never less.
 
-A source location (`SourceSpan`) comes in two forms. An **exact** span carries `start_byte`/`end_byte` offsets — fixed-width `u64` on the wire, widened exactly from the parser's byte offsets — valid for the named source's original text — parse errors report these, byte-precise, against the logical source ID (`memory:/…`, `workspace:/…`). A **source-scoped** location names a logical source with no offsets. The compiler type-checks imports (`filesystem-compiler`) by materializing pretty-printed sources into a private temp directory under numeric names, and errors crossing that boundary would otherwise leak rewritten offsets and `N.did` file names; instead, the compiler maps every materialized identity back to its logical source ID and withholds byte offsets it cannot prove correct for the original text. No diagnostic ever exposes a temp directory, a numeric materialized name, or a rewritten offset presented as an original one.
+A source location (`SourceSpan`) comes in two forms. An **exact** span carries `start_byte`/`end_byte` offsets — fixed-width `u64` on the wire, widened exactly from the parser's byte offsets — valid for the named source's original text — parse errors report these, byte-precise, against the logical source ID (`memory:/…`, `workspace:/…`). A **source-scoped** location names a logical source with no offsets.
+
+Both compilation backends produce only these two forms, by different routes. The in-memory backend (`compile_with_resolver`) never sees a rewritten offset at all: it merges the sources the resolver supplied, and the merge and actor-resolution reports upstream produces carry no labels, so there is nothing positional to publish. Where it *can* name the failing source — an `import service` whose target declares no main service — it attaches that logical source as a source-scoped location, because it knows which unit failed without reading the message. The native backend (`compile_did_file`, `filesystem-compiler`) type-checks by materializing pretty-printed sources into a private temp directory under numeric names, and errors crossing that boundary would otherwise leak rewritten offsets and `N.did` file names; it therefore maps every materialized identity back to its logical source ID — anchored to complete upstream message templates, never to a bare quoted `N.did`, so a user's own text field label is never read as a source identity — and withholds byte offsets it cannot prove correct for the original text. No diagnostic from either backend ever exposes a temp directory, a numeric materialized name, or a rewritten offset presented as an original one.
 
 The CLI envelopes are unchanged: compile and operational failures appear under `"diagnostics"`, Contract and HostValue validation failures under their existing `"violations"` envelopes, with the same top-level keys as before. `tests/diagnostics_contract.rs` pins the exact serialized shapes, the logical-source mapping, related-location ordering, and resource-metadata preservation across every conversion chain.
 

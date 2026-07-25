@@ -120,6 +120,14 @@ mod compiler_surface {
             candid_core::compile_did_with_options;
         let _: fn(&str, CompileOptions, &RuntimeContext) -> Result<Compilation, CompileError> =
             candid_core::compile_did_with_context;
+        // Imported-bundle compilation is `compiler` surface since issue #21;
+        // its signature is unchanged by the promotion.
+        let _: fn(
+            &str,
+            &dyn candid_core::SourceResolver,
+            CompileOptions,
+            &RuntimeContext,
+        ) -> Result<Compilation, CompileError> = candid_core::compile_with_resolver;
     }
 }
 
@@ -128,8 +136,7 @@ mod compiler_surface {
 mod filesystem_compiler_surface {
     use super::assert_public_type;
     use candid_core::{
-        Compilation, CompileError, CompileOptions, RuntimeContext, SourceResolver,
-        WorkspaceResolver,
+        Compilation, CompileError, CompileOptions, RuntimeContext, WorkspaceResolver,
     };
     use std::path::Path;
 
@@ -151,12 +158,6 @@ mod filesystem_compiler_surface {
             |path, options, context| {
                 candid_core::compile_did_file_with_context(path, options, context)
             };
-        let _: fn(
-            &str,
-            &dyn SourceResolver,
-            CompileOptions,
-            &RuntimeContext,
-        ) -> Result<Compilation, CompileError> = candid_core::compile_with_resolver;
     }
 }
 
