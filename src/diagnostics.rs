@@ -1,4 +1,6 @@
 use serde::{Deserialize, Serialize};
+// Only `CompileError` renders through `Display`, and it is compiler surface.
+#[cfg(feature = "compiler")]
 use std::fmt;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -128,12 +130,11 @@ pub struct RelatedLocation {
 /// The one serializable failure item shared by every domain in this crate.
 ///
 /// `Diagnostic` is the single item algebra behind compiler failures
-/// ([`CompileError`]), Contract/provenance validation
+/// (`CompileError`, `compiler` feature), Contract/provenance validation
 /// ([`crate::ContractValidationError`], whose items are the compatibility
 /// alias [`crate::ContractViolation`]), and HostValue validation
-/// ([`crate::HostValueValidationError`], items
-/// [`crate::HostValueViolation`]). Domains differ only in which optional
-/// fields they populate:
+/// (`HostValueValidationError`, items `HostValueViolation`, `host-value`
+/// feature). Domains differ only in which optional fields they populate:
 ///
 /// * compile diagnostics always carry `phase` and `severity`;
 /// * validation violations always carry `path` and never `phase`/`severity`.
@@ -245,11 +246,20 @@ impl Diagnostic {
     }
 }
 
+/// The compiler's failure collection.
+///
+/// Compiler surface: it is produced only by source compilation and by the
+/// resolvers feeding it, so it is gated on the `compiler` feature. The
+/// [`Diagnostic`] items it carries — and every field they can hold, `phase`
+/// and `severity` included — are unconditional, because `Diagnostic` is the
+/// single item algebra the Contract model already validates with.
+#[cfg(feature = "compiler")]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CompileError {
     pub diagnostics: Vec<Diagnostic>,
 }
 
+#[cfg(feature = "compiler")]
 impl CompileError {
     pub(crate) fn single(
         code: impl Into<String>,
@@ -282,6 +292,7 @@ impl CompileError {
     }
 }
 
+#[cfg(feature = "compiler")]
 impl fmt::Display for CompileError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         if let Some(diagnostic) = self.diagnostics.first() {
@@ -292,4 +303,5 @@ impl fmt::Display for CompileError {
     }
 }
 
+#[cfg(feature = "compiler")]
 impl std::error::Error for CompileError {}

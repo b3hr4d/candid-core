@@ -1,4 +1,6 @@
-use crate::diagnostics::{CompileError, Diagnostic, DiagnosticPhase, Severity};
+use crate::diagnostics::Diagnostic;
+#[cfg(feature = "compiler")]
+use crate::diagnostics::{CompileError, DiagnosticPhase, Severity};
 use std::fmt;
 
 /// Compatibility name for the shared diagnostic item in the Contract
@@ -41,6 +43,7 @@ impl ContractValidationError {
     /// locations, notes, and resource metadata, and gains the compile-domain
     /// `phase`/`severity`. The message keeps the pre-existing `{path}:
     /// {message}` rendering so compile output stays byte-compatible.
+    #[cfg(feature = "compiler")]
     pub(crate) fn into_compile_error(self, phase: DiagnosticPhase) -> CompileError {
         CompileError {
             diagnostics: self

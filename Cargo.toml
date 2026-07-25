@@ -6,26 +6,145 @@ rust-version = "1.78"
 description = "Canonical runtime Contract graph projection for Candid DID interfaces"
 license = "Apache-2.0"
 
+# One published package, three optional build surfaces. The implicit base — the
+# feature set left when `default-features = false` removes every feature — is
+# the pure Contract model: DTOs, validation, canonicalization, identities,
+# limits/runtime context, the diagnostics those need, and `ContractEnvelope`.
+# It depends on no Candid engine and no filesystem capability crate.
+#
+# Cargo unifies features across a build graph, so a workspace that also depends
+# on `candid-core` with defaults compiles the whole surface once for everyone.
+# Feature splitting bounds what a *dependency graph* must contain, not what a
+# single unified build produces; see docs/architecture.md.
+[features]
+default = ["compiler", "filesystem-compiler", "host-value"]
+# Source compilation: parsing, type checking, `compile_did` and its variants,
+# logical source identity (`SourceId`/`SourceResolver`/`MemoryResolver`),
+# `Compilation`, and the `SourceInfo` provenance sidecar.
+compiler = ["dep:candid", "dep:candid_parser"]
+# Native filesystem access on top of `compiler`: `WorkspaceResolver`,
+# `compile_did_file`, `compile_with_resolver`, source materialization, and the
+# `candid-core` binary.
+filesystem-compiler = ["compiler", "dep:cap-std"]
+# The lossless host value ABI and graph-directed value validation.
+host-value = ["dep:ic_principal"]
+
 [dependencies]
-candid = "=0.10.30"
-candid_parser = "=0.4.0"
+# `candid`/`candid_parser` are exact-pinned and optional: they enter the graph
+# only with `compiler`. `ProducerInfo::current` still reports these exact
+# version strings in every feature configuration — it reads them from this
+# manifest at compile time, not from a linked crate.
+candid = { version = "=0.10.30", optional = true }
+candid_parser = { version = "=0.4.0", optional = true }
 hex = "=0.4.3"
+# The Principal implementation `candid` itself re-exports, taken as a direct
+# dependency so `host-value` does not drag in the parser stack. `convert` is the
+# feature that provides `Principal::from_text`/`to_text` and `PrincipalError`.
+ic_principal = { version = "=0.1.5", default-features = false, features = ["convert"], optional = true }
 serde = { version = "=1.0.228", features = ["derive"] }
 serde_json = "=1.0.150"
 sha2 = "=0.10.9"
 
+# Capability-based filesystem access, so it is both target-conditional (never
+# on `target_os = "unknown"`, which is where browser WASM lands) and gated on
+# `filesystem-compiler`.
 [target.'cfg(not(target_os = "unknown"))'.dependencies]
-cap-std = "=4.0.2"
+cap-std = { version = "=4.0.2", optional = true }
 
 [dev-dependencies]
+# `candid_parser` is a dev-dependency as well as an optional runtime one: the
+# tests use `candid_parser::candid::idl_hash` as the authoritative reference
+# for the crate's own internal Candid name hash, and that parity check must run
+# in every feature configuration — including `--no-default-features`, where the
+# library itself never links it. Dev-dependencies are not part of any
+# downstream consumer's graph, which is what the feature boundaries bound.
+candid_parser = "=0.4.0"
 criterion = { version = "=0.5.1", default-features = false, features = ["cargo_bench_support"] }
 proptest = "=1.6.0"
 serde_json = "=1.0.150"
 
+[[bin]]
+name = "candid-core"
+path = "src/bin/candid-core.rs"
+required-features = ["filesystem-compiler"]
+
 [[bench]]
 name = "compilation"
 harness = false
+required-features = ["filesystem-compiler", "host-value"]
 
 [[bench]]
 name = "allocation"
 harness = false
+required-features = ["compiler"]
+
+[[example]]
+name = "bounded_parsing"
+required-features = ["compiler"]
+
+[[example]]
+name = "contract_walkthrough"
+required-features = ["compiler"]
+
+[[example]]
+name = "hermetic_bundle"
+required-features = ["filesystem-compiler"]
+
+[[example]]
+name = "host_value_validation"
+required-features = ["compiler", "host-value"]
+
+[[example]]
+name = "semantic_equivalence"
+required-features = ["compiler"]
+
+[[example]]
+name = "trust_boundary"
+required-features = ["compiler"]
+
+# Integration tests that need a feature *throughout* declare it here, so Cargo
+# skips the target rather than compiling a file of `#[cfg]`-erased tests. Suites
+# with meaningful pure-model coverage — `adr_conformance`, `api_portability`,
+# `canonical_properties`, `conformance_vectors`, `contract_foundation`,
+# `diagnostics_contract`, `model_public_api`, plus `adversarial_regression`,
+# which is pure model throughout — are deliberately absent: they build under
+# `--no-default-features` and gate individual cases instead.
+[[test]]
+name = "bounded_parse"
+required-features = ["compiler"]
+
+[[test]]
+name = "cli"
+required-features = ["filesystem-compiler"]
+
+[[test]]
+name = "deep_nesting"
+required-features = ["compiler", "host-value"]
+
+[[test]]
+name = "ecosystem_examples"
+required-features = ["compiler"]
+
+[[test]]
+name = "host_value_bounds"
+required-features = ["host-value"]
+
+[[test]]
+name = "host_value_conformance"
+required-features = ["host-value"]
+
+[[test]]
+name = "input_bounds"
+required-features = ["filesystem-compiler"]
+
+[[test]]
+name = "producer_bounds"
+required-features = ["compiler"]
+
+[[test]]
+name = "provenance_bounds"
+required-features = ["filesystem-compiler"]
+
+[[test]]
+name = "source_identity_bounds"
+required-features = ["filesystem-compiler"]

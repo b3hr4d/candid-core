@@ -494,7 +494,10 @@ impl<'a> Lowerer<'a> {
                     .map(|(name, function)| {
                         Ok(ServiceMethod {
                             name: name.clone(),
-                            id: candid_parser::candid::idl_hash(name),
+                            // The crate's own hash, not the parser's, so a
+                            // lowered method ID and the ID validation expects
+                            // can never come from two implementations.
+                            id: crate::name_hash::candid_name_hash(name),
                             function: self.ensure_type(function, pending)?,
                         })
                     })

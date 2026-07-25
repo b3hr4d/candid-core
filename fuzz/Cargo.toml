@@ -7,6 +7,18 @@ edition = "2021"
 [package.metadata]
 cargo-fuzz = true
 
+# Mirrors the library's feature surface so a target is only built when the
+# feature that owns the API it drives is on. `default` matches candid-core's
+# own default set, so a plain `cargo fuzz build` still builds all seven
+# targets; `cargo fuzz build --no-default-features --features host-value`
+# fuzzes exactly the HostValue boundary against a library with no Candid
+# source engine linked.
+[features]
+default = ["compiler", "filesystem-compiler", "host-value"]
+compiler = ["candid-core/compiler"]
+filesystem-compiler = ["compiler", "candid-core/filesystem-compiler"]
+host-value = ["candid-core/host-value"]
+
 # Pinned exactly, matching the crate under test. A floating serde_json is a
 # real hazard here: this crate's observable decode behaviour depends on
 # serde_json's 128-frame recursion limit, so the fuzzer must build against the
@@ -17,6 +29,7 @@ serde_json = "=1.0.150"
 
 [dependencies.candid-core]
 path = ".."
+default-features = false
 
 [[bin]]
 name = "source_parsing"
@@ -24,6 +37,7 @@ path = "fuzz_targets/source_parsing.rs"
 test = false
 doc = false
 bench = false
+required-features = ["compiler"]
 
 [[bin]]
 name = "contract_json"
@@ -45,6 +59,7 @@ path = "fuzz_targets/resolver_ids.rs"
 test = false
 doc = false
 bench = false
+required-features = ["compiler"]
 
 [[bin]]
 name = "provenance"
@@ -52,6 +67,7 @@ path = "fuzz_targets/provenance.rs"
 test = false
 doc = false
 bench = false
+required-features = ["compiler"]
 
 [[bin]]
 name = "host_value"
@@ -59,6 +75,7 @@ path = "fuzz_targets/host_value.rs"
 test = false
 doc = false
 bench = false
+required-features = ["host-value"]
 
 [[bin]]
 name = "envelope_json"

@@ -1,6 +1,12 @@
-use candid_core::{compile_did, validate_host_value, Contract, HostValue, Limits};
+//! The JSON-boundary cases are pure `host-value` behaviour; the
+//! contract-directed cases additionally need a compiled Contract.
+
+#[cfg(feature = "compiler")]
+use candid_core::{compile_did, validate_host_value, Contract};
+use candid_core::{HostValue, Limits};
 use serde_json::{json, Value};
 
+#[cfg(feature = "compiler")]
 fn declaration(contract: &Contract, name: &str) -> u32 {
     contract
         .declarations()
@@ -118,6 +124,7 @@ fn public_constructors_produce_only_canonical_scalars() {
     .unwrap();
 }
 
+#[cfg(feature = "compiler")]
 #[test]
 fn local_canonicalization_is_separate_from_contract_validation() {
     let value = parse(json!({ "kind": "nat", "value": "1" }));
@@ -129,6 +136,7 @@ fn local_canonicalization_is_separate_from_contract_validation() {
     assert_eq!(error.violations[0].code, "host_value_kind_mismatch");
 }
 
+#[cfg(feature = "compiler")]
 #[test]
 fn validation_preserves_wide_container_resource_diagnostics() {
     let compilation = compile_did("type Items = vec nat; service : {};").unwrap();
@@ -150,6 +158,7 @@ fn validation_preserves_wide_container_resource_diagnostics() {
     assert_eq!(info.observed, 101);
 }
 
+#[cfg(feature = "compiler")]
 #[test]
 fn validation_bounds_record_scans_by_canonicalization_work() {
     let compilation =
@@ -174,6 +183,7 @@ fn validation_bounds_record_scans_by_canonicalization_work() {
     assert_eq!(info.observed, 3);
 }
 
+#[cfg(feature = "compiler")]
 #[test]
 fn validation_bounds_variant_tag_scans_by_canonicalization_work() {
     // The variant arm resolves the tag by scanning the type's field table,
@@ -205,6 +215,7 @@ fn validation_bounds_variant_tag_scans_by_canonicalization_work() {
     assert_eq!(info.observed, 3);
 }
 
+#[cfg(feature = "compiler")]
 #[test]
 fn variant_tag_scans_are_deterministic_across_runs() {
     // The same hostile input must fail the same way every time.
@@ -223,4 +234,76 @@ fn variant_tag_scans_are_deterministic_across_runs() {
     let first = validate_host_value(contract, &selector, &value, &limits).unwrap_err();
     let second = validate_host_value(contract, &selector, &value, &limits).unwrap_err();
     assert_eq!(first, second);
+}
+
+/// Issue #24 replaced `candid_parser::Principal` with a direct `ic_principal`
+/// dependency so `host-value` stops dragging in the Candid source engine.
+/// `candid::Principal` is a plain `pub use` of `ic_principal::Principal`, so
+/// this must be a no-op for every observable behaviour: which texts are
+/// accepted, which are rejected, and exactly what the rejection says.
+///
+/// The reference side of the comparison is the dev-dependency
+/// `candid_parser::Principal` — the type the crate used before — so this test
+/// keeps checking parity against upstream even in configurations where the
+/// library no longer links it.
+#[test]
+fn principal_acceptance_and_error_text_match_the_reference_implementation() {
+    // Canonical, non-canonical, structurally invalid, and empty.
+    let texts = [
+        "aaaaa-aa",
+        "2vxsx-fae",
+        "rwlgt-iiaaa-aaaaa-aaaaa-cai",
+        "rrkah-fqaaa-aaaaa-aaaaq-cai",
+        "RWLGT-IIAAA-AAAAA-AAAAA-CAI",
+        "rwlgtiiaaaaaaaaaaaaaaacai",
+        "aaaaa-aa-",
+        "-aaaaa-aa",
+        "aaaaa-ab",
+        "",
+        "a",
+        "zzzzz-zz",
+        "not a principal",
+        "aaaaa-aa\u{0}",
+        "\u{e9}",
+    ];
+
+    let (mut accepted, mut non_canonical, mut unparsable) = (0, 0, 0);
+    for text in texts {
+        let json = json!({ "kind": "principal", "value": text }).to_string();
+        let observed = HostValue::from_json_with_limits(&json, &Limits::default());
+
+        // The reference decision: parse, then require canonical textual form.
+        let expected = match candid_parser::Principal::from_text(text) {
+            Err(error) => {
+                unparsable += 1;
+                Err(format!("$: invalid principal {text:?}: {error}"))
+            }
+            Ok(principal) if principal.to_text() != text => {
+                non_canonical += 1;
+                Err("$: non-canonical principal".to_string())
+            }
+            Ok(_) => {
+                accepted += 1;
+                Ok(())
+            }
+        };
+
+        match (observed, expected) {
+            (Ok(_), Ok(())) => {}
+            (Err(candid_core::HostValueJsonError::Malformed(message)), Err(expected)) => {
+                assert_eq!(message, expected, "error text for principal {text:?}");
+            }
+            (observed, expected) => panic!(
+                "principal {text:?}: decided {observed:?} but the reference decided {expected:?}"
+            ),
+        }
+    }
+
+    // A corpus that only ever took one branch would prove nothing.
+    assert!(
+        accepted > 0 && non_canonical > 0 && unparsable > 0,
+        "the corpus must exercise acceptance, non-canonical rejection, and parse \
+         rejection (accepted={accepted}, non_canonical={non_canonical}, \
+         unparsable={unparsable})"
+    );
 }

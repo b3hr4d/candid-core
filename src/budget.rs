@@ -40,6 +40,9 @@ impl<'a> Budget<'a> {
 
     /// Nested contexts must inherit this token; constructing a fresh one would
     /// silently make the caller's cancellation unobservable to resolvers.
+    /// Only provenance rederivation needs this: it builds a nested context
+    /// that must observe the caller's cancellation token.
+    #[cfg(feature = "compiler")]
     pub(crate) fn cancellation(&self) -> CancellationToken {
         self.cancellation.clone()
     }
@@ -99,6 +102,10 @@ impl<'a> Budget<'a> {
         Ok(high_water)
     }
 
+    /// Read a running total back. HostValue validation preflights child
+    /// counts with it; the budget tests assert against it in every
+    /// configuration.
+    #[cfg(any(feature = "host-value", test))]
     pub(crate) fn consumed(&self, resource: &'static str) -> usize {
         self.consumed.get(resource).copied().unwrap_or_default()
     }

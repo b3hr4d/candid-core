@@ -1,6 +1,6 @@
 use candid_core::{
     Actor, Contract, ContractDraft, Declaration, Field, MethodMode, PrimitiveType, ServiceMethod,
-    SourceId, TypeNode, TypeRef,
+    TypeNode, TypeRef,
 };
 use proptest::prelude::*;
 
@@ -343,28 +343,39 @@ proptest! {
         prop_assert_eq!(ordered.contract_id(), permuted.contract_id());
     }
 
-    #[test]
-    fn equivalent_source_ordering_preserves_semantic_identity(reverse: bool) {
-        let fields = if reverse { "right: text; left: nat" } else { "left: nat; right: text" };
-        let source = format!("type Payload = record {{ {fields} }}; service : {{ read: (Payload) -> (Payload) query }};");
-        let contract = candid_core::compile_did(&source).unwrap().into_parts().0;
-        let canonical = candid_core::compile_did("type Payload = record { left: nat; right: text }; service : { read: (Payload) -> (Payload) query };").unwrap().into_parts().0;
-        prop_assert_eq!(contract, canonical);
-    }
+}
 
+/// The two properties that need a Candid source engine. Kept in their own
+/// `proptest!` block so the model properties above still run with defaults
+/// disabled.
+#[cfg(feature = "compiler")]
+mod compiler_properties {
+    use candid_core::SourceId;
+    use proptest::prelude::*;
 
-    #[test]
-    fn source_id_parse_serde_round_trip_preserves_normalized_id(
-        scheme in "[a-z][a-z0-9-]{1,15}",
-        components in prop::collection::vec("[a-zA-Z0-9_-]{1,16}", 1..8),
-    ) {
-        let input = format!("{scheme}:/{}", components.join("/./"));
-        let parsed = SourceId::parse(&input).unwrap();
-        let json = serde_json::to_string(&parsed).unwrap();
-        let deserialized: SourceId = serde_json::from_str(&json).unwrap();
-        prop_assert_eq!(&deserialized, &parsed);
-        prop_assert_eq!(deserialized.as_str(), format!("{scheme}:/{}", components.join("/")));
-        prop_assert_eq!(deserialized.scheme(), scheme);
-        prop_assert_eq!(deserialized.path(), components.join("/"));
+    proptest! {
+        #[test]
+        fn equivalent_source_ordering_preserves_semantic_identity(reverse: bool) {
+            let fields = if reverse { "right: text; left: nat" } else { "left: nat; right: text" };
+            let source = format!("type Payload = record {{ {fields} }}; service : {{ read: (Payload) -> (Payload) query }};");
+            let contract = candid_core::compile_did(&source).unwrap().into_parts().0;
+            let canonical = candid_core::compile_did("type Payload = record { left: nat; right: text }; service : { read: (Payload) -> (Payload) query };").unwrap().into_parts().0;
+            prop_assert_eq!(contract, canonical);
+        }
+
+        #[test]
+        fn source_id_parse_serde_round_trip_preserves_normalized_id(
+            scheme in "[a-z][a-z0-9-]{1,15}",
+            components in prop::collection::vec("[a-zA-Z0-9_-]{1,16}", 1..8),
+        ) {
+            let input = format!("{scheme}:/{}", components.join("/./"));
+            let parsed = SourceId::parse(&input).unwrap();
+            let json = serde_json::to_string(&parsed).unwrap();
+            let deserialized: SourceId = serde_json::from_str(&json).unwrap();
+            prop_assert_eq!(&deserialized, &parsed);
+            prop_assert_eq!(deserialized.as_str(), format!("{scheme}:/{}", components.join("/")));
+            prop_assert_eq!(deserialized.scheme(), scheme);
+            prop_assert_eq!(deserialized.path(), components.join("/"));
+        }
     }
 }

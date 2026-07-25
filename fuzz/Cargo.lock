@@ -155,6 +155,7 @@ dependencies = [
  "candid_parser",
  "cap-std",
  "hex",
+ "ic_principal",
  "serde",
  "serde_json",
  "sha2",

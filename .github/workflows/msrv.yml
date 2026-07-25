@@ -40,6 +40,58 @@ jobs:
         run: cargo clippy --all-targets --all-features --locked -- -D warnings
       - name: Test
         run: cargo test --all-targets --locked
+  features:
+    name: Feature matrix
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      # Every supported combination, so a change that only compiles with
+      # defaults fails here rather than in a downstream `default-features =
+      # false` consumer. Suites that need a feature throughout declare
+      # `required-features` and are skipped; suites with pure-model coverage
+      # gate individual cases and still run with no features at all.
+      - name: Test every feature combination
+        run: |
+          set -euxo pipefail
+          cargo test --all-targets --locked --no-default-features
+          cargo test --all-targets --locked --no-default-features --features host-value
+          cargo test --all-targets --locked --no-default-features --features compiler
+          cargo test --all-targets --locked --no-default-features --features compiler,host-value
+          cargo test --all-targets --locked --no-default-features --features filesystem-compiler
+          cargo test --all-targets --locked --all-features
+      - name: Lint every feature combination
+        run: |
+          set -euxo pipefail
+          cargo clippy --all-targets --locked --no-default-features -- -D warnings
+          cargo clippy --all-targets --locked --no-default-features --features host-value -- -D warnings
+          cargo clippy --all-targets --locked --no-default-features --features compiler -- -D warnings
+          cargo clippy --all-targets --locked --no-default-features --features filesystem-compiler -- -D warnings
+      # Doctests and rustdoc are feature-sensitive too: an intra-doc link to an
+      # item that only exists behind a feature must not break the reduced build.
+      - name: Documentation for the reduced and full surfaces
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: |
+          set -euxo pipefail
+          cargo test --doc --locked --no-default-features
+          cargo test --doc --locked --all-features
+          cargo doc --no-deps --locked --no-default-features
+          cargo doc --no-deps --locked --all-features
+  dependency-boundaries:
+    name: Feature dependency boundaries
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      # Resolves `cargo metadata` per feature set and target and asserts what
+      # each one may and may not contain. This is the evidence behind the
+      # feature split: without it, "the base has no Candid engine" is a claim
+      # about source files rather than about what a consumer builds.
+      - name: Verify what each feature set puts in a consumer's graph
+        run: python3 tests/fixtures/packaging/verify_feature_graph.py
   conformance-reference:
     name: Independent conformance reference
     runs-on: ubuntu-latest
@@ -61,8 +113,16 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
-      - name: Check WASM library
-        run: cargo check --lib --target wasm32-unknown-unknown --locked
+      # A build check, not a runtime claim. The default build still succeeds
+      # here because `cap-std` is declared under `cfg(not(target_os =
+      # "unknown"))` as well as behind `filesystem-compiler`.
+      - name: Check WASM library across feature sets
+        run: |
+          set -euxo pipefail
+          cargo check --lib --target wasm32-unknown-unknown --locked --no-default-features
+          cargo check --lib --target wasm32-unknown-unknown --locked --no-default-features --features host-value
+          cargo check --lib --target wasm32-unknown-unknown --locked --no-default-features --features compiler
+          cargo check --lib --target wasm32-unknown-unknown --locked
   benchmark-smoke:
     name: Benchmark smoke test
     runs-on: ubuntu-latest

@@ -22,11 +22,12 @@ pub struct ContractIdentities {
 ///
 /// Producer metadata is deliberately **outside authenticated Contract
 /// identity**. The `candid-core:contract:v1` and `candid-core:interface:v1`
-/// hashes ([`crate::canonical`]) are computed over the type graph, declarations,
-/// actor, and format/profile markers only — never over `producer`. Two
-/// Contracts that differ only in their producer therefore share the same
-/// `contract_id` and `interface_id`, even though they are byte-different on the
-/// wire (producer *is* part of the canonical serialized JSON). A signature that
+/// hashes (see `docs/canonicalization-v1.md`) are computed over the type
+/// graph, declarations, actor, and format/profile markers only — never over
+/// `producer`. Two Contracts that differ only in their producer therefore
+/// share the same `contract_id` and `interface_id`, even though they are
+/// byte-different on the wire (producer *is* part of the canonical serialized
+/// JSON — and identical in every feature configuration). A signature that
 /// authenticates a Contract by its identity does not authenticate its producer
 /// claims, and callers must treat those claims as unverified.
 ///
@@ -49,6 +50,16 @@ impl ProducerInfo {
     /// the crate name and version plus the exact pinned `candid` and
     /// `candid_parser` dependency versions. This is the producer a
     /// [`ContractDraft`] builds with when none is supplied explicitly.
+    ///
+    /// The four fields are present and identical in every feature
+    /// configuration. `candid` and `candid_parser` are optional dependencies
+    /// enabled by the `compiler` feature, but the versions reported here are
+    /// read out of this package's own manifest text at compile time, not from
+    /// a linked crate, so a `default-features = false` build of a given
+    /// `candid-core` version reports exactly the same producer bytes as a full
+    /// one. That is deliberate: producer metadata is untrusted provenance
+    /// about *this package*, and making it vary by feature would fork the
+    /// serialized shape of otherwise identical Contracts.
     pub fn current() -> Self {
         Self {
             name: env!("CARGO_PKG_NAME").to_string(),
@@ -60,27 +71,127 @@ impl ProducerInfo {
 }
 
 fn exact_dependency_version(manifest: &str, dependency: &str) -> String {
-    let prefix = format!("{dependency} = ");
-    manifest
-        .lines()
-        .map(str::trim)
-        .find_map(|line| line.strip_prefix(&prefix))
-        .and_then(|value| {
-            value
-                .strip_prefix('"')
-                .and_then(|value| value.strip_prefix('='))
-                .and_then(|value| value.split_once('"').map(|(version, _)| version))
-        })
-        .unwrap_or_else(|| {
-            panic!("{dependency} must be declared as an exact string dependency in Cargo.toml")
-        })
-        .to_string()
+    manifest_dependency_version(manifest, dependency).unwrap_or_else(|| {
+        panic!("{dependency} must be declared as an exact dependency in Cargo.toml")
+    })
+}
+
+/// Find `dependency`'s pinned version in a Cargo manifest, in every spelling
+/// this crate's manifest can legitimately take.
+///
+/// Three forms have to be accepted, and the reason is not stylistic:
+///
+/// * `dep = "=X.Y.Z"` — the plain form;
+/// * `dep = { version = "=X.Y.Z", optional = true }` — the form an *optional*
+///   dependency is required to use, which is what `candid`/`candid_parser`
+///   became when they moved behind the `compiler` feature;
+/// * a `[dependencies.dep]` section with a `version = "=X.Y.Z"` line — which
+///   is what **Cargo itself writes** when it normalizes a manifest for
+///   publishing. A build from crates.io reads that normalized file through
+///   `CARGO_MANIFEST_DIR`, not the manifest in this repository, so a reader
+///   that only understood the first two forms would panic inside
+///   [`ProducerInfo::current`] in exactly the builds that matter most.
+///
+/// The scan is section-aware so `[dev-dependencies.candid_parser]` can never be
+/// mistaken for the real dependency, and a non-exact requirement still yields
+/// `None`: the pin is what makes the reported version meaningful.
+fn manifest_dependency_version(manifest: &str, dependency: &str) -> Option<String> {
+    let inline_prefix = format!("{dependency} = ");
+    let section_header = format!("[dependencies.{dependency}]");
+    let mut in_dependencies = false;
+    let mut in_dependency_section = false;
+
+    for line in manifest.lines().map(str::trim) {
+        if line.starts_with('[') {
+            in_dependencies = line == "[dependencies]";
+            in_dependency_section = line == section_header;
+        } else if in_dependencies {
+            if let Some(version) = line
+                .strip_prefix(&inline_prefix)
+                .and_then(exact_version_literal)
+            {
+                return Some(version.to_string());
+            }
+        } else if in_dependency_section {
+            if let Some(value) = line.strip_prefix("version = ") {
+                return exact_version_literal(value).map(str::to_string);
+            }
+        }
+    }
+    None
+}
+
+/// Read the `=X.Y.Z` text out of a value that is either a bare string literal
+/// or an inline table containing a `version` key.
+fn exact_version_literal(declaration: &str) -> Option<&str> {
+    let literal = match declaration.strip_prefix('{') {
+        Some(table) => table.split_once("version = ")?.1,
+        None => declaration,
+    };
+    literal
+        .strip_prefix('"')
+        .and_then(|value| value.strip_prefix('='))
+        .and_then(|value| value.split_once('"').map(|(version, _)| version))
+}
+
+#[cfg(test)]
+mod manifest_tests {
+    use super::*;
+
+    /// The manifest this build actually compiled against must answer, whatever
+    /// spelling it uses — that is the invariant `ProducerInfo::current` rests
+    /// on.
+    #[test]
+    fn the_packages_own_manifest_reports_both_engine_versions() {
+        assert!(!exact_dependency_version(PACKAGE_MANIFEST, "candid").is_empty());
+        assert!(!exact_dependency_version(PACKAGE_MANIFEST, "candid_parser").is_empty());
+    }
+
+    #[test]
+    fn every_spelling_cargo_can_produce_is_read_identically() {
+        let plain = "[dependencies]\ncandid = \"=0.10.30\"\n";
+        let inline_table = "[dependencies]\ncandid = { version = \"=0.10.30\", optional = true }\n";
+        // Exactly what `cargo package` writes into the published manifest.
+        let normalized = "[dependencies.candid]\nversion = \"=0.10.30\"\noptional = true\n";
+        for manifest in [plain, inline_table, normalized] {
+            assert_eq!(exact_dependency_version(manifest, "candid"), "0.10.30");
+        }
+    }
+
+    #[test]
+    fn a_dev_dependency_is_never_mistaken_for_the_real_one() {
+        // Both sections exist in this package's normalized manifest, and the
+        // dev one may legitimately carry a different requirement.
+        let manifest = "[dependencies.candid_parser]\nversion = \"=0.4.0\"\noptional = true\n\
+                        \n[dev-dependencies.candid_parser]\nversion = \"=0.9.9\"\n";
+        assert_eq!(exact_dependency_version(manifest, "candid_parser"), "0.4.0");
+        // A dev-only declaration is not an answer at all.
+        assert_eq!(
+            manifest_dependency_version(
+                "[dev-dependencies.candid_parser]\nversion = \"=0.4.0\"\n",
+                "candid_parser"
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn a_floating_requirement_is_not_an_exact_pin() {
+        for manifest in [
+            "[dependencies]\ncandid = \"0.10.30\"\n",
+            "[dependencies]\ncandid = { version = \"^0.10\" }\n",
+            "[dependencies.candid]\nversion = \"0.10.30\"\n",
+        ] {
+            assert_eq!(manifest_dependency_version(manifest, "candid"), None);
+        }
+    }
 }
 
 /// The wire-semantics Contract consumed by host runtimes.
 ///
 /// `declarations` supplies named roots for the arena. Comments, source spelling,
-/// and raw source are kept in [`crate::SourceInfo`], not here.
+/// and raw source are kept in the `SourceInfo` sidecar (`compiler` feature),
+/// not here.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Contract {
     pub(crate) format: String,

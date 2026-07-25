@@ -1,15 +1,27 @@
+//! Every case here compiles DID source except
+//! `contract_id_is_invariant_under_type_ref_reindexing_and_duplicate_semantic_nodes`,
+//! which is pure model behaviour and stays runnable with defaults disabled.
+
+#[cfg(feature = "compiler")]
 use candid_core::{
-    compile_did, compile_did_file, compile_did_with_options, compile_with_resolver, Actor,
-    CompileOptions, Contract, ContractDraft, Declaration, Field, MemoryResolver, MethodMode,
-    PrimitiveType, RawContract, RuntimeContext, ServiceMethod, SourceLabel, SourceOrigin, TypeNode,
+    compile_did, compile_did_with_options, Actor, CompileOptions, MethodMode, ServiceMethod,
+    SourceLabel, SourceOrigin,
+};
+#[cfg(feature = "filesystem-compiler")]
+use candid_core::{compile_did_file, compile_with_resolver, MemoryResolver, RuntimeContext};
+use candid_core::{
+    Contract, ContractDraft, Declaration, Field, PrimitiveType, RawContract, TypeNode,
     CANONICALIZATION_PROFILE, CONTRACT_FORMAT, FORMAT_VERSION, SEMANTICS_PROFILE,
 };
+#[cfg(feature = "compiler")]
 use std::collections::{BTreeMap, BTreeSet};
 
+#[cfg(feature = "compiler")]
 fn compile(source: &str) -> candid_core::Compilation {
     compile_did(source).unwrap_or_else(|error| panic!("compilation failed: {error:#?}"))
 }
 
+#[cfg(feature = "compiler")]
 fn declaration(contract: &Contract, name: &str) -> u32 {
     contract
         .declarations()
@@ -19,6 +31,7 @@ fn declaration(contract: &Contract, name: &str) -> u32 {
         .ty
 }
 
+#[cfg(feature = "compiler")]
 fn raw_declaration(contract: &RawContract, name: &str) -> u32 {
     contract
         .declarations
@@ -28,6 +41,7 @@ fn raw_declaration(contract: &RawContract, name: &str) -> u32 {
         .ty
 }
 
+#[cfg(feature = "compiler")]
 fn service_methods(contract: &Contract) -> &Vec<candid_core::ServiceMethod> {
     let Actor::Service { service } = contract.actor().as_ref().expect("expected actor") else {
         panic!("expected service actor")
@@ -38,6 +52,7 @@ fn service_methods(contract: &Contract) -> &Vec<candid_core::ServiceMethod> {
     methods
 }
 
+#[cfg(feature = "compiler")]
 fn primitive_set(contract: &Contract) -> BTreeSet<PrimitiveType> {
     contract
         .types()
@@ -49,6 +64,7 @@ fn primitive_set(contract: &Contract) -> BTreeSet<PrimitiveType> {
         .collect()
 }
 
+#[cfg(feature = "compiler")]
 #[test]
 fn lowers_every_candid_primitive_without_host_special_cases() {
     let compilation = compile(
@@ -86,6 +102,7 @@ fn lowers_every_candid_primitive_without_host_special_cases() {
     assert!(compilation.contract().validate().is_ok());
 }
 
+#[cfg(feature = "compiler")]
 #[test]
 fn aliases_are_provenance_and_resolve_to_direct_semantic_edges() {
     let compilation = compile(
@@ -122,6 +139,7 @@ fn aliases_are_provenance_and_resolve_to_direct_semantic_edges() {
         .any(|source| source.source.contains("Same semantic type")));
 }
 
+#[cfg(feature = "compiler")]
 #[test]
 fn labels_keep_authoritative_ids_and_source_spelling_is_sidecar_only() {
     let compilation = compile(
@@ -158,6 +176,7 @@ fn labels_keep_authoritative_ids_and_source_spelling_is_sidecar_only() {
     }));
 }
 
+#[cfg(feature = "compiler")]
 #[test]
 fn source_occurrences_survive_semantic_interning() {
     let compilation = compile(
@@ -251,6 +270,7 @@ fn source_occurrences_survive_semantic_interning() {
         .any(|field| field.label == SourceLabel::Positional));
 }
 
+#[cfg(feature = "compiler")]
 #[test]
 fn tuple_and_explicit_numbered_record_have_the_same_wire_contract() {
     let tuple = compile(
@@ -289,6 +309,7 @@ fn tuple_and_explicit_numbered_record_have_the_same_wire_contract() {
         .any(|label| label.container == shape && label.label == SourceLabel::Positional));
 }
 
+#[cfg(feature = "compiler")]
 #[test]
 fn blob_is_only_vec_nat8_in_the_contract() {
     let blob = compile(
@@ -317,6 +338,7 @@ fn blob_is_only_vec_nat8_in_the_contract() {
     ));
 }
 
+#[cfg(feature = "compiler")]
 #[test]
 fn conventional_result_variants_remain_plain_variants() {
     let compilation = compile(
@@ -337,6 +359,7 @@ fn conventional_result_variants_remain_plain_variants() {
         .contains("\"kind\": \"result\""));
 }
 
+#[cfg(feature = "compiler")]
 #[test]
 fn self_and_mutual_recursion_are_direct_graph_cycles() {
     let self_recursive = compile(
@@ -385,6 +408,7 @@ fn self_and_mutual_recursion_are_direct_graph_cycles() {
     assert_eq!(more.ty, a);
 }
 
+#[cfg(feature = "compiler")]
 #[test]
 fn function_and_service_references_are_first_class_type_nodes() {
     let compilation = compile(
@@ -413,6 +437,7 @@ fn function_and_service_references_are_first_class_type_nodes() {
     assert!(fields.iter().any(|field| field.ty == directory));
 }
 
+#[cfg(feature = "compiler")]
 #[test]
 fn all_valid_method_modes_are_explicit() {
     let compilation = compile(
@@ -445,6 +470,7 @@ fn all_valid_method_modes_are_explicit() {
     assert_eq!(modes["ow"], MethodMode::Oneway);
 }
 
+#[cfg(feature = "compiler")]
 #[test]
 fn distinct_service_methods_with_a_candid_hash_collision_remain_valid() {
     let compilation = compile(
@@ -463,6 +489,7 @@ fn distinct_service_methods_with_a_candid_hash_collision_remain_valid() {
     assert!(compilation.contract().validate().is_ok());
 }
 
+#[cfg(feature = "compiler")]
 #[test]
 fn service_classes_keep_init_argument_order_and_service_target() {
     let compilation = compile(
@@ -491,6 +518,7 @@ fn service_classes_keep_init_argument_order_and_service_target() {
     ));
 }
 
+#[cfg(feature = "compiler")]
 #[test]
 fn no_actor_empty_actor_and_zero_arg_constructor_remain_distinct() {
     let no_actor = compile("type OnlyType = nat;");
@@ -515,6 +543,7 @@ fn no_actor_empty_actor_and_zero_arg_constructor_remain_distinct() {
     );
 }
 
+#[cfg(feature = "filesystem-compiler")]
 #[test]
 fn byte_escapes_that_break_utf8_are_reported_not_panicked() {
     // `candid_parser` stores an unescaped string literal by pushing raw bytes
@@ -592,6 +621,7 @@ fn byte_escapes_that_break_utf8_are_reported_not_panicked() {
     }
 }
 
+#[cfg(feature = "compiler")]
 #[test]
 fn well_formed_sources_are_unaffected_by_the_parse_error_rendering() {
     // The fix changes only how a `Parse` error is described. Type-check errors
@@ -616,6 +646,7 @@ fn well_formed_sources_are_unaffected_by_the_parse_error_rendering() {
     );
 }
 
+#[cfg(feature = "compiler")]
 #[test]
 fn invalid_did_returns_actionable_structured_diagnostics() {
     let syntax = compile_did("service : { broken: (nat) -> ( };").unwrap_err();
@@ -641,6 +672,7 @@ fn invalid_did_returns_actionable_structured_diagnostics() {
     );
 }
 
+#[cfg(feature = "filesystem-compiler")]
 #[test]
 fn file_compilation_uses_the_authoritative_import_resolver() {
     let fixture = format!(
@@ -717,6 +749,7 @@ fn file_compilation_uses_the_authoritative_import_resolver() {
     }));
 }
 
+#[cfg(feature = "compiler")]
 #[test]
 fn contract_json_is_strict_validated_and_graph_invariants_are_enforced() {
     let compilation = compile(
@@ -761,6 +794,7 @@ fn contract_json_is_strict_validated_and_graph_invariants_are_enforced() {
     assert!(Contract::from_json(&serde_json::to_string(&wrong_identity).unwrap()).is_err());
 }
 
+#[cfg(feature = "compiler")]
 #[test]
 fn graph_validator_rejects_each_constrained_edge_kind_and_duplicate_id() {
     let compilation = compile(
@@ -851,6 +885,7 @@ fn graph_validator_rejects_each_constrained_edge_kind_and_duplicate_id() {
         .any(|violation| violation.code == "class_not_first_class_type"));
 }
 
+#[cfg(feature = "compiler")]
 #[test]
 fn source_sidecar_is_optional_and_never_changes_contract_identity() {
     let source = r#"
@@ -871,6 +906,7 @@ fn source_sidecar_is_optional_and_never_changes_contract_identity() {
     assert_eq!(with_source.contract(), without_source.contract());
 }
 
+#[cfg(feature = "compiler")]
 #[test]
 fn interface_ids_are_deterministic_and_ignore_provenance_but_track_wire_semantics() {
     let left = compile(

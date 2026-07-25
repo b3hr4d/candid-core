@@ -9,9 +9,13 @@
 //! the two implementations fails one side or the other.
 
 use candid_core::{
-    compile_did_file, Actor, Contract, ContractDraft, Declaration, RawContract, TypeNode, TypeRef,
-    CANONICALIZATION_PROFILE, CONTRACT_FORMAT, FORMAT_VERSION, SEMANTICS_PROFILE,
+    Actor, Contract, ContractDraft, Declaration, TypeNode, TypeRef, CANONICALIZATION_PROFILE,
+    CONTRACT_FORMAT, FORMAT_VERSION, SEMANTICS_PROFILE,
 };
+// Only the `.did`-reproducibility anchor needs the file compiler. Every vector
+// assertion below is pure model behaviour and runs with defaults disabled.
+#[cfg(feature = "filesystem-compiler")]
+use candid_core::{compile_did_file, RawContract};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
@@ -588,6 +592,7 @@ fn conformance_scenarios_keep_their_distinguishing_structure() {
     }
 }
 
+#[cfg(feature = "filesystem-compiler")]
 /// The checked-in wire fixtures are compatibility anchors: they must decode
 /// exactly (no canonicalizing repair), match the pinned canonical graph and
 /// IDs, and stay reproducible from their `.did` sources.

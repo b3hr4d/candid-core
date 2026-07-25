@@ -1,21 +1,45 @@
+//! Most cases here compile DID source. The four that do not — diagnostic
+//! capping, iterative canonical traversal, draft identity calculation, and the
+//! exact-pin audit of the identity-relevant dependencies — are pure model
+//! behaviour and stay runnable with defaults disabled.
+
+#[cfg(any(
+    feature = "filesystem-compiler",
+    all(feature = "compiler", feature = "host-value")
+))]
+use candid_core::CancellationToken;
+#[cfg(feature = "compiler")]
 use candid_core::{
-    compile_did, compile_did_file, compile_did_file_with_context, compile_did_with_context,
-    compile_with_resolver, validate_host_value, Actor, CancellationToken, Compilation,
-    CompileError, CompileOptions, Contract, ContractDraft, ContractEnvelope, ContractMethodRef,
-    ContractTypeRef, Declaration, Field, HostValue, Limits, MemoryResolver, PrimitiveType,
-    RawContract, RawSourceInfo, ResolveError, ResolvedSource, RuntimeContext, SourceId, SourceInfo,
-    SourceLabel, SourceOrigin, SourceResolver, TypeNode, CANONICALIZATION_PROFILE, CONTRACT_FORMAT,
-    FORMAT_VERSION, SEMANTICS_PROFILE,
+    compile_did, compile_did_with_context, Actor, Compilation, CompileOptions, Contract,
+    MemoryResolver, RawContract, RawSourceInfo, RuntimeContext, SourceId, SourceInfo, SourceLabel,
+    SourceOrigin, SourceResolver, CANONICALIZATION_PROFILE, CONTRACT_FORMAT, FORMAT_VERSION,
+    SEMANTICS_PROFILE,
 };
+#[cfg(feature = "filesystem-compiler")]
+use candid_core::{
+    compile_did_file, compile_did_file_with_context, compile_with_resolver, CompileError,
+    ResolveError, ResolvedSource,
+};
+#[cfg(all(feature = "compiler", feature = "host-value"))]
+use candid_core::{
+    validate_host_value, ContractEnvelope, ContractMethodRef, ContractTypeRef, HostValue,
+};
+use candid_core::{ContractDraft, Declaration, Field, Limits, PrimitiveType, TypeNode};
+#[cfg(feature = "filesystem-compiler")]
 use sha2::{Digest, Sha256};
+#[cfg(feature = "filesystem-compiler")]
 use std::collections::BTreeMap;
+#[cfg(feature = "filesystem-compiler")]
 use std::sync::atomic::{AtomicUsize, Ordering};
+#[cfg(feature = "filesystem-compiler")]
 use std::sync::Arc;
 
+#[cfg(feature = "compiler")]
 fn compile(source: &str) -> candid_core::Compilation {
     compile_did(source).unwrap_or_else(|error| panic!("compilation failed: {error:#?}"))
 }
 
+#[cfg(all(feature = "compiler", feature = "host-value"))]
 fn declaration(contract: &Contract, name: &str) -> u32 {
     contract
         .declarations()
@@ -25,6 +49,7 @@ fn declaration(contract: &Contract, name: &str) -> u32 {
         .ty
 }
 
+#[cfg(feature = "compiler")]
 #[test]
 fn identities_make_distinct_equality_claims() {
     let actor_only = compile("service : { ping: () -> (nat) query };");
@@ -56,6 +81,7 @@ fn identities_make_distinct_equality_claims() {
     );
 }
 
+#[cfg(feature = "compiler")]
 #[test]
 fn canonical_envelope_profiles_are_explicit_and_fail_closed() {
     let contract = compile("service : {};").contract().clone();
@@ -83,6 +109,7 @@ fn canonical_envelope_profiles_are_explicit_and_fail_closed() {
         .any(|violation| violation.code == "unsupported_semantics_profile"));
 }
 
+#[cfg(feature = "compiler")]
 #[test]
 fn compilation_parsing_rejects_a_mismatched_sidecar() {
     let compilation = compile("type Item = record { value: nat }; service : {};");
@@ -93,6 +120,7 @@ fn compilation_parsing_rejects_a_mismatched_sidecar() {
     assert!(Compilation::from_json_with_limits(&json.to_string(), &Limits::default()).is_err());
 }
 
+#[cfg(feature = "compiler")]
 #[test]
 fn compilation_atomically_remaps_raw_source_references() {
     let expected = compile("type A = nat; type B = text; service : {};");
@@ -134,6 +162,7 @@ fn compilation_atomically_remaps_raw_source_references() {
     assert_eq!(actual, expected);
 }
 
+#[cfg(feature = "compiler")]
 #[test]
 fn source_ids_deserialize_through_the_canonical_parser() {
     for invalid in [
@@ -158,6 +187,7 @@ fn source_ids_deserialize_through_the_canonical_parser() {
     );
 }
 
+#[cfg(feature = "compiler")]
 #[test]
 fn source_id_construction_routes_share_normalization() {
     let parsed = SourceId::parse("registry:/catalog/./v1/types.did").unwrap();
@@ -169,6 +199,7 @@ fn source_id_construction_routes_share_normalization() {
     assert_eq!(parsed, tried);
 }
 
+#[cfg(feature = "compiler")]
 #[test]
 fn logical_source_path_grammar_is_platform_independent() {
     for (input, expected) in [
@@ -227,6 +258,7 @@ fn logical_source_path_grammar_is_platform_independent() {
     }
 }
 
+#[cfg(feature = "filesystem-compiler")]
 #[test]
 fn source_info_rejects_invalid_and_noncanonical_logical_ids() {
     let compilation = compile("service : {};");
@@ -277,6 +309,7 @@ fn source_info_rejects_invalid_and_noncanonical_logical_ids() {
     }
 }
 
+#[cfg(feature = "compiler")]
 #[test]
 fn source_info_raw_construction_is_fallible_and_contract_bound() {
     let compilation = compile("service : {};");
@@ -304,12 +337,14 @@ fn source_info_raw_construction_is_fallible_and_contract_bound() {
     assert_eq!(error.violations[0].path.as_deref(), Some("$.contract_id"));
 }
 
+#[cfg(feature = "compiler")]
 fn assert_provenance_mismatch(raw: RawSourceInfo, contract: &Contract, path: &str) {
     let error = SourceInfo::try_from_raw(raw, contract, &Limits::default()).unwrap_err();
     assert_eq!(error.violations[0].code, "source_info_provenance_mismatch");
     assert_eq!(error.violations[0].path.as_deref(), Some(path));
 }
 
+#[cfg(feature = "compiler")]
 #[test]
 fn source_info_rederivation_rejects_every_derived_provenance_category() {
     let compilation = compile(
@@ -432,6 +467,7 @@ fn source_info_rederivation_rejects_every_derived_provenance_category() {
     );
 }
 
+#[cfg(feature = "filesystem-compiler")]
 #[test]
 fn source_info_rederivation_verifies_imported_actor_relationships() {
     let fixture = format!(
@@ -449,6 +485,7 @@ fn source_info_rederivation_verifies_imported_actor_relationships() {
     assert_provenance_mismatch(raw, compilation.contract(), "$.actors");
 }
 
+#[cfg(feature = "filesystem-compiler")]
 #[test]
 fn memory_resolver_compiles_one_immutable_logical_source_bundle() {
     let mut resolver = MemoryResolver::new();
@@ -482,10 +519,12 @@ fn memory_resolver_compiles_one_immutable_logical_source_bundle() {
         .starts_with("candid-core:source-bundle:v1:sha256:"));
 }
 
+#[cfg(feature = "filesystem-compiler")]
 struct AliasResolver {
     sources: BTreeMap<SourceId, String>,
 }
 
+#[cfg(feature = "filesystem-compiler")]
 impl AliasResolver {
     fn new() -> Self {
         let mut sources = BTreeMap::new();
@@ -501,6 +540,7 @@ impl AliasResolver {
     }
 }
 
+#[cfg(feature = "filesystem-compiler")]
 impl SourceResolver for AliasResolver {
     fn identify(&self, from: Option<&SourceId>, import: &str) -> Result<SourceId, ResolveError> {
         match (from.map(SourceId::as_str), import) {
@@ -531,6 +571,7 @@ impl SourceResolver for AliasResolver {
     }
 }
 
+#[cfg(feature = "filesystem-compiler")]
 #[test]
 fn materialization_honors_custom_resolver_aliases() {
     let compilation = compile_with_resolver(
@@ -555,12 +596,14 @@ fn materialization_honors_custom_resolver_aliases() {
     );
 }
 
+#[cfg(feature = "filesystem-compiler")]
 #[derive(Clone)]
 struct CountingResolver {
     inner: MemoryResolver,
     loads: Arc<AtomicUsize>,
 }
 
+#[cfg(feature = "filesystem-compiler")]
 impl SourceResolver for CountingResolver {
     fn identify(&self, from: Option<&SourceId>, import: &str) -> Result<SourceId, ResolveError> {
         self.inner.identify(from, import)
@@ -572,6 +615,7 @@ impl SourceResolver for CountingResolver {
     }
 }
 
+#[cfg(feature = "filesystem-compiler")]
 #[test]
 fn diamond_imports_are_snapshotted_and_loaded_once() {
     let mut inner = MemoryResolver::new();
@@ -639,6 +683,7 @@ fn contract_validation_caps_retained_diagnostics() {
     assert!(info.observed > limits.max_diagnostics() as u64);
 }
 
+#[cfg(feature = "filesystem-compiler")]
 #[test]
 fn resolver_rejects_authority_escape_and_import_cycles() {
     let mut escape = MemoryResolver::new();
@@ -669,6 +714,7 @@ fn resolver_rejects_authority_escape_and_import_cycles() {
     assert_eq!(error.diagnostics[0].code, "did_import_cycle");
 }
 
+#[cfg(feature = "compiler")]
 #[test]
 fn operational_limits_fail_with_machine_stable_diagnostics() {
     let context = RuntimeContext::new(Limits::default().with_max_source_bytes(8));
@@ -693,16 +739,19 @@ fn operational_limits_fail_with_machine_stable_diagnostics() {
     assert!(error.to_string().contains("validation failed"));
 }
 
+#[cfg(feature = "filesystem-compiler")]
 struct IgnoringLimitsResolver {
     source: String,
     digest: Option<String>,
 }
 
+#[cfg(feature = "filesystem-compiler")]
 struct CancellingResolver {
     source: String,
     cancellation: CancellationToken,
 }
 
+#[cfg(feature = "filesystem-compiler")]
 impl SourceResolver for CancellingResolver {
     fn identify(&self, _from: Option<&SourceId>, import: &str) -> Result<SourceId, ResolveError> {
         SourceId::parse(import)
@@ -721,6 +770,7 @@ impl SourceResolver for CancellingResolver {
     }
 }
 
+#[cfg(feature = "filesystem-compiler")]
 impl SourceResolver for IgnoringLimitsResolver {
     fn identify(&self, _from: Option<&SourceId>, import: &str) -> Result<SourceId, ResolveError> {
         SourceId::parse(import)
@@ -740,6 +790,7 @@ impl SourceResolver for IgnoringLimitsResolver {
     }
 }
 
+#[cfg(feature = "filesystem-compiler")]
 fn assert_source_limit(error: CompileError, limit: usize, observed: usize) {
     let diagnostic = &error.diagnostics[0];
     assert_eq!(diagnostic.code, "resource_limit_exceeded");
@@ -749,6 +800,7 @@ fn assert_source_limit(error: CompileError, limit: usize, observed: usize) {
     assert_eq!(resource.observed, observed as u64);
 }
 
+#[cfg(feature = "filesystem-compiler")]
 #[test]
 fn compiler_owns_source_limit_enforcement_for_every_resolver_path() {
     static NEXT_DIRECTORY: AtomicUsize = AtomicUsize::new(0);
@@ -801,6 +853,7 @@ fn compiler_owns_source_limit_enforcement_for_every_resolver_path() {
     std::fs::remove_dir_all(directory).unwrap();
 }
 
+#[cfg(feature = "filesystem-compiler")]
 #[test]
 fn compiler_source_accounting_accepts_exact_boundaries_and_rejects_next_source() {
     let source = "service : {};";
@@ -842,6 +895,7 @@ fn compiler_source_accounting_accepts_exact_boundaries_and_rejects_next_source()
     }
 }
 
+#[cfg(feature = "filesystem-compiler")]
 #[test]
 fn compiler_checks_source_limits_before_digesting_resolver_content() {
     let source = "service : {};";
@@ -856,6 +910,7 @@ fn compiler_checks_source_limits_before_digesting_resolver_content() {
     assert_source_limit(error, limit, source.len());
 }
 
+#[cfg(feature = "compiler")]
 #[test]
 fn elapsed_deadlines_abort_work_without_partial_artifacts() {
     let context = RuntimeContext::new(Limits::default().with_deadline_unix_ms(Some(1)));
@@ -864,6 +919,7 @@ fn elapsed_deadlines_abort_work_without_partial_artifacts() {
     assert_eq!(error.diagnostics[0].code, "operation_deadline_exceeded");
 }
 
+#[cfg(feature = "compiler")]
 #[test]
 fn resolver_context_methods_enforce_elapsed_deadlines() {
     let mut resolver = MemoryResolver::new();
@@ -882,6 +938,7 @@ fn resolver_context_methods_enforce_elapsed_deadlines() {
     assert_eq!(resolve_error.code, "operation_deadline_exceeded");
 }
 
+#[cfg(all(feature = "compiler", feature = "host-value"))]
 #[test]
 fn runtime_context_cancellation_is_cooperative_and_not_serialized() {
     let compilation = compile("service : {};");
@@ -912,6 +969,7 @@ fn runtime_context_cancellation_is_cooperative_and_not_serialized() {
     ));
 }
 
+#[cfg(feature = "filesystem-compiler")]
 #[test]
 fn resolver_cancellation_is_observed_before_accepting_loaded_content() {
     let token = CancellationToken::new();
@@ -930,6 +988,7 @@ fn resolver_cancellation_is_observed_before_accepting_loaded_content() {
     assert_eq!(error.diagnostics[0].code, "operation_cancelled");
 }
 
+#[cfg(feature = "compiler")]
 #[test]
 fn provenance_budget_failures_retain_stable_resource_metadata() {
     let compilation = compile("service : { ping: () -> () query };");
@@ -948,6 +1007,7 @@ fn provenance_budget_failures_retain_stable_resource_metadata() {
     assert_eq!(resource.observed, 1);
 }
 
+#[cfg(feature = "compiler")]
 #[test]
 fn one_operation_cannot_reset_canonicalization_work_between_stages() {
     let compilation = compile("service : {};");
@@ -993,6 +1053,7 @@ fn iterative_canonical_traversal_handles_deep_graphs_and_honors_work_limits() {
         .any(|violation| violation.code == "resource_limit_exceeded"));
 }
 
+#[cfg(all(feature = "compiler", feature = "host-value"))]
 #[test]
 fn tagged_host_values_preserve_bigints_float_bits_and_wire_field_ids() {
     let compilation = compile(
@@ -1027,6 +1088,7 @@ fn tagged_host_values_preserve_bigints_float_bits_and_wire_field_ids() {
     );
 }
 
+#[cfg(all(feature = "compiler", feature = "host-value"))]
 #[test]
 fn host_values_reject_coercions_and_unbound_contract_references() {
     let compilation = compile("type Amount = nat; service : {};");
@@ -1046,6 +1108,7 @@ fn host_values_reject_coercions_and_unbound_contract_references() {
     .is_err());
 }
 
+#[cfg(all(feature = "compiler", feature = "host-value"))]
 #[test]
 fn extensions_are_namespaced_and_cannot_mutate_the_core() {
     let contract = compile("service : {};").contract().clone();
@@ -1070,6 +1133,7 @@ fn extensions_are_namespaced_and_cannot_mutate_the_core() {
     assert!(ContractEnvelope::from_json_with_limits(&raw.to_string(), &Limits::default()).is_err());
 }
 
+#[cfg(all(feature = "compiler", feature = "host-value"))]
 #[test]
 fn actor_methods_are_persisted_by_contract_identity_and_name() {
     let contract = compile("service : { ping: () -> () query };")
@@ -1082,6 +1146,7 @@ fn actor_methods_are_persisted_by_contract_identity_and_name() {
     assert!(matches!(contract.actor(), Some(Actor::Service { .. })));
 }
 
+#[cfg(all(feature = "compiler", feature = "host-value"))]
 #[test]
 fn persisted_selectors_use_protocol_field_names_and_fail_closed() {
     let contract = compile("type Amount = nat; service : { ping: () -> () query };")
@@ -1127,6 +1192,7 @@ fn persisted_selectors_use_protocol_field_names_and_fail_closed() {
     );
 }
 
+#[cfg(feature = "compiler")]
 #[test]
 fn contract_id_changes_when_declaration_names_change() {
     let first = compile("type First = record { value: nat }; service : {};");
@@ -1141,6 +1207,7 @@ fn contract_id_changes_when_declaration_names_change() {
     );
 }
 
+#[cfg(feature = "compiler")]
 #[test]
 fn jcs_identity_is_independent_of_input_object_key_order() {
     let contract = compile("service : { ping: () -> () };").contract().clone();
@@ -1174,6 +1241,7 @@ fn contract_draft_calculates_identities_for_producers() {
     assert!(contract.validate().is_ok());
 }
 
+#[cfg(feature = "filesystem-compiler")]
 #[test]
 fn canonical_contracts_match_checked_in_cross_language_fixtures() {
     for name in ["actorless", "empty_actor", "class", "basic", "recursive"] {
@@ -1192,6 +1260,7 @@ fn canonical_contracts_match_checked_in_cross_language_fixtures() {
     }
 }
 
+#[cfg(feature = "filesystem-compiler")]
 fn conformance_fixture(name: &str) -> String {
     std::fs::read_to_string(format!(
         "{}/tests/fixtures/conformance/{name}",
@@ -1200,6 +1269,7 @@ fn conformance_fixture(name: &str) -> String {
     .unwrap()
 }
 
+#[cfg(feature = "filesystem-compiler")]
 /// Issue #14: the fixture test above reparses expectations through
 /// `Contract::from_json`, which canonicalizes what it decodes and can
 /// therefore repair — and hide — a noncanonical checked-in fixture. This
@@ -1238,6 +1308,7 @@ fn checked_in_fixtures_are_structurally_canonical_without_repair() {
     }
 }
 
+#[cfg(feature = "filesystem-compiler")]
 /// Issue #13: an actorless Contract's identity preimage is pinned to exact
 /// bytes that omit the `actor` property. The digest is recomputed here from
 /// the fixture's literal bytes with `sha2` alone, so a change to the payload
@@ -1285,6 +1356,7 @@ fn actorless_identity_bytes_and_id_match_the_pinned_golden_fixture() {
     assert_eq!(contract.interface_id(), None);
 }
 
+#[cfg(feature = "compiler")]
 /// Issue #13: absence is the only v1 wire spelling of "no actor". `None`
 /// serializes as an omitted property on every serialization path, and an
 /// explicit `"actor": null` fails decoding instead of aliasing omission.
@@ -1317,6 +1389,7 @@ fn actorless_contracts_omit_actor_on_the_wire_and_reject_explicit_null() {
     );
 }
 
+#[cfg(feature = "compiler")]
 /// Issue #13: omitting the absent actor must not collapse an actorless
 /// Contract into one with an explicitly empty service. The empty-actor IDs
 /// are pinned inline as the cross-release regression anchor proving the
@@ -1344,21 +1417,46 @@ fn actorless_and_explicitly_empty_actor_stay_distinct_on_the_wire() {
     );
 }
 
+/// Read a pinned dependency version out of the manifest, accepting every
+/// spelling Cargo can produce: `dep = "=X.Y.Z"`, the inline table an
+/// *optional* dependency must use, and the `[dependencies.dep]` section Cargo
+/// itself writes when it normalizes a manifest for publishing. This mirrors
+/// the crate-internal reader behind `ProducerInfo::current`, which is what the
+/// assertions below are checking; if the two ever disagree, one of them is
+/// wrong about what this package pins.
 fn exact_manifest_dependency_version(dependency: &str) -> String {
     let manifest = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/Cargo.toml"));
-    let prefix = format!("{dependency} = ");
-    manifest
-        .lines()
-        .map(str::trim)
-        .find_map(|line| line.strip_prefix(&prefix))
-        .and_then(|value| {
-            value
-                .strip_prefix('"')
-                .and_then(|value| value.strip_prefix('='))
-                .and_then(|value| value.split_once('"').map(|(version, _)| version))
-        })
-        .unwrap_or_else(|| panic!("{dependency} must be exact-pinned in Cargo.toml"))
-        .to_string()
+    let inline_prefix = format!("{dependency} = ");
+    let section_header = format!("[dependencies.{dependency}]");
+    let mut in_dependencies = false;
+    let mut in_dependency_section = false;
+
+    fn literal(declaration: &str) -> Option<&str> {
+        let literal = match declaration.strip_prefix('{') {
+            Some(table) => table.split_once("version = ")?.1,
+            None => declaration,
+        };
+        literal
+            .strip_prefix('"')
+            .and_then(|value| value.strip_prefix('='))
+            .and_then(|value| value.split_once('"').map(|(version, _)| version))
+    }
+
+    for line in manifest.lines().map(str::trim) {
+        if line.starts_with('[') {
+            in_dependencies = line == "[dependencies]";
+            in_dependency_section = line == section_header;
+        } else if in_dependencies {
+            if let Some(version) = line.strip_prefix(&inline_prefix).and_then(literal) {
+                return version.to_string();
+            }
+        } else if in_dependency_section {
+            if let Some(version) = line.strip_prefix("version = ").and_then(literal) {
+                return version.to_string();
+            }
+        }
+    }
+    panic!("{dependency} must be exact-pinned in Cargo.toml")
 }
 
 fn lockfile_versions(package: &str) -> Vec<String> {
@@ -1386,6 +1484,7 @@ fn lockfile_versions(package: &str) -> Vec<String> {
     versions
 }
 
+#[cfg(feature = "compiler")]
 #[test]
 fn producer_reports_exact_selected_candid_engine_versions() {
     let contract = compile("service : {};").contract().clone();

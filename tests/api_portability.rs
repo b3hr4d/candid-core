@@ -7,9 +7,11 @@
 //! configuration error codes/paths/messages; and the defined behavior of
 //! zero limits and elapsed deadlines.
 
+#[cfg(feature = "compiler")]
+use candid_core::compile_did;
 use candid_core::{
-    compile_did, Contract, ContractDraft, Declaration, Diagnostic, Field, Limits, LimitsConfig,
-    LimitsProfile, PrimitiveType, ProducerInfo, RawContract, RuntimeContext, SourceSpan, TypeNode,
+    Contract, ContractDraft, Declaration, Diagnostic, Field, Limits, LimitsConfig, LimitsProfile,
+    PrimitiveType, ProducerInfo, RawContract, RuntimeContext, SourceSpan, TypeNode,
     LIMITS_CONFIG_VERSION,
 };
 use serde_json::json;
@@ -44,6 +46,7 @@ fn invalid_draft() -> ContractDraft {
 
 // --- A. ContractDraft: producer drafts carry no fake identities ------------
 
+#[cfg(feature = "compiler")]
 #[test]
 fn serialized_draft_contains_only_draft_fields_and_never_identities() {
     let compiled = compile_did("service : { ping: () -> () };").unwrap();
@@ -179,6 +182,7 @@ fn draft_build_defaults_producer_to_current_and_honors_overrides() {
     assert_eq!(decoded.build().unwrap().producer(), &custom);
 }
 
+#[cfg(feature = "compiler")]
 #[test]
 fn draft_build_matches_the_compiler_and_the_verified_raw_path_exactly() {
     let compiled = compile_did(
