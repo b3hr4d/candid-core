@@ -1,0 +1,218 @@
+name: Release candidate
+
+# Everything a release candidate has to survive *before* anyone is asked to
+# authorize a tag, a crates.io publish, or a GitHub prerelease. This workflow is
+# deliberately unable to perform any of those three:
+#
+#   * `permissions: contents: read` is the whole grant, declared at workflow
+#     level so no job can widen it. No `contents: write`, no `packages`, no
+#     `id-token`.
+#   * No step references a crates.io token, and none should ever be added. The
+#     one command here that could publish is `cargo publish --dry-run`, which
+#     cannot. Adding a registry token to this repository's secrets would remove
+#     the property that makes this workflow safe to run on every pull request.
+#   * Nothing tags, releases, comments, or writes to the repository. The only
+#     outputs are a step summary and build artifacts.
+#
+# The complementary human procedure — including what is irreversible about
+# crates.io — is docs/releasing.md.
+#
+# This is additive to `Verify`, which keeps its own `-D warnings` rustdoc gate on
+# the repository tree. What this workflow adds is the same question asked of the
+# *published archive*: a consumer never sees this repository, only the `.crate`.
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    name: Package and inspect the archive
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
+        with:
+          toolchain: stable
+      # `--locked` throughout: a release archive is built from the tracked
+      # dependency graph or not at all.
+      - name: Build the archive
+        run: cargo package --locked
+      # The allowlist assertion. Runs against `cargo package --list`, so it sees
+      # what the archive actually holds rather than what Cargo.toml intends.
+      - name: Verify the package manifest
+        run: python3 tests/fixtures/packaging/verify_package_manifest.py --locked
+      - name: Dry-run the publish
+        run: cargo publish --dry-run --locked
+      # The digest and the exact file list are the evidence a release record
+      # quotes. They are reported and retained, never committed: the next commit
+      # changes `.cargo_vcs_info.json` inside the archive, so a checked-in
+      # checksum would be stale by construction.
+      - name: Record the archive digest and contents
+        run: |
+          set -euxo pipefail
+          archive="$(echo target/package/candid-core-*.crate)"
+          mkdir -p release-evidence
+          sha256sum "${archive}" | tee release-evidence/sha256.txt
+          wc -c < "${archive}" | tr -d ' ' | tee release-evidence/bytes.txt
+          cargo package --list --locked | sort | tee release-evidence/contents.txt
+          {
+            echo "### Release candidate archive"
+            echo
+            echo "| Evidence | Value |"
+            echo "| --- | --- |"
+            echo "| Commit | \`${GITHUB_SHA}\` |"
+            echo "| Archive | \`$(basename "${archive}")\` |"
+            echo "| Bytes | $(cat release-evidence/bytes.txt) |"
+            echo "| SHA-256 | \`$(cut -d' ' -f1 release-evidence/sha256.txt)\` |"
+            echo "| Packaged paths | $(wc -l < release-evidence/contents.txt | tr -d ' ') |"
+            echo
+            echo "<details><summary>Exact contents</summary>"
+            echo
+            echo '```'
+            cat release-evidence/contents.txt
+            echo '```'
+            echo
+            echo "</details>"
+          } >> "${GITHUB_STEP_SUMMARY}"
+      # The consumer and docs jobs download this, so every one of them is
+      # exercising the byte-identical archive whose digest was just recorded
+      # rather than an archive they rebuilt themselves.
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: crate-archive-${{ github.sha }}
+          path: |
+            target/package/candid-core-*.crate
+            release-evidence
+          retention-days: 30
+
+  packaged-consumers:
+    name: Consumers from the archive (${{ matrix.os }})
+    needs: package
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # POSIX shell plus `tar`, `mktemp`, and `python3`. Windows is covered by
+        # `Verify` for the library itself; the packaged-consumer script is not
+        # written for it, and a `bash` shim on Windows would make the evidence
+        # weaker, not stronger.
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
+        with:
+          toolchain: stable
+          targets: wasm32-unknown-unknown
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: crate-archive-${{ github.sha }}
+          path: downloaded
+      # Six external consumer crates plus an installed CLI, all built against
+      # the archive unpacked into a fresh temporary directory. The script
+      # refuses to run if the unpacked package is inside this checkout, which is
+      # what stops a "clean consumer" from quietly resolving back to the
+      # repository. It also asserts the base consumer's graph contains no
+      # `candid`, `candid_parser`, `cap-std`, or `ic_principal`, so the feature
+      # boundary is proven for the *published* manifest.
+      - name: Build every packaged-consumer surface
+        run: |
+          set -euxo pipefail
+          archive="$(echo downloaded/candid-core-*.crate)"
+          bash tests/fixtures/packaging/verify_packaged_consumers.sh "${archive}"
+
+  packaged-docs:
+    name: Rustdoc from the archive
+    needs: package
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
+        with:
+          toolchain: stable
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: crate-archive-${{ github.sha }}
+          path: downloaded
+      # docs.rs builds the archive, not the repository, and an intra-doc link to
+      # a file the allowlist dropped fails there and nowhere else. `Verify`
+      # keeps the same gate on the repository tree; this is the packaged half of
+      # it, on both the reduced and the full surface.
+      - name: Document the reduced and full surfaces with warnings denied
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: |
+          set -euxo pipefail
+          workdir="$(mktemp -d)"
+          tar -xzf downloaded/candid-core-*.crate -C "${workdir}"
+          package="$(find "${workdir}" -maxdepth 1 -type d -name 'candid-core-*')"
+          cd "${package}"
+          cargo doc --no-deps --locked --no-default-features
+          cargo doc --no-deps --locked --all-features
+
+  dependencies:
+    name: Advisories, licenses, sources, bans
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
+        with:
+          toolchain: stable
+      # cargo-deny is a release tool run on current stable, not an MSRV
+      # dependency and not a dependency of the crate: 0.20.2 itself declares
+      # `rust-version = "1.88"`, well above this crate's 1.78.
+      # Only the assignments: the runner's environment-file parser rejects any
+      # line that is not `KEY=value`, so the comments in that file cannot be
+      # piped through verbatim.
+      - name: Load the pinned tool versions
+        run: grep -E '^[A-Z_]+=' tests/fixtures/packaging/release-tools.env >> "$GITHUB_ENV"
+      - name: Install the pinned cargo-deny
+        run: cargo install cargo-deny --version "${CARGO_DENY_VERSION}" --locked
+      # All four checks. `deny.toml` allows five license expressions and ignores
+      # exactly one advisory, each with a written reason; it blanket-allows
+      # nothing.
+      - name: Check the dependency graph
+        run: cargo deny --all-features check advisories licenses sources bans
+
+  public-api:
+    name: Public API inventory
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
+        with:
+          toolchain: stable
+      # Only the assignments: the runner's environment-file parser rejects any
+      # line that is not `KEY=value`, so the comments in that file cannot be
+      # piped through verbatim.
+      - name: Load the pinned tool versions
+        run: grep -E '^[A-Z_]+=' tests/fixtures/packaging/release-tools.env >> "$GITHUB_ENV"
+      # rustdoc JSON is nightly-only and its format is unstable, so the nightly
+      # is pinned to an exact date as well as the tool to an exact version. An
+      # unpinned nightly would rewrite the committed snapshots on its own
+      # schedule and the drift check would stop meaning anything.
+      #
+      # Installed through rustup with the date from release-tools.env rather than
+      # through a rolling action ref, so this pins both halves: the action itself
+      # is an immutable commit and the nightly date comes from the one file that
+      # records it.
+      # The `minimal` profile carries rustdoc, which ships with `rustc`.
+      - name: Install the pinned nightly for rustdoc JSON
+        run: rustup toolchain install "${PUBLIC_API_TOOLCHAIN}" --profile minimal
+      - name: Install the pinned cargo-public-api
+        run: cargo install cargo-public-api --version "${CARGO_PUBLIC_API_VERSION}" --locked
+      # Fails on any difference from the committed snapshots for either surface.
+      # Intended API changes are landed by re-running with `--write` and
+      # committing the regenerated snapshot in the same change.
+      #
+      # There is no `cargo semver-checks` step: it needs a published baseline to
+      # compare against, and candid-core has none until 0.1.0-beta.1 exists on
+      # crates.io. Semver comparison begins with the release after this one.
+      - name: Compare the base and all-features surfaces
+        run: bash tests/fixtures/packaging/verify_public_api.sh

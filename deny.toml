@@ -1,0 +1,91 @@
+# cargo-deny policy: advisories, licenses, sources, bans.
+#
+# Run by the `Release candidate` workflow with an exactly pinned cargo-deny —
+# the version lives in tests/fixtures/packaging/release-tools.env, and the
+# reasoning behind every exception below is written out in
+# docs/verification.md#dependency-license-and-advisory-review.
+#
+# cargo-deny is a *release* tool, not an MSRV dependency and not a dependency of
+# this crate: 0.20.2 declares `rust-version = "1.88"`, well above candid-core's
+# own 1.78, and it is installed as a binary rather than declared in Cargo.toml.
+#
+# Nothing here is a blanket allow. `licenses.allow` is exactly the five
+# expressions the resolved graph actually uses, so an unreviewed licence in a
+# future dependency fails rather than being waved through, and `advisories.ignore`
+# names exactly one advisory with a reason.
+
+[graph]
+# The whole surface, so `candid`, `candid_parser`, `cap-std`, and `ic_principal`
+# are all in the graph. Checking only the default features would leave the
+# optional dependencies unaudited.
+all-features = true
+# The four targets this crate supports. `wasm32-unknown-unknown` is listed
+# explicitly because `cap-std` is target-gated as well as feature-gated, so a
+# graph resolved only for a native triple would not describe the browser build.
+targets = [
+    "x86_64-unknown-linux-gnu",
+    "aarch64-apple-darwin",
+    "x86_64-pc-windows-msvc",
+    "wasm32-unknown-unknown",
+]
+
+[advisories]
+# A yanked dependency is a release blocker: it means the version this crate pins
+# has been withdrawn by its author.
+yanked = "deny"
+# The strictest setting — transitive unmaintained crates included — so the one
+# exception below stays a single named advisory instead of a whole class being
+# switched off.
+unmaintained = "all"
+ignore = [
+    { id = "RUSTSEC-2024-0436", reason = "paste 1.0.15 is unmaintained; this is not a vulnerability. It is reached only through candid 0.10.30 -> paste, candid is exact-pinned, upstream offers no safe upgrade, and changing the Candid engine is out of scope for the packaging work that introduced this file." },
+]
+
+[licenses]
+# Exactly what the resolved graph uses today. Each entry is present because a
+# real dependency needs it, so an unreviewed licence arriving with a future
+# dependency bump fails this gate.
+allow = [
+    # candid, candid_parser, serde, serde_json, sha2, hex, ic_principal, and most
+    # of the graph, nearly all as `MIT OR Apache-2.0`.
+    "Apache-2.0",
+    # The rustix / cap-std family the filesystem capability layer is built on:
+    # rustix, cap-primitives, cap-std, io-lifetimes, io-extras, linux-raw-sys,
+    # winx, ar_archive_writer, fs-set-times, ambient-authority,
+    # rustix-linux-procfs. Apache-2.0 plus an exception that only grants more
+    # permission than Apache-2.0 alone.
+    "Apache-2.0 WITH LLVM-exception",
+    "MIT",
+    # unicode-ident is `(MIT OR Apache-2.0) AND Unicode-3.0`; the AND makes this
+    # mandatory rather than optional.
+    "Unicode-3.0",
+    # tiny-keccak, and only tiny-keccak: a public-domain dedication reached as a
+    # build-dependency of lalrpop, itself a build-dependency of candid_parser. It
+    # never enters a consumer's runtime graph.
+    "CC0-1.0",
+]
+confidence-threshold = 0.93
+
+# `Unlicense` deliberately has no entry. Every crate carrying it in this graph —
+# memchr, walkdir, byteorder, aho-corasick, same-file, termcolor, winapi-util —
+# offers `MIT OR Unlicense`, and MIT is allowed, so the expression is satisfied
+# without widening the list.
+
+[bans]
+# Warn, not deny. The duplicate pairs in this graph — syn 1/2, thiserror 1/2,
+# io-lifetimes 2/3, unicode-width 0.1/0.2, windows-sys 0.59/0.61 — all come from
+# exact-pinned upstream dependencies this crate does not control, so denying them
+# would block a release on someone else's dependency tree.
+multiple-versions = "warn"
+# Every direct dependency of this crate is pinned to an exact `=X.Y.Z`. A
+# wildcard requirement appearing here would be a real regression.
+wildcards = "deny"
+allow-wildcard-paths = false
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+# No git dependencies. A release archive must be reproducible from crates.io
+# alone, and a git source is not versioned in a way `cargo publish` accepts.
+allow-git = []

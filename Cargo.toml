@@ -1,10 +1,59 @@
 [package]
 name = "candid-core"
-version = "0.1.0"
+# Pre-1.0 and explicitly a prerelease. A caret requirement never selects a
+# prerelease, so `"0.1"` does not resolve to this version and consumers must ask
+# for `=0.1.0-beta.1` by name; see README.md and CHANGELOG.md. The same string
+# becomes `ProducerInfo::current().version`, which is the *only* observable thing
+# a version bump is allowed to move: `tests/release_metadata.rs` pins it as a
+# literal and re-checks that no semantic identity moved with it.
+version = "0.1.0-beta.1"
 edition = "2021"
 rust-version = "1.78"
 description = "Canonical runtime Contract graph projection for Candid DID interfaces"
 license = "Apache-2.0"
+repository = "https://github.com/b3hr4d/candid-core"
+homepage = "https://github.com/b3hr4d/candid-core"
+documentation = "https://docs.rs/candid-core"
+readme = "README.md"
+# Deliberately narrow, and deliberately *not* `parser-implementations`: this
+# crate delegates Candid parsing and type checking to `candid_parser` rather than
+# implementing them, so claiming that category would overstate what it is. What
+# it does own is a canonical encoding of a validated type graph, the graph
+# itself, and a developer-facing CLI.
+keywords = ["candid", "did", "canonicalization", "content-addressing", "internet-computer"]
+categories = ["encoding", "data-structures", "development-tools"]
+# A positive allowlist, not a growing `exclude` list. The difference is which way
+# a mistake falls: with `exclude`, anything added to this repository ships until
+# somebody remembers to exclude it, and an untracked scratch directory in a
+# contributor's working tree is published by default. With `include`, a new path
+# is outside the archive until it is named here on purpose.
+#
+# The published set is production source, runnable examples, the public
+# documentation set, and the three root documents. Everything else — the test
+# suites and their fixtures, benchmarks and their corpus, the fuzz crate, CI
+# workflows, agent/skill assets — is internal and never ships. Cargo adds
+# `Cargo.toml` (normalized), `Cargo.toml.orig`, `Cargo.lock`, and
+# `.cargo_vcs_info.json` on its own; they are asserted by the verifier, not
+# listed here.
+#
+# `docs/**/*.md` rather than `docs/**` keeps editor and OS droppings such as
+# `docs/.DS_Store` out even when a working tree has them. Because the allowlist
+# excludes `tests/` and `benches/`, Cargo also drops the `[[test]]` and
+# `[[bench]]` sections below from the normalized published manifest — without
+# that, a consumer's manifest parse would fail on a missing target file.
+#
+# `tests/fixtures/packaging/verify_package_manifest.py` asserts both halves of
+# the policy: every required path present, every forbidden path absent, no
+# unexplained extra path, and no file under a published directory that these
+# globs silently fail to match.
+include = [
+    "/src/**/*.rs",
+    "/examples/**/*.rs",
+    "/docs/**/*.md",
+    "/README.md",
+    "/CHANGELOG.md",
+    "/LICENSE",
+]
 
 # One published package, three optional build surfaces. The implicit base — the
 # feature set left when `default-features = false` removes every feature — is

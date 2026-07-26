@@ -1,0 +1,822 @@
+pub mod candid_core
+pub enum candid_core::Actor
+pub candid_core::Actor::Class
+pub candid_core::Actor::Class::class: candid_core::TypeRef
+pub candid_core::Actor::Service
+pub candid_core::Actor::Service::service: candid_core::TypeRef
+impl core::clone::Clone for candid_core::Actor
+pub fn candid_core::Actor::clone(&self) -> candid_core::Actor
+impl core::cmp::Eq for candid_core::Actor
+impl core::cmp::PartialEq for candid_core::Actor
+pub fn candid_core::Actor::eq(&self, &candid_core::Actor) -> bool
+impl core::fmt::Debug for candid_core::Actor
+pub fn candid_core::Actor::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for candid_core::Actor
+impl serde_core::ser::Serialize for candid_core::Actor
+pub fn candid_core::Actor::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for candid_core::Actor
+pub fn candid_core::Actor::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for candid_core::Actor
+impl core::marker::Send for candid_core::Actor
+impl core::marker::Sync for candid_core::Actor
+impl core::marker::Unpin for candid_core::Actor
+impl core::marker::UnsafeUnpin for candid_core::Actor
+impl core::panic::unwind_safe::RefUnwindSafe for candid_core::Actor
+impl core::panic::unwind_safe::UnwindSafe for candid_core::Actor
+#[non_exhaustive] pub enum candid_core::ArtifactKind
+pub candid_core::ArtifactKind::CompilationJsonV1
+pub candid_core::ArtifactKind::ContractEnvelopeJsonV1
+pub candid_core::ArtifactKind::ContractJsonV1
+impl core::clone::Clone for candid_core::ArtifactKind
+pub fn candid_core::ArtifactKind::clone(&self) -> candid_core::ArtifactKind
+impl core::cmp::Eq for candid_core::ArtifactKind
+impl core::cmp::PartialEq for candid_core::ArtifactKind
+pub fn candid_core::ArtifactKind::eq(&self, &candid_core::ArtifactKind) -> bool
+impl core::fmt::Debug for candid_core::ArtifactKind
+pub fn candid_core::ArtifactKind::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for candid_core::ArtifactKind
+pub fn candid_core::ArtifactKind::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl core::marker::Copy for candid_core::ArtifactKind
+impl core::marker::StructuralPartialEq for candid_core::ArtifactKind
+impl core::marker::Freeze for candid_core::ArtifactKind
+impl core::marker::Send for candid_core::ArtifactKind
+impl core::marker::Sync for candid_core::ArtifactKind
+impl core::marker::Unpin for candid_core::ArtifactKind
+impl core::marker::UnsafeUnpin for candid_core::ArtifactKind
+impl core::panic::unwind_safe::RefUnwindSafe for candid_core::ArtifactKind
+impl core::panic::unwind_safe::UnwindSafe for candid_core::ArtifactKind
+pub enum candid_core::ContractJsonError
+pub candid_core::ContractJsonError::InvalidContract(candid_core::ContractValidationError)
+pub candid_core::ContractJsonError::MalformedJson(alloc::string::String)
+impl core::clone::Clone for candid_core::ContractJsonError
+pub fn candid_core::ContractJsonError::clone(&self) -> candid_core::ContractJsonError
+impl core::cmp::Eq for candid_core::ContractJsonError
+impl core::cmp::PartialEq for candid_core::ContractJsonError
+pub fn candid_core::ContractJsonError::eq(&self, &candid_core::ContractJsonError) -> bool
+impl core::error::Error for candid_core::ContractJsonError
+impl core::fmt::Debug for candid_core::ContractJsonError
+pub fn candid_core::ContractJsonError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for candid_core::ContractJsonError
+pub fn candid_core::ContractJsonError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for candid_core::ContractJsonError
+impl core::marker::Freeze for candid_core::ContractJsonError
+impl core::marker::Send for candid_core::ContractJsonError
+impl core::marker::Sync for candid_core::ContractJsonError
+impl core::marker::Unpin for candid_core::ContractJsonError
+impl core::marker::UnsafeUnpin for candid_core::ContractJsonError
+impl core::panic::unwind_safe::RefUnwindSafe for candid_core::ContractJsonError
+impl core::panic::unwind_safe::UnwindSafe for candid_core::ContractJsonError
+pub enum candid_core::DiagnosticPhase
+pub candid_core::DiagnosticPhase::Load
+pub candid_core::DiagnosticPhase::Lower
+pub candid_core::DiagnosticPhase::Parse
+pub candid_core::DiagnosticPhase::TypeCheck
+impl core::clone::Clone for candid_core::DiagnosticPhase
+pub fn candid_core::DiagnosticPhase::clone(&self) -> candid_core::DiagnosticPhase
+impl core::cmp::Eq for candid_core::DiagnosticPhase
+impl core::cmp::PartialEq for candid_core::DiagnosticPhase
+pub fn candid_core::DiagnosticPhase::eq(&self, &candid_core::DiagnosticPhase) -> bool
+impl core::fmt::Debug for candid_core::DiagnosticPhase
+pub fn candid_core::DiagnosticPhase::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for candid_core::DiagnosticPhase
+impl serde_core::ser::Serialize for candid_core::DiagnosticPhase
+pub fn candid_core::DiagnosticPhase::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for candid_core::DiagnosticPhase
+pub fn candid_core::DiagnosticPhase::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for candid_core::DiagnosticPhase
+impl core::marker::Send for candid_core::DiagnosticPhase
+impl core::marker::Sync for candid_core::DiagnosticPhase
+impl core::marker::Unpin for candid_core::DiagnosticPhase
+impl core::marker::UnsafeUnpin for candid_core::DiagnosticPhase
+impl core::panic::unwind_safe::RefUnwindSafe for candid_core::DiagnosticPhase
+impl core::panic::unwind_safe::UnwindSafe for candid_core::DiagnosticPhase
+#[non_exhaustive] pub enum candid_core::LimitsProfile
+pub candid_core::LimitsProfile::InteractiveV1
+impl candid_core::LimitsProfile
+pub fn candid_core::LimitsProfile::limits(self) -> candid_core::Limits
+pub fn candid_core::LimitsProfile::wire_name(self) -> &'static str
+impl core::clone::Clone for candid_core::LimitsProfile
+pub fn candid_core::LimitsProfile::clone(&self) -> candid_core::LimitsProfile
+impl core::cmp::Eq for candid_core::LimitsProfile
+impl core::cmp::PartialEq for candid_core::LimitsProfile
+pub fn candid_core::LimitsProfile::eq(&self, &candid_core::LimitsProfile) -> bool
+impl core::fmt::Debug for candid_core::LimitsProfile
+pub fn candid_core::LimitsProfile::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::hash::Hash for candid_core::LimitsProfile
+pub fn candid_core::LimitsProfile::hash<__H: core::hash::Hasher>(&self, &mut __H)
+impl core::marker::Copy for candid_core::LimitsProfile
+impl core::marker::StructuralPartialEq for candid_core::LimitsProfile
+impl core::marker::Freeze for candid_core::LimitsProfile
+impl core::marker::Send for candid_core::LimitsProfile
+impl core::marker::Sync for candid_core::LimitsProfile
+impl core::marker::Unpin for candid_core::LimitsProfile
+impl core::marker::UnsafeUnpin for candid_core::LimitsProfile
+impl core::panic::unwind_safe::RefUnwindSafe for candid_core::LimitsProfile
+impl core::panic::unwind_safe::UnwindSafe for candid_core::LimitsProfile
+pub enum candid_core::MethodMode
+pub candid_core::MethodMode::CompositeQuery
+pub candid_core::MethodMode::Oneway
+pub candid_core::MethodMode::Query
+pub candid_core::MethodMode::Update
+impl core::clone::Clone for candid_core::MethodMode
+pub fn candid_core::MethodMode::clone(&self) -> candid_core::MethodMode
+impl core::cmp::Eq for candid_core::MethodMode
+impl core::cmp::PartialEq for candid_core::MethodMode
+pub fn candid_core::MethodMode::eq(&self, &candid_core::MethodMode) -> bool
+impl core::fmt::Debug for candid_core::MethodMode
+pub fn candid_core::MethodMode::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for candid_core::MethodMode
+impl core::marker::StructuralPartialEq for candid_core::MethodMode
+impl serde_core::ser::Serialize for candid_core::MethodMode
+pub fn candid_core::MethodMode::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for candid_core::MethodMode
+pub fn candid_core::MethodMode::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for candid_core::MethodMode
+impl core::marker::Send for candid_core::MethodMode
+impl core::marker::Sync for candid_core::MethodMode
+impl core::marker::Unpin for candid_core::MethodMode
+impl core::marker::UnsafeUnpin for candid_core::MethodMode
+impl core::panic::unwind_safe::RefUnwindSafe for candid_core::MethodMode
+impl core::panic::unwind_safe::UnwindSafe for candid_core::MethodMode
+pub enum candid_core::PrimitiveType
+pub candid_core::PrimitiveType::Bool
+pub candid_core::PrimitiveType::Empty
+pub candid_core::PrimitiveType::Float32
+pub candid_core::PrimitiveType::Float64
+pub candid_core::PrimitiveType::Int
+pub candid_core::PrimitiveType::Int16
+pub candid_core::PrimitiveType::Int32
+pub candid_core::PrimitiveType::Int64
+pub candid_core::PrimitiveType::Int8
+pub candid_core::PrimitiveType::Nat
+pub candid_core::PrimitiveType::Nat16
+pub candid_core::PrimitiveType::Nat32
+pub candid_core::PrimitiveType::Nat64
+pub candid_core::PrimitiveType::Nat8
+pub candid_core::PrimitiveType::Null
+pub candid_core::PrimitiveType::Principal
+pub candid_core::PrimitiveType::Reserved
+pub candid_core::PrimitiveType::Text
+impl core::clone::Clone for candid_core::PrimitiveType
+pub fn candid_core::PrimitiveType::clone(&self) -> candid_core::PrimitiveType
+impl core::cmp::Eq for candid_core::PrimitiveType
+impl core::cmp::Ord for candid_core::PrimitiveType
+pub fn candid_core::PrimitiveType::cmp(&self, &candid_core::PrimitiveType) -> core::cmp::Ordering
+impl core::cmp::PartialEq for candid_core::PrimitiveType
+pub fn candid_core::PrimitiveType::eq(&self, &candid_core::PrimitiveType) -> bool
+impl core::cmp::PartialOrd for candid_core::PrimitiveType
+pub fn candid_core::PrimitiveType::partial_cmp(&self, &candid_core::PrimitiveType) -> core::option::Option<core::cmp::Ordering>
+impl core::fmt::Debug for candid_core::PrimitiveType
+pub fn candid_core::PrimitiveType::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Copy for candid_core::PrimitiveType
+impl core::marker::StructuralPartialEq for candid_core::PrimitiveType
+impl serde_core::ser::Serialize for candid_core::PrimitiveType
+pub fn candid_core::PrimitiveType::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for candid_core::PrimitiveType
+pub fn candid_core::PrimitiveType::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for candid_core::PrimitiveType
+impl core::marker::Send for candid_core::PrimitiveType
+impl core::marker::Sync for candid_core::PrimitiveType
+impl core::marker::Unpin for candid_core::PrimitiveType
+impl core::marker::UnsafeUnpin for candid_core::PrimitiveType
+impl core::panic::unwind_safe::RefUnwindSafe for candid_core::PrimitiveType
+impl core::panic::unwind_safe::UnwindSafe for candid_core::PrimitiveType
+pub enum candid_core::Severity
+pub candid_core::Severity::Error
+impl core::clone::Clone for candid_core::Severity
+pub fn candid_core::Severity::clone(&self) -> candid_core::Severity
+impl core::cmp::Eq for candid_core::Severity
+impl core::cmp::PartialEq for candid_core::Severity
+pub fn candid_core::Severity::eq(&self, &candid_core::Severity) -> bool
+impl core::fmt::Debug for candid_core::Severity
+pub fn candid_core::Severity::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for candid_core::Severity
+impl serde_core::ser::Serialize for candid_core::Severity
+pub fn candid_core::Severity::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for candid_core::Severity
+pub fn candid_core::Severity::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for candid_core::Severity
+impl core::marker::Send for candid_core::Severity
+impl core::marker::Sync for candid_core::Severity
+impl core::marker::Unpin for candid_core::Severity
+impl core::marker::UnsafeUnpin for candid_core::Severity
+impl core::panic::unwind_safe::RefUnwindSafe for candid_core::Severity
+impl core::panic::unwind_safe::UnwindSafe for candid_core::Severity
+pub enum candid_core::TypeNode
+pub candid_core::TypeNode::Class
+pub candid_core::TypeNode::Class::init: alloc::vec::Vec<candid_core::TypeRef>
+pub candid_core::TypeNode::Class::service: candid_core::TypeRef
+pub candid_core::TypeNode::Func
+pub candid_core::TypeNode::Func::args: alloc::vec::Vec<candid_core::TypeRef>
+pub candid_core::TypeNode::Func::mode: candid_core::MethodMode
+pub candid_core::TypeNode::Func::results: alloc::vec::Vec<candid_core::TypeRef>
+pub candid_core::TypeNode::Opt
+pub candid_core::TypeNode::Opt::inner: candid_core::TypeRef
+pub candid_core::TypeNode::Primitive
+pub candid_core::TypeNode::Primitive::primitive: candid_core::PrimitiveType
+pub candid_core::TypeNode::Record
+pub candid_core::TypeNode::Record::fields: alloc::vec::Vec<candid_core::Field>
+pub candid_core::TypeNode::Service
+pub candid_core::TypeNode::Service::methods: alloc::vec::Vec<candid_core::ServiceMethod>
+pub candid_core::TypeNode::Variant
+pub candid_core::TypeNode::Variant::fields: alloc::vec::Vec<candid_core::Field>
+pub candid_core::TypeNode::Vec
+pub candid_core::TypeNode::Vec::inner: candid_core::TypeRef
+impl core::clone::Clone for candid_core::TypeNode
+pub fn candid_core::TypeNode::clone(&self) -> candid_core::TypeNode
+impl core::cmp::Eq for candid_core::TypeNode
+impl core::cmp::PartialEq for candid_core::TypeNode
+pub fn candid_core::TypeNode::eq(&self, &candid_core::TypeNode) -> bool
+impl core::fmt::Debug for candid_core::TypeNode
+pub fn candid_core::TypeNode::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for candid_core::TypeNode
+impl serde_core::ser::Serialize for candid_core::TypeNode
+pub fn candid_core::TypeNode::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for candid_core::TypeNode
+pub fn candid_core::TypeNode::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for candid_core::TypeNode
+impl core::marker::Send for candid_core::TypeNode
+impl core::marker::Sync for candid_core::TypeNode
+impl core::marker::Unpin for candid_core::TypeNode
+impl core::marker::UnsafeUnpin for candid_core::TypeNode
+impl core::panic::unwind_safe::RefUnwindSafe for candid_core::TypeNode
+impl core::panic::unwind_safe::UnwindSafe for candid_core::TypeNode
+pub struct candid_core::CancellationToken
+impl candid_core::CancellationToken
+pub fn candid_core::CancellationToken::cancel(&self)
+pub fn candid_core::CancellationToken::is_cancelled(&self) -> bool
+pub fn candid_core::CancellationToken::new() -> Self
+impl core::clone::Clone for candid_core::CancellationToken
+pub fn candid_core::CancellationToken::clone(&self) -> candid_core::CancellationToken
+impl core::cmp::Eq for candid_core::CancellationToken
+impl core::cmp::PartialEq for candid_core::CancellationToken
+pub fn candid_core::CancellationToken::eq(&self, &Self) -> bool
+impl core::default::Default for candid_core::CancellationToken
+pub fn candid_core::CancellationToken::default() -> candid_core::CancellationToken
+impl core::fmt::Debug for candid_core::CancellationToken
+pub fn candid_core::CancellationToken::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::Freeze for candid_core::CancellationToken
+impl core::marker::Send for candid_core::CancellationToken
+impl core::marker::Sync for candid_core::CancellationToken
+impl core::marker::Unpin for candid_core::CancellationToken
+impl core::marker::UnsafeUnpin for candid_core::CancellationToken
+impl core::panic::unwind_safe::RefUnwindSafe for candid_core::CancellationToken
+impl core::panic::unwind_safe::UnwindSafe for candid_core::CancellationToken
+pub struct candid_core::Contract
+impl candid_core::Contract
+pub fn candid_core::Contract::actor(&self) -> core::option::Option<&candid_core::Actor>
+pub fn candid_core::Contract::canonicalization_profile(&self) -> &str
+pub fn candid_core::Contract::canonicalize(&self) -> core::result::Result<Self, candid_core::ContractValidationError>
+pub fn candid_core::Contract::canonicalize_with_context(&self, &candid_core::RuntimeContext) -> core::result::Result<Self, candid_core::ContractValidationError>
+pub fn candid_core::Contract::canonicalize_with_limits(&self, &candid_core::Limits) -> core::result::Result<Self, candid_core::ContractValidationError>
+pub fn candid_core::Contract::contract_id(&self) -> &str
+pub fn candid_core::Contract::declarations(&self) -> &[candid_core::Declaration]
+pub fn candid_core::Contract::format(&self) -> &str
+pub fn candid_core::Contract::format_version(&self) -> u32
+pub fn candid_core::Contract::from_json(&str) -> core::result::Result<Self, candid_core::ContractJsonError>
+pub fn candid_core::Contract::from_json_with_context(&str, &candid_core::RuntimeContext) -> core::result::Result<Self, candid_core::ContractJsonError>
+pub fn candid_core::Contract::from_json_with_limits(&str, &candid_core::Limits) -> core::result::Result<Self, candid_core::ContractJsonError>
+pub fn candid_core::Contract::from_slice_with_context(&[u8], &candid_core::RuntimeContext) -> core::result::Result<Self, candid_core::ContractJsonError>
+pub fn candid_core::Contract::from_slice_with_limits(&[u8], &candid_core::Limits) -> core::result::Result<Self, candid_core::ContractJsonError>
+pub fn candid_core::Contract::identities(&self) -> &candid_core::ContractIdentities
+pub fn candid_core::Contract::interface_id(&self) -> core::option::Option<&str>
+pub fn candid_core::Contract::producer(&self) -> &candid_core::ProducerInfo
+pub fn candid_core::Contract::semantics_profile(&self) -> &str
+pub fn candid_core::Contract::to_json_pretty(&self) -> core::result::Result<alloc::string::String, candid_core::ContractValidationError>
+pub fn candid_core::Contract::to_json_pretty_with_context(&self, &candid_core::RuntimeContext) -> core::result::Result<alloc::string::String, candid_core::ContractValidationError>
+pub fn candid_core::Contract::to_json_pretty_with_limits(&self, &candid_core::Limits) -> core::result::Result<alloc::string::String, candid_core::ContractValidationError>
+pub fn candid_core::Contract::try_from_raw(candid_core::RawContract) -> core::result::Result<Self, candid_core::ContractValidationError>
+pub fn candid_core::Contract::try_from_raw_with_context(candid_core::RawContract, &candid_core::RuntimeContext) -> core::result::Result<Self, candid_core::ContractValidationError>
+pub fn candid_core::Contract::try_from_raw_with_limits(candid_core::RawContract, &candid_core::Limits) -> core::result::Result<Self, candid_core::ContractValidationError>
+pub fn candid_core::Contract::types(&self) -> &[candid_core::TypeNode]
+pub fn candid_core::Contract::validate(&self) -> core::result::Result<(), candid_core::ContractValidationError>
+pub fn candid_core::Contract::validate_with_context(&self, &candid_core::RuntimeContext) -> core::result::Result<(), candid_core::ContractValidationError>
+pub fn candid_core::Contract::validate_with_limits(&self, &candid_core::Limits) -> core::result::Result<(), candid_core::ContractValidationError>
+impl core::clone::Clone for candid_core::Contract
+pub fn candid_core::Contract::clone(&self) -> candid_core::Contract
+impl core::cmp::Eq for candid_core::Contract
+impl core::cmp::PartialEq for candid_core::Contract
+pub fn candid_core::Contract::eq(&self, &candid_core::Contract) -> bool
+impl core::convert::From<&candid_core::Contract> for candid_core::RawContract
+pub fn candid_core::RawContract::from(&candid_core::Contract) -> Self
+impl core::fmt::Debug for candid_core::Contract
+pub fn candid_core::Contract::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for candid_core::Contract
+impl serde_core::ser::Serialize for candid_core::Contract
+pub fn candid_core::Contract::serialize<S>(&self, S) -> core::result::Result<<S as serde_core::ser::Serializer>::Ok, <S as serde_core::ser::Serializer>::Error> where S: serde_core::ser::Serializer
+impl core::marker::Freeze for candid_core::Contract
+impl core::marker::Send for candid_core::Contract
+impl core::marker::Sync for candid_core::Contract
+impl core::marker::Unpin for candid_core::Contract
+impl core::marker::UnsafeUnpin for candid_core::Contract
+impl core::panic::unwind_safe::RefUnwindSafe for candid_core::Contract
+impl core::panic::unwind_safe::UnwindSafe for candid_core::Contract
+pub struct candid_core::ContractDraft
+pub candid_core::ContractDraft::actor: core::option::Option<candid_core::Actor>
+pub candid_core::ContractDraft::declarations: alloc::vec::Vec<candid_core::Declaration>
+pub candid_core::ContractDraft::producer: core::option::Option<candid_core::ProducerInfo>
+pub candid_core::ContractDraft::types: alloc::vec::Vec<candid_core::TypeNode>
+impl candid_core::ContractDraft
+pub fn candid_core::ContractDraft::build(self) -> core::result::Result<candid_core::Contract, candid_core::ContractValidationError>
+pub fn candid_core::ContractDraft::build_with_context(self, &candid_core::RuntimeContext) -> core::result::Result<candid_core::Contract, candid_core::ContractValidationError>
+pub fn candid_core::ContractDraft::build_with_limits(self, &candid_core::Limits) -> core::result::Result<candid_core::Contract, candid_core::ContractValidationError>
+pub fn candid_core::ContractDraft::new(alloc::vec::Vec<candid_core::TypeNode>, alloc::vec::Vec<candid_core::Declaration>, core::option::Option<candid_core::Actor>) -> Self
+pub fn candid_core::ContractDraft::with_producer(self, candid_core::ProducerInfo) -> Self
+impl core::clone::Clone for candid_core::ContractDraft
+pub fn candid_core::ContractDraft::clone(&self) -> candid_core::ContractDraft
+impl core::cmp::Eq for candid_core::ContractDraft
+impl core::cmp::PartialEq for candid_core::ContractDraft
+pub fn candid_core::ContractDraft::eq(&self, &candid_core::ContractDraft) -> bool
+impl core::fmt::Debug for candid_core::ContractDraft
+pub fn candid_core::ContractDraft::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for candid_core::ContractDraft
+impl serde_core::ser::Serialize for candid_core::ContractDraft
+pub fn candid_core::ContractDraft::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for candid_core::ContractDraft
+pub fn candid_core::ContractDraft::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for candid_core::ContractDraft
+impl core::marker::Send for candid_core::ContractDraft
+impl core::marker::Sync for candid_core::ContractDraft
+impl core::marker::Unpin for candid_core::ContractDraft
+impl core::marker::UnsafeUnpin for candid_core::ContractDraft
+impl core::panic::unwind_safe::RefUnwindSafe for candid_core::ContractDraft
+impl core::panic::unwind_safe::UnwindSafe for candid_core::ContractDraft
+pub struct candid_core::ContractEnvelope
+impl candid_core::ContractEnvelope
+pub fn candid_core::ContractEnvelope::contract(&self) -> &candid_core::Contract
+pub fn candid_core::ContractEnvelope::extensions(&self) -> &alloc::collections::btree::map::BTreeMap<alloc::string::String, serde_json::value::Value>
+pub fn candid_core::ContractEnvelope::from_json_with_context(&str, &candid_core::RuntimeContext) -> core::result::Result<Self, candid_core::ContractJsonError>
+pub fn candid_core::ContractEnvelope::from_json_with_limits(&str, &candid_core::Limits) -> core::result::Result<Self, candid_core::ContractJsonError>
+pub fn candid_core::ContractEnvelope::from_slice_with_context(&[u8], &candid_core::RuntimeContext) -> core::result::Result<Self, candid_core::ContractJsonError>
+pub fn candid_core::ContractEnvelope::from_slice_with_limits(&[u8], &candid_core::Limits) -> core::result::Result<Self, candid_core::ContractJsonError>
+pub fn candid_core::ContractEnvelope::insert_extension(&mut self, impl core::convert::Into<alloc::string::String>, serde_json::value::Value, &candid_core::Limits) -> core::result::Result<(), candid_core::ContractValidationError>
+pub fn candid_core::ContractEnvelope::insert_extension_with_context(&mut self, impl core::convert::Into<alloc::string::String>, serde_json::value::Value, &candid_core::RuntimeContext) -> core::result::Result<(), candid_core::ContractValidationError>
+pub fn candid_core::ContractEnvelope::new(candid_core::Contract) -> Self
+pub fn candid_core::ContractEnvelope::to_json_pretty_with_context(&self, &candid_core::RuntimeContext) -> core::result::Result<alloc::string::String, candid_core::ContractValidationError>
+pub fn candid_core::ContractEnvelope::to_json_pretty_with_limits(&self, &candid_core::Limits) -> core::result::Result<alloc::string::String, candid_core::ContractValidationError>
+pub fn candid_core::ContractEnvelope::validate(&self, &candid_core::Limits) -> core::result::Result<(), candid_core::ContractValidationError>
+pub fn candid_core::ContractEnvelope::validate_with_context(&self, &candid_core::RuntimeContext) -> core::result::Result<(), candid_core::ContractValidationError>
+impl core::clone::Clone for candid_core::ContractEnvelope
+pub fn candid_core::ContractEnvelope::clone(&self) -> candid_core::ContractEnvelope
+impl core::cmp::Eq for candid_core::ContractEnvelope
+impl core::cmp::PartialEq for candid_core::ContractEnvelope
+pub fn candid_core::ContractEnvelope::eq(&self, &candid_core::ContractEnvelope) -> bool
+impl core::fmt::Debug for candid_core::ContractEnvelope
+pub fn candid_core::ContractEnvelope::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for candid_core::ContractEnvelope
+impl serde_core::ser::Serialize for candid_core::ContractEnvelope
+pub fn candid_core::ContractEnvelope::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl core::marker::Freeze for candid_core::ContractEnvelope
+impl core::marker::Send for candid_core::ContractEnvelope
+impl core::marker::Sync for candid_core::ContractEnvelope
+impl core::marker::Unpin for candid_core::ContractEnvelope
+impl core::marker::UnsafeUnpin for candid_core::ContractEnvelope
+impl core::panic::unwind_safe::RefUnwindSafe for candid_core::ContractEnvelope
+impl core::panic::unwind_safe::UnwindSafe for candid_core::ContractEnvelope
+pub struct candid_core::ContractIdentities
+pub candid_core::ContractIdentities::contract: alloc::string::String
+pub candid_core::ContractIdentities::interface: core::option::Option<alloc::string::String>
+impl core::clone::Clone for candid_core::ContractIdentities
+pub fn candid_core::ContractIdentities::clone(&self) -> candid_core::ContractIdentities
+impl core::cmp::Eq for candid_core::ContractIdentities
+impl core::cmp::PartialEq for candid_core::ContractIdentities
+pub fn candid_core::ContractIdentities::eq(&self, &candid_core::ContractIdentities) -> bool
+impl core::fmt::Debug for candid_core::ContractIdentities
+pub fn candid_core::ContractIdentities::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for candid_core::ContractIdentities
+impl serde_core::ser::Serialize for candid_core::ContractIdentities
+pub fn candid_core::ContractIdentities::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for candid_core::ContractIdentities
+pub fn candid_core::ContractIdentities::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for candid_core::ContractIdentities
+impl core::marker::Send for candid_core::ContractIdentities
+impl core::marker::Sync for candid_core::ContractIdentities
+impl core::marker::Unpin for candid_core::ContractIdentities
+impl core::marker::UnsafeUnpin for candid_core::ContractIdentities
+impl core::panic::unwind_safe::RefUnwindSafe for candid_core::ContractIdentities
+impl core::panic::unwind_safe::UnwindSafe for candid_core::ContractIdentities
+pub struct candid_core::ContractValidationError
+pub candid_core::ContractValidationError::violations: alloc::vec::Vec<candid_core::ContractViolation>
+impl core::clone::Clone for candid_core::ContractValidationError
+pub fn candid_core::ContractValidationError::clone(&self) -> candid_core::ContractValidationError
+impl core::cmp::Eq for candid_core::ContractValidationError
+impl core::cmp::PartialEq for candid_core::ContractValidationError
+pub fn candid_core::ContractValidationError::eq(&self, &candid_core::ContractValidationError) -> bool
+impl core::error::Error for candid_core::ContractValidationError
+impl core::fmt::Debug for candid_core::ContractValidationError
+pub fn candid_core::ContractValidationError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for candid_core::ContractValidationError
+pub fn candid_core::ContractValidationError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for candid_core::ContractValidationError
+impl core::marker::Freeze for candid_core::ContractValidationError
+impl core::marker::Send for candid_core::ContractValidationError
+impl core::marker::Sync for candid_core::ContractValidationError
+impl core::marker::Unpin for candid_core::ContractValidationError
+impl core::marker::UnsafeUnpin for candid_core::ContractValidationError
+impl core::panic::unwind_safe::RefUnwindSafe for candid_core::ContractValidationError
+impl core::panic::unwind_safe::UnwindSafe for candid_core::ContractValidationError
+pub struct candid_core::Declaration
+pub candid_core::Declaration::name: alloc::string::String
+pub candid_core::Declaration::ty: candid_core::TypeRef
+impl core::clone::Clone for candid_core::Declaration
+pub fn candid_core::Declaration::clone(&self) -> candid_core::Declaration
+impl core::cmp::Eq for candid_core::Declaration
+impl core::cmp::PartialEq for candid_core::Declaration
+pub fn candid_core::Declaration::eq(&self, &candid_core::Declaration) -> bool
+impl core::fmt::Debug for candid_core::Declaration
+pub fn candid_core::Declaration::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for candid_core::Declaration
+impl serde_core::ser::Serialize for candid_core::Declaration
+pub fn candid_core::Declaration::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for candid_core::Declaration
+pub fn candid_core::Declaration::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for candid_core::Declaration
+impl core::marker::Send for candid_core::Declaration
+impl core::marker::Sync for candid_core::Declaration
+impl core::marker::Unpin for candid_core::Declaration
+impl core::marker::UnsafeUnpin for candid_core::Declaration
+impl core::panic::unwind_safe::RefUnwindSafe for candid_core::Declaration
+impl core::panic::unwind_safe::UnwindSafe for candid_core::Declaration
+pub struct candid_core::Diagnostic
+pub candid_core::Diagnostic::code: alloc::string::String
+pub candid_core::Diagnostic::message: alloc::string::String
+pub candid_core::Diagnostic::notes: alloc::vec::Vec<alloc::string::String>
+pub candid_core::Diagnostic::path: core::option::Option<alloc::string::String>
+pub candid_core::Diagnostic::phase: core::option::Option<candid_core::DiagnosticPhase>
+pub candid_core::Diagnostic::related: alloc::vec::Vec<candid_core::RelatedLocation>
+pub candid_core::Diagnostic::resource_limit: core::option::Option<candid_core::ResourceLimitInfo>
+pub candid_core::Diagnostic::severity: core::option::Option<candid_core::Severity>
+pub candid_core::Diagnostic::span: core::option::Option<candid_core::SourceSpan>
+impl candid_core::Diagnostic
+pub fn candid_core::Diagnostic::compiler(impl core::convert::Into<alloc::string::String>, candid_core::DiagnosticPhase, impl core::convert::Into<alloc::string::String>) -> Self
+pub fn candid_core::Diagnostic::resource_violation(&str, u64, u64) -> Self
+pub fn candid_core::Diagnostic::violation(impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>, impl core::convert::Into<alloc::string::String>) -> Self
+pub fn candid_core::Diagnostic::with_notes(self, alloc::vec::Vec<alloc::string::String>) -> Self
+pub fn candid_core::Diagnostic::with_path(self, impl core::convert::Into<alloc::string::String>) -> Self
+pub fn candid_core::Diagnostic::with_related(self, alloc::vec::Vec<candid_core::RelatedLocation>) -> Self
+pub fn candid_core::Diagnostic::with_resource_limit(self, candid_core::ResourceLimitInfo) -> Self
+pub fn candid_core::Diagnostic::with_span(self, candid_core::SourceSpan) -> Self
+impl core::clone::Clone for candid_core::Diagnostic
+pub fn candid_core::Diagnostic::clone(&self) -> candid_core::Diagnostic
+impl core::cmp::Eq for candid_core::Diagnostic
+impl core::cmp::PartialEq for candid_core::Diagnostic
+pub fn candid_core::Diagnostic::eq(&self, &candid_core::Diagnostic) -> bool
+impl core::fmt::Debug for candid_core::Diagnostic
+pub fn candid_core::Diagnostic::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for candid_core::Diagnostic
+impl serde_core::ser::Serialize for candid_core::Diagnostic
+pub fn candid_core::Diagnostic::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for candid_core::Diagnostic
+pub fn candid_core::Diagnostic::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for candid_core::Diagnostic
+impl core::marker::Send for candid_core::Diagnostic
+impl core::marker::Sync for candid_core::Diagnostic
+impl core::marker::Unpin for candid_core::Diagnostic
+impl core::marker::UnsafeUnpin for candid_core::Diagnostic
+impl core::panic::unwind_safe::RefUnwindSafe for candid_core::Diagnostic
+impl core::panic::unwind_safe::UnwindSafe for candid_core::Diagnostic
+pub struct candid_core::Field
+pub candid_core::Field::id: u32
+pub candid_core::Field::ty: candid_core::TypeRef
+impl core::clone::Clone for candid_core::Field
+pub fn candid_core::Field::clone(&self) -> candid_core::Field
+impl core::cmp::Eq for candid_core::Field
+impl core::cmp::PartialEq for candid_core::Field
+pub fn candid_core::Field::eq(&self, &candid_core::Field) -> bool
+impl core::fmt::Debug for candid_core::Field
+pub fn candid_core::Field::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for candid_core::Field
+impl serde_core::ser::Serialize for candid_core::Field
+pub fn candid_core::Field::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for candid_core::Field
+pub fn candid_core::Field::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for candid_core::Field
+impl core::marker::Send for candid_core::Field
+impl core::marker::Sync for candid_core::Field
+impl core::marker::Unpin for candid_core::Field
+impl core::marker::UnsafeUnpin for candid_core::Field
+impl core::panic::unwind_safe::RefUnwindSafe for candid_core::Field
+impl core::panic::unwind_safe::UnwindSafe for candid_core::Field
+pub struct candid_core::Limits
+impl candid_core::Limits
+pub fn candid_core::Limits::deadline_exceeded(&self) -> bool
+pub fn candid_core::Limits::deadline_unix_ms(&self) -> core::option::Option<u64>
+pub fn candid_core::Limits::profile(&self) -> candid_core::LimitsProfile
+pub fn candid_core::Limits::with_deadline_unix_ms(self, core::option::Option<u64>) -> Self
+impl candid_core::Limits
+pub fn candid_core::Limits::max_artifact_identity_work(&self) -> usize
+pub fn candid_core::Limits::max_bundle_bytes(&self) -> usize
+pub fn candid_core::Limits::max_canonicalization_work(&self) -> usize
+pub fn candid_core::Limits::max_declarations(&self) -> usize
+pub fn candid_core::Limits::max_diagnostics(&self) -> usize
+pub fn candid_core::Limits::max_fields(&self) -> usize
+pub fn candid_core::Limits::max_function_values(&self) -> usize
+pub fn candid_core::Limits::max_graph_edges(&self) -> usize
+pub fn candid_core::Limits::max_import_depth(&self) -> usize
+pub fn candid_core::Limits::max_import_edges(&self) -> usize
+pub fn candid_core::Limits::max_input_bytes(&self) -> usize
+pub fn candid_core::Limits::max_methods(&self) -> usize
+pub fn candid_core::Limits::max_producer_bytes(&self) -> usize
+pub fn candid_core::Limits::max_provenance_work(&self) -> usize
+pub fn candid_core::Limits::max_source_bytes(&self) -> usize
+pub fn candid_core::Limits::max_source_id_bytes(&self) -> usize
+pub fn candid_core::Limits::max_source_identity_work(&self) -> usize
+pub fn candid_core::Limits::max_source_nesting(&self) -> usize
+pub fn candid_core::Limits::max_sources(&self) -> usize
+pub fn candid_core::Limits::max_string_bytes(&self) -> usize
+pub fn candid_core::Limits::max_type_depth(&self) -> usize
+pub fn candid_core::Limits::max_type_nodes(&self) -> usize
+pub fn candid_core::Limits::max_value_bytes(&self) -> usize
+pub fn candid_core::Limits::max_value_depth(&self) -> usize
+pub fn candid_core::Limits::max_value_elements(&self) -> usize
+pub fn candid_core::Limits::max_value_nesting(&self) -> usize
+pub fn candid_core::Limits::with_max_artifact_identity_work(self, usize) -> Self
+pub fn candid_core::Limits::with_max_bundle_bytes(self, usize) -> Self
+pub fn candid_core::Limits::with_max_canonicalization_work(self, usize) -> Self
+pub fn candid_core::Limits::with_max_declarations(self, usize) -> Self
+pub fn candid_core::Limits::with_max_diagnostics(self, usize) -> Self
+pub fn candid_core::Limits::with_max_fields(self, usize) -> Self
+pub fn candid_core::Limits::with_max_function_values(self, usize) -> Self
+pub fn candid_core::Limits::with_max_graph_edges(self, usize) -> Self
+pub fn candid_core::Limits::with_max_import_depth(self, usize) -> Self
+pub fn candid_core::Limits::with_max_import_edges(self, usize) -> Self
+pub fn candid_core::Limits::with_max_input_bytes(self, usize) -> Self
+pub fn candid_core::Limits::with_max_methods(self, usize) -> Self
+pub fn candid_core::Limits::with_max_producer_bytes(self, usize) -> Self
+pub fn candid_core::Limits::with_max_provenance_work(self, usize) -> Self
+pub fn candid_core::Limits::with_max_source_bytes(self, usize) -> Self
+pub fn candid_core::Limits::with_max_source_id_bytes(self, usize) -> Self
+pub fn candid_core::Limits::with_max_source_identity_work(self, usize) -> Self
+pub fn candid_core::Limits::with_max_source_nesting(self, usize) -> Self
+pub fn candid_core::Limits::with_max_sources(self, usize) -> Self
+pub fn candid_core::Limits::with_max_string_bytes(self, usize) -> Self
+pub fn candid_core::Limits::with_max_type_depth(self, usize) -> Self
+pub fn candid_core::Limits::with_max_type_nodes(self, usize) -> Self
+pub fn candid_core::Limits::with_max_value_bytes(self, usize) -> Self
+pub fn candid_core::Limits::with_max_value_depth(self, usize) -> Self
+pub fn candid_core::Limits::with_max_value_elements(self, usize) -> Self
+pub fn candid_core::Limits::with_max_value_nesting(self, usize) -> Self
+impl core::clone::Clone for candid_core::Limits
+pub fn candid_core::Limits::clone(&self) -> candid_core::Limits
+impl core::cmp::Eq for candid_core::Limits
+impl core::cmp::PartialEq for candid_core::Limits
+pub fn candid_core::Limits::eq(&self, &candid_core::Limits) -> bool
+impl core::convert::From<&candid_core::Limits> for candid_core::LimitsConfig
+pub fn candid_core::LimitsConfig::from(&candid_core::Limits) -> Self
+impl core::convert::From<candid_core::Limits> for candid_core::LimitsConfig
+pub fn candid_core::LimitsConfig::from(candid_core::Limits) -> Self
+impl core::convert::TryFrom<candid_core::LimitsConfig> for candid_core::Limits
+pub type candid_core::Limits::Error = candid_core::LimitsConfigError
+pub fn candid_core::Limits::try_from(candid_core::LimitsConfig) -> core::result::Result<Self, candid_core::LimitsConfigError>
+impl core::default::Default for candid_core::Limits
+pub fn candid_core::Limits::default() -> Self
+impl core::fmt::Debug for candid_core::Limits
+pub fn candid_core::Limits::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for candid_core::Limits
+impl serde_core::ser::Serialize for candid_core::Limits
+pub fn candid_core::Limits::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for candid_core::Limits
+pub fn candid_core::Limits::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for candid_core::Limits
+impl core::marker::Send for candid_core::Limits
+impl core::marker::Sync for candid_core::Limits
+impl core::marker::Unpin for candid_core::Limits
+impl core::marker::UnsafeUnpin for candid_core::Limits
+impl core::panic::unwind_safe::RefUnwindSafe for candid_core::Limits
+impl core::panic::unwind_safe::UnwindSafe for candid_core::Limits
+pub struct candid_core::LimitsConfig
+impl core::clone::Clone for candid_core::LimitsConfig
+pub fn candid_core::LimitsConfig::clone(&self) -> candid_core::LimitsConfig
+impl core::cmp::Eq for candid_core::LimitsConfig
+impl core::cmp::PartialEq for candid_core::LimitsConfig
+pub fn candid_core::LimitsConfig::eq(&self, &candid_core::LimitsConfig) -> bool
+impl core::convert::From<&candid_core::Limits> for candid_core::LimitsConfig
+pub fn candid_core::LimitsConfig::from(&candid_core::Limits) -> Self
+impl core::convert::From<candid_core::Limits> for candid_core::LimitsConfig
+pub fn candid_core::LimitsConfig::from(candid_core::Limits) -> Self
+impl core::convert::TryFrom<candid_core::LimitsConfig> for candid_core::Limits
+pub type candid_core::Limits::Error = candid_core::LimitsConfigError
+pub fn candid_core::Limits::try_from(candid_core::LimitsConfig) -> core::result::Result<Self, candid_core::LimitsConfigError>
+impl core::fmt::Debug for candid_core::LimitsConfig
+pub fn candid_core::LimitsConfig::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for candid_core::LimitsConfig
+impl serde_core::ser::Serialize for candid_core::LimitsConfig
+pub fn candid_core::LimitsConfig::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for candid_core::LimitsConfig
+pub fn candid_core::LimitsConfig::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for candid_core::LimitsConfig
+impl core::marker::Send for candid_core::LimitsConfig
+impl core::marker::Sync for candid_core::LimitsConfig
+impl core::marker::Unpin for candid_core::LimitsConfig
+impl core::marker::UnsafeUnpin for candid_core::LimitsConfig
+impl core::panic::unwind_safe::RefUnwindSafe for candid_core::LimitsConfig
+impl core::panic::unwind_safe::UnwindSafe for candid_core::LimitsConfig
+pub struct candid_core::LimitsConfigError
+impl candid_core::LimitsConfigError
+pub fn candid_core::LimitsConfigError::code(&self) -> &str
+pub fn candid_core::LimitsConfigError::message(&self) -> &str
+pub fn candid_core::LimitsConfigError::path(&self) -> &str
+impl core::clone::Clone for candid_core::LimitsConfigError
+pub fn candid_core::LimitsConfigError::clone(&self) -> candid_core::LimitsConfigError
+impl core::cmp::Eq for candid_core::LimitsConfigError
+impl core::cmp::PartialEq for candid_core::LimitsConfigError
+pub fn candid_core::LimitsConfigError::eq(&self, &candid_core::LimitsConfigError) -> bool
+impl core::error::Error for candid_core::LimitsConfigError
+impl core::fmt::Debug for candid_core::LimitsConfigError
+pub fn candid_core::LimitsConfigError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::fmt::Display for candid_core::LimitsConfigError
+pub fn candid_core::LimitsConfigError::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for candid_core::LimitsConfigError
+impl core::marker::Freeze for candid_core::LimitsConfigError
+impl core::marker::Send for candid_core::LimitsConfigError
+impl core::marker::Sync for candid_core::LimitsConfigError
+impl core::marker::Unpin for candid_core::LimitsConfigError
+impl core::marker::UnsafeUnpin for candid_core::LimitsConfigError
+impl core::panic::unwind_safe::RefUnwindSafe for candid_core::LimitsConfigError
+impl core::panic::unwind_safe::UnwindSafe for candid_core::LimitsConfigError
+pub struct candid_core::ProducerInfo
+pub candid_core::ProducerInfo::candid_parser_version: alloc::string::String
+pub candid_core::ProducerInfo::candid_version: alloc::string::String
+pub candid_core::ProducerInfo::name: alloc::string::String
+pub candid_core::ProducerInfo::version: alloc::string::String
+impl candid_core::ProducerInfo
+pub fn candid_core::ProducerInfo::current() -> Self
+impl core::clone::Clone for candid_core::ProducerInfo
+pub fn candid_core::ProducerInfo::clone(&self) -> candid_core::ProducerInfo
+impl core::cmp::Eq for candid_core::ProducerInfo
+impl core::cmp::PartialEq for candid_core::ProducerInfo
+pub fn candid_core::ProducerInfo::eq(&self, &candid_core::ProducerInfo) -> bool
+impl core::fmt::Debug for candid_core::ProducerInfo
+pub fn candid_core::ProducerInfo::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for candid_core::ProducerInfo
+impl serde_core::ser::Serialize for candid_core::ProducerInfo
+pub fn candid_core::ProducerInfo::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for candid_core::ProducerInfo
+pub fn candid_core::ProducerInfo::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for candid_core::ProducerInfo
+impl core::marker::Send for candid_core::ProducerInfo
+impl core::marker::Sync for candid_core::ProducerInfo
+impl core::marker::Unpin for candid_core::ProducerInfo
+impl core::marker::UnsafeUnpin for candid_core::ProducerInfo
+impl core::panic::unwind_safe::RefUnwindSafe for candid_core::ProducerInfo
+impl core::panic::unwind_safe::UnwindSafe for candid_core::ProducerInfo
+pub struct candid_core::RawContract
+pub candid_core::RawContract::actor: core::option::Option<candid_core::Actor>
+pub candid_core::RawContract::canonicalization_profile: alloc::string::String
+pub candid_core::RawContract::declarations: alloc::vec::Vec<candid_core::Declaration>
+pub candid_core::RawContract::format: alloc::string::String
+pub candid_core::RawContract::format_version: u32
+pub candid_core::RawContract::identities: candid_core::ContractIdentities
+pub candid_core::RawContract::producer: candid_core::ProducerInfo
+pub candid_core::RawContract::semantics_profile: alloc::string::String
+pub candid_core::RawContract::types: alloc::vec::Vec<candid_core::TypeNode>
+impl core::clone::Clone for candid_core::RawContract
+pub fn candid_core::RawContract::clone(&self) -> candid_core::RawContract
+impl core::cmp::Eq for candid_core::RawContract
+impl core::cmp::PartialEq for candid_core::RawContract
+pub fn candid_core::RawContract::eq(&self, &candid_core::RawContract) -> bool
+impl core::convert::From<&candid_core::Contract> for candid_core::RawContract
+pub fn candid_core::RawContract::from(&candid_core::Contract) -> Self
+impl core::fmt::Debug for candid_core::RawContract
+pub fn candid_core::RawContract::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for candid_core::RawContract
+impl serde_core::ser::Serialize for candid_core::RawContract
+pub fn candid_core::RawContract::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for candid_core::RawContract
+pub fn candid_core::RawContract::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for candid_core::RawContract
+impl core::marker::Send for candid_core::RawContract
+impl core::marker::Sync for candid_core::RawContract
+impl core::marker::Unpin for candid_core::RawContract
+impl core::marker::UnsafeUnpin for candid_core::RawContract
+impl core::panic::unwind_safe::RefUnwindSafe for candid_core::RawContract
+impl core::panic::unwind_safe::UnwindSafe for candid_core::RawContract
+pub struct candid_core::RelatedLocation
+pub candid_core::RelatedLocation::message: alloc::string::String
+pub candid_core::RelatedLocation::span: core::option::Option<candid_core::SourceSpan>
+impl core::clone::Clone for candid_core::RelatedLocation
+pub fn candid_core::RelatedLocation::clone(&self) -> candid_core::RelatedLocation
+impl core::cmp::Eq for candid_core::RelatedLocation
+impl core::cmp::PartialEq for candid_core::RelatedLocation
+pub fn candid_core::RelatedLocation::eq(&self, &candid_core::RelatedLocation) -> bool
+impl core::fmt::Debug for candid_core::RelatedLocation
+pub fn candid_core::RelatedLocation::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for candid_core::RelatedLocation
+impl serde_core::ser::Serialize for candid_core::RelatedLocation
+pub fn candid_core::RelatedLocation::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for candid_core::RelatedLocation
+pub fn candid_core::RelatedLocation::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for candid_core::RelatedLocation
+impl core::marker::Send for candid_core::RelatedLocation
+impl core::marker::Sync for candid_core::RelatedLocation
+impl core::marker::Unpin for candid_core::RelatedLocation
+impl core::marker::UnsafeUnpin for candid_core::RelatedLocation
+impl core::panic::unwind_safe::RefUnwindSafe for candid_core::RelatedLocation
+impl core::panic::unwind_safe::UnwindSafe for candid_core::RelatedLocation
+pub struct candid_core::ResourceLimitInfo
+pub candid_core::ResourceLimitInfo::limit: u64
+pub candid_core::ResourceLimitInfo::observed: u64
+pub candid_core::ResourceLimitInfo::resource: alloc::string::String
+impl core::clone::Clone for candid_core::ResourceLimitInfo
+pub fn candid_core::ResourceLimitInfo::clone(&self) -> candid_core::ResourceLimitInfo
+impl core::cmp::Eq for candid_core::ResourceLimitInfo
+impl core::cmp::PartialEq for candid_core::ResourceLimitInfo
+pub fn candid_core::ResourceLimitInfo::eq(&self, &candid_core::ResourceLimitInfo) -> bool
+impl core::fmt::Debug for candid_core::ResourceLimitInfo
+pub fn candid_core::ResourceLimitInfo::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for candid_core::ResourceLimitInfo
+impl serde_core::ser::Serialize for candid_core::ResourceLimitInfo
+pub fn candid_core::ResourceLimitInfo::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for candid_core::ResourceLimitInfo
+pub fn candid_core::ResourceLimitInfo::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for candid_core::ResourceLimitInfo
+impl core::marker::Send for candid_core::ResourceLimitInfo
+impl core::marker::Sync for candid_core::ResourceLimitInfo
+impl core::marker::Unpin for candid_core::ResourceLimitInfo
+impl core::marker::UnsafeUnpin for candid_core::ResourceLimitInfo
+impl core::panic::unwind_safe::RefUnwindSafe for candid_core::ResourceLimitInfo
+impl core::panic::unwind_safe::UnwindSafe for candid_core::ResourceLimitInfo
+pub struct candid_core::RuntimeContext
+pub candid_core::RuntimeContext::limits: candid_core::Limits
+impl candid_core::RuntimeContext
+pub fn candid_core::RuntimeContext::cancellation_token(&self) -> candid_core::CancellationToken
+pub fn candid_core::RuntimeContext::new(candid_core::Limits) -> Self
+pub fn candid_core::RuntimeContext::with_cancellation(self, candid_core::CancellationToken) -> Self
+impl core::clone::Clone for candid_core::RuntimeContext
+pub fn candid_core::RuntimeContext::clone(&self) -> candid_core::RuntimeContext
+impl core::cmp::Eq for candid_core::RuntimeContext
+impl core::cmp::PartialEq for candid_core::RuntimeContext
+pub fn candid_core::RuntimeContext::eq(&self, &Self) -> bool
+impl core::default::Default for candid_core::RuntimeContext
+pub fn candid_core::RuntimeContext::default() -> Self
+impl core::fmt::Debug for candid_core::RuntimeContext
+pub fn candid_core::RuntimeContext::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl serde_core::ser::Serialize for candid_core::RuntimeContext
+pub fn candid_core::RuntimeContext::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for candid_core::RuntimeContext
+pub fn candid_core::RuntimeContext::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for candid_core::RuntimeContext
+impl core::marker::Send for candid_core::RuntimeContext
+impl core::marker::Sync for candid_core::RuntimeContext
+impl core::marker::Unpin for candid_core::RuntimeContext
+impl core::marker::UnsafeUnpin for candid_core::RuntimeContext
+impl core::panic::unwind_safe::RefUnwindSafe for candid_core::RuntimeContext
+impl core::panic::unwind_safe::UnwindSafe for candid_core::RuntimeContext
+pub struct candid_core::ServiceMethod
+pub candid_core::ServiceMethod::function: candid_core::TypeRef
+pub candid_core::ServiceMethod::id: u32
+pub candid_core::ServiceMethod::name: alloc::string::String
+impl core::clone::Clone for candid_core::ServiceMethod
+pub fn candid_core::ServiceMethod::clone(&self) -> candid_core::ServiceMethod
+impl core::cmp::Eq for candid_core::ServiceMethod
+impl core::cmp::PartialEq for candid_core::ServiceMethod
+pub fn candid_core::ServiceMethod::eq(&self, &candid_core::ServiceMethod) -> bool
+impl core::fmt::Debug for candid_core::ServiceMethod
+pub fn candid_core::ServiceMethod::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for candid_core::ServiceMethod
+impl serde_core::ser::Serialize for candid_core::ServiceMethod
+pub fn candid_core::ServiceMethod::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for candid_core::ServiceMethod
+pub fn candid_core::ServiceMethod::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for candid_core::ServiceMethod
+impl core::marker::Send for candid_core::ServiceMethod
+impl core::marker::Sync for candid_core::ServiceMethod
+impl core::marker::Unpin for candid_core::ServiceMethod
+impl core::marker::UnsafeUnpin for candid_core::ServiceMethod
+impl core::panic::unwind_safe::RefUnwindSafe for candid_core::ServiceMethod
+impl core::panic::unwind_safe::UnwindSafe for candid_core::ServiceMethod
+pub struct candid_core::SourceSpan
+pub candid_core::SourceSpan::end_byte: core::option::Option<u64>
+pub candid_core::SourceSpan::source_name: core::option::Option<alloc::string::String>
+pub candid_core::SourceSpan::start_byte: core::option::Option<u64>
+impl candid_core::SourceSpan
+pub fn candid_core::SourceSpan::exact(core::option::Option<alloc::string::String>, u64, u64) -> Self
+pub fn candid_core::SourceSpan::source_only(impl core::convert::Into<alloc::string::String>) -> Self
+impl core::clone::Clone for candid_core::SourceSpan
+pub fn candid_core::SourceSpan::clone(&self) -> candid_core::SourceSpan
+impl core::cmp::Eq for candid_core::SourceSpan
+impl core::cmp::PartialEq for candid_core::SourceSpan
+pub fn candid_core::SourceSpan::eq(&self, &candid_core::SourceSpan) -> bool
+impl core::fmt::Debug for candid_core::SourceSpan
+pub fn candid_core::SourceSpan::fmt(&self, &mut core::fmt::Formatter<'_>) -> core::fmt::Result
+impl core::marker::StructuralPartialEq for candid_core::SourceSpan
+impl serde_core::ser::Serialize for candid_core::SourceSpan
+pub fn candid_core::SourceSpan::serialize<__S>(&self, __S) -> core::result::Result<<__S as serde_core::ser::Serializer>::Ok, <__S as serde_core::ser::Serializer>::Error> where __S: serde_core::ser::Serializer
+impl<'de> serde_core::de::Deserialize<'de> for candid_core::SourceSpan
+pub fn candid_core::SourceSpan::deserialize<__D>(__D) -> core::result::Result<Self, <__D as serde_core::de::Deserializer>::Error> where __D: serde_core::de::Deserializer<'de>
+impl core::marker::Freeze for candid_core::SourceSpan
+impl core::marker::Send for candid_core::SourceSpan
+impl core::marker::Sync for candid_core::SourceSpan
+impl core::marker::Unpin for candid_core::SourceSpan
+impl core::marker::UnsafeUnpin for candid_core::SourceSpan
+impl core::panic::unwind_safe::RefUnwindSafe for candid_core::SourceSpan
+impl core::panic::unwind_safe::UnwindSafe for candid_core::SourceSpan
+pub const candid_core::CANONICALIZATION_PROFILE: &str
+pub const candid_core::CONTRACT_FORMAT: &str
+pub const candid_core::FORMAT_VERSION: u32
+pub const candid_core::LIMITS_CONFIG_VERSION: u64
+pub const candid_core::SEMANTICS_PROFILE: &str
+pub fn candid_core::artifact_id_with_context(candid_core::ArtifactKind, &[u8], &candid_core::RuntimeContext) -> core::result::Result<alloc::string::String, candid_core::ContractValidationError>
+pub fn candid_core::artifact_id_with_limits(candid_core::ArtifactKind, &[u8], &candid_core::Limits) -> core::result::Result<alloc::string::String, candid_core::ContractValidationError>
+pub type candid_core::ContractViolation = candid_core::Diagnostic
+pub type candid_core::TypeRef = u32
