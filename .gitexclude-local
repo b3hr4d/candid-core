@@ -1,3 +1,0 @@
-# Local-only repositories and metadata that must never enter Candid Core.
-.gitexclude-local
-/candid-scope/
