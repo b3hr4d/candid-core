@@ -77,13 +77,15 @@ something outside the repository are gathered in [releasing.md](releasing.md#7-a
 ### Pinned tool versions
 
 Two release tools are not in the dependency graph and must not become
-dependencies of the crate they verify. Their versions are pinned in exactly one
-place — [`tests/fixtures/packaging/release-tools.env`](../tests/fixtures/packaging/release-tools.env)
+dependencies of the crate they verify, and the Cargo that produces the archive
+is pinned for a third reason. All three versions live in exactly one place —
+[`tests/fixtures/packaging/release-tools.env`](../tests/fixtures/packaging/release-tools.env)
 — which both the workflow and the local scripts read, so a local run and a CI
 run cannot disagree about what was executed.
 
 | Tool | Pinned version | Why it is pinned this way |
 | --- | --- | --- |
+| Release toolchain | `1.94.1` | The Cargo that packages and publishes. `cargo package` is byte-stable within one Cargo version and not across versions: this tree at one commit, packaged by 1.91.1 and by 1.94.1, unpacks identically and produces different `.crate` digests (`493e06…` versus `abe811…`). `cargo publish` re-packages rather than uploading a supplied archive, so a rolling `stable` would let the recorded digest describe an archive nobody published. |
 | `cargo-deny` | `0.20.2` | Advisories, licenses, sources, bans. Run on current stable; 0.20.2 itself declares `rust-version = "1.88"`, so it is deliberately *not* an MSRV dependency of this crate. |
 | `cargo-public-api` | `0.52.0` | Generates the committed public API inventory. |
 | Nightly toolchain | `nightly-2026-07-15` | `cargo-public-api` builds rustdoc JSON, which is nightly-only and whose format is unstable. An unpinned nightly would rewrite the committed snapshots on its own schedule and the drift check would stop meaning anything. |
@@ -266,9 +268,11 @@ merge commit, and a crates.io URL are all things that either exist or do not.
 | Pull request | `pending` |
 | `Verify` run | `pending` |
 | `Release candidate` run | `pending` |
+| Release toolchain | `pending` — must be the `RELEASE_TOOLCHAIN` in `release-tools.env`, in CI and at publish time |
 | `.crate` file name | `pending` |
 | `.crate` bytes | `pending` |
 | `.crate` SHA-256 | `pending` |
+| crates.io recorded checksum | not performed; exists only after publication — see [releasing.md step 7](releasing.md#7-authorized-mutation) |
 | Packaged path count | `pending` |
 | Packaged contents | attached as the `crate-archive-<sha>` artifact — `pending` |
 | `cargo publish --dry-run --locked` | `pending` |
@@ -286,7 +290,10 @@ merge commit, and a crates.io URL are all things that either exist or do not.
 The SHA-256 belongs in a release record and never in the repository: the next
 commit changes `.cargo_vcs_info.json` inside the archive, so a committed checksum
 is stale by construction. CI reports it in the job summary and retains it, with
-the exact file list, as a build artifact.
+the exact file list and the Cargo version that produced it, as a build artifact.
+It identifies an archive only together with that commit and that Cargo; the
+digest crates.io records after publication is the one a consumer's `Cargo.lock`
+carries, and step 7 compares the two.
 
 ## Recorded canonicalization v1 evidence
 

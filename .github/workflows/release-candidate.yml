@@ -37,9 +37,28 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      # Only the assignments: the runner's environment-file parser rejects any
+      # line that is not `KEY=value`, so the comments in that file cannot be
+      # piped through verbatim.
+      - name: Load the pinned tool versions
+        run: grep -E '^[A-Z_]+=' tests/fixtures/packaging/release-tools.env >> "$GITHUB_ENV"
+      # An exact Cargo, not `stable`. The digest this job records is only
+      # evidence about the published artifact if the operator's `cargo publish`
+      # packages with the same Cargo: `cargo package` is byte-stable within a
+      # version and not across versions, and `cargo publish` re-packages instead
+      # of uploading an archive you hand it. releasing.md pins the human half of
+      # this to the same value.
       - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
         with:
-          toolchain: stable
+          toolchain: ${{ env.RELEASE_TOOLCHAIN }}
+      - name: Confirm the pinned Cargo is the one packaging
+        run: |
+          set -euo pipefail
+          actual="$(cargo --version | cut -d' ' -f2)"
+          if [ "${actual}" != "${RELEASE_TOOLCHAIN}" ]; then
+            printf 'expected cargo %s, found %s\n' "${RELEASE_TOOLCHAIN}" "${actual}" >&2
+            exit 1
+          fi
       # `--locked` throughout: a release archive is built from the tracked
       # dependency graph or not at all.
       - name: Build the archive
@@ -53,7 +72,10 @@ jobs:
       # The digest and the exact file list are the evidence a release record
       # quotes. They are reported and retained, never committed: the next commit
       # changes `.cargo_vcs_info.json` inside the archive, so a checked-in
-      # checksum would be stale by construction.
+      # checksum would be stale by construction. The digest is bound to the
+      # commit *and* to `RELEASE_TOOLCHAIN`, which is why the Cargo version is
+      # recorded beside it; after publication, crates.io's own recorded checksum
+      # is what closes the loop (releasing.md step 7).
       - name: Record the archive digest and contents
         run: |
           set -euxo pipefail
@@ -68,6 +90,7 @@ jobs:
             echo "| Evidence | Value |"
             echo "| --- | --- |"
             echo "| Commit | \`${GITHUB_SHA}\` |"
+            echo "| Cargo | \`$(cargo --version)\` |"
             echo "| Archive | \`$(basename "${archive}")\` |"
             echo "| Bytes | $(cat release-evidence/bytes.txt) |"
             echo "| SHA-256 | \`$(cut -d' ' -f1 release-evidence/sha256.txt)\` |"

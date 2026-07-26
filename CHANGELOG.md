@@ -118,8 +118,11 @@ have seen them:
 - A root `LICENSE` carries the complete Apache License 2.0 text.
 - The manifest declares `repository`, `homepage`, `documentation`, `readme`, and
   a narrow keyword/category set.
-- A `Release candidate` workflow packages the crate, verifies the archive
-  manifest, records its SHA-256 and exact file list as CI evidence, and builds
+- A `Release candidate` workflow packages the crate with the exact Cargo pinned
+  in `tests/fixtures/packaging/release-tools.env` — `cargo package` bytes are
+  reproducible within a Cargo version and not across versions, so the digest and
+  the publish have to share one — verifies the archive manifest, records its
+  SHA-256, Cargo version, and exact file list as CI evidence, and builds
   external consumers — base, `compiler`, full native, the installed CLI, and two
   `wasm32-unknown-unknown` surfaces — against the *unpacked archive* rather than
   against this repository. It holds `contents: read`, accepts no crates.io

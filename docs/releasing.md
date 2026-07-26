@@ -19,7 +19,17 @@ local run and a CI run cannot disagree about what was executed. Source it first:
 
 ```sh
 . tests/fixtures/packaging/release-tools.env
+rustup toolchain install "${RELEASE_TOOLCHAIN}"
 ```
+
+`RELEASE_TOOLCHAIN` is the exact Cargo that packages and publishes. It is pinned
+rather than left as `stable` because `cargo package` is byte-stable within one
+Cargo version and not across versions: this tree at one commit packaged by
+1.91.1 and by 1.94.1 unpacks identically and yields different `.crate` digests.
+`cargo publish` re-packages rather than uploading an archive you hand it, so if
+the operator's Cargo differs from CI's, the recorded SHA-256 describes an
+archive nobody published. Use `cargo "+${RELEASE_TOOLCHAIN}"` for every
+packaging and publishing command below.
 
 ## 1. Prepare a release candidate from a clean, exact commit
 
@@ -124,11 +134,12 @@ Build the archive and look at it. Do not skip to the dry run — the dry run
 succeeding tells you the archive compiles, not that it contains the right files.
 
 ```sh
-cargo package --locked
+cargo "+${RELEASE_TOOLCHAIN}" --version                # must be ${RELEASE_TOOLCHAIN}
+cargo "+${RELEASE_TOOLCHAIN}" package --locked
 
 # What is in it, and nothing else.
 python3 tests/fixtures/packaging/verify_package_manifest.py --locked
-cargo package --list --locked | sort
+cargo "+${RELEASE_TOOLCHAIN}" package --list --locked | sort
 
 # How big, and exactly which bytes.
 ls -l target/package/candid-core-*.crate
@@ -139,10 +150,13 @@ tar -tzf target/package/candid-core-*.crate | sort
 tar -xzf target/package/candid-core-*.crate -C "$(mktemp -d)"
 ```
 
-Record the byte size and the SHA-256 in the evidence table (step 6). The digest
-belongs in a release record, never committed to the repository — the next commit
-changes `.cargo_vcs_info.json` and invalidates it, so a committed checksum is a
-stale checksum by construction.
+Record the byte size and the SHA-256 in the evidence table (step 6), together
+with the Cargo version that produced them. The digest identifies an archive only
+in combination with both the commit and the Cargo: change either and the bytes
+change even though the unpacked source does not. The digest belongs in a release
+record, never committed to the repository — the next commit changes
+`.cargo_vcs_info.json` and invalidates it, so a committed checksum is a stale
+checksum by construction.
 
 Read the unpacked tree, not just the file list. Three things to confirm by eye:
 
@@ -159,7 +173,7 @@ Read the unpacked tree, not just the file list. Three things to confirm by eye:
 ## 4. Verify the dry run and clean consumers built from the archive
 
 ```sh
-cargo publish --dry-run --locked
+cargo "+${RELEASE_TOOLCHAIN}" publish --dry-run --locked
 bash tests/fixtures/packaging/verify_packaged_consumers.sh
 ```
 
@@ -223,15 +237,36 @@ these, and no automation in this repository handles a credential.
 1. **Tag.** `git tag -a v<version> -m "candid-core <version>"` on the exact
    release commit, then `git push origin v<version>`. Tag the commit the evidence
    names — not `HEAD`, which may have moved.
-2. **Publish.** `cargo publish --locked` from that same clean commit. The
-   operator authenticates interactively (`cargo login`, or a token supplied in
-   that operator's own environment). Do not add a crates.io token to GitHub
-   Actions secrets: the `Release candidate` workflow is designed to be
-   unable to publish, and adding a token removes that property.
-3. **GitHub prerelease.** Create a release from the tag, marked as a
-   prerelease, with the changelog entry as its body and the archive's SHA-256
-   quoted in it. `0.1.0-beta.1` is a prerelease in the semver sense and must be
-   marked as one in GitHub too.
+2. **Publish.** `cargo "+${RELEASE_TOOLCHAIN}" publish --locked` from that same
+   clean commit. The toolchain is not optional here: `cargo publish` builds its
+   own archive rather than uploading the one step 3 measured, so publishing with
+   a different Cargo uploads different bytes and silently detaches the recorded
+   digest from the artifact. The operator authenticates interactively
+   (`cargo login`, or a token supplied in that operator's own environment). Do
+   not add a crates.io token to GitHub Actions secrets: the `Release candidate`
+   workflow is designed to be unable to publish, and adding a token removes that
+   property.
+3. **Confirm the published digest.** crates.io records the SHA-256 of what it
+   actually received. Read it back and compare it with step 3's:
+
+   ```sh
+   version="$(grep '^version' Cargo.toml | cut -d'"' -f2)"
+   curl -sS "https://crates.io/api/v1/crates/candid-core/${version}" \
+     | python3 -c 'import json,sys; print(json.load(sys.stdin)["version"]["checksum"])'
+   ```
+
+   This value, not the locally computed one, is what a consumer's `Cargo.lock`
+   will carry, and it is the digest to quote in the GitHub release. If it differs
+   from step 3's digest, the release gates measured an archive that was not
+   published: say so in the release record and in `CHANGELOG.md`, and treat it
+   as a defect in this procedure rather than a discrepancy to reconcile by hand.
+   The version cannot be re-published (§8), so the correction is a follow-up
+   version.
+4. **GitHub prerelease.** Create a release from the tag, marked as a
+   prerelease, with the changelog entry as its body and the crates.io checksum
+   from the previous step quoted in it, alongside the Cargo version that built
+   it. `0.1.0-beta.1` is a prerelease in the semver sense and must be marked as
+   one in GitHub too.
 
 Do these in that order. A tag without a publish is recoverable; a publish
 without a tag leaves a version on crates.io that no commit in the repository is
