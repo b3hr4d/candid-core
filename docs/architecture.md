@@ -96,7 +96,7 @@ The type arena includes exactly these semantic node families:
 | Family | Nodes / contents |
 | --- | --- |
 | Primitive | `{ "kind": "primitive", "primitive": "nat" }` (and every other Candid primitive) |
-| Containers | `{ "kind": "opt" | "vec", "inner": TypeRef }` |
+| Containers | `{ "kind": "opt", "inner": TypeRef }` and `{ "kind": "vec", "inner": TypeRef }` |
 | Aggregates | `record` and `variant` fields `{ id: u32, type: TypeRef }` |
 | Calls | `func` argument/result refs and one valid Candid mode |
 | Actors | `service` methods `{ name, id, function }`; `class` constructor argument refs and service ref |
