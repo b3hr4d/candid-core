@@ -1,6 +1,10 @@
 /target/
 .DS_Store
 
+# Local-only repositories and metadata that must never enter Candid Core.
+/.gitexclude-local
+/candid-scope/
+
 # Running the Python conformance reference (tests/fixtures/conformance/
 # verify_vectors.py) compiles bytecode next to the script.
 __pycache__/
