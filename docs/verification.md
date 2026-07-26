@@ -1,6 +1,6 @@
 # Release verification gates
 
-Verification status is decision-specific. An ADR remains **Implemented, verification pending** until every gate in its required-verification list has recorded evidence. ADR 0002 is **Verified** because the independent-vector gate completed as recorded below; that status does not imply that any other ADR's gates are complete.
+Verification status is decision-specific. An ADR remains **Implemented, verification pending** until every gate in its required-verification list has recorded evidence. ADR 0002 is **Verified** because the independent-vector gate completed as recorded below; that status does not imply that any other ADR's gates are complete. The release-candidate gates in [their own section](#release-candidate-gates) are a separate axis again: they bound what a published archive contains and how it behaves for an external consumer, and passing them promotes no ADR.
 
 ## Enforced in this repository
 
@@ -42,7 +42,7 @@ Verification status is decision-specific. An ADR remains **Implemented, verifica
   ```
 
   `tests/browser_wasm.rs` compiles a self-contained source and a four-source imported bundle — a type import, an `import service`, and a diamond where one target is reached from two importers — inside the browser; pins its `contract_id`, `interface_id`, `source_bundle_id`, exact logical sources and exact import edges; round-trips the provenance sidecar through `SourceInfo::try_from_raw`; and asserts that an imported service with no main service, an unbound imported type, an unparseable imported source, an unresolvable import, an exhausted `sources` limit, cancellation, and an explicit deadline all fail with stable codes, phases, and resource triples and never leak a materialized name, a temporary directory, or a native path. Every case body is shared: on `wasm32-unknown-unknown` it is a `wasm_bindgen_test` with `run_in_browser`, and on every other target the identical assertions run under the ordinary harness in the native jobs, so the pinned identities cannot drift between the two. The browser dev-dependency (`wasm-bindgen-test =0.3.58`, which pins `wasm-bindgen =0.2.108` and declares `rust-version = "1.71"`) is target-specific, so it never enters the native or MSRV graph. A non-zero exit from `wasm-pack` — a build failure, a browser that will not start, or a failed assertion inside Chrome — fails the job.
-- The dependency-boundary job runs `python3 tests/fixtures/packaging/verify_feature_graph.py`, which resolves `cargo metadata` for each feature set and target and asserts that the base graph excludes `candid`, `candid_parser`, `cap-std`, and `ic_principal`; that `host-value` adds `ic_principal` and nothing from the Candid engine; that `compiler` adds the parser stack but no `cap-std`; and that `cap-std` appears only for `filesystem-compiler` on targets that have a filesystem. It follows normal and build edges only, because dev-dependencies never reach a downstream consumer — which is also why the browser harness is invisible to it. This is the *dependency* boundary; `.crate` archive contents are unaffected by feature selection and are separate release-hardening work.
+- The dependency-boundary job runs `python3 tests/fixtures/packaging/verify_feature_graph.py`, which resolves `cargo metadata` for each feature set and target and asserts that the base graph excludes `candid`, `candid_parser`, `cap-std`, and `ic_principal`; that `host-value` adds `ic_principal` and nothing from the Candid engine; that `compiler` adds the parser stack but no `cap-std`; and that `cap-std` appears only for `filesystem-compiler` on targets that have a filesystem. It follows normal and build edges only, because dev-dependencies never reach a downstream consumer — which is also why the browser harness is invisible to it. This is the *dependency* boundary, and it is a different question from the *archive* boundary: feature selection bounds what a consumer must build, while the `include` allowlist bounds what a consumer must download. Both gates live in the same directory; see [Release-candidate gates](#release-candidate-gates) below.
 - The two compilation backends are pinned against each other by `src/compile/differential.rs`, a native unit-test module that runs the same `MemoryResolver` bundles through the promoted in-memory backend and through the materialized `candid_parser::check_file` backend `compile_did_file` uses. Valid bundles must produce byte-identical canonical Contracts, identities, and provenance; invalid bundles must produce identical stable diagnostic codes, phases, and resource triples. It covers plain type imports, service plus type imports, diamond and repeated imports, a target reached by both import kinds, recursion, actorless and class actors, and merge, type-check, duplicate-binding, and parse failures.
 - The crate's internal Candid name hash is pinned against `candid_parser::candid::idl_hash` by `tests/candid_name_hash.rs` and by unit tests in `src/name_hash.rs`, in every feature configuration including `--no-default-features`. That is what keeps canonical bytes, `contract_id`, and `interface_id` unchanged now that base validation no longer links the parser.
 
@@ -61,6 +61,239 @@ Verification status is decision-specific. An ADR remains **Implemented, verifica
 - Pull requests compile every fuzz target and replay its tracked seed and regression corpora with `-runs=0`, so a target that stops compiling, or a previously fixed crash that returns, fails on the pull request rather than on the next schedule. The replay performs no mutation and is therefore deterministic. Both fuzz jobs first assert that `fuzz/Cargo.lock` is current, since `cargo fuzz` accepts no `--locked` flag of its own.
 - The weekly fuzz job exercises source parsing, Contract JSON, canonicalization, resolver IDs, provenance, HostValue JSON, and envelope parsing, seeded from the tracked corpora. The fuzz crate mirrors the library's features and each target declares the feature that owns the API it drives, so `cargo fuzz build` still builds all seven targets while a reduced feature set builds only the targets that remain meaningful. Both fuzz jobs upload their crash artifacts, so a red run yields a reproducer without re-running locally.
 - Pull requests compile and exercise every benchmark once without enforcing wall-clock thresholds. Weekly and manually dispatched runs retain Criterion's raw estimates, allocation measurements, toolchain, host, and exact commit as downloadable CI artifacts.
+
+## Release-candidate gates
+
+Everything above answers "does this repository behave correctly". This section
+answers a different question: "does the archive a consumer downloads behave
+correctly". A consumer never sees this repository, and every gate here exists
+because a repository-relative check cannot make the claim.
+
+None of it publishes anything. The `Release candidate` workflow holds
+`permissions: contents: read` and nothing more, references no crates.io token,
+and neither tags, releases, nor mutates GitHub. The human steps that do mutate
+something outside the repository are gathered in [releasing.md](releasing.md#7-authorized-mutation).
+
+### Pinned tool versions
+
+Two release tools are not in the dependency graph and must not become
+dependencies of the crate they verify, and the Cargo that produces the archive
+is pinned for a third reason. All three versions live in exactly one place —
+[`tests/fixtures/packaging/release-tools.env`](../tests/fixtures/packaging/release-tools.env)
+— which both the workflow and the local scripts read, so a local run and a CI
+run cannot disagree about what was executed.
+
+| Tool | Pinned version | Why it is pinned this way |
+| --- | --- | --- |
+| Release toolchain | `1.94.1` | The Cargo that packages and publishes. `cargo package` is byte-stable within one Cargo version and not across versions: this tree at one commit, packaged by 1.91.1 and by 1.94.1, unpacks identically and produces different `.crate` digests (`493e06…` versus `abe811…`). `cargo publish` re-packages rather than uploading a supplied archive, so a rolling `stable` would let the recorded digest describe an archive nobody published. |
+| `cargo-deny` | `0.20.2` | Advisories, licenses, sources, bans. Run on current stable; 0.20.2 itself declares `rust-version = "1.88"`, so it is deliberately *not* an MSRV dependency of this crate. |
+| `cargo-public-api` | `0.52.0` | Generates the committed public API inventory. |
+| Nightly toolchain | `nightly-2026-07-15` | `cargo-public-api` builds rustdoc JSON, which is nightly-only and whose format is unstable. An unpinned nightly would rewrite the committed snapshots on its own schedule and the drift check would stop meaning anything. |
+
+Neither tool is a `[dependencies]` or `[dev-dependencies]` entry, and the
+packaging verifiers are Python standard library plus `cargo`, so no packaging
+check adds a crate to any consumer's graph.
+
+### The package allowlist policy
+
+`Cargo.toml` carries a positive `include` allowlist rather than an `exclude`
+list. The difference matters: with `exclude`, anything added to the repository
+ships until somebody remembers to exclude it, and an untracked scratch directory
+in a contributor's working tree is packaged by default. With `include`, a new
+path is outside the archive until it is named on purpose.
+
+The published set is:
+
+```toml
+include = [
+    "/src/**/*.rs",
+    "/examples/**/*.rs",
+    "/docs/**/*.md",
+    "/README.md",
+    "/CHANGELOG.md",
+    "/LICENSE",
+]
+```
+
+Cargo adds `Cargo.toml` (normalized), `Cargo.toml.orig`, `Cargo.lock`, and
+`.cargo_vcs_info.json` itself. `docs/**/*.md` rather than `docs/**` keeps editor
+and OS droppings out even when a working tree has them.
+
+Two consequences worth stating, because both were true and surprising:
+
+- Cargo **removes** the `[[test]]` and `[[bench]]` sections from the normalized
+  published manifest when the allowlist excludes their files, and sets
+  `autotests = false`/`autobenches = false`. Without that, a consumer's manifest
+  parse would fail on a missing target file. The `[[example]]` sections are
+  retained, because the examples *are* published.
+- Cargo's dirty-tree check considers only files that would be packaged, so
+  `cargo package --locked` succeeds with an untracked scratch directory present
+  once that directory is outside the allowlist. That is a convenience, not a
+  licence to package a dirty tree; see
+  [releasing.md step 1](releasing.md#1-prepare-a-release-candidate-from-a-clean-exact-commit).
+
+`tests/fixtures/packaging/verify_package_manifest.py` asserts the policy in
+four directions, and each one has its own failure mode:
+
+```sh
+python3 tests/fixtures/packaging/verify_package_manifest.py --locked
+```
+
+1. **Nothing internal ships.** `tests/`, `benches/`, `fuzz/`, `.github/`,
+   `.codex/`, `.claude/`, `target/`, any `candid-scope/`, and root
+   infrastructure files such as `deny.toml` and `.gitignore` must all be absent.
+2. **Nothing required is missing.** Every `src/**.rs`, `examples/**.rs`, and
+   `docs/**.md` on disk must be in the archive, along with the three root
+   documents and Cargo's own four files. `src/bounded.rs` is named individually
+   because the binary reaches it through a `#[path]` attribute, so no `mod`
+   declaration would reveal its absence. Per-directory floors catch an `include`
+   glob that silently matches nothing.
+3. **No unexplained extra path**, and no file under a published directory that
+   the allowlist does not match. A `src/table.json` behind an `include_str!` or a
+   `docs/diagram.svg` an ADR links to compiles and renders in this repository and
+   is simply absent from the archive; this is the check that catches it before a
+   consumer does.
+4. **The manifest has not drifted.** The `include` list, `repository`,
+   `homepage`, `documentation`, `readme`, `license`, the keywords, and the
+   categories are compared against recorded values, and both lockfiles must
+   record the same `candid-core` version as `Cargo.toml`. Relaxing the allowlist
+   is a deliberate edit to this script, in the same change.
+
+### Clean packaged-consumer surfaces
+
+```sh
+cargo package --locked
+cargo publish --dry-run --locked
+bash tests/fixtures/packaging/verify_packaged_consumers.sh
+```
+
+The script unpacks the archive into a fresh temporary directory, **refuses to run
+if that directory is inside the repository**, and builds six external consumer
+crates plus an installed CLI against it. Each consumer is generated on the spot
+with a `path` dependency on the unpacked package, so nothing resolves back to
+this checkout:
+
+| Consumer | Feature selection | What it proves |
+| --- | --- | --- |
+| base | `default-features = false` | The pure model builds and runs with no Candid engine; `ProducerInfo::current` finds its pinned engine versions in the *normalized* manifest Cargo generated |
+| compiler | `default-features = false, features = ["compiler"]` | Self-contained and imported in-memory compilation |
+| all-features | `["compiler", "filesystem-compiler", "host-value"]` | The full native surface including host-value validation |
+| CLI | `cargo install --locked --path <unpacked> --no-default-features --features filesystem-compiler` | The binary installs from the archive, then compiles and validates a `.did` file the script writes itself |
+| wasm base | `default-features = false`, `--target wasm32-unknown-unknown` | The base model still checks for bare WASM from the archive |
+| wasm compiler | `default-features = false, features = ["compiler"]`, `--target wasm32-unknown-unknown` | The browser surface still checks for bare WASM from the archive |
+
+Two details are load-bearing. The CLI smoke writes its own source because every
+fixture under `tests/` is deliberately outside the archive — a smoke that read
+`tests/fixtures/` would pass in this repository and fail for every real
+consumer. And `cargo tree` is run over the base consumer and fails if `candid`,
+`candid_parser`, `cap-std`, or `ic_principal` appears, because the feature
+boundary has to hold in the published manifest and not only in this one.
+
+The archive is also documented as docs.rs will build it:
+
+```sh
+RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --locked --no-default-features   # in the unpacked package
+RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --locked --all-features          # in the unpacked package
+```
+
+This is additive to the existing `Verify` feature-matrix job, which already runs
+the same warnings-denied rustdoc gate on the repository tree and continues to do
+so. The packaged run answers the separate question of whether an intra-doc link
+survives the allowlist.
+
+### Dependency, license, and advisory review
+
+```sh
+cargo install cargo-deny --version 0.20.2 --locked
+cargo deny --all-features check advisories licenses sources bans
+```
+
+`deny.toml` blanket-allows nothing. Every exception is narrow and written down:
+
+| Exception | Scope | Reason |
+| --- | --- | --- |
+| `Apache-2.0 WITH LLVM-exception` | `rustix`, `cap-primitives`, `cap-std`, `io-lifetimes`, `io-extras`, `linux-raw-sys`, `winx`, `ar_archive_writer`, `fs-set-times`, `ambient-authority`, `rustix-linux-procfs` | The standard permissive licence of the `rustix`/`cap-std` family this crate's filesystem capability layer is built on. Apache-2.0 plus an exception that only *grants* more permission. |
+| `CC0-1.0` | `tiny-keccak` only, and only as a build-dependency of `lalrpop`, itself a build-dependency of `candid_parser` | Public-domain dedication. It never appears in a consumer's runtime graph, and it arrives through an exact-pinned upstream dependency this issue does not change. |
+| `RUSTSEC-2024-0436` | `paste 1.0.15` | Unmaintained, **not** a vulnerability. Reached only through `candid 0.10.30`, which is exact-pinned; upstream offers no safe upgrade. `unmaintained = "all"` is kept — the strictest setting — so this stays one named advisory rather than a whole class being switched off. |
+
+`Unlicense` needs no entry: the crates carrying it (`memchr`, `walkdir`,
+`byteorder`, `aho-corasick`, `same-file`, `termcolor`, `winapi-util`) all offer
+`MIT OR Unlicense`, and MIT is allowed. `multiple-versions` is `warn`, not
+`deny`, because the duplicate pairs (`syn` 1/2, `thiserror` 1/2,
+`io-lifetimes` 2/3, `unicode-width` 0.1/0.2, `windows-sys` 0.59/0.61) all come
+from exact-pinned upstream graphs this crate does not control. `wildcards`,
+`unknown-registry`, and `unknown-git` are all `deny`, and `allow-git` is empty.
+
+### Public API inventory
+
+```sh
+cargo install cargo-public-api --version 0.52.0 --locked
+rustup toolchain install nightly-2026-07-15
+bash tests/fixtures/packaging/verify_public_api.sh            # fails on drift
+bash tests/fixtures/packaging/verify_public_api.sh --write    # accept reviewed drift
+```
+
+| Surface | Snapshot |
+| --- | --- |
+| base (`--no-default-features`) | `tests/fixtures/packaging/public-api-base.txt` |
+| full (`--all-features`) | `tests/fixtures/packaging/public-api-all-features.txt` |
+
+Both are generated with `-s`, which omits blanket implementations inherited from
+dependency traits. Auto-trait impls (`Send`, `Sync`, `Unpin`) and derived impls
+(`Clone`, `Debug`, `PartialEq`) are deliberately kept, because losing one of
+those is a breaking change and has to appear in the diff. Neither snapshot
+contains a version string, so a version bump alone never regenerates them.
+
+Two surfaces rather than one, because they are two published APIs: an item that
+moves from the base surface to behind a feature is a breaking change for a
+`default-features = false` consumer even though the full surface is unchanged.
+
+`cargo semver-checks` is deliberately **absent**. It compares against a
+published baseline, and `candid-core` has none: nothing has ever been published
+under this name. Semver comparison begins with the release *after*
+`0.1.0-beta.1` exists on crates.io, at which point it becomes a required gate
+here.
+
+### Release-candidate evidence template
+
+Fill this in for the specific commit being proposed, and mark anything that does
+not exist yet as `pending` rather than guessing it. A PR number, a CI run URL, a
+merge commit, and a crates.io URL are all things that either exist or do not.
+
+| Evidence | Value |
+| --- | --- |
+| Version | `pending` |
+| Release commit | `pending` |
+| Tree state | `git status --porcelain` empty — `pending` |
+| Pull request | `pending` |
+| `Verify` run | `pending` |
+| `Release candidate` run | `pending` |
+| Release toolchain | `pending` — must be the `RELEASE_TOOLCHAIN` in `release-tools.env`, in CI and at publish time |
+| `.crate` file name | `pending` |
+| `.crate` bytes | `pending` |
+| `.crate` SHA-256 | `pending` |
+| crates.io recorded checksum | not performed; exists only after publication — see [releasing.md step 7](releasing.md#7-authorized-mutation) |
+| Packaged path count | `pending` |
+| Packaged contents | attached as the `crate-archive-<sha>` artifact — `pending` |
+| `cargo publish --dry-run --locked` | `pending` |
+| Packaged consumers (6 surfaces + CLI, Linux and macOS) | `pending` |
+| Packaged rustdoc, both surfaces, warnings denied | `pending` |
+| `cargo deny check advisories licenses sources bans` | `pending` |
+| Public API drift, both surfaces | `pending` |
+| MSRV 1.78 | `pending` |
+| Browser runtime evidence | `pending` |
+| Independent canonicalization reference (11 vectors) | `pending` |
+| Independent artifact-identity reference (10 vectors) | `pending` |
+| Fuzz build and deterministic replay | `pending` |
+| Tag / crates.io / GitHub prerelease | not performed; requires explicit authorization — see [releasing.md](releasing.md#7-authorized-mutation) |
+
+The SHA-256 belongs in a release record and never in the repository: the next
+commit changes `.cargo_vcs_info.json` inside the archive, so a committed checksum
+is stale by construction. CI reports it in the job summary and retains it, with
+the exact file list and the Cargo version that produced it, as a build artifact.
+It identifies an archive only together with that commit and that Cargo; the
+digest crates.io records after publication is the one a consumer's `Cargo.lock`
+carries, and step 7 compares the two.
 
 ## Recorded canonicalization v1 evidence
 

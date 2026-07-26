@@ -1,0 +1,162 @@
+# Changelog
+
+This file records what changed between released versions of `candid-core`. The
+release procedure that produces an entry here is [docs/releasing.md](docs/releasing.md).
+
+`candid-core` is pre-1.0. Until 1.0, **any** release may change the public Rust
+API, the serialized Contract/Compilation/envelope shapes, the canonical bytes,
+and therefore the identities computed over them. Pin an exact version.
+
+## 0.1.0-beta.1 — prepared, not yet published
+
+The first release candidate. Nothing has been published to crates.io, no tag
+exists, and no GitHub release exists; the version bump and the release gates
+described here are the preparation for that decision, not the decision itself.
+The tag, the crates.io publish, and the GitHub prerelease are separately
+authorized steps set out in [docs/releasing.md](docs/releasing.md).
+
+Because this is the first version, everything below describes the shape of the
+initial surface rather than a change from a predecessor.
+
+### The crate
+
+- **Four build surfaces from one published package.** The implicit base — what
+  is left when `default-features = false` removes every feature — is the pure
+  Contract model: DTOs, validation, canonicalization, the semantic identities,
+  detached artifact identity, `Limits`/`RuntimeContext`/`CancellationToken`,
+  `ContractEnvelope`, and the diagnostics those need. It links no Candid engine
+  and no filesystem capability crate. `compiler` adds Candid source compilation
+  with no host filesystem. `filesystem-compiler` adds native filesystem access
+  and the `candid-core` binary on top of `compiler`. `host-value` adds the
+  lossless tagged host value ABI and graph-directed value validation. All three
+  are on by default.
+
+  These are *dependency-graph* boundaries, and they are verified as such:
+  `tests/fixtures/packaging/verify_feature_graph.py` resolves `cargo metadata`
+  per feature set and target and asserts what each one may and may not contain.
+  Cargo unifies features across a build, so feature selection bounds what a
+  dependency graph must contain, not what a single unified build produces.
+
+- **Browser-WASM imported compilation.** `compiler` is the surface a browser
+  host builds, and it covers multi-file bundles as well as self-contained
+  sources. `compile_with_resolver` takes an entry ID plus a `SourceResolver` and
+  compiles the whole bundle in memory through the official `candid_parser`
+  merged-program APIs — no materialization, no temporary directory, no
+  `cap-std`, no ambient authority. `tests/browser_wasm.rs` is the runtime
+  evidence: it compiles both import kinds plus a diamond inside headless Chrome,
+  pins the resulting identities and provenance, and asserts that resolver,
+  resource, cancellation, and deadline failures stay structured on a target with
+  no filesystem and no clock.
+
+- **Semantic identity and exact-octet identity are different things.**
+  `contract_id` and `interface_id` are *semantic* Contract identities: documents
+  that mean the same thing share them on purpose, so rewriting `producer`,
+  editing an envelope extension, or re-encoding the JSON leaves both untouched.
+  `source_bundle_id` is a raw-source bundle content identity over source bytes
+  and import edges. None of the three identifies a complete serialized document.
+  `artifact_id_with_limits` does, per declared `ArtifactKind`, and returns the ID
+  to the caller rather than writing it into the document. No unkeyed content ID
+  authenticates itself.
+
+- **All untrusted work is bounded.** Untrusted JSON goes through the
+  `*_with_limits`/`*_with_context` parse APIs, which gate byte length before
+  decoding and then share one budget with validation. `Contract`,
+  `ContractEnvelope`, `Compilation`, and `HostValue` deliberately do not
+  implement `Deserialize`, because a trait impl has no argument position for a
+  resource policy.
+
+### Pre-1.0 API and wire instability
+
+- The public Rust API is unstable. `tests/fixtures/packaging/public-api-base.txt`
+  and `public-api-all-features.txt` are committed inventories of both published
+  surfaces so that a change is visible in review. They record the API; they do
+  not promise it.
+- The serialized Contract, Compilation, and envelope shapes are unstable, and so
+  are the canonical bytes and every identity computed over them. A future
+  release may move `contract_id` for an unchanged input; if that happens it will
+  be a canonicalization-profile change recorded here.
+- The Contract format is **not** promoted to a stable v1 by this release. See
+  the ADR status note under Known limitations.
+- `cargo semver-checks` is deliberately absent: there is no published
+  `candid-core` baseline to compare against. Semver comparison begins with the
+  release *after* this one.
+- Because `0.1.0-beta.1` is a prerelease, a `"0.1"` requirement does not select
+  it. Consumers ask for it by name: `candid-core = "=0.1.0-beta.1"`.
+
+### Migrations already in place
+
+These removals happened during the pre-1.0 API cleanup ([issue #23]) and are
+documented in the README under "Migrating from the pre-cleanup producer APIs".
+They are repeated here because a first-time reader of this changelog will not
+have seen them:
+
+- `RawContract::new` and `Contract::build_raw`/`build_raw_with_context` are
+  gone. A producer-facing constructor that fabricated placeholder zero
+  identities made the intuitive `RawContract::new` → `Contract::try_from_raw`
+  pairing fail by construction. Use `ContractDraft`, which has no identity
+  fields at all, plus `.with_producer(..)` when a caller-supplied producer is
+  needed.
+- `Limits` no longer exposes public fields or exhaustive struct literals.
+  Construct through a profile plus builders (`Limits::default().with_…`) and
+  read through getters.
+- `ResourceLimitInfo.limit`/`.observed` and `SourceSpan.start_byte`/`.end_byte`
+  moved from platform-width `usize` to fixed-width `u64`. The serialized JSON
+  numeric text is unchanged.
+- Serialized `Limits` documents moved from a bare field map to the versioned
+  portable configuration.
+
+### Packaging
+
+- The published archive is a positive `include` allowlist: production source,
+  runnable examples, the public documentation set, `README.md`, `CHANGELOG.md`,
+  `LICENSE`, and the manifest material Cargo adds itself. Test suites and their
+  fixtures, benchmarks and their corpus, the fuzz crate, CI workflows, and
+  agent/skill assets are not published.
+  `tests/fixtures/packaging/verify_package_manifest.py` asserts both halves:
+  every required path present, every forbidden path absent, and no unexplained
+  extra path.
+- A root `LICENSE` carries the complete Apache License 2.0 text.
+- The manifest declares `repository`, `homepage`, `documentation`, `readme`, and
+  a narrow keyword/category set.
+- A `Release candidate` workflow packages the crate with the exact Cargo pinned
+  in `tests/fixtures/packaging/release-tools.env` — `cargo package` bytes are
+  reproducible within a Cargo version and not across versions, so the digest and
+  the publish have to share one — verifies the archive manifest, records its
+  SHA-256, Cargo version, and exact file list as CI evidence, and builds
+  external consumers — base, `compiler`, full native, the installed CLI, and two
+  `wasm32-unknown-unknown` surfaces — against the *unpacked archive* rather than
+  against this repository. It holds `contents: read`, accepts no crates.io
+  token, and neither tags, releases, nor publishes anything.
+
+### Known limitations
+
+- **ADR verification is incomplete.** ADR 0002 (versioning and canonical bytes)
+  is **Verified**: an independent Python reference reproduces all 11
+  canonicalization vectors, and the run is recorded in
+  [docs/verification.md](docs/verification.md). ADRs 0001 and 0003–0007 remain
+  **Implemented, verification pending**. The implementations are in place and,
+  for ADR 0007, an independent reference and a CI job exist, but no run of that
+  job is recorded yet. Wiring is not evidence.
+- **The host-value ↔ Candid binary bridge is deferred.** `HostValue` is a
+  lossless tagged ABI validated against the Contract graph; encoding to and
+  decoding from Candid's binary wire format is not part of this crate yet.
+- **Bounded decoding is coarse.** `from_json_with_limits` and its siblings
+  enforce `max_input_bytes` before decoding, which bounds peak decode allocation
+  to a multiple of the caller's ceiling. They do not reject element by element
+  during decode; that remains a follow-up.
+- **`HostValue` uses a different byte gate.** `HostValue::from_json_with_limits`
+  gates on `max_value_bytes`, not `max_input_bytes`, and reports
+  `HostValueJsonError::Limit`, which carries no `resource` name. Lowering
+  `max_input_bytes` alone does not bound HostValue decoding.
+- **Raising `max_value_nesting` above 128 has no effect**, because serde_json's
+  own fixed 128-frame ceiling is left in place underneath the crate-owned check.
+- **TypeScript generation and comparison are not in this release**
+  ([issue #38]).
+- **Benchmark regression gating is not in this release** ([issue #39]). Pull
+  requests compile and exercise every benchmark once; weekly runs retain
+  Criterion estimates, allocation measurements, toolchain, host, and commit as
+  CI artifacts, but no wall-clock threshold is enforced.
+
+[issue #23]: https://github.com/b3hr4d/candid-core/issues/23
+[issue #38]: https://github.com/b3hr4d/candid-core/issues/38
+[issue #39]: https://github.com/b3hr4d/candid-core/issues/39
