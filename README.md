@@ -9,7 +9,34 @@ cargo run --bin candid-core -- validate ./contract.json
 
 The compile command emits JSON containing a canonical validated `contract` and an optional, identity-bound `source_info` sidecar. The Contract exposes a full `contract_id` and an actor-only `interface_id`; source spelling/comments are identified separately by `source_bundle_id`. That source identity covers only the raw source files and import edges. At an external trust boundary, `SourceInfo::try_from_raw` recompiles that bundle and requires every presented provenance field to match the compiler-derived sidecar.
 
-See [architecture](docs/architecture.md) and the [Contract graph](docs/contract-graph.md) for the v1 model, constraints, and the explicitly deferred host-value ↔ Candid binary bridge. The byte-level identity algorithm is specified normatively in [canonicalization v1](docs/canonicalization-v1.md). See [release verification gates](docs/verification.md) for the checks required before declaring the format stable across implementations. See [performance benchmarks](docs/benchmarks.md) for reproducible comparisons with the pinned official Candid checker and for allocation measurements.
+Those three are not one family. `contract_id` and `interface_id` are **semantic Contract identities**, so documents that mean the same thing share them on purpose; `source_bundle_id` is a **raw-source bundle content identity**, so it does identify raw source-file content — source bytes and import edges included — and formatting and comments inside a source therefore do move it. What none of the three identifies is a complete serialized `Contract`, `ContractEnvelope`, or `Compilation` document. A fourth does: `artifact_id_with_limits` hashes the exact octets of such a document and returns the ID to the caller — use it when exact octets are what must be committed to. See [what each identity claims](#what-each-identity-claims) below; no unkeyed content ID authenticates itself.
+
+See [architecture](docs/architecture.md) and the [Contract graph](docs/contract-graph.md) for the v1 model, constraints, and the explicitly deferred host-value ↔ Candid binary bridge. The byte-level algorithm for the three canonicalized identities is specified normatively in [canonicalization v1](docs/canonicalization-v1.md), and the detached artifact identity in [artifact identity v1](docs/artifact-identity-v1.md). See [release verification gates](docs/verification.md) for the checks required before declaring the format stable across implementations. See [performance benchmarks](docs/benchmarks.md) for reproducible comparisons with the pinned official Candid checker and for allocation measurements.
+
+## What each identity claims
+
+Every ID below is a content address over a different projection. **No unkeyed content ID authenticates itself**: a signature or other external mechanism is what authenticates, and signing one of these commits to exactly what its second column lists and to nothing else.
+
+| ID | Kind of identity | Exactly what is covered | Equality means | Excluded |
+| --- | --- | --- | --- | --- |
+| `interface_id` | Semantic Contract | The canonical type graph reachable from the actor, plus both profile markers | The same actor wire interface under the same profiles | Declaration names, actor-unreachable declarations, `producer`, extensions, `SourceInfo`, source text, formatting. Absent for a declaration-only Contract |
+| `contract_id` | Semantic Contract | The complete canonical Contract payload: format markers, both profiles, every retained type node, declarations and their names, and the actor when present | The same complete semantic Contract | `producer`, envelope extensions, `SourceInfo`, source text, comments, formatting, packaging. Two files with different producers, extensions, or sidecars share it |
+| `source_bundle_id` | Raw-source bundle content | The canonical list of raw logical sources and their import edges — comment and documentation text inside a source is source bytes, so it is covered | The same raw source bytes and import edges | Everything *derived* from those sources: derived declaration/method/label provenance and derived documentation fields, so it identifies the bundle, not the complete `SourceInfo`. A presented sidecar is validated by rederivation at construction time, not by this ID |
+| `artifact_id` | Detached exact-octet, per declared `ArtifactKind` | The exact octet sequence passed to `artifact_id_with_limits` | The same kind and the same bytes | Nothing that is in the bytes; everything that is not. It makes no validity, authenticity, or provenance claim |
+
+```rust,ignore
+use candid_core::{artifact_id_with_limits, ArtifactKind, Limits};
+
+// Detached: the ID is returned to you, never written into the document, and
+// never computed implicitly by a decode. Validate the artifact separately.
+let id = artifact_id_with_limits(
+    ArtifactKind::ContractEnvelopeJsonV1,
+    document_bytes,
+    &Limits::default(),
+)?;
+```
+
+Reformatting, whitespace, key order, a rewritten `producer`, an extension edit, and a `SourceInfo` edit all change `artifact_id` and leave `contract_id` and `interface_id` exactly where they were. Coverage is exactly the bytes passed to the call — whether or not those bytes have been persisted anywhere — so what travels with them depends on the kind named. `ArtifactKind` selects a domain and neither parses nor validates, so the following describes a *valid serialized document of the declared kind*: a `Contract` document carries the Contract alone, `producer` included; an envelope document carries extensions and no `SourceInfo`; a compilation document carries a `SourceInfo` sidecar and no extensions; and package or application version is covered only when it is literally in the supplied artifact bytes. Arbitrary bytes hash just as well under any kind, and the resulting ID claims nothing about their validity. There is no signer model, key format, signature algorithm, trust policy, or registry protocol here — [artifact identity v1](docs/artifact-identity-v1.md) and [ADR 0007](docs/adrs/0007-artifact-identity.md) state the boundary precisely.
 
 ## Command-line interface
 
@@ -73,16 +100,17 @@ Each example declares its `required-features`, so `cargo run --example …` unde
 
 ## Foundation decisions
 
-Six implemented [foundation ADRs](docs/adrs/README.md) define the boundaries for large-ecosystem use:
+Seven implemented [foundation ADRs](docs/adrs/README.md) define the boundaries for large-ecosystem use:
 
 1. separate interface, Contract, and source-bundle identities;
 2. independently version schema, Candid semantics, and canonical bytes;
 3. make validated artifacts and provenance binding explicit;
 4. resolve imports through a hermetic capability boundary;
-5. bound all untrusted work; and
-6. use a lossless tagged HostValue ABI.
+5. bound all untrusted work;
+6. use a lossless tagged HostValue ABI; and
+7. give artifacts whose exact octets must be committed to a detached identity.
 
-All six decisions are implemented in the Rust reference runtime. Because the crate has not been released, this profile is the clean starting point rather than a compatibility layer over an earlier format.
+All seven decisions are implemented in the Rust reference runtime. Because the crate has not been released, this profile is the clean starting point rather than a compatibility layer over an earlier format.
 
 ## Rust version and dependencies
 
@@ -94,7 +122,7 @@ The crate advertises Rust 1.78 as its minimum supported Rust version (MSRV). Dir
 
 | Feature | Adds | Dependencies it pulls in |
 | --- | --- | --- |
-| *(base)* | `Contract`, `ContractDraft`, `RawContract`, `ContractEnvelope`, validation, canonicalization, identities, `Limits`/`RuntimeContext`/`CancellationToken`, `Diagnostic` | `serde`, `serde_json`, `sha2`, `hex` |
+| *(base)* | `Contract`, `ContractDraft`, `RawContract`, `ContractEnvelope`, validation, canonicalization, the semantic Contract identities, detached `artifact_id_with_limits`/`ArtifactKind`, `Limits`/`RuntimeContext`/`CancellationToken`, `Diagnostic` | `serde`, `serde_json`, `sha2`, `hex` |
 | `host-value` | `HostValue`, `HostFieldValue`, `validate_host_value`, `ContractTypeRef`/`ContractMethodRef`, `Contract::bind_type`/`bind_method` | `ic_principal` |
 | `compiler` | `compile_did` and its option/context variants, `compile_with_resolver`, `Compilation`, `CompileOptions`, `CompileError`, `SourceId`/`SourceResolver`/`ResolvedSource`/`MemoryResolver`, `SourceInfo`/`RawSourceInfo` provenance | `candid`, `candid_parser` |
 | `filesystem-compiler` (implies `compiler`) | `WorkspaceResolver`, `compile_did_file` and its variants, source materialization for `candid_parser::check_file`, the `candid-core` binary | `cap-std` |
@@ -126,7 +154,7 @@ Two caveats, both deliberate:
 - **Cargo unifies features across a build.** If anything else in your dependency graph depends on `candid-core` with defaults, the whole surface is compiled once for every consumer in that build. Feature selection bounds what a *dependency graph* must contain; it cannot subtract from a graph that already asked for more.
 - **Feature selection does not shrink the published `.crate` archive.** Every source file ships regardless of which features a consumer enables. Bounding archive contents is separate release-hardening work.
 
-Producer metadata is unaffected by any of this: `ProducerInfo::current` reports the same `name`, `version`, `candid_version`, and `candid_parser_version` in every configuration, because it reads the pinned versions from this package's manifest at compile time rather than from a linked crate. It remains **unauthenticated** provenance held outside the semantic identities — see the [identity ADR](docs/adrs/0001-contract-identities.md).
+Producer metadata is unaffected by any of this: `ProducerInfo::current` reports the same `name`, `version`, `candid_version`, and `candid_parser_version` in every configuration, because it reads the pinned versions from this package's manifest at compile time rather than from a linked crate. It remains **unverified** provenance held outside the semantic Contract identities: neither `contract_id` nor `interface_id` covers it, so rewriting it leaves both byte-identical. A caller that needs to commit to the producer bytes it actually received commits to an `artifact_id`, and what else travels with them depends on the kind named — `ContractJsonV1` binds the Contract document's octets, `producer` included and nothing more; the envelope and compilation kinds bind those octets plus extensions or the provenance sidecar respectively. See the [identity ADR](docs/adrs/0001-contract-identities.md) and [ADR 0007](docs/adrs/0007-artifact-identity.md).
 
 ## Browsers and bare WASM
 
@@ -199,6 +227,12 @@ Each item below is tagged with the feature that provides it; untagged items are 
   behavior).
 - *(`host-value`)* `HostValue` plus `validate_host_value` provide the lossless tagged value ABI.
 - `ContractEnvelope` keeps namespaced extensions outside the strict core.
+- `artifact_id_with_limits`/`artifact_id_with_context` compute a detached,
+  exact-octet identity for a serialized Contract, envelope, or compilation
+  document, under the `ArtifactKind` the caller names. The ID is returned to the
+  caller, never stored in the artifact, and never computed by a decode;
+  `max_input_bytes` gates the slice before hashing and
+  `max_artifact_identity_work` meters the hash on its own counter.
 
 ### Migrating from the pre-cleanup producer APIs
 

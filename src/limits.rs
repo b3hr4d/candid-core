@@ -284,9 +284,9 @@ limit_fields! {
     /// Maximum aggregate bytes across the four producer metadata strings.
     ///
     /// Producer metadata is untrusted, caller-supplied provenance that is
-    /// deliberately kept out of authenticated Contract identity (see
+    /// deliberately kept out of the semantic Contract identities (see
     /// [`crate::ProducerInfo`]); this bounds the bytes it may contribute to a
-    /// validated Contract without ever affecting an identity hash.
+    /// validated Contract without ever affecting a semantic identity hash.
     max_producer_bytes / with_max_producer_bytes = 4096;
     /// Maximum retained diagnostics per failure.
     ///
@@ -327,6 +327,50 @@ limit_fields! {
     /// about 213M units for a compile pass and 341M for the two validation
     /// passes together; 400M covers both with headroom.
     max_source_identity_work / with_max_source_identity_work = 400_000_000;
+    /// Maximum work units charged while computing a detached artifact identity
+    /// (`candid-core:artifact:*`; see [`crate::artifact_id_with_limits`]).
+    ///
+    /// One unit per artifact byte plus the fixed domain framing cost — the
+    /// domain tag and its one separator byte. There is no length field and no
+    /// second kind label in the preimage, so that constant is the whole
+    /// overhead, and the cost is exactly
+    /// `bytes.len() + domain.len() + 1`.
+    ///
+    /// The default is proven against the default byte gate rather than guessed.
+    /// [`Limits::max_input_bytes`] is enforced first, so the largest artifact
+    /// this ever hashes by default is 4 MiB (4 194 304 bytes); the longest of
+    /// the frozen domains,
+    /// `candid-core:artifact:contract-envelope-json:v1`, is 46 bytes, so the
+    /// worst case is 4 194 351 units. 10 000 000 covers that with more than
+    /// twice the headroom, matches
+    /// [`Limits::max_canonicalization_work`]'s default, and cannot overflow:
+    /// every charge saturates rather than wrapping.
+    ///
+    /// Kept separate from every other work counter on purpose. Artifact
+    /// identity is an explicit, detached call, so metering it on
+    /// `canonicalization_work` would let content-addressing a document starve
+    /// the Contract canonicalization that follows it on the same budget, and
+    /// metering it on `source_identity_work` would do the same to provenance.
+    /// Raising [`Limits::max_input_bytes`] above this value without raising
+    /// this one makes over-sized artifacts fail on `artifact_identity_work`
+    /// instead of on `input_bytes`; raise both together.
+    ///
+    /// # Wire compatibility
+    ///
+    /// This override key is additive. [`Limits::default`] and every
+    /// configuration that leaves this limit at its profile value still
+    /// serialize with no `max_artifact_identity_work` key at all, so existing
+    /// documents are unchanged in both directions. The implication is
+    /// one-directional and deliberate: because [`LimitsConfig`] rejects unknown
+    /// override keys, a document that *does* carry an explicit
+    /// `max_artifact_identity_work` override is readable by this build and
+    /// newer ones but rejected by a build that predates the key. That is the
+    /// intended failure — silently ignoring an unknown limit override would
+    /// apply a policy the document did not ask for. [`LIMITS_CONFIG_VERSION`]
+    /// is unchanged, because adding a limit is not a schema break: `Limits`
+    /// fields are private precisely so that adding one is never a breaking
+    /// change, and no existing key, value, or default moved.
+    max_artifact_identity_work / with_max_artifact_identity_work = 10_000_000;
     /// Maximum semantic HostValue nesting depth.
     max_value_depth / with_max_value_depth = 256;
     /// Maximum aggregate HostValue elements per document.

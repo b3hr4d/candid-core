@@ -12,7 +12,7 @@
 //!
 //! | Feature | Adds | Dependencies it pulls in |
 //! | --- | --- | --- |
-//! | *(base)* `default-features = false` | `Contract`, `ContractDraft`, `RawContract`, validation, canonicalization, identities, `Limits`/`RuntimeContext`, `Diagnostic`, `ContractEnvelope` | `serde`, `serde_json`, `sha2`, `hex` |
+//! | *(base)* `default-features = false` | `Contract`, `ContractDraft`, `RawContract`, validation, canonicalization, the semantic Contract identities, detached [`artifact_id_with_limits`], `Limits`/`RuntimeContext`, `Diagnostic`, `ContractEnvelope` | `serde`, `serde_json`, `sha2`, `hex` |
 //! | `host-value` | `HostValue` and graph-directed value validation | `ic_principal` |
 //! | `compiler` | `compile_did`, `compile_with_resolver`, `Compilation`, `SourceId`/`SourceResolver`/`MemoryResolver`, `SourceInfo` provenance | `candid`, `candid_parser` |
 //! | `filesystem-compiler` (implies `compiler`) | `WorkspaceResolver`, `compile_did_file`, source materialization, the `candid-core` binary | `cap-std` |
@@ -54,6 +54,7 @@
 #[cfg(not(any(target_pointer_width = "32", target_pointer_width = "64")))]
 compile_error!("candid-core supports only 32- and 64-bit targets: portable u64 wire values must represent every usize exactly (usize must not exceed 64 bits), and the InteractiveV1 default limits require a usize of at least 32 bits");
 
+mod artifact_id;
 // `bounded` reads a capped byte count off a `std::io::Read`; only the native
 // filesystem resolver uses it, and only where a real filesystem exists.
 #[cfg(all(feature = "filesystem-compiler", not(target_os = "unknown")))]
@@ -75,6 +76,7 @@ mod validate;
 #[cfg(feature = "host-value")]
 mod value;
 
+pub use artifact_id::{artifact_id_with_context, artifact_id_with_limits, ArtifactKind};
 #[cfg(feature = "compiler")]
 pub use compile::{
     compile_did, compile_did_with_context, compile_did_with_options, compile_with_resolver,

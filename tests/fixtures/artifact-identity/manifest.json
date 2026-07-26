@@ -1,0 +1,164 @@
+{
+  "manifest_version": 1,
+  "note": [
+    "Independent vectors for detached, exact-octet artifact identity (issue #25).",
+    "Deliberately separate from tests/fixtures/conformance/, which is the closed",
+    "semantic canonicalization conformance manifest. Nothing here canonicalizes,",
+    "validates, or reinterprets anything: an artifact_id is SHA-256 over",
+    "<domain> || 0x00 || <the exact artifact bytes>, and equal IDs claim only",
+    "equal kind and equal octets. contract_id and interface_id are semantic",
+    "Contract identities and source_bundle_id is a raw-source bundle content",
+    "identity; an artifact ID is none of those. See docs/artifact-identity-v1.md."
+  ],
+  "domains": {
+    "ContractJsonV1": "candid-core:artifact:contract-json:v1",
+    "ContractEnvelopeJsonV1": "candid-core:artifact:contract-envelope-json:v1",
+    "CompilationJsonV1": "candid-core:artifact:compilation-json:v1"
+  },
+  "vectors": [
+    {
+      "name": "empty",
+      "kind": "ContractEnvelopeJsonV1",
+      "file": "artifacts/empty.bin",
+      "preimage_hex": "63616e6469642d636f72653a61727469666163743a636f6e74726163742d656e76656c6f70652d6a736f6e3a763100",
+      "artifact_id": "candid-core:artifact:contract-envelope-json:v1:sha256:1642aac2ca520b95cc0c31068934081c206f8673bb3779058bb88e331ff21603",
+      "note": "Framing anchor: no artifact bytes at all, so the domain tag and the single 0x00 separator are the whole preimage. Also shows that an artifact_id exists for bytes that are not a valid artifact — computing one is not a validity claim."
+    },
+    {
+      "name": "contract",
+      "kind": "ContractJsonV1",
+      "file": "artifacts/contract.json",
+      "contract_id": "candid-core:contract:v1:sha256:5b4d7090e72cefb298b0d5e2941dc2ed1f6ac44957163d75dd406ac5e30c930d",
+      "artifact_id": "candid-core:artifact:contract-json:v1:sha256:db27c5c23308bcfb793ac04b8e290261c90516e35ef4cbf67c1261e1c41f5d9c",
+      "note": "Baseline raw Contract document: the same Contract the envelope and compilation vectors carry, serialized on its own with no enclosing envelope and no provenance sidecar."
+    },
+    {
+      "name": "contract_producer",
+      "kind": "ContractJsonV1",
+      "file": "artifacts/contract-producer.json",
+      "contract_id": "candid-core:contract:v1:sha256:5b4d7090e72cefb298b0d5e2941dc2ed1f6ac44957163d75dd406ac5e30c930d",
+      "artifact_id": "candid-core:artifact:contract-json:v1:sha256:ef28cfa48e30fb103fd5153a5c195e8118049e3823c499b41145353f007ab530",
+      "note": "Only producer.name and producer.version were rewritten. Raw Contract bytes contain producer, so the Contract artifact ID moves; contract_id and interface_id exclude producer and are byte-identical, which is exactly why a semantic identity cannot stand in for an artifact identity."
+    },
+    {
+      "name": "contract_envelope",
+      "kind": "ContractEnvelopeJsonV1",
+      "file": "artifacts/contract-envelope.json",
+      "contract_id": "candid-core:contract:v1:sha256:5b4d7090e72cefb298b0d5e2941dc2ed1f6ac44957163d75dd406ac5e30c930d",
+      "artifact_id": "candid-core:artifact:contract-envelope-json:v1:sha256:197ab67b995c0c3418cb1240d3a6d6271ba2337cc3c61233701c376b2a1484d4",
+      "note": "Baseline envelope: a strict Contract plus one namespaced extension."
+    },
+    {
+      "name": "contract_envelope_extension_name",
+      "kind": "ContractEnvelopeJsonV1",
+      "file": "artifacts/contract-envelope-extension-name.json",
+      "contract_id": "candid-core:contract:v1:sha256:5b4d7090e72cefb298b0d5e2941dc2ed1f6ac44957163d75dd406ac5e30c930d",
+      "artifact_id": "candid-core:artifact:contract-envelope-json:v1:sha256:774929f13be7dea05684f2e94babad10f67f9dbad32ee962065e4712d9e88c99",
+      "note": "Only the extension name changed. contract_id is unchanged because extensions are outside it; artifact_id changes because the octets changed."
+    },
+    {
+      "name": "contract_envelope_extension_value",
+      "kind": "ContractEnvelopeJsonV1",
+      "file": "artifacts/contract-envelope-extension-value.json",
+      "contract_id": "candid-core:contract:v1:sha256:5b4d7090e72cefb298b0d5e2941dc2ed1f6ac44957163d75dd406ac5e30c930d",
+      "artifact_id": "candid-core:artifact:contract-envelope-json:v1:sha256:034599415e02c0b6c769d30a65871061a92c9e9cc7923b19c05ffebde1f1eace",
+      "note": "Only one extension value changed, including the package_version-carrying object. Package metadata is covered exactly when it is present in the supplied artifact bytes, and never by contract_id."
+    },
+    {
+      "name": "contract_envelope_compact",
+      "kind": "ContractEnvelopeJsonV1",
+      "file": "artifacts/contract-envelope-compact.json",
+      "contract_id": "candid-core:contract:v1:sha256:5b4d7090e72cefb298b0d5e2941dc2ed1f6ac44957163d75dd406ac5e30c930d",
+      "artifact_id": "candid-core:artifact:contract-envelope-json:v1:sha256:d6f61d92ccd3a4865b9f30cb5402e47528507ceac2051746fdc0effeb5893f1b",
+      "note": "The identical JSON value rendered by a different encoder: same meaning, no whitespace, different octets, different artifact_id. This is the exact-octet claim, stated as a vector."
+    },
+    {
+      "name": "compilation",
+      "kind": "CompilationJsonV1",
+      "file": "artifacts/compilation.json",
+      "contract_id": "candid-core:contract:v1:sha256:5b4d7090e72cefb298b0d5e2941dc2ed1f6ac44957163d75dd406ac5e30c930d",
+      "artifact_id": "candid-core:artifact:compilation-json:v1:sha256:1b157c385502d75bd6d2fc4caa956179edb8aa366ca7bf3a986163cea2ccc7f6",
+      "note": "Baseline compilation: the same Contract plus its SourceInfo provenance sidecar."
+    },
+    {
+      "name": "compilation_source_doc",
+      "kind": "CompilationJsonV1",
+      "file": "artifacts/compilation-source-doc.json",
+      "contract_id": "candid-core:contract:v1:sha256:5b4d7090e72cefb298b0d5e2941dc2ed1f6ac44957163d75dd406ac5e30c930d",
+      "artifact_id": "candid-core:artifact:compilation-json:v1:sha256:cd893c634e82b05f35fd5d95bbd77315be35c6d747efe52d67660c3c55262ebe",
+      "note": "One doc comment changed in the entry source. A doc comment is not semantic, so contract_id is unchanged while source_bundle_id, the sidecar, and artifact_id all move."
+    },
+    {
+      "name": "compilation_producer",
+      "kind": "CompilationJsonV1",
+      "file": "artifacts/compilation-producer.json",
+      "contract_id": "candid-core:contract:v1:sha256:5b4d7090e72cefb298b0d5e2941dc2ed1f6ac44957163d75dd406ac5e30c930d",
+      "artifact_id": "candid-core:artifact:compilation-json:v1:sha256:5463685d18b2ee248ad5dddd7f7f52764aee6ef361fa5df439163d39f16dcdca",
+      "note": "Only producer.name and producer.version were rewritten. The document still validates and still carries the identical contract_id, which is precisely why contract_id must not be treated as an artifact or provenance identity."
+    }
+  ],
+  "cross_kind": [
+    {
+      "vector": "empty",
+      "kind": "CompilationJsonV1",
+      "artifact_id": "candid-core:artifact:compilation-json:v1:sha256:6e716227d7ae7ac930966faafa9812eeac2fa34a85c1f03b91d949ca88b21807"
+    },
+    {
+      "vector": "empty",
+      "kind": "ContractJsonV1",
+      "artifact_id": "candid-core:artifact:contract-json:v1:sha256:66c1371d29c896c2b292edc5dc1d344bf39103c5a1011141ed6883ace3e95401"
+    },
+    {
+      "vector": "contract_envelope",
+      "kind": "CompilationJsonV1",
+      "artifact_id": "candid-core:artifact:compilation-json:v1:sha256:1df636f645defb7ab1c63b94c6a3ea52913c16f01ed2ee5900c8ad8adb0c4e40"
+    },
+    {
+      "vector": "contract_envelope",
+      "kind": "ContractJsonV1",
+      "artifact_id": "candid-core:artifact:contract-json:v1:sha256:1dbbeaf911e0009f3785face2ea2670ae1c981135ce2c01952f4bdd1c7a97d20"
+    },
+    {
+      "vector": "contract",
+      "kind": "ContractEnvelopeJsonV1",
+      "artifact_id": "candid-core:artifact:contract-envelope-json:v1:sha256:a92e01b91f6e219c1ba8b95a04132f93be6b29672c1b51ddd15110495a8c9e94"
+    },
+    {
+      "vector": "contract",
+      "kind": "CompilationJsonV1",
+      "artifact_id": "candid-core:artifact:compilation-json:v1:sha256:c871522df32f5ec8108d80592fb3a65384471ca3714716faa9fbd807e876eba8"
+    }
+  ],
+  "shared_contract_id": {
+    "contract_id": "candid-core:contract:v1:sha256:5b4d7090e72cefb298b0d5e2941dc2ed1f6ac44957163d75dd406ac5e30c930d",
+    "members": [
+      "contract",
+      "contract_producer",
+      "contract_envelope",
+      "contract_envelope_extension_name",
+      "contract_envelope_extension_value",
+      "contract_envelope_compact",
+      "compilation",
+      "compilation_source_doc",
+      "compilation_producer"
+    ],
+    "note": "Every member embeds this identical semantic contract_id and every member has a distinct artifact_id. That difference is the whole point of issue #25.",
+    "contract_id_path": {
+      "ContractJsonV1": ["identities", "contract"],
+      "ContractEnvelopeJsonV1": ["contract", "identities", "contract"],
+      "CompilationJsonV1": ["contract", "identities", "contract"]
+    }
+  },
+  "required_cases": [
+    "empty",
+    "contract",
+    "contract_producer",
+    "contract_envelope",
+    "contract_envelope_extension_name",
+    "contract_envelope_extension_value",
+    "contract_envelope_compact",
+    "compilation",
+    "compilation_source_doc",
+    "compilation_producer"
+  ]
+}

@@ -7,12 +7,13 @@
 //! a downstream `default-features = false` consumer can reach.
 
 use candid_core::{
-    Actor, CancellationToken, Contract, ContractDraft, ContractEnvelope, ContractIdentities,
-    ContractJsonError, ContractValidationError, ContractViolation, Declaration, Diagnostic,
-    DiagnosticPhase, Field, Limits, LimitsConfig, LimitsConfigError, LimitsProfile, MethodMode,
-    PrimitiveType, ProducerInfo, RawContract, RelatedLocation, ResourceLimitInfo, RuntimeContext,
-    ServiceMethod, Severity, SourceSpan, TypeNode, TypeRef, CANONICALIZATION_PROFILE,
-    CONTRACT_FORMAT, FORMAT_VERSION, LIMITS_CONFIG_VERSION, SEMANTICS_PROFILE,
+    Actor, ArtifactKind, CancellationToken, Contract, ContractDraft, ContractEnvelope,
+    ContractIdentities, ContractJsonError, ContractValidationError, ContractViolation, Declaration,
+    Diagnostic, DiagnosticPhase, Field, Limits, LimitsConfig, LimitsConfigError, LimitsProfile,
+    MethodMode, PrimitiveType, ProducerInfo, RawContract, RelatedLocation, ResourceLimitInfo,
+    RuntimeContext, ServiceMethod, Severity, SourceSpan, TypeNode, TypeRef,
+    CANONICALIZATION_PROFILE, CONTRACT_FORMAT, FORMAT_VERSION, LIMITS_CONFIG_VERSION,
+    SEMANTICS_PROFILE,
 };
 
 fn assert_public_type<T: 'static>() {}
@@ -21,6 +22,7 @@ fn assert_public_type<T: 'static>() {}
 #[test]
 fn model_api_remains_available_at_the_crate_root() {
     assert_public_type::<Actor>();
+    assert_public_type::<ArtifactKind>();
     assert_public_type::<CancellationToken>();
     assert_public_type::<Contract>();
     assert_public_type::<ContractDraft>();
@@ -55,6 +57,66 @@ fn model_api_remains_available_at_the_crate_root() {
     assert_eq!(SEMANTICS_PROFILE, "candid-1");
     assert_eq!(CANONICALIZATION_PROFILE, "candid-core-canon-1");
     assert_eq!(LIMITS_CONFIG_VERSION, 1);
+}
+
+/// Detached artifact identity is base surface, and its signature is pinned
+/// rather than just its name.
+///
+/// Every `ArtifactKind` variant must stay reachable with defaults disabled:
+/// `CompilationJsonV1` names a `compiler`-surface document type, but hashing
+/// bytes needs no Candid engine, so a `default-features = false` consumer can
+/// content-address a compilation document it was handed. Moving either function
+/// or the enum behind a feature would fail to compile here.
+///
+/// The enum stays `#[non_exhaustive]`, so a downstream `match` cannot break when
+/// a further kind is named; the variants pinned below are frozen, and each keeps
+/// its own domain rather than redefining another's.
+#[test]
+fn artifact_identity_api_remains_available_at_the_crate_root() {
+    let _: fn(ArtifactKind, &[u8], &Limits) -> Result<String, ContractValidationError> =
+        candid_core::artifact_id_with_limits;
+    let _: fn(ArtifactKind, &[u8], &RuntimeContext) -> Result<String, ContractValidationError> =
+        candid_core::artifact_id_with_context;
+
+    let kinds = [
+        (
+            ArtifactKind::ContractJsonV1,
+            "candid-core:artifact:contract-json:v1:sha256:",
+        ),
+        (
+            ArtifactKind::ContractEnvelopeJsonV1,
+            "candid-core:artifact:contract-envelope-json:v1:sha256:",
+        ),
+        (
+            ArtifactKind::CompilationJsonV1,
+            "candid-core:artifact:compilation-json:v1:sha256:",
+        ),
+    ];
+    let mut rendered = Vec::new();
+    for (kind, prefix) in kinds {
+        let id = candid_core::artifact_id_with_limits(kind, b"{}", &Limits::default())
+            .expect("hashing two bytes must fit the default budgets");
+        assert!(id.starts_with(prefix), "{kind:?}: {id}");
+        rendered.push(id);
+    }
+    // Distinct variants, and therefore distinct identities over equal bytes.
+    for (position, (kind, _)) in kinds.iter().enumerate() {
+        for (other_kind, _) in &kinds[position + 1..] {
+            assert_ne!(kind, other_kind);
+        }
+        for other in &rendered[position + 1..] {
+            assert_ne!(&rendered[position], other, "{kind:?}");
+        }
+    }
+
+    // The limit that meters it is base surface too, with its documented default.
+    assert_eq!(Limits::default().max_artifact_identity_work(), 10_000_000);
+    assert_eq!(
+        Limits::default()
+            .with_max_artifact_identity_work(7)
+            .max_artifact_identity_work(),
+        7
+    );
 }
 
 /// Producer metadata is identical in every configuration: `candid` and

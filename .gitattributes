@@ -1,0 +1,14 @@
+# An artifact identity is a digest of *exact octets* (see
+# docs/artifact-identity-v1.md), so the vectors under
+# tests/fixtures/artifact-identity/ must arrive in the working tree byte for
+# byte on every platform. Without this, a Windows checkout configured with
+# `core.autocrlf=true` would rewrite every LF to CRLF and move every pinned
+# artifact ID — a failure that could not reproduce on Linux or macOS.
+#
+# Deliberately scoped to that directory. Nothing else in this repository
+# depends on its checked-out line endings.
+tests/fixtures/artifact-identity/** text eol=lf
+# The `.bin` slot is for raw artifact bytes that are not text at all. `binary`
+# unsets `text` (which also makes the `eol` above inert for these paths), so a
+# future non-UTF-8 vector cannot be rewritten by any conversion.
+tests/fixtures/artifact-identity/**/*.bin binary
