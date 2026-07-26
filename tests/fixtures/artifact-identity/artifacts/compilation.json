@@ -1,0 +1,166 @@
+{
+  "contract": {
+    "format": "candid-core",
+    "format_version": 1,
+    "semantics_profile": "candid-1",
+    "canonicalization_profile": "candid-core-canon-1",
+    "identities": {
+      "contract": "candid-core:contract:v1:sha256:5b4d7090e72cefb298b0d5e2941dc2ed1f6ac44957163d75dd406ac5e30c930d",
+      "interface": "candid-core:interface:v1:sha256:de50dbb31aab6a1eb82fb48d0a908382d23bd17c29e785c916c21a3b0799cb9e"
+    },
+    "producer": {
+      "name": "candid-core",
+      "version": "0.1.0",
+      "candid_version": "0.10.30",
+      "candid_parser_version": "0.4.0"
+    },
+    "types": [
+      {
+        "kind": "service",
+        "methods": [
+          {
+            "name": "read",
+            "id": 1269254998,
+            "function": 1
+          }
+        ]
+      },
+      {
+        "kind": "func",
+        "args": [
+          2
+        ],
+        "results": [
+          3
+        ],
+        "mode": "query"
+      },
+      {
+        "kind": "primitive",
+        "primitive": "nat"
+      },
+      {
+        "kind": "record",
+        "fields": [
+          {
+            "id": 23515,
+            "type": 2
+          },
+          {
+            "id": 1873743348,
+            "type": 4
+          }
+        ]
+      },
+      {
+        "kind": "primitive",
+        "primitive": "text"
+      }
+    ],
+    "declarations": [
+      {
+        "name": "Item",
+        "type": 3
+      }
+    ],
+    "actor": {
+      "kind": "service",
+      "service": 0
+    }
+  },
+  "source_info": {
+    "source_info_version": 1,
+    "contract_id": "candid-core:contract:v1:sha256:5b4d7090e72cefb298b0d5e2941dc2ed1f6ac44957163d75dd406ac5e30c930d",
+    "source_bundle_id": "candid-core:source-bundle:v1:sha256:52cb9ba7ed7105a36de5a5f2665ef82261080406133498ed4aa8b3cac6f9bcca",
+    "sources": [
+      {
+        "name": "memory:/root.did",
+        "source": "import \"types.did\";\n/// Ledger service.\nservice : { read: (id: nat) -> (Item) query };\n"
+      },
+      {
+        "name": "memory:/types.did",
+        "source": "/// An item.\ntype Item = record { id: nat; label: text };\n"
+      }
+    ],
+    "imports": [
+      {
+        "from": "memory:/root.did",
+        "import": "types.did",
+        "to": "memory:/types.did",
+        "kind": "type"
+      }
+    ],
+    "declarations": [
+      {
+        "source": "memory:/types.did",
+        "name": "Item",
+        "type": 3,
+        "docs": [
+          "/ An item."
+        ]
+      }
+    ],
+    "field_labels": [
+      {
+        "origin": {
+          "kind": "declaration",
+          "source": "memory:/types.did",
+          "name": "Item"
+        },
+        "path": "type:Item.fields[0]",
+        "container": 3,
+        "id": 23515,
+        "label": {
+          "kind": "named",
+          "name": "id"
+        }
+      },
+      {
+        "origin": {
+          "kind": "declaration",
+          "source": "memory:/types.did",
+          "name": "Item"
+        },
+        "path": "type:Item.fields[1]",
+        "container": 3,
+        "id": 1873743348,
+        "label": {
+          "kind": "named",
+          "name": "label"
+        }
+      }
+    ],
+    "methods": [
+      {
+        "origin": {
+          "kind": "actor",
+          "source": "memory:/root.did"
+        },
+        "path": "actor.methods[0]",
+        "service": 0,
+        "name": "read"
+      }
+    ],
+    "function_arguments": [
+      {
+        "origin": {
+          "kind": "actor",
+          "source": "memory:/root.did"
+        },
+        "path": "actor.methods[0].function.args[0]",
+        "function": 1,
+        "direction": "argument",
+        "position": 0,
+        "name": "id"
+      }
+    ],
+    "actors": [
+      {
+        "source": "memory:/root.did",
+        "docs": [
+          "/ Ledger service."
+        ]
+      }
+    ]
+  }
+}

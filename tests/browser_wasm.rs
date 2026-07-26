@@ -24,8 +24,9 @@
 #![cfg(feature = "compiler")]
 
 use candid_core::{
-    compile_did, compile_with_resolver, CancellationToken, CompileError, CompileOptions,
-    DiagnosticPhase, Limits, MemoryResolver, RawSourceInfo, RuntimeContext, SourceId, SourceInfo,
+    artifact_id_with_context, artifact_id_with_limits, compile_did, compile_with_resolver,
+    ArtifactKind, CancellationToken, CompileError, CompileOptions, DiagnosticPhase, Limits,
+    MemoryResolver, RawSourceInfo, RuntimeContext, SourceId, SourceInfo,
 };
 
 #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
@@ -49,7 +50,7 @@ macro_rules! browser_case {
 }
 
 // ---------------------------------------------------------------------------
-// The bundle under test, and its pinned semantic identities.
+// The bundle under test, and its pinned content identities.
 // ---------------------------------------------------------------------------
 
 /// A four-source bundle that exercises both import kinds at once:
@@ -509,5 +510,100 @@ browser_case! {
             .insert("workspace:/entry.did", "service : {};")
             .expect_err("MemoryResolver only owns memory:/ sources");
         assert_eq!(error.code, "did_source_scheme_mismatch");
+    }
+}
+
+browser_case! {
+    /// Issue #25's detached artifact identity, on the target a browser host
+    /// actually runs. Hashing exact octets needs no filesystem and no clock, so
+    /// the only thing worth proving here is that it produces *identical* digests
+    /// to the native jobs — which is what the shared body plus a fixed literal
+    /// gives.
+    ///
+    /// The absolute pins deliberately hash constant bytes rather than a live
+    /// serialization: the framing anchor cannot drift with a producer version
+    /// bump, so it stays evidence about the digest construction itself.
+    fn artifact_identity_is_computed_identically_in_a_browser() {
+        // The framing anchor, once per frozen kind: no artifact bytes at all, so
+        // the domain tag and its single 0x00 separator are the whole preimage.
+        // The same literals are pinned by `src/artifact_id.rs` and by
+        // `tests/fixtures/artifact-identity/manifest.json`.
+        assert_eq!(
+            artifact_id_with_limits(ArtifactKind::ContractJsonV1, b"", &Limits::default())
+                .expect("an empty artifact costs only the domain framing"),
+            "candid-core:artifact:contract-json:v1:sha256:66c1371d29c896c2b292edc5dc1d344bf39103c5a1011141ed6883ace3e95401"
+        );
+        assert_eq!(
+            artifact_id_with_limits(ArtifactKind::ContractEnvelopeJsonV1, b"", &Limits::default())
+                .expect("an empty artifact costs only the domain framing"),
+            "candid-core:artifact:contract-envelope-json:v1:sha256:1642aac2ca520b95cc0c31068934081c206f8673bb3779058bb88e331ff21603"
+        );
+        assert_eq!(
+            artifact_id_with_limits(ArtifactKind::CompilationJsonV1, b"", &Limits::default())
+                .expect("an empty artifact costs only the domain framing"),
+            "candid-core:artifact:compilation-json:v1:sha256:6e716227d7ae7ac930966faafa9812eeac2fa34a85c1f03b91d949ca88b21807"
+        );
+
+        // A real compilation document produced in the browser: the identity is
+        // over its exact octets, and one changed byte is a different artifact
+        // while the semantic Contract identity has not moved at all.
+        let compilation = compile_bundle(&RuntimeContext::default()).expect("must compile");
+        let document = compilation
+            .to_json_pretty_with_limits(&Limits::default())
+            .expect("a compiled bundle must serialize");
+        let id = |bytes: &[u8]| {
+            artifact_id_with_limits(ArtifactKind::CompilationJsonV1, bytes, &Limits::default())
+                .expect("hashing a compilation document must fit the default budgets")
+        };
+
+        let baseline = id(document.as_bytes());
+        assert!(baseline.starts_with("candid-core:artifact:compilation-json:v1:sha256:"));
+        assert_eq!(baseline, id(document.as_bytes()), "hashing is deterministic");
+        assert_eq!(compilation.contract().contract_id(), BUNDLE_CONTRACT_ID);
+
+        let mut edited = document.clone().into_bytes();
+        let middle = edited.len() / 2;
+        edited[middle] ^= 0x01;
+        assert_ne!(id(&edited), baseline, "one byte must change the artifact ID");
+
+        // The same octets under either other kind are a different identity: the
+        // domain separates the digest space here exactly as it does natively.
+        for other in [ArtifactKind::ContractJsonV1, ArtifactKind::ContractEnvelopeJsonV1] {
+            assert_ne!(
+                artifact_id_with_limits(other, document.as_bytes(), &Limits::default())
+                    .expect("hashing must fit the default budgets"),
+                baseline
+            );
+        }
+
+        // And a raw Contract document, hashed under the kind that names it: the
+        // Contract's own octets are a different artifact from the compilation
+        // that embeds them, while `contract_id` is the same in both.
+        let contract = compilation
+            .contract()
+            .to_json_pretty_with_limits(&Limits::default())
+            .expect("a compiled Contract must serialize");
+        let contract_id = artifact_id_with_limits(
+            ArtifactKind::ContractJsonV1,
+            contract.as_bytes(),
+            &Limits::default(),
+        )
+        .expect("hashing a Contract document must fit the default budgets");
+        assert!(contract_id.starts_with("candid-core:artifact:contract-json:v1:sha256:"));
+        assert_ne!(contract_id, baseline);
+        assert!(contract.contains(BUNDLE_CONTRACT_ID));
+
+        // Failing closed works the same way here: bare wasm32 has no clock, so
+        // any explicit deadline is already elapsed, and cancellation is a plain
+        // atomic that works everywhere.
+        let cancellation = CancellationToken::new();
+        cancellation.cancel();
+        let error = artifact_id_with_context(
+            ArtifactKind::CompilationJsonV1,
+            document.as_bytes(),
+            &RuntimeContext::default().with_cancellation(cancellation),
+        )
+        .expect_err("a cancelled operation must not return a digest");
+        assert_eq!(error.violations[0].code, "operation_cancelled");
     }
 }

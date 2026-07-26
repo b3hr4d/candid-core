@@ -363,10 +363,17 @@ Exactly these members, from the canonical Contract:
 | `actor` | the canonical actor object — **omitted entirely when the Contract has no actor**; `"actor": null` never appears in a payload |
 
 `identities` (the values being derived) and `producer` are **excluded**.
-Producer metadata is untrusted provenance deliberately outside
-authenticated identity: two Contracts differing only in `producer` share
+Producer metadata is unverified provenance deliberately outside the semantic
+Contract identity payloads: two Contracts differing only in `producer` share
 both IDs even though their wire JSON differs. Binding it would change every
-existing `contract_id`; this exclusion is load-bearing compatibility.
+existing `contract_id`; this exclusion is load-bearing compatibility. No unkeyed
+content ID authenticates itself, so neither ID authenticates the producer claims
+— nor anything else. A caller that must commit to the producer bytes it actually
+received commits to an `artifact_id`, whose coverage depends on the artifact kind
+named: raw Contract JSON binds those bytes because they are in the exact
+artifact, while the semantic identities specified here still exclude them (see
+[artifact identity v1](artifact-identity-v1.md), which changes nothing in this
+document).
 
 ### 9.2 Interface identity payload
 

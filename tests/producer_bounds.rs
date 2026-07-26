@@ -2,8 +2,17 @@
 //!
 //! Producer metadata is caller-supplied provenance. Two properties matter and
 //! are pinned here: its aggregate bytes are bounded like every other untrusted
-//! string budget, and it stays *outside* authenticated Contract identity so that
-//! rewriting it cannot forge — or is forced to break — a signed `contract_id`.
+//! string budget, and it stays *outside* the semantic Contract identities.
+//!
+//! The second property is a compatibility guarantee, not a security one, and
+//! the difference is worth stating because an earlier version of this comment
+//! got it backwards. Because `producer` is excluded, rewriting it leaves
+//! `contract_id` and `interface_id` byte-identical — so a signature over
+//! `contract_id` says nothing at all about the producer bytes that travelled
+//! with it, and re-branding a Contract does not and cannot break such a
+//! signature. That is exactly why issue #25 added a separate, detached
+//! `artifact_id` over the complete artifact octets; `tests/artifact_identity.rs`
+//! pins both halves of that boundary.
 
 use candid_core::{
     compile_did, Contract, ContractDraft, Limits, ProducerInfo, RawContract, RuntimeContext,
@@ -85,7 +94,7 @@ fn oversized_producer_fails_deterministically_across_runs() {
 }
 
 #[test]
-fn producer_stays_outside_authenticated_identity() {
+fn producer_stays_outside_the_semantic_contract_identities() {
     // The load-bearing compatibility boundary: producer is part of the canonical
     // wire bytes but never part of the identity hash. Two Contracts that differ
     // only in producer must therefore share both identities while remaining

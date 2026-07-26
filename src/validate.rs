@@ -261,10 +261,11 @@ fn enforce_limits(
             contract.declarations.len(),
         )
         .map_err(crate::budget::BudgetError::into_contract_error)?;
-    // Producer metadata is untrusted, caller-supplied provenance kept out of
-    // authenticated identity, so it carries no structural bound of its own. Cap
-    // its aggregate bytes here; the sum also caps every individual field, and
-    // `observe` is safe because it never affects an identity hash.
+    // Producer metadata is untrusted, caller-supplied provenance kept out of the
+    // semantic Contract identities, so it carries no structural bound of its
+    // own. Cap its aggregate bytes here; the sum also caps every individual
+    // field, and `observe` is safe because it never affects a semantic identity
+    // hash.
     let producer = &contract.producer;
     let producer_bytes = producer
         .name

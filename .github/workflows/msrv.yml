@@ -105,6 +105,20 @@ jobs:
       # brittle.
       - name: Reproduce every conformance vector without Rust
         run: python3 tests/fixtures/conformance/verify_vectors.py
+  artifact-identity-reference:
+    name: Independent artifact identity reference
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      # Detached artifact identity (issue #25) is a separate claim from
+      # canonicalization, over a separate manifest, so it gets its own job
+      # rather than being folded into the conformance reference above: the
+      # closed semantic conformance set must keep meaning exactly what it did.
+      # A standard-library Python implementation recomputes every artifact ID
+      # from the exact bytes on disk and re-checks that one shared semantic
+      # `contract_id` spans several distinct artifact IDs.
+      - name: Reproduce every artifact identity vector without Rust
+        run: python3 tests/fixtures/artifact-identity/verify_artifact_ids.py
   wasm:
     name: Stable WASM
     runs-on: ubuntu-latest

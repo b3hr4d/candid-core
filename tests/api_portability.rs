@@ -166,7 +166,7 @@ fn draft_build_defaults_producer_to_current_and_honors_overrides() {
     };
     let overridden = nat_draft().with_producer(custom.clone()).build().unwrap();
     assert_eq!(overridden.producer(), &custom);
-    // Producer stays outside authenticated identity.
+    // Producer stays outside the semantic Contract identities.
     assert_eq!(default_built.contract_id(), overridden.contract_id());
 
     // A producer supplied on the wire decodes and is honored at build time.

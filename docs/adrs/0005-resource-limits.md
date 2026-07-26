@@ -107,11 +107,11 @@ would otherwise have been detected.
 
 Producer metadata is untrusted, caller-supplied provenance. Its aggregate bytes
 are bounded (`max_producer_bytes`), but it is deliberately excluded from the
-authenticated `candid-core:contract:v1` and `candid-core:interface:v1` identity
-payloads: binding it in would change every existing identity, and a signature
-over a Contract identity is not a signature over its producer claims. Producer
-metadata remains part of the canonical serialized bytes, so it is preserved
-losslessly on the wire while never influencing an identity hash.
+semantic Contract identity payloads `candid-core:contract:v1` and
+`candid-core:interface:v1`: binding it in would change every existing identity,
+and a signature over a Contract identity is not a signature over its producer
+claims. Producer metadata remains part of the canonical serialized bytes, so it
+is preserved losslessly on the wire while never influencing an identity hash.
 
 `RuntimeContext` snapshots the configured Unix deadline into a monotonic local
 deadline when work begins and carries a cloneable `CancellationToken` for

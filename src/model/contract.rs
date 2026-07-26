@@ -20,16 +20,26 @@ pub struct ContractIdentities {
 /// Untrusted, caller-supplied provenance about the tool that produced a
 /// Contract.
 ///
-/// Producer metadata is deliberately **outside authenticated Contract
-/// identity**. The `candid-core:contract:v1` and `candid-core:interface:v1`
+/// Producer metadata is deliberately **outside the semantic Contract
+/// identities**. The `candid-core:contract:v1` and `candid-core:interface:v1`
 /// hashes (see `docs/canonicalization-v1.md`) are computed over the type
 /// graph, declarations, actor, and format/profile markers only — never over
 /// `producer`. Two Contracts that differ only in their producer therefore
 /// share the same `contract_id` and `interface_id`, even though they are
 /// byte-different on the wire (producer *is* part of the canonical serialized
-/// JSON — and identical in every feature configuration). A signature that
-/// authenticates a Contract by its identity does not authenticate its producer
-/// claims, and callers must treat those claims as unverified.
+/// JSON — and identical in every feature configuration). No unkeyed content ID
+/// authenticates itself, so neither identity authenticates these claims; a
+/// signature over one commits to the semantic Contract and callers must treat
+/// producer metadata as unverified.
+///
+/// A caller that must commit to the producer bytes it actually received commits
+/// to a detached
+/// [`artifact_id_with_limits`](crate::artifact_id_with_limits) instead, and what
+/// that binds depends on the [`ArtifactKind`](crate::ArtifactKind) named:
+/// `ContractJsonV1` covers the Contract document's octets, `producer` included
+/// and nothing more, while the envelope and compilation kinds cover those octets
+/// plus extensions or the provenance sidecar respectively. The semantic
+/// identities exclude producer metadata under every kind.
 ///
 /// This boundary is load-bearing for compatibility: binding `producer` into the
 /// identity payload would change every existing `contract_id`. The bytes are
@@ -528,7 +538,7 @@ pub struct ContractDraft {
     )]
     pub actor: Option<Actor>,
     /// Untrusted provenance about the authoring tool. `None` builds with
-    /// [`ProducerInfo::current`]. Never part of authenticated identity; see
+    /// [`ProducerInfo::current`]. Never part of a semantic identity; see
     /// [`ProducerInfo`]. An explicit `"producer": null` is rejected on
     /// decode: absence is the only spelling of "default producer", mirroring
     /// the `actor` rule.
