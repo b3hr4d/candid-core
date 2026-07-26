@@ -124,7 +124,13 @@ jobs:
       - name: Build every packaged-consumer surface
         run: |
           set -euxo pipefail
-          archive="$(echo downloaded/candid-core-*.crate)"
+          shopt -s nullglob
+          archives=(downloaded/target/package/candid-core-*.crate)
+          if (( ${#archives[@]} != 1 )); then
+            printf 'expected exactly one downloaded crate archive, found %s\n' "${#archives[@]}" >&2
+            exit 1
+          fi
+          archive="${archives[0]}"
           bash tests/fixtures/packaging/verify_packaged_consumers.sh "${archive}"
 
   packaged-docs:
@@ -149,8 +155,15 @@ jobs:
           RUSTDOCFLAGS: -D warnings
         run: |
           set -euxo pipefail
+          shopt -s nullglob
+          archives=(downloaded/target/package/candid-core-*.crate)
+          if (( ${#archives[@]} != 1 )); then
+            printf 'expected exactly one downloaded crate archive, found %s\n' "${#archives[@]}" >&2
+            exit 1
+          fi
+          archive="${archives[0]}"
           workdir="$(mktemp -d)"
-          tar -xzf downloaded/candid-core-*.crate -C "${workdir}"
+          tar -xzf "${archive}" -C "${workdir}"
           package="$(find "${workdir}" -maxdepth 1 -type d -name 'candid-core-*')"
           cd "${package}"
           cargo doc --no-deps --locked --no-default-features
