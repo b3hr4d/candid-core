@@ -183,6 +183,79 @@ fn validation_bounds_record_scans_by_canonicalization_work() {
     assert_eq!(info.observed, 3);
 }
 
+/// `type Wide = record { 0 : nat8; 1 : nat8; ... };` with `count` fields.
+/// Numeric Candid field names *are* the field IDs, so the value side below
+/// needs no `idl_hash`.
+#[cfg(feature = "compiler")]
+fn wide_record_source(count: u32) -> String {
+    let mut source = String::from("type Wide = record { ");
+    for id in 0..count {
+        source.push_str(&format!("{id} : nat8; "));
+    }
+    source.push_str("}; service : {};");
+    source
+}
+
+#[cfg(feature = "compiler")]
+fn wide_record_value(count: u32) -> Value {
+    json!({
+        "kind": "record",
+        "fields": (0..count)
+            .map(|id| json!({ "id": id, "value": { "kind": "nat8", "value": 0 } }))
+            .collect::<Vec<_>>(),
+    })
+}
+
+/// The documented interaction between the work budget and the advertised
+/// field/element ceilings (issue #88).
+///
+/// The test above proves the record scan is *charged*, using an artificially
+/// tiny budget. This one pins what that charging costs at **default** limits,
+/// which is the claim the rustdoc on `max_canonicalization_work`,
+/// `max_fields`, and `max_value_elements` makes to a caller: record validation
+/// is deliberately allocation-free and quadratic, so a record exhausts the
+/// default 10_000_000 budget at 2_582 fields — three orders of magnitude below
+/// `max_fields` (500_000) and `max_value_elements` (1_000_000).
+///
+/// The exact numbers are pinned on purpose. They are documented constants, so a
+/// change to the scan cost must fail here and force the rustdoc to be updated
+/// with it rather than silently drift away from what callers were told.
+#[cfg(feature = "compiler")]
+#[test]
+fn default_limits_bound_record_width_below_the_advertised_field_ceiling() {
+    const LAST_ACCEPTED: u32 = 2_581;
+    const FIRST_REJECTED: u32 = 2_582;
+
+    let limits = Limits::default();
+    assert!(
+        (FIRST_REJECTED as usize) < limits.max_fields(),
+        "the ceiling under test must sit below max_fields, or it is not the binding limit"
+    );
+
+    let compilation = compile_did(&wide_record_source(LAST_ACCEPTED)).unwrap();
+    let contract = compilation.contract();
+    let selector = contract.bind_type(declaration(contract, "Wide")).unwrap();
+    let value = parse(wide_record_value(LAST_ACCEPTED));
+    validate_host_value(contract, &selector, &value, &limits)
+        .expect("a record one field below the ceiling must validate at default limits");
+
+    let compilation = compile_did(&wide_record_source(FIRST_REJECTED)).unwrap();
+    let contract = compilation.contract();
+    let selector = contract.bind_type(declaration(contract, "Wide")).unwrap();
+    let value = parse(wide_record_value(FIRST_REJECTED));
+    let error = validate_host_value(contract, &selector, &value, &limits)
+        .expect_err("one field further must fail closed on the work budget");
+
+    // Fail closed on the work budget, not on fields or elements, and not by
+    // running to completion and reporting a field-set mismatch.
+    let violation = &error.violations[0];
+    assert_eq!(violation.code, "resource_limit_exceeded");
+    let info = violation.resource_limit.as_ref().unwrap();
+    assert_eq!(info.resource, "canonicalization_work");
+    assert_eq!(info.limit, 10_000_000);
+    assert_eq!(info.observed, 10_000_001);
+}
+
 #[cfg(feature = "compiler")]
 #[test]
 fn validation_bounds_variant_tag_scans_by_canonicalization_work() {

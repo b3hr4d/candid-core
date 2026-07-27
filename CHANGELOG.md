@@ -7,13 +7,36 @@ release procedure that produces an entry here is [docs/releasing.md](docs/releas
 API, the serialized Contract/Compilation/envelope shapes, the canonical bytes,
 and therefore the identities computed over them. Pin an exact version.
 
-## 0.1.0-beta.1 — prepared, not yet published
+## Unreleased
 
-The first release candidate. Nothing has been published to crates.io, no tag
-exists, and no GitHub release exists; the version bump and the release gates
-described here are the preparation for that decision, not the decision itself.
-The tag, the crates.io publish, and the GitHub prerelease are separately
-authorized steps set out in [docs/releasing.md](docs/releasing.md).
+### Documentation
+
+- **The effective ceiling on HostValue record width is now documented**
+  ([issue #88]). Record validation is deliberately allocation-free: it scans
+  pairwise and charges `canonicalization_work` per comparison rather than
+  building a field-ID index, so the cost is roughly `1.5n²` for an `n`-field
+  record. At the default `max_canonicalization_work` that binds a single record
+  at **2 581 fields** — far below the 500 000 `max_fields` permits and the
+  1 000 000 `max_value_elements` permits, neither of which is the binding limit
+  for a wide record. The rustdoc on all three limits now says so, and a
+  regression test pins the boundary and the exact resource metadata one field
+  over. No behaviour changed: this release documents what the code already did.
+  The failure was, and remains, structured and deadline-interruptible rather
+  than a hang.
+
+## 0.1.0-beta.1 — published 2026-07-27
+
+The first published version, released from commit
+`819a3c9062bf6420bec66fb6e8fd9c7c67add50c` with Cargo 1.94.1. The `.crate`
+SHA-256 crates.io recorded is
+`4082434fe0057bf9bccabd9e987cb9772137488e6294e05f28c094b544cf8224`, matching the
+digest the release gates measured.
+
+The archive published under this version was built before publication, so the
+copy of this file inside it still describes the release as prepared rather than
+published — unavoidable, since editing it would change the commit and therefore
+the digest. The tag, the crates.io publish, and the GitHub prerelease were
+separately authorized steps, set out in [docs/releasing.md](docs/releasing.md).
 
 Because this is the first version, everything below describes the shape of the
 initial surface rather than a change from a predecessor.
@@ -160,3 +183,4 @@ have seen them:
 [issue #23]: https://github.com/b3hr4d/candid-core/issues/23
 [issue #38]: https://github.com/b3hr4d/candid-core/issues/38
 [issue #39]: https://github.com/b3hr4d/candid-core/issues/39
+[issue #88]: https://github.com/b3hr4d/candid-core/issues/88
