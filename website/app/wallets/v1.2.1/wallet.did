@@ -1,0 +1,53 @@
+// Sovereign Wallet v1.2.1 — a repackage of v1.2.0, not a new interface.
+//
+// Declarations are in a different order, the import points at a renamed file,
+// `Memo` lives here now instead of in the shared file, and there is a lot more
+// prose. Compile it and compare: same `contract_id`, same `interface_id`,
+// different `source_bundle_id`. Wallets on v1.2.0 and wallets on v1.2.1 are
+// the same wallet as far as any client is concerned.
+
+import "types.did";
+
+/// Free-form note attached to a transfer.
+type Memo = opt text;
+
+/// One page of history, as an offset and a count.
+type Page = record {
+  start : nat64;
+  length : nat64;
+};
+
+/// A settled transfer, as recorded by the wallet.
+type Transaction = record {
+  at : nat64;
+  counterparty : principal;
+  amount : Tokens;
+  memo : Memo;
+};
+
+/// Why a transfer did not settle.
+type TransferError = variant {
+  InsufficientFunds : record { balance : Tokens };
+  BadFee : record { expected : Tokens };
+};
+
+/// The block index of a settled transfer, or the reason there is not one.
+type TransferResult = variant {
+  Ok : nat64;
+  Err : TransferError;
+};
+
+/// Everything needed to move tokens out of this wallet.
+type TransferArgs = record {
+  to : principal;
+  amount : Tokens;
+  memo : Memo;
+};
+
+service : {
+  balance : () -> (Tokens) query;
+  owner : () -> (principal) query;
+  transactions : (Page) -> (vec Transaction) query;
+  transfer : (TransferArgs) -> (TransferResult);
+  wallet_version : () -> (text) query;
+}

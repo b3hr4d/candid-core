@@ -1,0 +1,38 @@
+// Sovereign Wallet v2.1.0 — additive over v2.0.0: subaccount balances and a
+// metadata table. Nothing a v2.0.0 client calls has moved.
+import "common.did";
+
+type TransferArgs = record {
+  to : Account;
+  amount : Tokens;
+  memo : Memo;
+  created_at : opt nat64;
+};
+
+type TransferError = variant {
+  InsufficientFunds : record { balance : Tokens };
+  BadFee : record { expected : Tokens };
+  TooOld;
+  Duplicate : record { of : nat64 };
+};
+
+type TransferResult = variant { Ok : nat64; Err : TransferError };
+
+type Transaction = record {
+  at : nat64;
+  counterparty : principal;
+  amount : Tokens;
+  memo : Memo;
+};
+
+type Page = record { start : nat64; length : nat64 };
+
+service : {
+  balance : () -> (Tokens) query;
+  balance_of : (Account) -> (Tokens) query;
+  controllers : () -> (vec principal) query;
+  metadata : () -> (vec record { text; text }) query;
+  transactions : (Page) -> (vec Transaction) query;
+  transfer : (TransferArgs) -> (TransferResult);
+  wallet_version : () -> (text) query;
+}

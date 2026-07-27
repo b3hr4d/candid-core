@@ -1,0 +1,173 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>One frontend, every version — candid-core</title>
+    <meta
+      name="description"
+      content="A live demonstration of running one decentralized application against a fleet of canisters on six different interface versions, with every identity compiled in the browser by candid-core."
+    />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ctext y='26' font-size='26'%3E%F0%9F%A7%A9%3C/text%3E%3C/svg%3E" />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <header class="masthead">
+      <div class="wrap">
+        <p class="eyebrow">candid-core <span id="crate-version">0.1.0-beta.1</span> · live in your browser</p>
+        <h1>Seven wallets.<br />Six interfaces. One frontend.</h1>
+        <p class="lede">
+          Every user of this dapp owns their own wallet canister and upgrades it when they feel
+          like it — or never. So the fleet is permanently spread across versions, and the frontend
+          has to work anyway. Below, that frontend figures out what each wallet can do by
+          <em>compiling its DID interface right here in this page</em> and comparing canonical
+          identities. No server, no registry, no version string it has to take on trust.
+        </p>
+        <div class="runtime" id="runtime" role="status">
+          <span class="spinner"></span> instantiating the WebAssembly module…
+        </div>
+      </div>
+    </header>
+
+    <main class="wrap">
+      <section id="fleet-section" aria-labelledby="fleet-heading">
+        <div class="section-head">
+          <h2 id="fleet-heading"><span class="ordinal">01</span> The fleet</h2>
+          <p>
+            Seven canisters, running six different builds between them. Pick one to see exactly
+            what this frontend negotiated with it.
+          </p>
+        </div>
+
+        <fieldset class="support">
+          <legend>This frontend ships code for</legend>
+          <label><input type="checkbox" id="line-1" value="1.x" checked /> the <b>1.x</b> line</label>
+          <label><input type="checkbox" id="line-2" value="2.x" checked /> the <b>2.x</b> line</label>
+          <p class="support-hint">
+            Untick one and watch the fleet. This is the cost of dropping a release line, measured
+            rather than guessed.
+          </p>
+        </fieldset>
+
+        <div class="fleet" id="fleet"></div>
+        <div class="detail" id="detail"></div>
+      </section>
+
+      <section id="releases-section" aria-labelledby="releases-heading">
+        <div class="section-head">
+          <h2 id="releases-heading"><span class="ordinal">02</span> What each identity actually claims</h2>
+          <p>
+            Three identities over three different projections of the same release, all computed in
+            this page. <code>interface_id</code> covers the actor's wire interface;
+            <code>contract_id</code> covers the whole semantic Contract; <code>source_bundle_id</code>
+            covers the raw source bytes and import edges. Watch what 1.2.1 does to them.
+          </p>
+        </div>
+        <div class="table-scroll">
+          <table class="releases" id="releases"></table>
+        </div>
+        <div class="callout" id="repackage"></div>
+      </section>
+
+      <section id="matrix-section" aria-labelledby="matrix-heading">
+        <div class="section-head">
+          <h2 id="matrix-heading"><span class="ordinal">03</span> Which upgrades break a client</h2>
+          <p>
+            Every ordered pair of releases. A row is the version a client was written against; a
+            column is the version the wallet is actually running. Click any cell.
+          </p>
+        </div>
+        <div class="table-scroll">
+          <table class="matrix" id="matrix"></table>
+        </div>
+        <p class="legend">
+          <span><b class="mark identical">≡</b> identical <code>interface_id</code></span>
+          <span><b class="mark compatible">＋n</b> n methods added, nothing the client uses moved</span>
+          <span><b class="mark breaking">✕n</b> n methods the client uses were removed or changed</span>
+        </p>
+        <div class="callout" id="matrix-detail"></div>
+      </section>
+
+      <section id="playground-section" aria-labelledby="playground-heading">
+        <div class="section-head">
+          <h2 id="playground-heading"><span class="ordinal">04</span> Propose the next version</h2>
+          <p>
+            Edit the candidate below. It is compiled on every keystroke by the same runtime, and
+            checked against every wallet already in the fleet before you ship it to any of them.
+          </p>
+        </div>
+        <div class="playground">
+          <div class="editor">
+            <div class="tabs" id="editor-tabs" role="tablist"></div>
+            <textarea id="editor" spellcheck="false" aria-label="Candidate DID source"></textarea>
+            <div class="editor-foot">
+              <button type="button" id="reset-editor" class="ghost">Reset to 2.1.0</button>
+              <span id="editor-status" class="editor-status"></span>
+            </div>
+          </div>
+          <div class="candidate" id="candidate"></div>
+        </div>
+      </section>
+
+      <section id="how-section" aria-labelledby="how-heading">
+        <div class="section-head">
+          <h2 id="how-heading"><span class="ordinal">05</span> How this page works</h2>
+        </div>
+        <div class="how">
+          <article>
+            <h3>Nothing is precomputed</h3>
+            <p>
+              The page fetches plain <code>.did</code> files, hands each bundle to
+              <code>compile_with_resolver</code> through a <code>MemoryResolver</code>, and renders
+              what comes back. Delete the <code>.wasm</code> and there is nothing left to show.
+            </p>
+          </article>
+          <article>
+            <h3>No filesystem, no ambient authority</h3>
+            <p>
+              The module is built with <code>default-features = false</code> and only the
+              <code>compiler</code> feature — no <code>cap-std</code>, nothing that could read a
+              file. An import the page did not supply is a resolver error, never a fetch.
+            </p>
+          </article>
+          <article>
+            <h3>No binding generator</h3>
+            <p>
+              candid-core takes no <code>wasm-bindgen</code> production dependency, so neither does
+              this. The bridge is four <code>extern "C"</code> functions over linear memory and one
+              JSON document each way.
+            </p>
+          </article>
+          <article>
+            <h3>Every limit still applies</h3>
+            <p>
+              The same <code>interactive_v1</code> bounds the CLI uses hold here. Paste a megabyte
+              of padding into the editor and you get a structured
+              <code>resource_limit_exceeded</code>, not a hung tab.
+            </p>
+          </article>
+        </div>
+      </section>
+    </main>
+
+    <footer class="wrap">
+      <p>
+        Built from
+        <a href="https://github.com/b3hr4d/candid-core">github.com/b3hr4d/candid-core</a>. The wallet
+        releases are illustrative; the identities, diagnostics, and compatibility verdicts are
+        computed by the crate.
+      </p>
+      <p class="fineprint" id="fineprint"></p>
+    </footer>
+
+    <noscript>
+      <p class="wrap">
+        This page compiles Candid interfaces in your browser, so it needs JavaScript and
+        WebAssembly. The same comparisons are available from the command line:
+        <code>cargo run --bin candid-core -- compile ./wallet.did</code>.
+      </p>
+    </noscript>
+
+    <script type="module" src="js/main.js"></script>
+  </body>
+</html>

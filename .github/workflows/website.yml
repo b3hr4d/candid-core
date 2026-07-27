@@ -1,0 +1,87 @@
+name: Website
+
+# Builds the browser demo under `website/`, checks that the claims its prose
+# makes are still true of the `.did` files it ships, and publishes it to GitHub
+# Pages from `main`.
+#
+# The split between the two jobs is the usual one and it matters: `build` runs
+# on every pull request under the workflow-level `contents: read` grant and can
+# publish nothing. `deploy` is the only job with `pages: write`, it never runs
+# for a pull request, and it builds nothing — it deploys the artifact `build`
+# produced.
+#
+# Deployment requires Pages to be enabled for the repository with
+# `Source: GitHub Actions`. Until it is, `deploy` fails and `build` keeps
+# passing, which is the right way round.
+
+on:
+  pull_request:
+    paths:
+      - 'website/**'
+      - 'src/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/website.yml'
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Pages allows one deployment at a time. Queue rather than cancel: a superseded
+# run that is already deploying should finish rather than leave the site half
+# updated.
+concurrency:
+  group: website-pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build and verify
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+          components: rustfmt, clippy
+      - name: Format
+        run: cargo fmt --manifest-path website/wasm/Cargo.toml --check
+      - name: Lint
+        run: >-
+          cargo clippy --manifest-path website/wasm/Cargo.toml
+          --target wasm32-unknown-unknown --release --locked -- -D warnings
+      - name: Build the browser module
+        run: ./website/build.sh
+      - name: Check the claims the page makes
+        run: node website/verify.mjs
+      - name: Report the module size
+        run: |
+          bytes=$(wc -c <website/app/candid_core_web.wasm)
+          gzipped=$(gzip -9 -c website/app/candid_core_web.wasm | wc -c)
+          echo "| module | bytes |" >>"$GITHUB_STEP_SUMMARY"
+          echo "| --- | ---: |" >>"$GITHUB_STEP_SUMMARY"
+          echo "| candid_core_web.wasm | ${bytes} |" >>"$GITHUB_STEP_SUMMARY"
+          echo "| gzipped | ${gzipped} |" >>"$GITHUB_STEP_SUMMARY"
+      - name: Package the site
+        if: github.event_name != 'pull_request'
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: website/app
+
+  deploy:
+    name: Publish to Pages
+    needs: build
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

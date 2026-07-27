@@ -1,0 +1,23 @@
+// Sovereign Wallet v1.1.0 — adds a build string. Purely additive: every
+// v1.0.0 method keeps the signature it had.
+import "common.did";
+
+type TransferArgs = record {
+  to : principal;
+  amount : Tokens;
+  memo : Memo;
+};
+
+type TransferError = variant {
+  InsufficientFunds : record { balance : Tokens };
+  BadFee : record { expected : Tokens };
+};
+
+type TransferResult = variant { Ok : nat64; Err : TransferError };
+
+service : {
+  balance : () -> (Tokens) query;
+  owner : () -> (principal) query;
+  transfer : (TransferArgs) -> (TransferResult);
+  wallet_version : () -> (text) query;
+}

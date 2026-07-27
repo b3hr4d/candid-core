@@ -106,6 +106,18 @@ Each example declares its `required-features`, so `cargo run --example …` unde
 
 `contract_walkthrough` prints a canonical recursive Contract and its provenance summary. `semantic_equivalence` compares interface identity with source identity. `trust_boundary` demonstrates rejection of injected metadata and a tampered identity. `hermetic_bundle` shows filesystem-free import resolution — the browser path, which is why it needs only `compiler` — while `host_value_validation` preserves a large `nat` and an IEEE NaN payload. `bounded_parsing` rejects oversized untrusted documents before decoding and shows the second limit serialization consumes.
 
+## Live browser example
+
+[`website/`](website/README.md) is a page that runs one decentralized-application frontend against a fleet of canisters on six different interface versions — the ordinary situation for a dapp whose users own their own canisters and upgrade on their own schedule. It fetches each release's `.did` files, compiles them in the browser through `compile_with_resolver`, and uses the resulting identities and type graph to decide what the frontend can do with each wallet: which capability each one serves, which upgrade steps are semantically breaking, and which release is a repackage that moved `source_bundle_id` while leaving `contract_id` and `interface_id` exactly where they were. Nothing on the page is precomputed, and the module it loads takes no `wasm-bindgen` dependency — the bridge is a raw C ABI over linear memory, because the crate's no-binding-generator claim should survive its own demo.
+
+```sh
+./website/build.sh                                   # build the module
+node website/verify.mjs                              # check the page's claims
+python3 -m http.server --directory website/app 8080  # then open localhost:8080
+```
+
+`website/verify.mjs` runs the page's own modules in Node against the same sources, so an edit that falsifies something the page says — a step that stops being breaking, a repackage that stops being identity-stable — fails in CI rather than misinforming a reader.
+
 ## Foundation decisions
 
 Seven implemented [foundation ADRs](docs/adrs/README.md) define the boundaries for large-ecosystem use:

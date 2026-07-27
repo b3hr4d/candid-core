@@ -16,3 +16,10 @@ __pycache__/
 /fuzz/target/
 /fuzz/corpus/
 /fuzz/artifacts/
+
+# `website/wasm` is a separate cargo project too, and the module it produces is
+# a build output: CI rebuilds it from these sources before deploying the page,
+# and `website/build.sh` does the same locally. A checked-in `.wasm` would be a
+# ~800 KiB binary in every clone that nothing verifies against its source.
+/website/wasm/target/
+/website/app/candid_core_web.wasm

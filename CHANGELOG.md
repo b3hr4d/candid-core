@@ -9,6 +9,19 @@ and therefore the identities computed over them. Pin an exact version.
 
 ## Unreleased
 
+### Repository
+
+- **A live browser example.** [`website/`](website/README.md) runs one
+  decentralized-application frontend against a fleet of canisters on six
+  different interface versions, compiling every release's `.did` files in the
+  browser through `compile_with_resolver` and deciding capability by capability
+  what the frontend can do with each wallet. Nothing in the published crate
+  changed: the demo is a separate, unpublished `cdylib` under `website/wasm`
+  that depends on this crate with `default-features = false, features =
+  ["compiler"]` — no `cap-std`, no `wasm-bindgen`, no binding generator — plus a
+  static page with no build step. `website/verify.mjs` runs the page's own
+  modules in Node and fails if an edit falsifies something the page claims.
+
 ### Documentation
 
 - **The effective ceiling on HostValue record width is now documented**

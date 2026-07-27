@@ -1,0 +1,104 @@
+{
+  "canister": "Sovereign Wallet",
+  "description": "Every user of this dapp controls their own wallet canister and upgrades it whenever they feel like it. These are the interface versions currently live in the fleet.",
+  "versions": [
+    {
+      "id": "v1.0.0",
+      "released": "2026-01-12",
+      "line": "1.x",
+      "entry": "wallet.did",
+      "files": ["wallet.did", "common.did"],
+      "headline": "First release",
+      "summary": "Balance, owner, and a transfer that addresses a bare principal."
+    },
+    {
+      "id": "v1.1.0",
+      "released": "2026-02-03",
+      "line": "1.x",
+      "entry": "wallet.did",
+      "files": ["wallet.did", "common.did"],
+      "headline": "Adds wallet_version",
+      "summary": "Purely additive. Every v1.0.0 method keeps its exact signature."
+    },
+    {
+      "id": "v1.2.0",
+      "released": "2026-03-20",
+      "line": "1.x",
+      "entry": "wallet.did",
+      "files": ["wallet.did", "common.did"],
+      "headline": "Adds paged history",
+      "summary": "Adds transactions and the types it needs. Still additive over 1.0.0."
+    },
+    {
+      "id": "v1.2.1",
+      "released": "2026-04-02",
+      "line": "1.x",
+      "entry": "wallet.did",
+      "files": ["wallet.did", "types.did"],
+      "headline": "Repackage of 1.2.0",
+      "summary": "Renamed file, moved declaration, reordered, documented. Same contract, different source bundle."
+    },
+    {
+      "id": "v2.0.0",
+      "released": "2026-05-18",
+      "line": "2.x",
+      "entry": "wallet.did",
+      "files": ["wallet.did", "common.did"],
+      "headline": "Breaking: accounts and controllers",
+      "summary": "transfer takes an Account and gains two error cases; owner is replaced by controllers."
+    },
+    {
+      "id": "v2.1.0",
+      "released": "2026-07-01",
+      "line": "2.x",
+      "entry": "wallet.did",
+      "files": ["wallet.did", "common.did"],
+      "headline": "Adds balance_of and metadata",
+      "summary": "Additive over 2.0.0."
+    }
+  ],
+  "fleet": [
+    {
+      "holder": "Ana",
+      "canister": "rrkah-fqaaa-aaaaa-aaaaq-cai",
+      "version": "v1.0.0",
+      "note": "Never upgraded. Cold storage, and she likes it that way."
+    },
+    {
+      "holder": "Bao",
+      "canister": "ryjl3-tyaaa-aaaaa-aaaba-cai",
+      "version": "v1.1.0",
+      "note": "Took the version endpoint, skipped the rest."
+    },
+    {
+      "holder": "Chi",
+      "canister": "r7inp-6aaaa-aaaaa-aaabq-cai",
+      "version": "v1.2.0",
+      "note": "Current on the 1.x line."
+    },
+    {
+      "holder": "Dara",
+      "canister": "rkp4c-7iaaa-aaaaa-aaaca-cai",
+      "version": "v1.2.1",
+      "note": "Same interface as Chi. The wasm was rebuilt from repackaged sources."
+    },
+    {
+      "holder": "Emre",
+      "canister": "renrk-eyaaa-aaaaa-aaada-cai",
+      "version": "v2.0.0",
+      "note": "First mover onto the 2.x line."
+    },
+    {
+      "holder": "Fen",
+      "canister": "rdmx6-jaaaa-aaaaa-aaadq-cai",
+      "version": "v2.1.0",
+      "note": "Fully current."
+    },
+    {
+      "holder": "Gala",
+      "canister": "qoctq-giaaa-aaaaa-aaaea-cai",
+      "version": "v1.0.0",
+      "note": "Inherited the canister and has not touched it since."
+    }
+  ]
+}

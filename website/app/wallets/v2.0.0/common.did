@@ -1,0 +1,9 @@
+// Shared value types for the Sovereign Wallet canister, v2 line.
+type Tokens = record { e8s : nat64 };
+type Memo = opt text;
+
+// New in v2: transfers address a subaccount, not a bare principal.
+type Account = record {
+  owner : principal;
+  subaccount : opt blob;
+};

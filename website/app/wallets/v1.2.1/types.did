@@ -1,0 +1,10 @@
+// Repackaged from v1.2.0's `common.did`.
+//
+// The file was renamed, `Memo` moved out of it and into `wallet.did`, and the
+// remaining declaration picked up documentation it did not have before. Every
+// one of those edits moves `source_bundle_id`, which identifies raw source
+// bytes and import edges. None of them moves `contract_id` or `interface_id`,
+// which identify what the service *means*.
+
+/// A quantity of tokens, in e8s (10^-8 of one token).
+type Tokens = record { e8s : nat64 };

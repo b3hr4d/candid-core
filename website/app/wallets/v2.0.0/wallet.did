@@ -1,0 +1,40 @@
+// Sovereign Wallet v2.0.0 — the breaking upgrade.
+//
+// Three changes a v1 client cannot ignore: `transfer` now takes an `Account`
+// and can fail two new ways, `owner` is gone, and `controllers` replaces it.
+// `balance`, `wallet_version`, and `transactions` are untouched, which is why
+// a wallet still on v1 and a wallet on v2 can be driven by the same page.
+import "common.did";
+
+type TransferArgs = record {
+  to : Account;
+  amount : Tokens;
+  memo : Memo;
+  created_at : opt nat64;
+};
+
+type TransferError = variant {
+  InsufficientFunds : record { balance : Tokens };
+  BadFee : record { expected : Tokens };
+  TooOld;
+  Duplicate : record { of : nat64 };
+};
+
+type TransferResult = variant { Ok : nat64; Err : TransferError };
+
+type Transaction = record {
+  at : nat64;
+  counterparty : principal;
+  amount : Tokens;
+  memo : Memo;
+};
+
+type Page = record { start : nat64; length : nat64 };
+
+service : {
+  balance : () -> (Tokens) query;
+  controllers : () -> (vec principal) query;
+  transactions : (Page) -> (vec Transaction) query;
+  transfer : (TransferArgs) -> (TransferResult);
+  wallet_version : () -> (text) query;
+}

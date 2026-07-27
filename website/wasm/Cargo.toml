@@ -1,0 +1,36 @@
+[package]
+name = "candid-core-web"
+version = "0.0.0"
+publish = false
+edition = "2021"
+rust-version = "1.78"
+description = "Raw-ABI browser bridge for the candid-core multi-version wallet demo"
+license = "Apache-2.0"
+
+# A `cdylib` and nothing else. There is no Rust consumer of this crate: its only
+# job is to be a `.wasm` module the demo page instantiates directly.
+[lib]
+crate-type = ["cdylib"]
+path = "src/lib.rs"
+
+[dependencies]
+# `compiler` without `filesystem-compiler` and without `host-value` is exactly
+# the browser surface README.md describes: `compile_with_resolver` over sources
+# the host already holds, no `cap-std`, no ambient authority. Keeping
+# `default-features = false` here is what proves the claim rather than
+# restating it — a build that needed the filesystem would fail.
+candid-core = { path = "../..", default-features = false, features = ["compiler"] }
+serde = { version = "=1.0.228", features = ["derive"] }
+serde_json = "=1.0.150"
+
+# The demo module is downloaded by every visitor, so it is optimized for size
+# rather than speed. `panic = "abort"` is deliberate: the bridge never unwinds
+# across the ABI boundary, and every failure it is designed to report — parse
+# errors, type errors, resource-limit rejections — arrives as a structured
+# `Result`, not a panic.
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
