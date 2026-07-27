@@ -126,10 +126,51 @@ fn official_check(source: &str) {
 
 fn main() {
     let source = support::ledger_source();
+    // `cargo bench --benches --locked -- --test` compiles and exercises every
+    // benchmark once on every pull request. This binary is `harness = false`, so
+    // that contract is hand-written rather than provided by Criterion, and
+    // before issue #87 this branch returned after one plain compile: `measure`,
+    // the allocator counter lifecycle, and the JSON emission the scheduled job
+    // captures were never reached, so a regression in any of them surfaced only
+    // in a scheduled or dispatched run.
+    //
+    // One measured case, not the whole matrix. Smoke mode has to stay on the
+    // pull-request critical path, and a single sample is not a statistical
+    // claim — this asserts that the probe *works*, never what it measured.
+    // The report goes to stderr on purpose: the scheduled job redirects this
+    // binary's stdout into `benchmark-artifacts/allocations.json`, and a smoke
+    // run must not be capable of being mistaken for that artifact.
     if std::env::args().any(|argument| argument == "--test") {
         official_check(source);
-        compile_did_with_options(source, CompileOptions::default())
-            .expect("allocation probe fixture must compile");
+        let smoke = measure("ledger", "core_full", source.len(), || {
+            compile_did_with_options(source, CompileOptions::default())
+                .expect("allocation probe fixture must compile")
+        });
+        // A probe that measures nothing is exactly the failure this exists to
+        // catch. If `reset_counters` stopped enabling the allocator hook, or
+        // `measure` stopped reading the counters back, every field here would be
+        // zero and the scheduled report would be silently empty rather than
+        // absent — the shape of bug a green pipeline hides.
+        assert!(
+            smoke.allocations > 0,
+            "allocation probe recorded no allocations; the counter lifecycle is broken"
+        );
+        assert!(
+            smoke.allocated_bytes > 0,
+            "allocation probe recorded no allocated bytes; the counter lifecycle is broken"
+        );
+        assert!(
+            smoke.peak_live_bytes > 0,
+            "allocation probe recorded no peak live bytes; the counter lifecycle is broken"
+        );
+        assert_eq!(
+            smoke.input_bytes,
+            source.len(),
+            "allocation probe reported an input size it was not given"
+        );
+        let report = serde_json::to_string_pretty(std::slice::from_ref(&smoke))
+            .expect("allocation measurements must serialize");
+        eprintln!("allocation probe smoke (not a measurement claim):\n{report}");
         return;
     }
 
