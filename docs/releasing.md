@@ -1,12 +1,19 @@
 # Releasing candid-core
 
-This is the exact procedure for turning a commit into a published version. It is
-credential-free by construction: no step here, and nothing in CI, holds a
-crates.io token or a GitHub token beyond `contents: read`. The three steps that
-mutate anything outside this repository — creating a tag, publishing to
-crates.io, and creating a GitHub prerelease — are gathered at the end under
-[Authorized mutation](#7-authorized-mutation) and are performed by a human, on
-purpose, after the evidence in steps 1–6 exists.
+This is the exact procedure for turning a commit into a published version. It
+holds no stored crates.io credential anywhere: the publish step exchanges a
+GitHub OIDC identity for a token that expires shortly and is revoked when the
+job ends, so there is no long-lived token in Actions secrets and none on an
+operator's workstation either.
+
+Steps 1–6 are read-only with respect to the outside world, and every workflow
+that runs on a pull request — `Verify` and `Release candidate` — holds no more
+than `contents: read` and is unable to tag, publish, or release. The three steps
+that mutate anything outside this repository — creating a tag, publishing to
+crates.io, and creating a GitHub release — are gathered at the end under
+[Authorized mutation](#7-authorized-mutation). They live in a separate
+`workflow_dispatch`-only workflow, and each one waits for its own explicit human
+approval after the evidence in steps 1–6 exists.
 
 Read [§8 Irreversibility](#8-irreversibility-yanking-and-rollback) **before**
 the first publish. A crates.io version cannot be deleted, and yanking is not
@@ -230,47 +237,91 @@ number, a CI run URL, a merge commit, or a crates.io URL until it exists.
 ## 7. Authorized mutation
 
 Everything above is read-only with respect to the outside world. Everything
-below is not, and each item requires explicit authorization from the repository
-owner, given after seeing the step 6 evidence. Nothing in CI performs any of
-these, and no automation in this repository handles a credential.
+below is not. The three mutations — the tag, the crates.io publish, and the
+GitHub release — are performed by the `Release` workflow
+([`.github/workflows/release.yml`](../.github/workflows/release.yml)), and each
+one requires a separate explicit approval from the repository owner, given after
+seeing the step 6 evidence.
 
-1. **Tag.** `git tag -a v<version> -m "candid-core <version>"` on the exact
-   release commit, then `git push origin v<version>`. Tag the commit the evidence
-   names — not `HEAD`, which may have moved.
-2. **Publish.** `cargo "+${RELEASE_TOOLCHAIN}" publish --locked` from that same
-   clean commit. The toolchain is not optional here: `cargo publish` builds its
-   own archive rather than uploading the one step 3 measured, so publishing with
-   a different Cargo uploads different bytes and silently detaches the recorded
-   digest from the artifact. The operator authenticates interactively
-   (`cargo login`, or a token supplied in that operator's own environment). Do
-   not add a crates.io token to GitHub Actions secrets: the `Release candidate`
-   workflow is designed to be unable to publish, and adding a token removes that
-   property.
-3. **Confirm the published digest.** crates.io records the SHA-256 of what it
-   actually received. Read it back and compare it with step 3's:
+Automating these steps did not move the authorization; it moved *where the
+authorization is recorded*. Each mutation runs in its own GitHub Environment
+with required reviewers, so the run pauses until a human approves that specific
+job. Approving the tag does not approve the publish, and approving the publish
+does not approve the release.
 
-   ```sh
-   version="$(grep '^version' Cargo.toml | cut -d'"' -f2)"
-   curl -sS "https://crates.io/api/v1/crates/candid-core/${version}" \
-     | python3 -c 'import json,sys; print(json.load(sys.stdin)["version"]["checksum"])'
-   ```
+### Prerequisites, configured once
 
-   This value, not the locally computed one, is what a consumer's `Cargo.lock`
-   will carry, and it is the digest to quote in the GitHub release. If it differs
-   from step 3's digest, the release gates measured an archive that was not
-   published: say so in the release record and in `CHANGELOG.md`, and treat it
-   as a defect in this procedure rather than a discrepancy to reconcile by hand.
-   The version cannot be re-published (§8), so the correction is a follow-up
-   version.
-4. **GitHub prerelease.** Create a release from the tag, marked as a
-   prerelease, with the changelog entry as its body and the crates.io checksum
-   from the previous step quoted in it, alongside the Cargo version that built
-   it. `0.1.0-beta.1` is a prerelease in the semver sense and must be marked as
-   one in GitHub too.
+- **Trusted Publishing.** Configure this repository and `release.yml` as a
+  trusted publisher for `candid-core` in the crates.io UI. The workflow holds no
+  crates.io token: `rust-lang/crates-io-auth-action` exchanges the workflow's
+  OIDC identity for a token that expires shortly and is revoked when the job
+  ends. **Do not add a crates.io token to Actions secrets.** The `Release
+  candidate` workflow runs on every pull request and is designed to be unable to
+  publish; a stored token would remove that property, and Trusted Publishing
+  means no such token needs to exist anywhere — including on an operator's
+  workstation, which is where the credential used to live.
+  Trusted Publishing cannot be configured for a crate that does not exist, which
+  is why `0.1.0-beta.1` was published by hand.
+- **Three protected environments** — `release-tag`, `crates-io`, and
+  `github-release` — each with required reviewers. Without required reviewers
+  the environments are not gates and the three approvals collapse into one.
+- **A release note.** Write `.github/release-notes/<version>.md` and land it in
+  the pull request that prepares the release, so its wording is reviewed. See
+  [the convention](../.github/release-notes/README.md).
 
-Do these in that order. A tag without a publish is recoverable; a publish
-without a tag leaves a version on crates.io that no commit in the repository is
-identified with.
+### Running it
+
+Dispatch `Release` with the release commit, the version, and the `.crate`
+SHA-256 recorded by the `Release candidate` run for that commit:
+
+```sh
+gh workflow run release.yml \
+  --field commit=<40-character release commit SHA> \
+  --field version=<version> \
+  --field expected_sha256=<.crate SHA-256 from step 3>
+```
+
+The `guard` job runs before any approval is requested and fails closed on: a
+commit that is not a full SHA or not reachable from `main`, a version that does
+not match `Cargo.toml`, a tag that already exists, a Cargo other than
+`RELEASE_TOOLCHAIN`, a missing release note, a package-manifest violation, and —
+the check this procedure could previously only ask a human to perform by eye — a
+repackaged archive whose digest differs from `expected_sha256`.
+
+Then approve, in order:
+
+1. **`release-tag`** — creates an annotated `v<version>` on the input commit,
+   never on `HEAD`, and verifies the pushed tag is annotated and resolves to
+   that commit.
+2. **`crates-io`** — publishes with `RELEASE_TOOLCHAIN`. The toolchain is not
+   optional: `cargo publish` builds its own archive rather than uploading the one
+   step 3 measured, so publishing with a different Cargo uploads different bytes
+   and silently detaches the recorded digest from the artifact.
+3. **`github-release`** — creates the release from the tag with the reviewed
+   notes, marked as a prerelease whenever the version carries a semver
+   prerelease suffix. The flag is derived from the version string rather than
+   supplied, so a typo cannot publish a beta as a stable release.
+
+Between steps 2 and 3 the `confirm` job reads crates.io's own recorded checksum
+back and compares it with `expected_sha256`. That value, not the locally
+computed one, is what a consumer's `Cargo.lock` carries. If it differs, the
+release gates measured an archive that was not published: say so in the release
+record and in `CHANGELOG.md`, and treat it as a defect in this procedure rather
+than a discrepancy to reconcile by hand. The version cannot be re-published
+(§8), so the correction is a follow-up version.
+
+The job order is the same order a human would use, and for the same reason: a
+tag without a publish is recoverable; a publish without a tag leaves a version
+on crates.io that no commit in the repository is identified with.
+
+### Doing it by hand
+
+The workflow is the supported path. If it is unavailable, the equivalent manual
+commands are `git tag -a v<version> -m "candid-core <version>" <commit>` and
+`git push origin refs/tags/v<version>`; `cargo "+${RELEASE_TOOLCHAIN}" publish
+--locked` with the operator authenticating interactively; the checksum read-back
+above; and `gh release create v<version> --verify-tag --prerelease`. Record that
+the manual path was used and why.
 
 ## 8. Irreversibility, yanking, and rollback
 
