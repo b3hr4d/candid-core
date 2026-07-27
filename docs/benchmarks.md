@@ -111,14 +111,21 @@ python3 tests/fixtures/benchmarks/compare.py compare \
   --markdown /tmp/report.md
 ```
 
+**Emit the manifest before running the suite.** That ordering is load-bearing, not stylistic: Criterion never deletes a `new/` directory, so a benchmark you renamed or removed keeps its result from whatever ran last in the same `target/criterion`. The manifest file's timestamp is the run's epoch, and any estimate older than it is treated as left over from a previous run — excluded from the comparison and reported, rather than imported as if this run had produced it.
+
 What it refuses, and why:
 
 | Situation | Behaviour |
 | --- | --- |
 | Baseline missing or unreadable | No comparison; exit 2 |
-| Corpus, generator sizes, feature set, or metric units differ | No comparison; exit 2. The two runs did not measure the same thing, so no delta between them is interpretable — recapture the baseline |
-| Toolchain, target, host, or lockfile differ | No comparison unless `--allow-environment-drift`, which renders the report marked **informational only** and refuses to gate on it |
+| Corpus (including the imported bundle), generator sizes, feature set, or metric units differ | No comparison; exit 2. The two runs did not measure the same thing, so no delta between them is interpretable — recapture the baseline |
+| Toolchain, effective target, `RUSTFLAGS`, host, or lockfile differ | No comparison unless `--allow-environment-drift`, which renders the report marked **informational only** and refuses to gate on it |
+| No Criterion estimates newer than the manifest | No comparison; exit 2 — the suite was not run after the manifest was emitted |
 | Compatible | Renders Markdown and, with `--json`, machine-readable output |
+
+Codegen flags are part of the identity because they change the binary without changing the toolchain: `RUSTFLAGS='-C target-cpu=native'` on one run and not the other produces two materially different programs on one machine, which would otherwise look like no drift at all.
+
+All three allocation metrics are compared — `allocations`, `allocated_bytes`, and `peak_live_bytes`. A change that holds the allocation count constant while growing cumulative or peak bytes is a real memory regression, and comparing only the count would render it as a reassuring 0%.
 
 `--fail-on-regression PCT` exits 1 when any median regresses by more than `PCT`. It is opt-in with no default threshold, because a calibrated threshold needs repeated controlled-runner data that does not exist yet ([issue #39]); and it is rejected outright on an environment-drifted comparison, where the deltas describe two machines as much as two revisions.
 

@@ -102,6 +102,11 @@ fn main() {
     // path satisfies that without a special case.
     let cases = support::import_free_cases();
 
+    // The imported bundle is part of the corpus, not an aside: three of the
+    // `compile/imported_bundle` benchmarks measure exactly these files. Earlier
+    // this recorded only their aggregate byte count, which cannot see an edit
+    // that preserves total length — so a changed bundle could pass the
+    // compatibility check and be compared as if nothing had moved.
     let corpus: Vec<CorpusCase> = cases
         .iter()
         .map(|case| CorpusCase {
@@ -109,6 +114,15 @@ fn main() {
             bytes: case.source.len(),
             fingerprint: format!("{:016x}", fnv1a64(case.source.as_bytes())),
         })
+        .chain(
+            support::imported_bundle_sources()
+                .iter()
+                .map(|(name, source)| CorpusCase {
+                    name: format!("imports/{name}"),
+                    bytes: source.len(),
+                    fingerprint: format!("{:016x}", fnv1a64(source.as_bytes())),
+                }),
+        )
         .collect();
 
     // Order matters and is the declaration order of `import_free_cases`, so a

@@ -68,7 +68,24 @@ HARD_KEYS = (
 # Environment fields. A difference here means the same program was measured on
 # different machinery: the comparison may still be informative, but it is not
 # evidence, so it requires --allow-environment-drift and can never fail a gate.
-SOFT_KEYS = ("rustc", "cargo", "target", "host", "lockfile_digest")
+# Every metric the allocation probe captures. All three are compared: a change
+# that holds the allocation count constant while growing cumulative or peak
+# bytes is a real memory regression, and comparing only the count would render
+# it as 0%.
+ALLOCATION_METRICS = ("allocations", "allocated_bytes", "peak_live_bytes")
+
+SOFT_KEYS = (
+    "rustc",
+    "cargo",
+    "target",
+    "host",
+    "lockfile_digest",
+    # Codegen flags change the binary without changing the toolchain or the
+    # host. `RUSTFLAGS='-C target-cpu=native'` on one run and not the other
+    # produces two materially different programs on one machine, which would
+    # otherwise show as no drift at all and be allowed to fail a gate.
+    "rustflags",
+)
 
 
 def die(message: str) -> "None":
@@ -97,10 +114,23 @@ def fnv1a64(data: bytes) -> str:
 
 def environment(repo_root: Path) -> dict:
     verbose = run("rustc", "-Vv")
-    target = ""
+    host = ""
     for line in verbose.splitlines():
         if line.startswith("host: "):
-            target = line[len("host: ") :].strip()
+            host = line[len("host: ") :].strip()
+    # The *effective* target, not the host triple. `cargo bench --target ...`
+    # or `CARGO_BUILD_TARGET` builds a different binary on the same machine,
+    # and recording only `rustc -Vv`'s host would report no drift between them.
+    target = os.environ.get("CARGO_BUILD_TARGET") or host
+    # `CARGO_ENCODED_RUSTFLAGS` wins over `RUSTFLAGS` when both are set, and
+    # separates arguments with \x1f; normalize so the two spellings of the same
+    # flags compare equal.
+    encoded = os.environ.get("CARGO_ENCODED_RUSTFLAGS")
+    rustflags = (
+        " ".join(encoded.split("\x1f"))
+        if encoded is not None
+        else os.environ.get("RUSTFLAGS", "")
+    ).strip()
     lockfile = repo_root / "Cargo.lock"
     if not lockfile.is_file():
         die(f"{lockfile} is missing; a benchmark identity needs the locked graph")
@@ -110,6 +140,7 @@ def environment(repo_root: Path) -> dict:
         "target": target,
         "host": f"{platform.system()} {platform.machine()}",
         "lockfile_digest": fnv1a64(lockfile.read_bytes()),
+        "rustflags": rustflags,
     }
 
 
@@ -122,21 +153,37 @@ def load_json(path: Path, what: str) -> object:
         die(f"{what} at {path} could not be read: {error}")
 
 
-def collect_criterion(root: Path) -> dict:
-    """Read every benchmark's latest estimates from a Criterion tree.
+def collect_criterion(root: Path, run_epoch: float) -> "tuple[dict, list]":
+    """Read this run's benchmark estimates from a Criterion tree.
 
     Criterion writes `benchmark.json` and `estimates.json` together inside each
     case's `new/` directory. Sibling `base/`, `main/`, and `change/` directories
     hold whatever a previous run or a named baseline left behind — exactly the
     stale data this tool exists to avoid comparing against by accident — so the
     glob is anchored to `new/` rather than matching `benchmark.json` anywhere.
+
+    That is necessary but not sufficient. Criterion never *removes* a `new/`
+    directory, so a benchmark the candidate renamed or deleted keeps its result
+    from whatever ran last in the same `target/criterion`. A recursive scan
+    would import that leftover as if the candidate had just produced it, and the
+    report would show a stale unchanged case rather than a removed one.
+
+    `run_epoch` is the mtime of the manifest file, which the documented workflow
+    emits *before* running the suite. Anything older than it was not produced by
+    this run. Such cases are excluded and returned separately, so they are
+    reported rather than silently dropped — a silent drop would be the same
+    class of bug in the other direction.
     """
     if not root.is_dir():
         die(f"Criterion output directory not found at {root}")
     results = {}
+    stale = []
     for benchmark_json in root.rglob("new/benchmark.json"):
         estimates_path = benchmark_json.parent / "estimates.json"
         if not estimates_path.is_file():
+            continue
+        if estimates_path.stat().st_mtime < run_epoch:
+            stale.append(json.loads(benchmark_json.read_text())["full_id"])
             continue
         meta = json.loads(benchmark_json.read_text())
         estimates = json.loads(estimates_path.read_text())
@@ -151,8 +198,11 @@ def collect_criterion(root: Path) -> dict:
             "throughput_bytes": (meta.get("throughput") or {}).get("Bytes"),
         }
     if not results:
-        die(f"no Criterion estimates under {root}; run the suite first")
-    return results
+        die(
+            f"no Criterion estimates newer than the manifest under {root}. "
+            "Emit the manifest first, then run the suite — see docs/benchmarks.md."
+        )
+    return results, sorted(stale)
 
 
 def collect_allocations(path: Path) -> dict:
@@ -169,17 +219,22 @@ def collect_allocations(path: Path) -> dict:
     }
 
 
-def build_record(args, repo_root: Path) -> dict:
-    manifest = load_json(Path(args.manifest), "benchmark manifest")
+def build_record(args, repo_root: Path) -> "tuple[dict, list]":
+    manifest_path = Path(args.manifest)
+    manifest = load_json(manifest_path, "benchmark manifest")
     if not isinstance(manifest, dict) or "corpus_id" not in manifest:
         die("benchmark manifest is not the object `cargo bench --bench manifest` emits")
-    return {
+    criterion, stale = collect_criterion(
+        Path(args.criterion), manifest_path.stat().st_mtime
+    )
+    record = {
         "baseline_schema_version": BASELINE_SCHEMA_VERSION,
         "manifest": manifest,
         "environment": environment(repo_root),
-        "criterion": collect_criterion(Path(args.criterion)),
+        "criterion": criterion,
         "allocations": collect_allocations(Path(args.allocations)),
     }
+    return record, stale
 
 
 def check_compatibility(baseline: dict, candidate: dict, allow_drift: bool) -> list:
@@ -264,16 +319,30 @@ def render_markdown(report: dict) -> str:
             f"| `{name}` | {before['median_ns']:.0f} ns | {after['median_ns']:.0f} ns "
             f"| {change:+.1f}% | {ci} |"
         )
-    out += ["", "## Allocations", "", "| Case | Baseline | Candidate | Delta |",
-            "| --- | ---: | ---: | ---: |"]
-    for name, before, after, change in report["allocations"]:
-        if before is None or after is None:
-            out.append(f"| `{name}` | {before or '—'} | {after or '—'} | |")
-            continue
-        out.append(
-            f"| `{name}` | {before['allocations']} | {after['allocations']} "
-            f"| {change:+.1f}% |"
-        )
+    # All three captured metrics, not only the count. A change that keeps the
+    # number of allocations constant while growing cumulative or peak bytes is a
+    # memory regression, and reporting only `allocations` would render it as a
+    # reassuring 0%.
+    out += [
+        "",
+        "## Allocations",
+        "",
+        "| Case | Metric | Baseline | Candidate | Delta |",
+        "| --- | --- | ---: | ---: | ---: |",
+    ]
+    for metric in ALLOCATION_METRICS:
+        for name, before, after, change in report["allocations"][metric]:
+            if before is None or after is None:
+                out.append(
+                    f"| `{name}` | {metric} | "
+                    f"{before[metric] if before else '—'} | "
+                    f"{after[metric] if after else '—'} | |"
+                )
+                continue
+            out.append(
+                f"| `{name}` | {metric} | {before[metric]} | {after[metric]} "
+                f"| {change:+.1f}% |"
+            )
     out += [
         "",
         "Deltas are regression *signals*, not proof. A single run on a shared machine "
@@ -310,7 +379,17 @@ def main() -> int:
 
     args = parser.parse_args()
     repo_root = Path(__file__).resolve().parents[3]
-    candidate = build_record(args, repo_root)
+    candidate, stale = build_record(args, repo_root)
+
+    # Reported, never silently dropped. A leftover `new/` from an earlier run in
+    # the same `target/criterion` means the candidate no longer produces that
+    # benchmark — a renamed or deleted case — which is information, not noise.
+    if stale:
+        print(
+            f"note: ignored {len(stale)} Criterion case(s) older than this run's "
+            f"manifest: {', '.join(stale)}",
+            file=sys.stderr,
+        )
 
     if args.command == "capture":
         candidate["note"] = args.note
@@ -333,9 +412,13 @@ def main() -> int:
         "informational_only": bool(drift),
         "environment_drift": drift,
         "timing": delta_rows(baseline["criterion"], candidate["criterion"], "median_ns"),
-        "allocations": delta_rows(
-            baseline["allocations"], candidate["allocations"], "allocations"
-        ),
+        "allocations": {
+            metric: delta_rows(
+                baseline["allocations"], candidate["allocations"], metric
+            )
+            for metric in ALLOCATION_METRICS
+        },
+        "stale_cases": stale,
     }
 
     markdown = render_markdown(report)
