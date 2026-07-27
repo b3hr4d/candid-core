@@ -16,10 +16,16 @@ tagged or published. That check is deliberately early: a crates.io version can
 never be republished, so discovering a missing release note afterwards cannot be
 fixed for that version.
 
-What a release note is expected to state honestly, following
+A note cannot state its own release commit or the resulting archive digest:
+committing those values would change the commit, and therefore
+`.cargo_vcs_info.json` and the digest, again. So the workflow appends a **Release
+provenance** table — commit, Cargo version, `.crate` SHA-256, and crates.io URL —
+from values that run has verified. Do not hand-write those into the note; they
+would be stale by construction.
+
+What the note itself is expected to state honestly, following
 [`docs/releasing.md`](../../docs/releasing.md) step 5:
 
-- the exact release commit, the `.crate` digest, and the Cargo that produced it;
 - installation syntax, naming the exact version — a caret requirement does not
   select a prerelease;
 - pre-1.0 API, wire-format, canonical-byte, and identity instability;

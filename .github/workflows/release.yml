@@ -61,6 +61,12 @@ jobs:
   guard:
     name: Guard the release inputs
     runs-on: ubuntu-latest
+    # Declared rather than inherited. The workflow-level `{}` leaves every
+    # permission at `none`, and this job checks out the repository: relying on
+    # the checkout succeeding because the repository happens to be public would
+    # make the release depend on its visibility.
+    permissions:
+      contents: read
     outputs:
       prerelease: ${{ steps.semver.outputs.prerelease }}
       notes_path: ${{ steps.semver.outputs.notes_path }}
@@ -252,6 +258,9 @@ jobs:
       # The OIDC identity Trusted Publishing exchanges for a short-lived token.
       # This is the whole credential story: nothing is stored.
       id-token: write
+      # Naming any permission sets every other one to `none`, so the checkout
+      # below needs this stated explicitly.
+      contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -340,13 +349,49 @@ jobs:
           ref: ${{ inputs.commit }}
           persist-credentials: false
 
+      - name: Load the pinned tool versions
+        run: grep -E '^[A-Z_]+=' tests/fixtures/packaging/release-tools.env >> "$GITHUB_ENV"
+
+      # The reviewed note cannot state its own release commit or the resulting
+      # archive digest: committing those values would change the commit, and
+      # therefore `.cargo_vcs_info.json` and the digest, again. So the note
+      # carries the prose a human should review, and the provenance is appended
+      # here from values this run has actually verified — `expected_sha256` was
+      # matched against a repackage before the tag and against crates.io's own
+      # recorded checksum after the publish.
+      - name: Compose the release body
+        env:
+          COMMIT: ${{ inputs.commit }}
+          VERSION: ${{ inputs.version }}
+          EXPECTED: ${{ inputs.expected_sha256 }}
+          NOTES: ${{ needs.guard.outputs.notes_path }}
+        run: |
+          set -euo pipefail
+          body="${RUNNER_TEMP:-/tmp}/release-body.md"
+          cat "${NOTES}" > "${body}"
+          {
+            printf '\n---\n\n## Release provenance\n\n'
+            printf '| Evidence | Value |\n| --- | --- |\n'
+            printf '| Release commit | `%s` |\n' "${COMMIT}"
+            printf '| Cargo | `%s` |\n' "${RELEASE_TOOLCHAIN}"
+            printf '| `.crate` SHA-256 | `%s` |\n' "${EXPECTED}"
+            printf '| crates.io | https://crates.io/crates/candid-core/%s |\n' "${VERSION}"
+            printf '\nThe digest above was recorded by the `Release candidate` run for this'
+            printf ' commit, re-verified by repackaging with the pinned Cargo before the tag'
+            printf ' was created, and matched against the checksum crates.io itself recorded'
+            printf ' after publication. `cargo package` output is byte-stable within one Cargo'
+            printf ' version and not across versions, so the digest identifies this archive'
+            printf ' only together with that commit and that Cargo.\n'
+          } >> "${body}"
+          echo "RELEASE_BODY=${body}" >> "$GITHUB_ENV"
+          cat "${body}"
+
       # `--verify-tag` refuses to invent a tag: the tag job above is the only
       # thing allowed to create one.
       - name: Create the release
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ inputs.version }}
-          NOTES: ${{ needs.guard.outputs.notes_path }}
           PRERELEASE: ${{ needs.guard.outputs.prerelease }}
         run: |
           set -euo pipefail
@@ -359,7 +404,7 @@ jobs:
             --verify-tag \
             ${flag} \
             --title "candid-core ${VERSION}" \
-            --notes-file "${NOTES}"
+            --notes-file "${RELEASE_BODY}"
 
       - name: Verify the published release
         env:
