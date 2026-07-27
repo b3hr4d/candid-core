@@ -10,8 +10,13 @@ on worth much — that is how drift gets through.
 So the rule here is neither "no breaks" nor "breaks are free". It is **no
 undocumented breaks**: `cargo semver-checks` reports what changed, and a
 reported break must be acknowledged in the `## Unreleased` section of
-`CHANGELOG.md` with a line containing `**BREAKING**`. Acknowledged, it passes;
-unacknowledged, it fails and names what to write.
+`CHANGELOG.md` by a list item that *begins* with the `**BREAKING**` marker.
+Acknowledged, it passes; unacknowledged, it fails and names what to write.
+
+The marker must start a list item rather than merely appear somewhere in the
+section. That is not pedantry: the changelog entry describing this gate contains
+the marker while explaining it, so a substring check would be satisfied by its
+own documentation and would wave through every break forever.
 
 Two surfaces are checked, because they are two published APIs: the base model a
 `default-features = false` consumer sees, and the full surface. An item that
@@ -85,6 +90,16 @@ def published_baseline(repo_root: Path) -> str:
     return version
 
 
+# An acknowledgement is a *list item* that starts with the marker, not any
+# mention of it. A substring search is not enough and is actively dangerous
+# here: the changelog entry describing this gate necessarily contains the marker
+# while explaining it, so a substring check would be satisfied by its own
+# documentation and would pass every break forever. Anchoring to a bullet also
+# means an inline `**BREAKING**` inside prose or backticks cannot acknowledge
+# anything.
+ACKNOWLEDGEMENT = re.compile(r"^[ \t]*[-*][ \t]+\*\*BREAKING\*\*", re.MULTILINE)
+
+
 def unreleased_section(changelog: Path) -> str:
     """The text between `## Unreleased` and the next `## ` heading."""
     if not changelog.is_file():
@@ -145,22 +160,30 @@ def main() -> int:
         return 0
 
     surfaces = ", ".join(broken)
-    acknowledgement = unreleased_section(repo_root / "CHANGELOG.md")
-    if "**BREAKING**" in acknowledgement:
+    section = unreleased_section(repo_root / "CHANGELOG.md")
+    entries = ACKNOWLEDGEMENT.findall(section)
+    if entries:
         print(
             f"breaking changes reported on: {surfaces}\n"
-            "acknowledged in the Unreleased section of CHANGELOG.md — allowed, "
-            "because this crate is pre-1.0 and documents that any release may "
-            "break."
+            f"acknowledged by {len(entries)} entry/entries in the Unreleased "
+            "section of CHANGELOG.md — allowed, because this crate is pre-1.0 "
+            "and documents that any release may break."
         )
         return 0
 
     print(
         f"breaking changes reported on: {surfaces}\n"
         "\n"
-        "This is permitted before 1.0, but it must be written down. Add a line "
-        "containing **BREAKING** to the `## Unreleased` section of CHANGELOG.md "
-        "describing what changed and what a consumer must do, then re-run.\n"
+        "This is permitted before 1.0, but it must be written down. Add a list "
+        "item to the `## Unreleased` section of CHANGELOG.md that begins with "
+        "the marker, describing what changed and what a consumer must do:\n"
+        "\n"
+        "    - **BREAKING**: `ContractEnvelope` is no longer re-exported at the "
+        "crate root; import it from `candid_core::envelope`.\n"
+        "\n"
+        "The marker must start a list item. A mention inside prose or backticks "
+        "does not acknowledge anything — otherwise the changelog entry that "
+        "documents this gate would satisfy it.\n"
         "\n"
         "If the change was not intended, revert it instead — that is the case "
         "this gate exists to catch.",

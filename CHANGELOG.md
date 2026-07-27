@@ -15,10 +15,12 @@ and therefore the identities computed over them. Pin an exact version.
   ([issue #92]). `cargo semver-checks` compares both published surfaces against
   the latest release and reports breaking changes. Because this crate is pre-1.0
   and reserves the right to break, the gate does not forbid them — it forbids
-  *undocumented* ones: a reported break must be acknowledged with a
-  `**BREAKING**` line in this Unreleased section. Adding this gate does not
-  promise semver stability before 1.0, and does not promote the Contract format
-  to a stable v1.
+  *undocumented* ones: a reported break must be acknowledged by a list item in
+  this Unreleased section that begins with a bolded `BREAKING` marker followed
+  by a colon. The marker has to start the item; a mention inside prose does not
+  count, which is why this paragraph does not itself acknowledge anything.
+  Adding this gate does not promise semver stability before 1.0, and does not
+  promote the Contract format to a stable v1.
 
 ### Documentation
 

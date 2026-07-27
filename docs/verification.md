@@ -264,9 +264,15 @@ It is evidence that no breaking change reached the published surfaces
 crate is pre-1.0 and its changelog reserves the right to change the public API,
 the serialized shapes, the canonical bytes, and every identity computed over
 them; a gate that hard-failed on a break would fight intended work. A warning
-nobody must act on would be ignored. So a reported break must be acknowledged
-with a `**BREAKING**` line in the `## Unreleased` section of `CHANGELOG.md`:
-acknowledged it passes, unacknowledged it fails.
+nobody must act on would be ignored. So a reported break must be acknowledged in
+the `## Unreleased` section of `CHANGELOG.md` by a **list item beginning with a
+bolded `BREAKING` marker**: acknowledged it passes, unacknowledged it fails.
+
+The marker must start a list item, not merely appear in the section. The
+changelog entry that documents this gate necessarily contains the marker while
+explaining it, so a substring match would be satisfied by its own documentation
+and would pass every break forever — the anchoring is what stops the gate
+defeating itself.
 
 Both published surfaces are checked, because an item that moves from the base to
 behind a feature is breaking for a `default-features = false` consumer even
