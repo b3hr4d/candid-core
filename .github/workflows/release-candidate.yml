@@ -247,8 +247,33 @@ jobs:
       # Intended API changes are landed by re-running with `--write` and
       # committing the regenerated snapshot in the same change.
       #
-      # There is no `cargo semver-checks` step: it needs a published baseline to
-      # compare against, and candid-core has none until 0.1.0-beta.1 exists on
-      # crates.io. Semver comparison begins with the release after this one.
+      # This records the surface; the `semver` job below classifies changes to
+      # it. Both are needed: a snapshot diff shows that something moved, and
+      # leaves a human to decide whether it was breaking.
       - name: Compare the base and all-features surfaces
         run: bash tests/fixtures/packaging/verify_public_api.sh
+
+  semver:
+    name: Semver compatibility
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
+        with:
+          toolchain: stable
+      - name: Load the pinned tool versions
+        run: grep -E '^[A-Z_]+=' tests/fixtures/packaging/release-tools.env >> "$GITHUB_ENV"
+      - name: Install the pinned cargo-semver-checks
+        run: cargo install cargo-semver-checks --version "${CARGO_SEMVER_CHECKS_VERSION}" --locked
+      # Neither "no breaks" nor "breaks are free". This crate is pre-1.0 and its
+      # changelog reserves the right to break, so a hard failure would fight
+      # intended work; but a warning nobody must act on is how drift gets
+      # through. The rule is no *undocumented* breaks: a reported break must be
+      # acknowledged in the Unreleased section of CHANGELOG.md.
+      #
+      # The script forces `--release-type patch` deliberately. A branch that has
+      # not bumped its version compares X -> X, which cargo-semver-checks reads
+      # as "assume major" and answers by running zero checks — a gate that
+      # passes because it asked nothing.
+      - name: Classify changes against the published baseline
+        run: python3 tests/fixtures/packaging/verify_semver.py

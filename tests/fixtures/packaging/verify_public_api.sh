@@ -6,9 +6,11 @@
 # with every feature on. An item that moves between them is an API change even
 # when neither snapshot's item count changes.
 #
-# There is no `cargo semver-checks` here on purpose. Semver comparison needs a
-# published baseline to compare against, and candid-core has none until
-# 0.1.0-beta.1 exists on crates.io; see docs/releasing.md.
+# This script records the surface; it does not judge changes to it. Classifying
+# a change as breaking is `verify_semver.py`, which compares against the
+# published baseline. Both exist because they answer different questions: a
+# snapshot diff shows that something moved, and leaves a human to decide whether
+# it was breaking.
 #
 # Usage:
 #   verify_public_api.sh            # compare against the committed snapshots
