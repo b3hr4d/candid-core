@@ -147,6 +147,15 @@ name = "allocation"
 harness = false
 required-features = ["compiler"]
 
+# Emits the benchmark manifest rather than measuring anything; see
+# benches/manifest.rs and docs/benchmarks.md. `filesystem-compiler` matches
+# `compilation`, because the manifest describes that suite's corpus including
+# the imported bundle.
+[[bench]]
+name = "manifest"
+harness = false
+required-features = ["filesystem-compiler", "host-value"]
+
 [[example]]
 name = "bounded_parsing"
 required-features = ["compiler"]

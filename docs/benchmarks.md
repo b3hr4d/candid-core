@@ -84,6 +84,55 @@ cargo bench --bench compilation --locked -- --noplot --baseline main
 
 Treat one result as evidence to investigate, not proof of a regression. Hardware, thermals, OS scheduling, filesystem caches, compiler version, target features, and allocator all affect results. Repeat suspected changes and inspect absolute time, throughput, confidence intervals, and the allocation probe—not only a percentage.
 
+### Durable baselines and a checked comparison
+
+Criterion's named baselines above are convenient but say nothing about *what* was measured: they will happily compare two runs over different corpora, feature sets, or toolchains and report a confident percentage. `tests/fixtures/benchmarks/compare.py` exists to make that precondition checkable, and it is built to refuse rather than guess — a missing or incompatible baseline reports that no comparison was made and exits non-zero, never a delta it cannot stand behind.
+
+A run's identity has two halves. `cargo bench --bench manifest` emits what only the Rust side knows: the corpus fingerprints, generator sizes, feature set, and metric units. The script records what only it can observe: toolchain, target, host, and the lockfile digest.
+
+Capture a baseline on `main`:
+
+```sh
+cargo bench --bench manifest --locked > /tmp/manifest.json
+cargo bench --bench compilation --locked -- --noplot
+cargo bench --bench allocation --locked > /tmp/allocations.json
+python3 tests/fixtures/benchmarks/compare.py capture \
+  --manifest /tmp/manifest.json --criterion target/criterion \
+  --allocations /tmp/allocations.json \
+  --out benches/baselines/main.json --note "why this baseline was taken"
+```
+
+Run the same three commands on the candidate branch, then compare:
+
+```sh
+python3 tests/fixtures/benchmarks/compare.py compare \
+  --baseline benches/baselines/main.json --manifest /tmp/manifest.json \
+  --criterion target/criterion --allocations /tmp/allocations.json \
+  --markdown /tmp/report.md
+```
+
+**Emit the manifest before running the suite.** That ordering is load-bearing, not stylistic: Criterion never deletes a `new/` directory, so a benchmark you renamed or removed keeps its result from whatever ran last in the same `target/criterion`. The manifest file's timestamp is the run's epoch, and any estimate older than it is treated as left over from a previous run — excluded from the comparison and reported, rather than imported as if this run had produced it.
+
+What it refuses, and why:
+
+| Situation | Behaviour |
+| --- | --- |
+| Baseline missing or unreadable | No comparison; exit 2 |
+| Corpus (including the imported bundle), generator sizes, feature set, or metric units differ | No comparison; exit 2. The two runs did not measure the same thing, so no delta between them is interpretable — recapture the baseline |
+| Toolchain, effective target, `RUSTFLAGS`, host, or lockfile differ | No comparison unless `--allow-environment-drift`, which renders the report marked **informational only** and refuses to gate on it |
+| No Criterion estimates newer than the manifest | No comparison; exit 2 — the suite was not run after the manifest was emitted |
+| Compatible | Renders Markdown and, with `--json`, machine-readable output |
+
+Codegen flags are part of the identity because they change the binary without changing the toolchain: `RUSTFLAGS='-C target-cpu=native'` on one run and not the other produces two materially different programs on one machine, which would otherwise look like no drift at all.
+
+All three allocation metrics are compared — `allocations`, `allocated_bytes`, and `peak_live_bytes`. A change that holds the allocation count constant while growing cumulative or peak bytes is a real memory regression, and comparing only the count would render it as a reassuring 0%.
+
+`--fail-on-regression PCT` exits 1 when any median regresses by more than `PCT`. It is opt-in with no default threshold, because a calibrated threshold needs repeated controlled-runner data that does not exist yet ([issue #39]); and it is rejected outright on an environment-drifted comparison, where the deltas describe two machines as much as two revisions.
+
+Baselines live in `benches/baselines/`, outside the `include` allowlist in `Cargo.toml`, so a baseline never ships to a consumer. Committing one is deliberate: updating a baseline should be a reviewed change that records why it moved.
+
+[issue #39]: https://github.com/b3hr4d/candid-core/issues/39
+
 ## CI policy
 
 Ordinary pull requests smoke-run every benchmark once. They do not enforce wall-clock thresholds on shared GitHub-hosted runners. The weekly schedule and manual workflow dispatch run the statistical suite and allocation probe, then upload:

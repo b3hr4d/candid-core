@@ -46,15 +46,24 @@ pub fn imported_root() -> PathBuf {
         .join("root.did")
 }
 
-pub fn imported_bundle_bytes() -> u64 {
+/// The three sources `compile/imported_bundle` measures, by name and content.
+///
+/// Exposed as content rather than only as an aggregate length because the
+/// benchmark manifest fingerprints them: an edit that preserves total length
+/// still changes what that benchmark measures, and a byte count cannot see it.
+pub fn imported_bundle_sources() -> [(&'static str, &'static str); 3] {
     [
-        include_str!("../corpus/imports/root.did"),
-        include_str!("../corpus/imports/common.did"),
-        include_str!("../corpus/imports/archive.did"),
+        ("root.did", include_str!("../corpus/imports/root.did")),
+        ("common.did", include_str!("../corpus/imports/common.did")),
+        ("archive.did", include_str!("../corpus/imports/archive.did")),
     ]
-    .iter()
-    .map(|source| source.len() as u64)
-    .sum()
+}
+
+pub fn imported_bundle_bytes() -> u64 {
+    imported_bundle_sources()
+        .iter()
+        .map(|(_, source)| source.len() as u64)
+        .sum()
 }
 
 fn wide_record(fields: usize) -> String {
