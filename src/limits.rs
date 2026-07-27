@@ -274,6 +274,11 @@ limit_fields! {
     /// Maximum named declarations in a Contract.
     max_declarations / with_max_declarations = 100_000;
     /// Maximum aggregate record/variant fields across a Contract.
+    ///
+    /// This bounds a *Contract*. It is not the ceiling on how wide a record
+    /// `validate_host_value` will accept: that is governed by
+    /// [`Limits::max_canonicalization_work`], which at its default binds a
+    /// single record at 2 581 fields — far below the 500 000 permitted here.
     max_fields / with_max_fields = 500_000;
     /// Maximum aggregate service methods across a Contract.
     max_methods / with_max_methods = 100_000;
@@ -297,6 +302,28 @@ limit_fields! {
     /// collection.
     max_diagnostics / with_max_diagnostics = 100;
     /// Maximum canonicalization work units per operation.
+    ///
+    /// This counter, not [`Limits::max_fields`] or
+    /// [`Limits::max_value_elements`], is what bounds how wide a record
+    /// `validate_host_value` can accept. Record validation is
+    /// deliberately allocation-free: instead of building a field-ID index it
+    /// scans pairwise and charges one unit per comparison, checking the
+    /// deadline before each charge. Three such scans run per record — duplicate
+    /// detection, field-set agreement, and per-field lookup — so the cost is
+    /// roughly `1.5n²` units for an `n`-field record.
+    ///
+    /// At this default that puts the ceiling at **2 581 fields**: a record with
+    /// 2 582 fields fails closed with `resource_limit_exceeded` naming
+    /// `canonicalization_work`. That is three orders of magnitude below the
+    /// 500 000 fields [`Limits::max_fields`] permits and the 1 000 000 elements
+    /// [`Limits::max_value_elements`] permits, so those two are not the binding
+    /// limit for wide records. Raise this counter to validate wider ones, and
+    /// note the cost grows quadratically. The failure is structured and
+    /// interruptible, never a hang.
+    ///
+    /// The counter is per operation and shared with Contract canonicalization,
+    /// so several moderately wide records in one value tree accumulate against
+    /// the same budget.
     max_canonicalization_work / with_max_canonicalization_work = 10_000_000;
     /// Maximum work units charged while resolving provenance targets.
     ///
@@ -374,6 +401,12 @@ limit_fields! {
     /// Maximum semantic HostValue nesting depth.
     max_value_depth / with_max_value_depth = 256;
     /// Maximum aggregate HostValue elements per document.
+    ///
+    /// Reaching this ceiling with a single wide *record* is not possible at
+    /// default limits: [`Limits::max_canonicalization_work`] binds one record
+    /// at 2 581 fields, well before the million elements permitted here. This
+    /// limit is the binding one for wide vectors and for element counts
+    /// accumulated across a value tree.
     max_value_elements / with_max_value_elements = 1_000_000;
     /// Maximum aggregate HostValue text/blob bytes per document.
     max_value_bytes / with_max_value_bytes = 16 * 1024 * 1024;
