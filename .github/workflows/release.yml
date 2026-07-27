@@ -1,0 +1,437 @@
+name: Release
+
+# The three steps that mutate anything outside this repository: the tag, the
+# crates.io publish, and the GitHub prerelease. Everything that decides whether
+# those steps *should* happen already ran in `Verify` and `Release candidate`;
+# this workflow only performs them, and only after a human approves each one.
+#
+# Design constraints, all of which are load-bearing:
+#
+#   * `workflow_dispatch` only. This workflow must never be reachable from a
+#     pull request. `release-candidate.yml` runs on every PR and is deliberately
+#     unable to publish; keeping the two files separate is what preserves that.
+#   * `permissions: {}` at workflow level. Each job elevates only what it needs,
+#     so the guard job cannot write and the publish job cannot tag.
+#   * No crates.io token, here or in repository secrets. Publication uses
+#     Trusted Publishing: `rust-lang/crates-io-auth-action` exchanges this
+#     workflow's OIDC identity for a short-lived token that its `post` step
+#     revokes when the job ends. Adding a stored token would reintroduce exactly
+#     the credential this design removes.
+#   * One protected environment per mutation. Approving the tag does not approve
+#     the publish, and approving the publish does not approve the release. Each
+#     environment must be configured with required reviewers; without that, the
+#     approvals are not gates.
+#   * Every input reaches a script through `env:`, never through `${{ }}`
+#     interpolation inside `run:`. This workflow holds `contents: write`, so an
+#     input that lands in a shell as text is a code-execution path.
+#
+# The human procedure, including what is irreversible about crates.io, is
+# docs/releasing.md.
+
+on:
+  workflow_dispatch:
+    inputs:
+      commit:
+        description: 'Exact release commit SHA (full 40 hex characters), not a branch name'
+        required: true
+        type: string
+      version:
+        description: 'Version being released, e.g. 0.1.0-beta.2'
+        required: true
+        type: string
+      expected_sha256:
+        description: '.crate SHA-256 recorded by the Release candidate run for that commit'
+        required: true
+        type: string
+      notes_path:
+        description: 'Release notes file, relative to the repository root, as of that commit'
+        required: false
+        default: ''
+        type: string
+
+permissions: {}
+
+# A second dispatch for the same version must not race the first. Never
+# cancel-in-progress: a half-cancelled release is worse than a slow one.
+concurrency:
+  group: release-${{ inputs.version }}
+  cancel-in-progress: false
+
+jobs:
+  guard:
+    name: Guard the release inputs
+    runs-on: ubuntu-latest
+    # Declared rather than inherited. The workflow-level `{}` leaves every
+    # permission at `none`, and this job checks out the repository: relying on
+    # the checkout succeeding because the repository happens to be public would
+    # make the release depend on its visibility.
+    permissions:
+      contents: read
+    outputs:
+      prerelease: ${{ steps.semver.outputs.prerelease }}
+      notes_path: ${{ steps.semver.outputs.notes_path }}
+    steps:
+      # Shape-check the inputs before anything touches the network. A branch
+      # name here would mean the release is identified by something that can
+      # move after the evidence was collected.
+      - name: Validate the input shapes
+        env:
+          COMMIT: ${{ inputs.commit }}
+          VERSION: ${{ inputs.version }}
+          EXPECTED: ${{ inputs.expected_sha256 }}
+        run: |
+          set -euo pipefail
+          printf '%s' "${COMMIT}" | grep -qE '^[0-9a-f]{40}$' \
+            || { echo "commit must be a full 40-character lowercase SHA" >&2; exit 1; }
+          printf '%s' "${EXPECTED}" | grep -qE '^[0-9a-f]{64}$' \
+            || { echo "expected_sha256 must be 64 lowercase hex characters" >&2; exit 1; }
+          printf '%s' "${VERSION}" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$' \
+            || { echo "version must be semver, e.g. 0.1.0-beta.2" >&2; exit 1; }
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ inputs.commit }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      # The prerelease flag is derived, never supplied: a semver prerelease is
+      # exactly a version with a hyphenated suffix. Taking it as an input would
+      # let a typo publish `0.1.0-beta.2` as a stable GitHub release.
+      - name: Derive the prerelease flag and locate the notes
+        id: semver
+        env:
+          VERSION: ${{ inputs.version }}
+          NOTES_PATH: ${{ inputs.notes_path }}
+        run: |
+          set -euo pipefail
+          case "${VERSION}" in
+            *-*) prerelease=true ;;
+            *)   prerelease=false ;;
+          esac
+          echo "prerelease=${prerelease}" >> "${GITHUB_OUTPUT}"
+          notes="${NOTES_PATH}"
+          if [ -z "${notes}" ]; then
+            notes=".github/release-notes/${VERSION}.md"
+          fi
+          echo "notes_path=${notes}" >> "${GITHUB_OUTPUT}"
+          printf 'version %s -> prerelease=%s, notes=%s\n' "${VERSION}" "${prerelease}" "${notes}"
+
+      # Fail here rather than after publishing. Everything below this point is
+      # recoverable; a missing release note discovered after step `publish` is
+      # not, because the version can never be republished.
+      - name: Confirm the release notes exist at this commit
+        env:
+          NOTES: ${{ steps.semver.outputs.notes_path }}
+        run: |
+          set -euo pipefail
+          [ -s "${NOTES}" ] || { echo "release notes not found or empty: ${NOTES}" >&2; exit 1; }
+          printf 'release notes: %s (%s bytes)\n' "${NOTES}" "$(wc -c < "${NOTES}" | tr -d ' ')"
+
+      # A release commit that is not reachable from `main` is either a mistake
+      # or a deliberate release of unreviewed code. Both should stop here.
+      #
+      # `main` is fetched explicitly rather than assumed: this job checks out a
+      # bare SHA, and a remote-tracking `origin/main` is not guaranteed to exist
+      # in that case. Without the fetch this check could fail because the ref is
+      # missing rather than because the commit is unreachable — fail-closed, but
+      # for the wrong reason and at the worst possible moment.
+      - name: Confirm the commit is an ancestor of main
+        env:
+          COMMIT: ${{ inputs.commit }}
+        run: |
+          set -euo pipefail
+          git fetch --quiet origin main
+          git merge-base --is-ancestor "${COMMIT}" FETCH_HEAD \
+            || { echo "${COMMIT} is not reachable from origin/main" >&2; exit 1; }
+          printf '%s is reachable from origin/main\n' "${COMMIT}"
+
+      - name: Confirm the tag does not already exist
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          if git ls-remote --exit-code --tags origin "refs/tags/v${VERSION}" >/dev/null 2>&1; then
+            echo "tag v${VERSION} already exists on origin" >&2
+            exit 1
+          fi
+          echo "tag v${VERSION} is free"
+
+      - name: Load the pinned tool versions
+        run: grep -E '^[A-Z_]+=' tests/fixtures/packaging/release-tools.env >> "$GITHUB_ENV"
+
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
+        with:
+          toolchain: ${{ env.RELEASE_TOOLCHAIN }}
+
+      - name: Confirm the pinned Cargo is the one packaging
+        run: |
+          set -euo pipefail
+          actual="$(cargo --version | cut -d' ' -f2)"
+          if [ "${actual}" != "${RELEASE_TOOLCHAIN}" ]; then
+            printf 'expected cargo %s, found %s\n' "${RELEASE_TOOLCHAIN}" "${actual}" >&2
+            exit 1
+          fi
+
+      - name: Confirm the manifest declares the version being released
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          declared="$(cargo metadata --no-deps --format-version 1 --locked \
+            | python3 -c 'import json,sys; print(json.load(sys.stdin)["packages"][0]["version"])')"
+          if [ "${declared}" != "${VERSION}" ]; then
+            printf 'Cargo.toml declares %s, dispatch asked for %s\n' "${declared}" "${VERSION}" >&2
+            exit 1
+          fi
+
+      - name: Build the archive
+        run: cargo package --locked
+
+      - name: Verify the package manifest
+        run: python3 tests/fixtures/packaging/verify_package_manifest.py --locked
+
+      # The check the manual procedure could only ask a human to perform by eye.
+      # `cargo package` is byte-stable within one Cargo version and not across
+      # versions, so this passes only when the same commit and the same Cargo
+      # that produced the recorded digest are the ones publishing.
+      - name: Confirm the archive digest matches the recorded evidence
+        env:
+          EXPECTED: ${{ inputs.expected_sha256 }}
+        run: |
+          set -euo pipefail
+          archive="$(echo target/package/candid-core-*.crate)"
+          actual="$(sha256sum "${archive}" | cut -d' ' -f1)"
+          printf 'archive:  %s\nexpected: %s\nactual:   %s\n' "${archive}" "${EXPECTED}" "${actual}"
+          if [ "${actual}" != "${EXPECTED}" ]; then
+            echo "archive digest does not match the recorded evidence; refusing to release" >&2
+            exit 1
+          fi
+
+      - name: Dry-run the publish
+        run: cargo publish --dry-run --locked
+
+  tag:
+    name: Create the annotated tag
+    needs: guard
+    runs-on: ubuntu-latest
+    environment: release-tag
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ inputs.commit }}
+          fetch-depth: 0
+
+      # Annotated, and against the input SHA rather than HEAD: the tag must name
+      # the commit the evidence names, even if the branch has moved since.
+      - name: Tag the release commit
+        env:
+          COMMIT: ${{ inputs.commit }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          git config user.name  'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git tag -a "v${VERSION}" -m "candid-core ${VERSION}" "${COMMIT}"
+          git push origin "refs/tags/v${VERSION}"
+
+      - name: Verify the pushed tag
+        env:
+          COMMIT: ${{ inputs.commit }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          target="$(git rev-parse "v${VERSION}^{commit}")"
+          [ "$(git cat-file -t "v${VERSION}")" = tag ] \
+            || { echo "v${VERSION} is not an annotated tag" >&2; exit 1; }
+          [ "${target}" = "${COMMIT}" ] \
+            || { echo "v${VERSION} points at ${target}, expected ${COMMIT}" >&2; exit 1; }
+          printf 'v%s -> %s (annotated)\n' "${VERSION}" "${target}"
+
+  publish:
+    name: Publish to crates.io
+    needs: [guard, tag]
+    runs-on: ubuntu-latest
+    environment: crates-io
+    permissions:
+      # The OIDC identity Trusted Publishing exchanges for a short-lived token.
+      # This is the whole credential story: nothing is stored.
+      id-token: write
+      # Naming any permission sets every other one to `none`, so the checkout
+      # below needs this stated explicitly.
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ inputs.commit }}
+          persist-credentials: false
+
+      - name: Load the pinned tool versions
+        run: grep -E '^[A-Z_]+=' tests/fixtures/packaging/release-tools.env >> "$GITHUB_ENV"
+
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
+        with:
+          toolchain: ${{ env.RELEASE_TOOLCHAIN }}
+
+      # `cargo publish` re-packages rather than uploading the archive the guard
+      # job measured, so the toolchain has to match there too. This is the
+      # failure the pinned version exists to prevent.
+      - name: Confirm the pinned Cargo is the one publishing
+        run: |
+          set -euo pipefail
+          actual="$(cargo --version | cut -d' ' -f2)"
+          if [ "${actual}" != "${RELEASE_TOOLCHAIN}" ]; then
+            printf 'expected cargo %s, found %s\n' "${RELEASE_TOOLCHAIN}" "${actual}" >&2
+            exit 1
+          fi
+
+      - name: Authenticate with crates.io
+        id: auth
+        uses: rust-lang/crates-io-auth-action@c6f97d42243bad5fab37ca0427f495c86d5b1a18 # v1.0.5
+
+      - name: Publish
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+        run: cargo publish --locked
+
+  confirm:
+    name: Confirm the published digest
+    needs: [guard, publish]
+    runs-on: ubuntu-latest
+    steps:
+      # crates.io records the SHA-256 of what it actually received, and that
+      # value — not the locally computed one — is what a consumer's Cargo.lock
+      # carries. Comparing them is what closes the loop between the evidence and
+      # the artifact. The index can lag the publish by a few seconds.
+      - name: Read the checksum back from crates.io and compare
+        env:
+          VERSION: ${{ inputs.version }}
+          EXPECTED: ${{ inputs.expected_sha256 }}
+        run: |
+          set -euo pipefail
+          reader="${RUNNER_TEMP:-/tmp}/read_checksum.py"
+          cat > "${reader}" <<'PY'
+          import json, sys
+          try:
+              print(json.load(sys.stdin)["version"]["checksum"])
+          except Exception:
+              print("")
+          PY
+          actual=""
+          for attempt in 1 2 3 4 5 6 7 8 9 10; do
+            body="$(curl -sS -H 'User-Agent: candid-core release workflow' \
+              "https://crates.io/api/v1/crates/candid-core/${VERSION}" || true)"
+            actual="$(printf '%s' "${body}" | python3 "${reader}")"
+            [ -n "${actual}" ] && break
+            printf 'attempt %s: version not visible yet, retrying\n' "${attempt}"
+            sleep 15
+          done
+          [ -n "${actual}" ] || { echo "crates.io never reported ${VERSION}" >&2; exit 1; }
+          printf 'expected: %s\ncrates.io: %s\n' "${EXPECTED}" "${actual}"
+          if [ "${actual}" != "${EXPECTED}" ]; then
+            echo "crates.io recorded a different archive than the gates measured" >&2
+            echo "do not reconcile this by hand; see docs/releasing.md section 8" >&2
+            exit 1
+          fi
+          echo "published digest matches the recorded evidence"
+
+  github-release:
+    name: Create the GitHub release
+    needs: [guard, tag, publish, confirm]
+    runs-on: ubuntu-latest
+    environment: github-release
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ inputs.commit }}
+          persist-credentials: false
+
+      - name: Load the pinned tool versions
+        run: grep -E '^[A-Z_]+=' tests/fixtures/packaging/release-tools.env >> "$GITHUB_ENV"
+
+      # The reviewed note cannot state its own release commit or the resulting
+      # archive digest: committing those values would change the commit, and
+      # therefore `.cargo_vcs_info.json` and the digest, again. So the note
+      # carries the prose a human should review, and the provenance is appended
+      # here from values this run has actually verified — `expected_sha256` was
+      # matched against a repackage before the tag and against crates.io's own
+      # recorded checksum after the publish.
+      - name: Compose the release body
+        env:
+          COMMIT: ${{ inputs.commit }}
+          VERSION: ${{ inputs.version }}
+          EXPECTED: ${{ inputs.expected_sha256 }}
+          NOTES: ${{ needs.guard.outputs.notes_path }}
+        run: |
+          set -euo pipefail
+          body="${RUNNER_TEMP:-/tmp}/release-body.md"
+          cat "${NOTES}" > "${body}"
+          {
+            printf '\n---\n\n## Release provenance\n\n'
+            printf '| Evidence | Value |\n| --- | --- |\n'
+            printf '| Release commit | `%s` |\n' "${COMMIT}"
+            printf '| Cargo | `%s` |\n' "${RELEASE_TOOLCHAIN}"
+            printf '| `.crate` SHA-256 | `%s` |\n' "${EXPECTED}"
+            printf '| crates.io | https://crates.io/crates/candid-core/%s |\n' "${VERSION}"
+            printf '\nThe digest above was recorded by the `Release candidate` run for this'
+            printf ' commit, re-verified by repackaging with the pinned Cargo before the tag'
+            printf ' was created, and matched against the checksum crates.io itself recorded'
+            printf ' after publication. `cargo package` output is byte-stable within one Cargo'
+            printf ' version and not across versions, so the digest identifies this archive'
+            printf ' only together with that commit and that Cargo.\n'
+          } >> "${body}"
+          echo "RELEASE_BODY=${body}" >> "$GITHUB_ENV"
+          cat "${body}"
+
+      # `--verify-tag` refuses to invent a tag: the tag job above is the only
+      # thing allowed to create one.
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.version }}
+          PRERELEASE: ${{ needs.guard.outputs.prerelease }}
+        run: |
+          set -euo pipefail
+          flag=""
+          if [ "${PRERELEASE}" = "true" ]; then
+            flag="--prerelease"
+          fi
+          # shellcheck disable=SC2086
+          gh release create "v${VERSION}" \
+            --verify-tag \
+            ${flag} \
+            --title "candid-core ${VERSION}" \
+            --notes-file "${RELEASE_BODY}"
+
+      - name: Verify the published release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.version }}
+          PRERELEASE: ${{ needs.guard.outputs.prerelease }}
+          COMMIT: ${{ inputs.commit }}
+        run: |
+          set -euo pipefail
+          gh release view "v${VERSION}" --json name,tagName,isPrerelease,isDraft,url \
+            > release.json
+          cat release.json
+          python3 - "${VERSION}" "${PRERELEASE}" <<'PY'
+          import json, sys
+          version, prerelease = sys.argv[1], sys.argv[2] == "true"
+          r = json.load(open("release.json"))
+          assert r["tagName"] == f"v{version}", r["tagName"]
+          assert r["name"] == f"candid-core {version}", r["name"]
+          assert r["isPrerelease"] is prerelease, r["isPrerelease"]
+          assert r["isDraft"] is False, r["isDraft"]
+          print("release verified:", r["url"])
+          PY
+          target="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/v${VERSION}" --jq '.object.sha')"
+          type="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/v${VERSION}" --jq '.object.type')"
+          if [ "${type}" = tag ]; then
+            target="$(gh api "repos/${GITHUB_REPOSITORY}/git/tags/${target}" --jq '.object.sha')"
+          fi
+          [ "${target}" = "${COMMIT}" ] \
+            || { echo "release tag resolves to ${target}, expected ${COMMIT}" >&2; exit 1; }
+          printf 'release tag resolves to the release commit %s\n' "${target}"

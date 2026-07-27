@@ -248,11 +248,38 @@ Two surfaces rather than one, because they are two published APIs: an item that
 moves from the base surface to behind a feature is a breaking change for a
 `default-features = false` consumer even though the full surface is unchanged.
 
-`cargo semver-checks` is deliberately **absent**. It compares against a
-published baseline, and `candid-core` has none: nothing has ever been published
-under this name. Semver comparison begins with the release *after*
-`0.1.0-beta.1` exists on crates.io, at which point it becomes a required gate
-here.
+`cargo semver-checks` is deliberately **absent** from the gates that produced
+`0.1.0-beta.1`: it compares against a published baseline, and at that point
+nothing had ever been published under this name. `0.1.0-beta.1` is now on
+crates.io, so that baseline exists and semver comparison becomes a required gate
+for the next release.
+
+### The Release workflow
+
+`.github/workflows/release.yml` performs the three mutations in
+[releasing.md §7](releasing.md#7-authorized-mutation). It is evidence for two
+things that the manual procedure could only ask an operator to promise.
+
+- **The published bytes are the measured bytes.** Its `guard` job repackages the
+  input commit with `RELEASE_TOOLCHAIN` and refuses to proceed unless the digest
+  equals the one the `Release candidate` run recorded; its `confirm` job then
+  reads crates.io's own checksum back and compares it again after publication.
+  Previously both comparisons were a human reading two hex strings.
+- **Each mutation was separately authorized.** The tag, publish, and release jobs
+  run in three GitHub Environments with required reviewers, so the approval
+  record is the environment's, not a sentence in a chat log.
+
+What it is *not* evidence for: it promotes no ADR, adds no gate that `Verify`
+and `Release candidate` do not already enforce, and makes no claim about whether
+a release *should* happen. A human still chooses the commit, reads the step 6
+evidence, and approves each environment.
+
+The workflow triggers on `workflow_dispatch` only and declares
+`permissions: {}` at workflow level, elevating per job — `contents: write` for
+tag and release, `id-token: write` for publish, nothing for `guard` and
+`confirm`. It holds no crates.io token; publication uses Trusted Publishing.
+`Verify` and `Release candidate`, the two workflows reachable from a pull
+request, are unchanged and remain unable to publish.
 
 ### Release-candidate evidence template
 
