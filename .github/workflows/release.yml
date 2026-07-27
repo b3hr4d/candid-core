@@ -123,13 +123,21 @@ jobs:
 
       # A release commit that is not reachable from `main` is either a mistake
       # or a deliberate release of unreviewed code. Both should stop here.
+      #
+      # `main` is fetched explicitly rather than assumed: this job checks out a
+      # bare SHA, and a remote-tracking `origin/main` is not guaranteed to exist
+      # in that case. Without the fetch this check could fail because the ref is
+      # missing rather than because the commit is unreachable — fail-closed, but
+      # for the wrong reason and at the worst possible moment.
       - name: Confirm the commit is an ancestor of main
         env:
           COMMIT: ${{ inputs.commit }}
         run: |
           set -euo pipefail
-          git merge-base --is-ancestor "${COMMIT}" origin/main \
+          git fetch --quiet origin main
+          git merge-base --is-ancestor "${COMMIT}" FETCH_HEAD \
             || { echo "${COMMIT} is not reachable from origin/main" >&2; exit 1; }
+          printf '%s is reachable from origin/main\n' "${COMMIT}"
 
       - name: Confirm the tag does not already exist
         env:
