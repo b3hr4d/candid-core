@@ -2,5 +2,7 @@
 // Deferred: `Callback` is a `func` declaration; func/service/class arrive in a later slice (issue #38).
 // Deferred: `Registry` is a `service` declaration; func/service/class arrive in a later slice (issue #38).
 // Deferred: the actor interface; func/service/class arrive in a later slice (issue #38).
+import { c, type Schema } from "@candid-core/schema";
 
 export type Kept = { value: bigint };
+export const Kept: Schema<Kept> = c.rec(() => c.record({ value: c.nat }));

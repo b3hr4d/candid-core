@@ -45,6 +45,16 @@ consequence is enforced rather than papered over: an `opt` whose inner type
 can itself be `null` in TypeScript — `opt opt`, `opt null`, `opt reserved` —
 fails closed, because `T | null` cannot distinguish `None` from `Some(None)`.
 
+**The generated artifact is a runtime schema, not just types.** Each
+declaration emits an invariantly-annotated builder alongside its alias —
+ — targeting the schema core in
+ (imported as , a placeholder until the npm
+package and its permanent name exist). Because  is invariant,
+the annotation makes  itself prove on every golden that the builder infers
+exactly the reviewed alias. The builders carry the structure the Zod-style
+runtime recorded on issue #38 will walk: validation, form metadata, and the
+TS-native Candid codec are later slices over these same objects.
+
 **Golden tests carry the mapping decisions.** Each fixture under
 `tests/fixtures/` must generate byte-identical output to its checked-in golden
 in `tests/goldens/`; regenerate deliberately with `UPDATE_GOLDENS=1` and review

@@ -211,6 +211,17 @@ fn first_names(contract: &Contract) -> BTreeMap<TypeRef, String> {
     map
 }
 
+/// One traversal, two syntaxes. `Alias` renders the static type expression;
+/// `Builder` renders the runtime schema expression the alias annotates. Every
+/// guard — deferred constructs, collapsing options, dangling refs — runs
+/// before this dispatch, so the two outputs can never disagree about what is
+/// representable.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Target {
+    Alias,
+    Builder,
+}
+
 struct Generator<'a> {
     contract: &'a Contract,
     names: &'a TsNames,
@@ -234,8 +245,24 @@ impl Generator<'_> {
                 TypeNode::Service { .. } => deferred.push((declaration.name.clone(), "service")),
                 TypeNode::Class { .. } => deferred.push((declaration.name.clone(), "class")),
                 _ => {
-                    let body = self.declaration_body(declaration.ty, &declaration.name)?;
-                    aliases.push(format!("export type {} = {};\n", declaration.name, body));
+                    // The alias is the reviewed type; the builder is the
+                    // runtime schema annotated with it. `Schema<T>` is
+                    // invariant, so the annotation makes `tsc` prove the
+                    // builder infers exactly the alias — the golden type-check
+                    // is the equality gate, not a convention.
+                    //
+                    // Every declaration is wrapped in `c.rec`: emission order
+                    // is canonical (name-sorted), not dependency-sorted, and
+                    // the lazy thunk is what makes a forward reference safe at
+                    // module initialization.
+                    let alias =
+                        self.declaration_body(declaration.ty, &declaration.name, Target::Alias)?;
+                    let builder =
+                        self.declaration_body(declaration.ty, &declaration.name, Target::Builder)?;
+                    aliases.push(format!(
+                        "export type {name} = {alias};\nexport const {name}: Schema<{name}> = c.rec(() => {builder});\n",
+                        name = declaration.name,
+                    ));
                 }
             }
         }
@@ -255,6 +282,9 @@ impl Generator<'_> {
                  later slice (issue #38).\n",
             );
         }
+        if !aliases.is_empty() {
+            out.push_str("import { c, type Schema } from \"@candid-core/schema\";\n");
+        }
         if self.uses_principal {
             out.push_str(&format!(
                 "import type {{ Principal }} from {};\n",
@@ -271,10 +301,15 @@ impl Generator<'_> {
     /// The right-hand side of one alias. A declaration whose node is first
     /// declared under a *different* name renders as that name, so later
     /// aliases of one node stay aliases instead of duplicating structure.
-    fn declaration_body(&mut self, ty: TypeRef, own_name: &str) -> Result<String, TsGenError> {
+    fn declaration_body(
+        &mut self,
+        ty: TypeRef,
+        own_name: &str,
+        target: Target,
+    ) -> Result<String, TsGenError> {
         match self.declared.get(&ty) {
             Some(first) if first != own_name => Ok(first.clone()),
-            _ => self.render_structure(ty, own_name),
+            _ => self.render_structure(ty, own_name, target),
         }
     }
 
@@ -288,7 +323,12 @@ impl Generator<'_> {
     /// Render a type expression. Declared nodes render as their first name —
     /// which is what terminates recursion, since every Candid cycle passes
     /// through a declaration.
-    fn render(&mut self, reference: TypeRef, declaration: &str) -> Result<String, TsGenError> {
+    fn render(
+        &mut self,
+        reference: TypeRef,
+        declaration: &str,
+        target: Target,
+    ) -> Result<String, TsGenError> {
         if let Some(name) = self.declared.get(&reference) {
             // The named shortcut is only sound if the alias it references was
             // actually emitted. A declared func/service/class was *skipped*
@@ -309,16 +349,17 @@ impl Generator<'_> {
             }
             return Ok(name.clone());
         }
-        self.render_structure(reference, declaration)
+        self.render_structure(reference, declaration, target)
     }
 
     fn render_structure(
         &mut self,
         reference: TypeRef,
         declaration: &str,
+        target: Target,
     ) -> Result<String, TsGenError> {
         match self.node(reference)?.clone() {
-            TypeNode::Primitive { primitive } => Ok(self.primitive(primitive).to_string()),
+            TypeNode::Primitive { primitive } => Ok(self.primitive(primitive, target).to_string()),
             TypeNode::Opt { inner } => {
                 // `T | null` reads as an absent value should — but it can only
                 // carry Candid's optionality when `T` itself can never be
@@ -344,8 +385,11 @@ impl Generator<'_> {
                         inner: inner_kind,
                     });
                 }
-                let inner = self.render(inner, declaration)?;
-                Ok(format!("{inner} | null"))
+                let inner = self.render(inner, declaration, target)?;
+                Ok(match target {
+                    Target::Alias => format!("{inner} | null"),
+                    Target::Builder => format!("c.opt({inner})"),
+                })
             }
             TypeNode::Vec { inner } => {
                 // `vec nat8` is binary data, and `Uint8Array` is its modern
@@ -357,60 +401,95 @@ impl Generator<'_> {
                         primitive: PrimitiveType::Nat8,
                     } = self.node(inner)?
                     {
-                        return Ok("Uint8Array".to_string());
+                        return Ok(match target {
+                            Target::Alias => "Uint8Array".to_string(),
+                            Target::Builder => "c.blob()".to_string(),
+                        });
                     }
                 }
-                let inner = self.render(inner, declaration)?;
-                Ok(format!("Array<{inner}>"))
+                let inner = self.render(inner, declaration, target)?;
+                Ok(match target {
+                    Target::Alias => format!("Array<{inner}>"),
+                    Target::Builder => format!("c.vec({inner})"),
+                })
             }
             TypeNode::Record { fields } => {
                 if fields.is_empty() {
                     // `{}` means "anything non-nullish" in TypeScript; an empty
                     // Candid record is a unit value, and this is its honest type.
-                    return Ok("Record<string, never>".to_string());
+                    return Ok(match target {
+                        Target::Alias => "Record<string, never>".to_string(),
+                        Target::Builder => "c.unit()".to_string(),
+                    });
                 }
                 if is_tuple_shaped(&fields) {
                     let mut elements = Vec::with_capacity(fields.len());
                     for field in &fields {
-                        elements.push(self.render(field.ty, declaration)?);
+                        elements.push(self.render(field.ty, declaration, target)?);
                     }
-                    return Ok(format!("[{}]", elements.join(", ")));
+                    return Ok(match target {
+                        Target::Alias => format!("[{}]", elements.join(", ")),
+                        Target::Builder => format!("c.tuple([{}])", elements.join(", ")),
+                    });
                 }
                 let mut members = Vec::with_capacity(fields.len());
                 for field in &fields {
                     let key = self.field_key(reference, field.id);
-                    let value = self.render(field.ty, declaration)?;
+                    let value = self.render(field.ty, declaration, target)?;
                     members.push(format!("{key}: {value}"));
                 }
-                Ok(format!("{{ {} }}", members.join("; ")))
+                Ok(match target {
+                    Target::Alias => format!("{{ {} }}", members.join("; ")),
+                    Target::Builder => format!("c.record({{ {} }})", members.join(", ")),
+                })
             }
             TypeNode::Variant { fields } => {
                 if fields.is_empty() {
-                    // A variant with no tags is uninhabited.
-                    return Ok("never".to_string());
+                    // A variant with no tags is uninhabited. The builder's
+                    // `VariantInfer<{}>` distributes over no arms and infers
+                    // `never`, matching the alias by construction.
+                    return Ok(match target {
+                        Target::Alias => "never".to_string(),
+                        Target::Builder => "c.variant({})".to_string(),
+                    });
                 }
                 // A discriminated union: `tag` is the label as a string
                 // literal type, `value` carries the payload and is omitted for
                 // a `null` payload, because Candid's bare `ok` and `ok : null`
                 // are the same variant arm and an ever-present `value: null`
-                // would be noise on every tag-only arm.
+                // would be noise on every tag-only arm. The builder emits the
+                // arm's payload schema either way — `VariantInfer` performs the
+                // same null-payload omission at the type level, which is what
+                // keeps the two representations provably aligned.
                 let mut arms = Vec::with_capacity(fields.len());
                 for field in &fields {
-                    let tag = self.tag_literal(reference, field.id);
-                    let payload_is_null = matches!(
-                        self.node(field.ty)?,
-                        TypeNode::Primitive {
-                            primitive: PrimitiveType::Null
+                    match target {
+                        Target::Alias => {
+                            let tag = self.tag_literal(reference, field.id);
+                            let payload_is_null = matches!(
+                                self.node(field.ty)?,
+                                TypeNode::Primitive {
+                                    primitive: PrimitiveType::Null
+                                }
+                            );
+                            if payload_is_null {
+                                arms.push(format!("{{ tag: {tag} }}"));
+                            } else {
+                                let value = self.render(field.ty, declaration, target)?;
+                                arms.push(format!("{{ tag: {tag}; value: {value} }}"));
+                            }
                         }
-                    );
-                    if payload_is_null {
-                        arms.push(format!("{{ tag: {tag} }}"));
-                    } else {
-                        let value = self.render(field.ty, declaration)?;
-                        arms.push(format!("{{ tag: {tag}; value: {value} }}"));
+                        Target::Builder => {
+                            let key = self.field_key(reference, field.id);
+                            let value = self.render(field.ty, declaration, target)?;
+                            arms.push(format!("{key}: {value}"));
+                        }
                     }
                 }
-                Ok(arms.join(" | "))
+                Ok(match target {
+                    Target::Alias => arms.join(" | "),
+                    Target::Builder => format!("c.variant({{ {} }})", arms.join(", ")),
+                })
             }
             TypeNode::Func { .. } => Err(TsGenError::UnsupportedConstruct {
                 declaration: declaration.to_string(),
@@ -427,7 +506,32 @@ impl Generator<'_> {
         }
     }
 
-    fn primitive(&mut self, primitive: PrimitiveType) -> &'static str {
+    fn primitive(&mut self, primitive: PrimitiveType, target: Target) -> &'static str {
+        if target == Target::Builder {
+            if primitive == PrimitiveType::Principal {
+                self.uses_principal = true;
+            }
+            return match primitive {
+                PrimitiveType::Null => "c.null",
+                PrimitiveType::Bool => "c.bool",
+                PrimitiveType::Nat => "c.nat",
+                PrimitiveType::Int => "c.int",
+                PrimitiveType::Nat8 => "c.nat8",
+                PrimitiveType::Nat16 => "c.nat16",
+                PrimitiveType::Nat32 => "c.nat32",
+                PrimitiveType::Nat64 => "c.nat64",
+                PrimitiveType::Int8 => "c.int8",
+                PrimitiveType::Int16 => "c.int16",
+                PrimitiveType::Int32 => "c.int32",
+                PrimitiveType::Int64 => "c.int64",
+                PrimitiveType::Float32 => "c.float32",
+                PrimitiveType::Float64 => "c.float64",
+                PrimitiveType::Text => "c.text",
+                PrimitiveType::Reserved => "c.reserved",
+                PrimitiveType::Empty => "c.empty",
+                PrimitiveType::Principal => "c.principal",
+            };
+        }
         match primitive {
             PrimitiveType::Null => "null",
             PrimitiveType::Bool => "boolean",
