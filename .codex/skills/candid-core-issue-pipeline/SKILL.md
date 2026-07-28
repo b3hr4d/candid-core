@@ -1,11 +1,11 @@
 ---
 name: candid-core-issue-pipeline
-description: Triage, prioritize, implement, publish, review, merge, and close Candid Core GitHub security, design-remediation, maintenance, and ecosystem issues through a safe local workflow. Use for one issue or PR, repository-wide backlog ordering, dependency and severity analysis, security remediation, review threads, release gates, or Codex cloud task results in b3hr4d/candid-core.
+description: Triage, prioritize, implement, publish, review, merge, close, and release Candid Core work through a safe local workflow. Use for one issue or PR, repository-wide backlog ordering, program umbrellas and their slices, security remediation, review threads, release preparation and execution, or delegated-agent results in b3hr4d/candid-core.
 ---
 
 # Candid Core Issue Pipeline
 
-Use this workflow for `b3hr4d/candid-core`. Read the repository `AGENTS.md` and every file it references before acting; those instructions override this skill.
+Use this workflow for `b3hr4d/candid-core`. Read the repository `CLAUDE.md` and every file it references before acting; it carries the verification battery, the merge boundary, and the recorded footguns, and it overrides this skill where they conflict.
 
 ## Select modes and authority
 
@@ -17,6 +17,7 @@ Use this workflow for `b3hr4d/candid-core`. Read the repository `AGENTS.md` and 
 - **Remediate**: Address verified actionable review findings on the existing issue branch, then re-run proportional checks.
 - **Merge**: Merge only with explicit user authorization in the current request and after independently verifying every merge gate.
 - **Close**: Perform post-merge issue housekeeping only after independently confirming every acceptance criterion on refreshed `main`.
+- **Release**: Prepare and execute a version release strictly through `docs/releasing.md`. Every externally visible mutation — tag, registry publish, GitHub release — needs its own explicit authorization; one approval never carries to the next step, and registry publications are permanent.
 
 Treat named modes as binding. Infer only the minimum modes clearly requested. A request to implement does not by itself authorize publication or merge; a request to complete an issue end-to-end authorizes the necessary sequence through close unless the user limits it.
 
@@ -24,8 +25,8 @@ Treat named modes as binding. Infer only the minimum modes clearly requested. A 
 
 1. Read current GitHub and checkout state instead of trusting summaries, labels, issue suggestions, or cloud-task reports. Inspect the complete issue and discussion, linked and related PRs, checks, reviews, review threads, branch, worktree, and `main` freshness.
 2. Reproduce or confirm the issue evidence against current `main`. Treat the reported cause and suggested implementation as hypotheses until the code and tests support them.
-3. Permit exactly one implementation owner per issue. Do not implement concurrently in local and cloud tasks.
-4. Use cloud tasks only for bounded research, a candidate patch, or read-only review. Inspect their final diff and actual test output locally before adoption. Adopt one candidate as sole ownership or replace it; never combine uncontrolled concurrent implementations.
+3. Permit exactly one implementation owner per issue. Do not implement the same issue concurrently in this session and any delegated or background agent.
+4. Use delegated agents only for bounded research, a candidate patch, or read-only review. Inspect their final diff and actual test output locally before adoption. Adopt one candidate as sole ownership or replace it; never combine uncontrolled concurrent implementations.
 5. Keep one issue per branch and PR. Coordinate shared architectural decisions across dependent issues without combining their implementation scopes.
 6. Preserve unrelated user changes. Never use destructive Git commands unless the user explicitly requests them.
 
@@ -42,7 +43,8 @@ For a repository-wide review:
 3. Record `blocked by`, `blocks`, `overlaps`, and `independent` relationships. Distinguish a direct fix from a foundational prerequisite and from post-merge housekeeping.
 4. Order by verified severity, exploitability and blast radius, prerequisite depth, compatibility risk, and implementation readiness—not issue number, age, or label alone.
 5. Propose small milestones and a single highest-priority unblocked issue. Preserve one issue per PR even when several issues form one program.
-6. Flag issues whose acceptance criteria conflict, duplicate merged work, require a material product decision, or cannot yet be verified.
+6. When a program outgrows one issue, split it: keep the original as an umbrella carrying the charter and a dependency-ordered index, and file one issue per slice. Write each slice self-contained — restating the decisions, file paths, constraints, and acceptance criteria it depends on — so a fresh session needs no conversation history to execute it.
+7. Flag issues whose acceptance criteria conflict, duplicate merged work, require a material product decision, or cannot yet be verified.
 
 Report the complete ordered queue, dependency rationale, milestone grouping, and recommended execution method. Do not mutate issue labels, milestones, bodies, or state in Portfolio mode.
 
@@ -56,7 +58,9 @@ Before editing, read the complete issue and discussion, relevant source, tests, 
 4. Compatibility, stable-output/error, resource-bound, security, platform, and serialization risks.
 5. Exact files and adversarial/regression tests to add.
 
-Stop for direction before a material API, serialized-format, identity-domain, dependency, portability-policy, or issue-scope expansion. Do not silently resolve conflicting acceptance criteria.
+Stop for direction before a material API, serialized-format, identity-domain, dependency, portability-policy, or issue-scope expansion. Present options with a recommendation rather than an open question. Do not silently resolve conflicting acceptance criteria.
+
+Record every settled material decision on the issue itself — the choice, the rejected alternatives, and the reason — so it survives the session. A decision recorded on an issue is settled: apply it, and reopen it only by naming it to the user, never by silently diverging.
 
 ## Implement and verify
 
@@ -88,6 +92,10 @@ Merge only when all are true:
 - dependency ordering is still valid and no newer repository state supersedes the solution.
 
 After merge, refresh `main`, verify the merge commit and deployed repository state where relevant, re-run or inspect the evidence needed for closure, and verify automatic issue closure. Comment with the merged PR, concise fix, exact checks, review-thread disposition, and remaining limitations. Close manually only after this verification.
+
+Then check what standing evidence the merge invalidated — a lockfile change stales the reviewed benchmark baseline, any commit stales release digests — and perform or schedule the documented follow-through rather than leaving it implicit.
+
+Keep issue state honest in both directions: if automation closed an issue whose work is incomplete (a closing-keyword accident, a partial slice), reopen it immediately with a comment stating what remains; if reality has moved past an issue's text, rescope and retitle it rather than leaving a description that no longer describes the work.
 
 ## Evidence and etiquette
 
