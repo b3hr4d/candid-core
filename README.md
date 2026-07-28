@@ -1,7 +1,7 @@
 # Candid Core
 
-> **Unstable beta.** The version being prepared is `0.1.0-beta.1`, and nothing
-> has been published to crates.io yet. Until 1.0, any release may change the
+> **Unstable beta.** The version being prepared is `0.1.0-beta.2`;
+> `0.1.0-beta.1` is published on crates.io. Until 1.0, any release may change the
 > public Rust API, the serialized Contract/Compilation/envelope shapes, the
 > canonical bytes, and every identity computed over them. Pin an exact version.
 > See the [changelog](CHANGELOG.md) for the beta's scope and
@@ -137,27 +137,27 @@ The crate advertises Rust 1.78 as its minimum supported Rust version (MSRV). Dir
 | `compiler` | `compile_did` and its option/context variants, `compile_with_resolver`, `Compilation`, `CompileOptions`, `CompileError`, `SourceId`/`SourceResolver`/`ResolvedSource`/`MemoryResolver`, `SourceInfo`/`RawSourceInfo` provenance | `candid`, `candid_parser` |
 | `filesystem-compiler` (implies `compiler`) | `WorkspaceResolver`, `compile_did_file` and its variants, source materialization for `candid_parser::check_file`, the `candid-core` binary | `cap-std` |
 
-Because every feature is on by default, the full surface needs no feature selection at all. The version requirement, however, has to name the prerelease explicitly: `0.1.0-beta.1` is a prerelease, and a caret requirement such as `"0.1"` will **not** resolve to it. Cargo only selects a prerelease when the requirement mentions one, so every example below pins the exact version.
+Because every feature is on by default, the full surface needs no feature selection at all. The version requirement, however, has to name the prerelease explicitly: `0.1.0-beta.2` is a prerelease, and a caret requirement such as `"0.1"` will **not** resolve to it. Cargo only selects a prerelease when the requirement mentions one, so every example below pins the exact version.
 
 ```toml
 # the full surface, every feature on by default
-candid-core = "=0.1.0-beta.1"
+candid-core = "=0.1.0-beta.2"
 
 # a pure Contract consumer: model, validation, canonicalization, identities
-candid-core = { version = "=0.1.0-beta.1", default-features = false }
+candid-core = { version = "=0.1.0-beta.2", default-features = false }
 
 # ... plus the lossless tagged host value ABI
-candid-core = { version = "=0.1.0-beta.1", default-features = false, features = ["host-value"] }
+candid-core = { version = "=0.1.0-beta.2", default-features = false, features = ["host-value"] }
 
 # a browser/WASM host that compiles DID source it already has — self-contained
 # or a multi-file bundle with imports
-candid-core = { version = "=0.1.0-beta.1", default-features = false, features = ["compiler"] }
+candid-core = { version = "=0.1.0-beta.2", default-features = false, features = ["compiler"] }
 
 # a native tool that reads .did files, or uses the CLI
-candid-core = { version = "=0.1.0-beta.1", default-features = false, features = ["filesystem-compiler"] }
+candid-core = { version = "=0.1.0-beta.2", default-features = false, features = ["filesystem-compiler"] }
 ```
 
-`cargo add candid-core@=0.1.0-beta.1` does the same thing from the command line. Pinning with `=` is the right choice for a prerelease for a second reason: with the API and the wire format both unstable before 1.0, an automatic upgrade to `0.1.0-beta.2` is a change a consumer should opt into deliberately.
+`cargo add candid-core@=0.1.0-beta.2` does the same thing from the command line. Pinning with `=` is the right choice for a prerelease for a second reason: with the API and the wire format both unstable before 1.0, an automatic upgrade to `0.1.0-beta.3` is a change a consumer should opt into deliberately.
 
 Items outside the selected set are **absent at compile time**, not runtime stubs: a build error names the missing item, and turning on the feature it belongs to is the fix. `tests/model_public_api.rs` pins the root exports of each surface, and `tests/fixtures/packaging/verify_feature_graph.py` proves the dependency claims in the table above against `cargo metadata` — the base graph resolves to 23 packages where the default graph resolves to 126, and a `compiler`-only browser-WASM graph to 106.
 

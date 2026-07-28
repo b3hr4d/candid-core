@@ -2,11 +2,11 @@
 name = "candid-core"
 # Pre-1.0 and explicitly a prerelease. A caret requirement never selects a
 # prerelease, so `"0.1"` does not resolve to this version and consumers must ask
-# for `=0.1.0-beta.1` by name; see README.md and CHANGELOG.md. The same string
+# for `=0.1.0-beta.2` by name; see README.md and CHANGELOG.md. The same string
 # becomes `ProducerInfo::current().version`, which is the *only* observable thing
 # a version bump is allowed to move: `tests/release_metadata.rs` pins it as a
 # literal and re-checks that no semantic identity moved with it.
-version = "0.1.0-beta.1"
+version = "0.1.0-beta.2"
 edition = "2021"
 rust-version = "1.78"
 description = "Canonical runtime Contract graph projection for Candid DID interfaces"

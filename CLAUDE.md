@@ -7,8 +7,7 @@ that make those modes concrete.
 
 ## What this is
 
-A Rust workspace. The root package `candid-core` (published, `0.1.0-beta.1` on
-crates.io) projects Candid `.did` interfaces into a canonical, validated,
+A Rust workspace. The root package `candid-core` (published on crates.io) projects Candid `.did` interfaces into a canonical, validated,
 identity-addressed Contract graph. `crates/candid-core-ts` (unpublishable by
 design) generates a Zod-style TypeScript schema runtime from that graph — the
 program tracked by umbrella issue #38 and its slice issues, each of which is

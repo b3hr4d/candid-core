@@ -225,7 +225,7 @@ that, because every fixture under `tests/` is deliberately outside the archive.
 
 - The README's installation examples name the version being released. A
   prerelease is not selected by a caret requirement: `"0.1"` will not resolve to
-  `0.1.0-beta.1`, so the examples use `=0.1.0-beta.1`.
+  a prerelease, so the examples pin it exactly, `=<version>`.
 
 ## 6. Present the evidence
 
@@ -356,6 +356,6 @@ If a release has to be withdrawn:
    point at the correction. Deleting a tag that consumers may have fetched
    creates a worse problem than the one being fixed.
 
-For a prerelease specifically: because `"0.1"` does not select
-`0.1.0-beta.1`, a broken beta reaches only consumers who asked for it by exact
+For a prerelease specifically: because `"0.1"` does not select any
+prerelease, a broken beta reaches only consumers who asked for it by exact
 version. That narrows the blast radius; it does not remove the permanence.
