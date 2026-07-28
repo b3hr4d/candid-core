@@ -98,10 +98,19 @@ jobs:
           fi
           cat comparison/report.md >> "${GITHUB_STEP_SUMMARY}"
       # Exactly one comment per pull request, found by its marker and updated
-      # in place. Skipped for forks, whose token is read-only regardless of the
-      # permissions declared above; the job summary still carries the report.
+      # in place. Skipped in the two cases where the token is read-only
+      # regardless of the permissions declared above — forks, and Dependabot,
+      # whose pull requests come from a branch in *this* repository and so pass
+      # the repo-name check while still carrying a read-only token. Without the
+      # actor guard every dependency update would fail this workflow at the
+      # comment step even though its comparison succeeded. The job summary
+      # still carries the report in both cases. Any other token failure stays a
+      # hard failure on purpose: a real permission misconfiguration should be
+      # seen, not swallowed.
       - name: Update the pull-request comment
-        if: github.event.pull_request.head.repo.full_name == github.repository
+        if: >-
+          github.event.pull_request.head.repo.full_name == github.repository &&
+          github.actor != 'dependabot[bot]'
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
