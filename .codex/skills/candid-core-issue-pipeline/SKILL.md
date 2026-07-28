@@ -89,6 +89,14 @@ Merge only when all are true:
 
 After merge, refresh `main`, verify the merge commit and deployed repository state where relevant, re-run or inspect the evidence needed for closure, and verify automatic issue closure. Comment with the merged PR, concise fix, exact checks, review-thread disposition, and remaining limitations. Close manually only after this verification.
 
+## Evidence and etiquette
+
+1. Prove a gate by making it fail: inject a representative fault, watch the gate refuse, revert, and cite both directions. A check demonstrated only on its green path is wiring, not evidence.
+2. Golden files are reviewed decisions. Regenerate them only deliberately, review the diff as an API change, and keep any generated-versus-declared equality gate (such as an invariant type annotation the compiler must prove) intact rather than loosening it to make a diff pass.
+3. Resolve a review thread only after the fix is pushed, with a reply stating what changed and how it was verified. Explain non-actionable findings instead of resolving them silently; if a finding is real but out of scope, file the issue and link it before resolving.
+4. Never place a closing keyword next to an issue number that must stay open anywhere GitHub parses it — "does not close #N" still closes #N on merge. Reference with a bare number; use closing keywords only to close.
+5. Route long or quote-bearing text (commit messages, PR bodies, thread replies) through files rather than inline shell arguments, and re-read what was actually written before publishing it.
+
 ## Completion report
 
 Report actual state, not intended state: selected modes, issue and branch, commit/PR/merge URLs, acceptance-criteria disposition, checks passed, checks failed or unavailable, review-thread disposition, issue comment/closure state, limitations, and the highest-priority unblocked next issue. Never create an empty PR or choose the next issue by number alone.
