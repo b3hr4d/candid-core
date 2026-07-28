@@ -248,11 +248,44 @@ Two surfaces rather than one, because they are two published APIs: an item that
 moves from the base surface to behind a feature is a breaking change for a
 `default-features = false` consumer even though the full surface is unchanged.
 
-`cargo semver-checks` is deliberately **absent** from the gates that produced
-`0.1.0-beta.1`: it compares against a published baseline, and at that point
-nothing had ever been published under this name. `0.1.0-beta.1` is now on
-crates.io, so that baseline exists and semver comparison becomes a required gate
-for the next release.
+### Semver compatibility
+
+`cargo semver-checks` was absent from the gates that produced `0.1.0-beta.1`,
+because it compares against a published baseline and at that point nothing had
+ever been published under this name. That baseline now exists, and
+`tests/fixtures/packaging/verify_semver.py` is the gate:
+
+```sh
+python3 tests/fixtures/packaging/verify_semver.py
+```
+
+It is evidence that no breaking change reached the published surfaces
+**unnoticed** — not that none occurred. The distinction is deliberate. This
+crate is pre-1.0 and its changelog reserves the right to change the public API,
+the serialized shapes, the canonical bytes, and every identity computed over
+them; a gate that hard-failed on a break would fight intended work. A warning
+nobody must act on would be ignored. So a reported break must be acknowledged in
+the `## Unreleased` section of `CHANGELOG.md` by a **list item beginning with a
+bolded `BREAKING` marker**: acknowledged it passes, unacknowledged it fails.
+
+The marker must start a list item, not merely appear in the section. The
+changelog entry that documents this gate necessarily contains the marker while
+explaining it, so a substring match would be satisfied by its own documentation
+and would pass every break forever — the anchoring is what stops the gate
+defeating itself.
+
+Both published surfaces are checked, because an item that moves from the base to
+behind a feature is breaking for a `default-features = false` consumer even
+though the full surface is unchanged.
+
+The script forces `--release-type patch`. Without it a branch whose version has
+not been bumped compares `X -> X`, which `cargo semver-checks` reads as "assume
+major" and answers by running zero checks — a gate that passes because it asked
+nothing. Forcing the patch question makes every breaking change visible whether
+or not a version bump has happened yet.
+
+This complements the inventory above rather than replacing it: the snapshots
+record what the surface *is*, and this classifies what changed.
 
 ### The Release workflow
 
