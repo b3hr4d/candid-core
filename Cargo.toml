@@ -55,6 +55,24 @@ include = [
     "/LICENSE",
 ]
 
+# A workspace with this package as its only member, converted ahead of the
+# TypeScript generator crate (issue #38) so the conversion's packaging effects
+# are proven on their own rather than entangled with generator code. Future
+# members live under `crates/` and are named here explicitly — no globs, so a
+# stray directory can never become a member by accident.
+#
+# `cargo package` strips this table from the normalized manifest a consumer
+# parses (`Cargo.toml.orig` keeps it verbatim), so the published archive is
+# unchanged: still exactly the 57-path allowlist, asserted by
+# `tests/fixtures/packaging/verify_package_manifest.py` as before.
+#
+# `fuzz/` is not a member and must never become one: it is its own workspace
+# root with its own tracked lockfile (see fuzz/Cargo.toml), and `exclude`
+# records that here so a future member glob cannot swallow it.
+[workspace]
+resolver = "2"
+exclude = ["fuzz"]
+
 # One published package, three optional build surfaces. The implicit base — the
 # feature set left when `default-features = false` removes every feature — is
 # the pure Contract model: DTOs, validation, canonicalization, identities,

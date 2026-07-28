@@ -4,6 +4,14 @@ version = "0.0.0"
 publish = false
 edition = "2021"
 
+# Its own workspace root, deliberately. The repository root became a Cargo
+# workspace for issue #38, and without this table every `cargo` invocation in
+# this directory would walk up, find that workspace, discover this package is
+# not a member, and refuse to build. Declaring the fuzz crate its own root keeps
+# it self-contained — it shares the parent's lockfile with nothing and never
+# did; `fuzz/Cargo.lock` stays the tracked graph the CI freshness check pins.
+[workspace]
+
 [package.metadata]
 cargo-fuzz = true
 
