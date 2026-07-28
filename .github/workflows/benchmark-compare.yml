@@ -1,0 +1,135 @@
+name: Benchmark comparison
+
+# Informational, never a gate. This workflow compares a pull request's
+# benchmark run against the reviewed baseline in `benches/baselines/` and
+# publishes the result as a job summary plus one bot-managed comment. It cannot
+# fail a pull request for a timing or allocation delta — that is a recorded
+# decision on issue #39, not an unfinished feature: GitHub-hosted runners are
+# shared and thermally variable, so a threshold calibrated from their noise
+# would produce a red check maintainers learn to ignore.
+#
+# What *can* fail this workflow is the tooling itself breaking. A missing
+# baseline, an incompatible manifest, or environment drift are expected
+# outcomes that the report states plainly ("no comparison was made" beats a
+# delta nobody can stand behind).
+#
+# This lives in its own file, not in `Verify` or `Release candidate`, because
+# commenting needs `pull-requests: write` and those two workflows deliberately
+# hold nothing beyond `contents: read`. This one gains no ability to tag,
+# publish, or write repository contents.
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+  pull-requests: write
+
+# One comparison per PR at a time; a superseded push cancels the older run —
+# unlike a release, an outdated informational comparison has no value.
+concurrency:
+  group: benchmark-compare-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  compare:
+    name: Compare against the reviewed baseline
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
+        with:
+          toolchain: stable
+      # Manifest first: its mtime is the run epoch that lets `compare.py`
+      # reject Criterion results left over from an earlier run.
+      - name: Emit the benchmark manifest
+        run: |
+          mkdir -p comparison
+          cargo bench --bench manifest --locked > comparison/manifest.json
+      # The full statistical configuration, not a reduced one: the baseline was
+      # captured from the full suite, and comparing medians drawn from
+      # different sample counts would add a second source of noise to a signal
+      # that already carries plenty.
+      - name: Run the statistical suite
+        run: cargo bench --bench compilation --locked -- --noplot
+      - name: Run the allocation probe
+        run: cargo bench --bench allocation --locked > comparison/allocations.json
+      # `--allow-environment-drift` is deliberate and permanent here. Hosted
+      # runners change toolchains and hardware on their own schedule, so a
+      # drifted comparison is the common case; the report is marked
+      # informational-only and `compare.py` refuses to gate on it by
+      # construction. Exit 0 (compared) and exit 2 (no comparison was made —
+      # baseline missing or manifests incompatible) are both expected outcomes;
+      # anything else is the tool breaking and fails the job.
+      - name: Compare against the reviewed baseline
+        run: |
+          set -uo pipefail
+          mkdir -p comparison
+          status=0
+          python3 tests/fixtures/benchmarks/compare.py compare \
+            --baseline benches/baselines/main.json \
+            --manifest comparison/manifest.json \
+            --criterion target/criterion \
+            --allocations comparison/allocations.json \
+            --allow-environment-drift \
+            --markdown comparison/report.md \
+            2> comparison/refusal.txt || status=$?
+          if [ "${status}" -eq 2 ]; then
+            {
+              echo "# Benchmark comparison"
+              echo
+              echo "**No comparison was made.**"
+              echo
+              echo '```'
+              cat comparison/refusal.txt
+              echo '```'
+              echo
+              echo "This is the tool refusing rather than guessing. A reviewed"
+              echo "baseline is captured by dispatching the Verify workflow and"
+              echo "committing its \`baseline.json\` artifact to"
+              echo "\`benches/baselines/main.json\`; see docs/benchmarks.md."
+            } > comparison/report.md
+          elif [ "${status}" -ne 0 ]; then
+            echo "compare.py failed with exit ${status}:" >&2
+            cat comparison/refusal.txt >&2
+            exit "${status}"
+          fi
+          cat comparison/report.md >> "${GITHUB_STEP_SUMMARY}"
+      # Exactly one comment per pull request, found by its marker and updated
+      # in place. Skipped in the two cases where the token is read-only
+      # regardless of the permissions declared above — forks, and Dependabot,
+      # whose pull requests come from a branch in *this* repository and so pass
+      # the repo-name check while still carrying a read-only token. Without the
+      # actor guard every dependency update would fail this workflow at the
+      # comment step even though its comparison succeeded. The job summary
+      # still carries the report in both cases. Any other token failure stays a
+      # hard failure on purpose: a real permission misconfiguration should be
+      # seen, not swallowed.
+      - name: Update the pull-request comment
+        if: >-
+          github.event.pull_request.head.repo.full_name == github.repository &&
+          github.actor != 'dependabot[bot]'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          marker='<!-- candid-core-benchmark-comparison -->'
+          {
+            echo "${marker}"
+            cat comparison/report.md
+          } > comparison/comment.md
+          existing="$(gh api "repos/${REPO}/issues/${PR}/comments" --paginate \
+            --jq "[.[] | select(.body | startswith(\"${marker}\")) | .id] | first // empty")"
+          if [ -n "${existing}" ]; then
+            gh api -X PATCH "repos/${REPO}/issues/comments/${existing}" \
+              -F body=@comparison/comment.md > /dev/null
+            echo "updated comment ${existing}"
+          else
+            gh api -X POST "repos/${REPO}/issues/${PR}/comments" \
+              -F body=@comparison/comment.md > /dev/null
+            echo "created comment"
+          fi

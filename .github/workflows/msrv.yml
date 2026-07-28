@@ -217,12 +217,31 @@ jobs:
           cargo --version >> benchmark-artifacts/environment.txt
           uname -a >> benchmark-artifacts/environment.txt
           echo "git_sha=${GITHUB_SHA}" >> benchmark-artifacts/environment.txt
+      # Before the suite, not after: the manifest file's mtime is the run epoch
+      # that `compare.py` uses to reject Criterion results left over from an
+      # earlier run in the same `target/criterion`.
+      - name: Emit the benchmark manifest
+        run: cargo bench --bench manifest --locked > benchmark-artifacts/manifest.json
       - name: Run statistical benchmarks
         run: cargo bench --bench compilation --locked -- --noplot
       - name: Run allocation probe
         run: cargo bench --bench allocation --locked > benchmark-artifacts/allocations.json
       - name: Collect machine-readable Criterion results
         run: cp -R target/criterion benchmark-artifacts/criterion
+      # A candidate baseline, captured on the runner class that pull-request
+      # comparisons run on — a baseline captured on a maintainer's machine can
+      # never be environment-compatible with CI. Uploading it does not adopt it:
+      # committing `benchmark-artifacts/baseline.json` to
+      # `benches/baselines/main.json` is a reviewed change, made deliberately,
+      # with the reason recorded in the commit (docs/benchmarks.md).
+      - name: Capture a candidate baseline
+        run: |
+          python3 tests/fixtures/benchmarks/compare.py capture \
+            --manifest benchmark-artifacts/manifest.json \
+            --criterion target/criterion \
+            --allocations benchmark-artifacts/allocations.json \
+            --out benchmark-artifacts/baseline.json \
+            --note "captured by Verify run ${GITHUB_RUN_ID} on ${GITHUB_SHA}"
       - uses: actions/upload-artifact@v4
         with:
           name: benchmarks-${{ github.sha }}

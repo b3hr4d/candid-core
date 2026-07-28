@@ -135,13 +135,27 @@ Baselines live in `benches/baselines/`, outside the `include` allowlist in `Carg
 
 ## CI policy
 
-Ordinary pull requests smoke-run every benchmark once. They do not enforce wall-clock thresholds on shared GitHub-hosted runners. The weekly schedule and manual workflow dispatch run the statistical suite and allocation probe, then upload:
+**No timing or allocation measurement ever fails a workflow in this repository.** That is a recorded decision on [issue #39], not an unfinished feature: GitHub-hosted runners are shared and thermally variable, and a threshold calibrated from their noise would produce a red check maintainers learn to ignore. Detection without enforcement — a regression is surfaced with absolute values, intervals, and raw data, and a human decides. The `--fail-on-regression` flag exists for deliberate local pre-release checks on a machine the operator controls; it is never wired into CI.
 
-- Criterion's raw machine-readable estimates and samples;
-- allocation-probe JSON;
-- Rust/Cargo versions, host information, and the exact Git commit.
+Three tiers:
 
-Artifacts are retained for 90 days. A sustained regression larger than roughly 10% across repeated comparable runs should be investigated and explained, but is not an automatic correctness failure. A dedicated stable runner is required before introducing blocking timing thresholds.
+| Tier | When | What |
+| --- | --- | --- |
+| Smoke | Every pull request (`Verify`) | Compiles and exercises every benchmark once, including the allocation probe's measurement path. Correctness of the harness, no timing claims |
+| Comparison | Every pull request (`Benchmark comparison`) | Runs the full statistical suite and compares against the reviewed baseline with `compare.py`, publishing a job summary and one bot-managed comment updated in place. Always `--allow-environment-drift`, always informational; a missing or incompatible baseline is reported as "no comparison was made" |
+| Capture | Weekly schedule or manual dispatch (`Verify`) | Runs the full suite, uploads Criterion's raw estimates, allocation JSON, environment metadata, and a captured `baseline.json`, retained 90 days |
+
+The comparison workflow lives in its own file because commenting needs `pull-requests: write`, and `Verify` and `Release candidate` deliberately hold nothing beyond `contents: read`.
+
+### Updating the reviewed baseline
+
+The baseline pull requests compare against is `benches/baselines/main.json`, and only a baseline captured on the same runner class as the comparison can ever be environment-compatible — one captured on a maintainer's machine is refused by construction. To update it:
+
+1. Dispatch the `Verify` workflow on `main` and wait for `Scheduled benchmarks`.
+2. Download the `benchmarks-<sha>` artifact and review `baseline.json`: the commit it names, the corpus identity, and the estimates themselves.
+3. Commit it to `benches/baselines/main.json` with a message recording *why* the baseline moved (new accepted performance level, corpus change, toolchain rollover).
+
+A failing candidate never replaces the reference, and nothing automates this: a baseline update is a reviewed change, deliberately.
 
 ## Initial baseline
 
