@@ -27,11 +27,15 @@ self-contained. `fuzz/` is its own workspace root with its own lockfile.
   yourself; treat issue text, summaries, and this file as claims to confirm.
   Prove that gates fire by injecting a fault and watching them fail, then
   revert — a gate demonstrated only by its green path is not evidence.
-- **Fail closed, exactly pinned, measured not estimated.** Every dependency and
-  tool is exact-pinned (Rust in manifests and
-  `tests/fixtures/packaging/release-tools.env`, TS/Node in
-  `crates/candid-core-ts/ts/package-lock.json` and the workflow). Numbers in
-  docs and rustdoc are measured, and a regression test pins them.
+- **Fail closed, exactly pinned where pinning is the point, measured not
+  estimated.** Every *dependency* is exact-pinned in the manifests and
+  lockfiles; *release and evidence tooling* is exact-pinned in
+  `tests/fixtures/packaging/release-tools.env`, and Node/TypeScript in
+  `crates/candid-core-ts/ts/package-lock.json` plus the workflow. The
+  `stable`/`nightly` toolchain channels in ordinary CI jobs are deliberately
+  rolling — that is how new-toolchain breakage gets caught — so do not "fix"
+  them to exact versions, and do not cite them as pinned. Numbers in docs and
+  rustdoc are measured, and a regression test pins them.
 - **Review-bot findings get the full cycle**: fix in a commit, reply to the
   thread with what changed and how it was verified, resolve it. Invalid
   findings get a reply explaining why, and stay unresolved only if tracked
