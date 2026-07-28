@@ -101,26 +101,49 @@ fn generation_is_deterministic_across_serde_round_trips() {
 }
 
 /// A deferred construct nested inside a supported type fails closed rather
-/// than silently emitting `unknown`.
+/// than silently emitting `unknown` — whether it is anonymous or reached
+/// through a declared name. The named case is the sharper one: the alias the
+/// reference would name was *skipped*, so emitting it would produce an
+/// undefined TypeScript type while reporting success (review finding on the
+/// first slice, and this test originally constructed exactly that case while
+/// classifying it as safe).
 #[test]
 fn nested_func_fails_closed() {
-    let compilation = compile_did(
-        "type Callback = func (nat) -> (text);\ntype Holder = record { hook : Callback };",
-    )
-    .expect("source must compile");
-    // `Callback` is declared, so `hook` renders as a name reference and the
-    // declaration itself is skipped — that is the deferred-note path. Force the
-    // nested path with an anonymous func.
-    let nested = compile_did("type Holder = record { hook : func (nat) -> (text) };")
+    let anonymous = compile_did("type Holder = record { hook : func (nat) -> (text) };")
         .expect("source must compile");
-    let names = TsNames::new();
-    let error = generate_module(nested.contract(), &names, &TsOptions::default())
-        .expect_err("nested func must fail closed");
+    let error = generate_module(anonymous.contract(), &TsNames::new(), &TsOptions::default())
+        .expect_err("anonymous nested func must fail closed");
     assert!(matches!(
         error,
         TsGenError::UnsupportedConstruct { kind: "func", .. }
     ));
-    drop(compilation);
+
+    let named = compile_did(
+        "type Callback = func (nat) -> (text);\ntype Holder = record { hook : Callback };",
+    )
+    .expect("source must compile");
+    let error = generate_module(named.contract(), &TsNames::new(), &TsOptions::default())
+        .expect_err("a reference to a skipped deferred alias must fail closed");
+    assert!(matches!(
+        error,
+        TsGenError::UnsupportedConstruct { kind: "func", .. }
+    ));
+}
+
+/// The caller-supplied module specifier is escaped, never interpolated: a
+/// hostile or accidental quote cannot produce syntactically invalid output.
+#[test]
+fn principal_import_is_escaped() {
+    let compilation = compile_did("type Who = principal;").expect("compile");
+    let options = TsOptions {
+        principal_import: "bad\"path".to_string(),
+    };
+    let output =
+        generate_module(compilation.contract(), &TsNames::new(), &options).expect("generate");
+    assert!(
+        output.contains("from \"bad\\\"path\";"),
+        "specifier must be escaped: {output}"
+    );
 }
 
 /// Without a name table every field renders by the `_id_` convention — the

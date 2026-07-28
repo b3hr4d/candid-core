@@ -231,8 +231,8 @@ impl Generator<'_> {
         }
         if self.uses_principal {
             out.push_str(&format!(
-                "import type {{ Principal }} from \"{}\";\n",
-                options.principal_import
+                "import type {{ Principal }} from {};\n",
+                quote_string(&options.principal_import)
             ));
         }
         if !aliases.is_empty() {
@@ -264,6 +264,23 @@ impl Generator<'_> {
     /// through a declaration.
     fn render(&mut self, reference: TypeRef, declaration: &str) -> Result<String, TsGenError> {
         if let Some(name) = self.declared.get(&reference) {
+            // The named shortcut is only sound if the alias it references was
+            // actually emitted. A declared func/service/class was *skipped*
+            // with a header note, so a reference to its name would be an
+            // undefined type in the output — exactly the silent hole the
+            // fail-closed rule exists to prevent.
+            let kind = match self.node(reference)? {
+                TypeNode::Func { .. } => Some("func"),
+                TypeNode::Service { .. } => Some("service"),
+                TypeNode::Class { .. } => Some("class"),
+                _ => None,
+            };
+            if let Some(kind) = kind {
+                return Err(TsGenError::UnsupportedConstruct {
+                    declaration: declaration.to_string(),
+                    kind,
+                });
+            }
             return Ok(name.clone());
         }
         self.render_structure(reference, declaration)
@@ -397,6 +414,7 @@ fn is_ts_type_identifier(name: &str) -> bool {
     const RESERVED: &[&str] = &[
         "any",
         "as",
+        "await",
         "bigint",
         "boolean",
         "break",
@@ -505,6 +523,9 @@ mod tests {
         assert!(!is_ts_type_identifier("delete"));
         assert!(!is_ts_type_identifier("string"));
         assert!(!is_ts_type_identifier("undefined"));
+        // Reserved at ES-module top level even though it is not a keyword
+        // everywhere: `export type await = ...` does not parse.
+        assert!(!is_ts_type_identifier("await"));
     }
 
     #[test]
