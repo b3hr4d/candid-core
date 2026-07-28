@@ -130,6 +130,34 @@ fn nested_func_fails_closed() {
     ));
 }
 
+/// `T | null` cannot carry Candid optionality when the inner type can itself
+/// be `null` in TypeScript. Every collapsing shape fails closed — including an
+/// opt reached through a declared alias, because the check is on the node, not
+/// its spelling.
+#[test]
+fn collapsing_options_fail_closed() {
+    for (source, inner) in [
+        ("type DoubleOpt = opt opt nat;", "opt"),
+        ("type OptNull = opt null;", "null"),
+        ("type OptReserved = opt reserved;", "reserved"),
+        ("type Inner = opt nat;\ntype Outer = opt Inner;", "opt"),
+    ] {
+        let compilation = compile_did(source).expect("source must compile");
+        let error = generate_module(
+            compilation.contract(),
+            &TsNames::new(),
+            &TsOptions::default(),
+        )
+        .expect_err(source);
+        match error {
+            TsGenError::UnrepresentableOption { inner: got, .. } => {
+                assert_eq!(got, inner, "{source}")
+            }
+            other => panic!("expected UnrepresentableOption for {source}, got {other:?}"),
+        }
+    }
+}
+
 /// The caller-supplied module specifier is escaped, never interpolated: a
 /// hostile or accidental quote cannot produce syntactically invalid output.
 #[test]

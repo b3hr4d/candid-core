@@ -32,6 +32,19 @@ supported type fails closed rather than emitting `unknown`. Field names are
 caller-supplied through `TsNames` — the semantic Contract stores only label
 IDs — with a `compiler`-feature bridge from a compilation's provenance sidecar.
 
+**The output is a clean domain model, by owner decision on issue #38.**
+`opt T` renders `T | null`; variants render as discriminated
+`{ tag, value }` unions with `value` omitted for `null` payloads; anonymous
+`vec nat8` renders `Uint8Array`; `Principal` imports from
+`@icp-sdk/core/principal` by default. This deliberately diverges from the
+shapes the agent-js runtime produces (`[] | [T]` opts, single-key variant
+objects — what `@icp-sdk/bindgen` emits, verified against its 0.4.0 output):
+compatibility is a non-goal for now, and consuming these types against a live
+agent needs a boundary conversion, recorded on the issue as future work. One
+consequence is enforced rather than papered over: an `opt` whose inner type
+can itself be `null` in TypeScript — `opt opt`, `opt null`, `opt reserved` —
+fails closed, because `T | null` cannot distinguish `None` from `Some(None)`.
+
 **Golden tests carry the mapping decisions.** Each fixture under
 `tests/fixtures/` must generate byte-identical output to its checked-in golden
 in `tests/goldens/`; regenerate deliberately with `UPDATE_GOLDENS=1` and review

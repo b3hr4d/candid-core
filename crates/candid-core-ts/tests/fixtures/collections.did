@@ -2,6 +2,6 @@ type Unit = record {};
 type Pair = record { nat; text };
 type Item = record { id : nat32; label : text; payload : blob };
 type MaybeItem = opt Item;
-type DoubleOpt = opt opt nat;
+type Note = opt text;
 type Items = vec Item;
 type Grid = vec vec nat8;

@@ -27,6 +27,19 @@
 //! type fails closed with [`TsGenError::UnsupportedConstruct`] rather than
 //! silently emitting `unknown`.
 //!
+//! # A clean domain model, not the wire shape
+//!
+//! By owner decision on issue #38, the output is the clean modern reading of
+//! a Contract rather than the shapes the agent-js runtime produces: `opt T`
+//! is `T | null`, variants are discriminated `{ tag, value }` unions, and
+//! anonymous `vec nat8` is `Uint8Array`. Two consequences are deliberate.
+//! An `opt` whose inner type can itself be `null` — another `opt`, `null`,
+//! `reserved` — fails closed with [`TsGenError::UnrepresentableOption`],
+//! because `T | null` cannot carry `None` versus `Some(None)`. And consuming
+//! these types against a live agent needs a boundary conversion, which is
+//! future work recorded on the issue — the types describe the domain, not the
+//! transport.
+//!
 //! # Determinism
 //!
 //! Identical Contracts produce byte-identical TypeScript: emission follows the
@@ -110,7 +123,7 @@ pub struct TsOptions {
 impl Default for TsOptions {
     fn default() -> Self {
         Self {
-            principal_import: "@dfinity/principal".to_string(),
+            principal_import: "@icp-sdk/core/principal".to_string(),
         }
     }
 }
@@ -128,6 +141,13 @@ pub enum TsGenError {
     },
     /// A declaration name cannot be a TypeScript type identifier.
     InvalidDeclarationName { name: String },
+    /// An `opt` whose inner type can itself be `null` in TypeScript — another
+    /// `opt`, `null`, or `reserved` — cannot be carried by `T | null` without
+    /// collapsing `None` into `Some(None)`. Fail closed rather than corrupt.
+    UnrepresentableOption {
+        declaration: String,
+        inner: &'static str,
+    },
     /// A type reference points outside the Contract arena. A validated
     /// Contract cannot contain one; this guards the unvalidated path.
     DanglingTypeRef { reference: TypeRef },
@@ -144,6 +164,12 @@ impl fmt::Display for TsGenError {
             Self::InvalidDeclarationName { name } => write!(
                 f,
                 "declaration name `{name}` is not a valid TypeScript type identifier"
+            ),
+            Self::UnrepresentableOption { declaration, inner } => write!(
+                f,
+                "declaration `{declaration}` wraps `{inner}` in `opt`: `T | null` \
+                 cannot distinguish `None` from `Some(None)` there, so generation \
+                 refuses rather than collapsing the two"
             ),
             Self::DanglingTypeRef { reference } => {
                 write!(
@@ -294,10 +320,46 @@ impl Generator<'_> {
         match self.node(reference)?.clone() {
             TypeNode::Primitive { primitive } => Ok(self.primitive(primitive).to_string()),
             TypeNode::Opt { inner } => {
+                // `T | null` reads as an absent value should — but it can only
+                // carry Candid's optionality when `T` itself can never be
+                // `null`. Three inner shapes break that: another `opt` (the
+                // classic `None` vs `Some(None)`), `null` itself, and
+                // `reserved`, whose `unknown` absorbs `null` entirely. The
+                // check is on the inner *node*, not its spelling, so an alias
+                // of an opt collapses just as surely and is refused just the
+                // same.
+                let collapsing = match self.node(inner)? {
+                    TypeNode::Opt { .. } => Some("opt"),
+                    TypeNode::Primitive {
+                        primitive: PrimitiveType::Null,
+                    } => Some("null"),
+                    TypeNode::Primitive {
+                        primitive: PrimitiveType::Reserved,
+                    } => Some("reserved"),
+                    _ => None,
+                };
+                if let Some(inner_kind) = collapsing {
+                    return Err(TsGenError::UnrepresentableOption {
+                        declaration: declaration.to_string(),
+                        inner: inner_kind,
+                    });
+                }
                 let inner = self.render(inner, declaration)?;
-                Ok(format!("[] | [{inner}]"))
+                Ok(format!("{inner} | null"))
             }
             TypeNode::Vec { inner } => {
+                // `vec nat8` is binary data, and `Uint8Array` is its modern
+                // type. Only the *anonymous* nat8 node gets it: an element
+                // type the Contract declares by name (`type Byte = nat8`) is a
+                // deliberate abstraction and keeps its name.
+                if !self.declared.contains_key(&inner) {
+                    if let TypeNode::Primitive {
+                        primitive: PrimitiveType::Nat8,
+                    } = self.node(inner)?
+                    {
+                        return Ok("Uint8Array".to_string());
+                    }
+                }
                 let inner = self.render(inner, declaration)?;
                 Ok(format!("Array<{inner}>"))
             }
@@ -327,11 +389,26 @@ impl Generator<'_> {
                     // A variant with no tags is uninhabited.
                     return Ok("never".to_string());
                 }
+                // A discriminated union: `tag` is the label as a string
+                // literal type, `value` carries the payload and is omitted for
+                // a `null` payload, because Candid's bare `ok` and `ok : null`
+                // are the same variant arm and an ever-present `value: null`
+                // would be noise on every tag-only arm.
                 let mut arms = Vec::with_capacity(fields.len());
                 for field in &fields {
-                    let key = self.field_key(reference, field.id);
-                    let value = self.render(field.ty, declaration)?;
-                    arms.push(format!("{{ {key}: {value} }}"));
+                    let tag = self.tag_literal(reference, field.id);
+                    let payload_is_null = matches!(
+                        self.node(field.ty)?,
+                        TypeNode::Primitive {
+                            primitive: PrimitiveType::Null
+                        }
+                    );
+                    if payload_is_null {
+                        arms.push(format!("{{ tag: {tag} }}"));
+                    } else {
+                        let value = self.render(field.ty, declaration)?;
+                        arms.push(format!("{{ tag: {tag}; value: {value} }}"));
+                    }
                 }
                 Ok(arms.join(" | "))
             }
@@ -377,6 +454,16 @@ impl Generator<'_> {
                 self.uses_principal = true;
                 "Principal"
             }
+        }
+    }
+
+    /// A variant tag as a TypeScript string literal type: the supplied label
+    /// text when one exists, else the `_id_` convention. Always quoted — the
+    /// literal is a type, not a property name.
+    fn tag_literal(&self, container: TypeRef, id: u32) -> String {
+        match self.names.get(container, id) {
+            Some(name) => quote_string(name),
+            None => quote_string(&format!("_{id}_")),
         }
     }
 

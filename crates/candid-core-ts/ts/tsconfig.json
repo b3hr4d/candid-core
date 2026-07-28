@@ -6,7 +6,7 @@
     "module": "esnext",
     "moduleResolution": "bundler",
     "paths": {
-      "@dfinity/principal": [
+      "@icp-sdk/core/principal": [
         "./principal-stub.d.ts"
       ]
     }
