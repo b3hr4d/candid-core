@@ -1,0 +1,26 @@
+[package]
+# A working name, not a published one. Nothing may publish this crate until its
+# registry name is decided deliberately — crate names are permanent on
+# crates.io, exactly like versions — and `publish = false` is what enforces
+# that until then.
+name = "candid-core-ts"
+version = "0.0.0"
+publish = false
+edition = "2021"
+rust-version = "1.78"
+description = "TypeScript code generation over the candid-core Contract graph"
+license = "Apache-2.0"
+repository = "https://github.com/b3hr4d/candid-core"
+
+[dependencies]
+# The base surface only, and that is a design statement rather than a default:
+# the generator consumes a validated Contract graph, so it needs no Candid
+# parser, no filesystem capability, and no host-value ABI. If a future change
+# needs a feature here, that is a boundary being crossed and belongs in review.
+#
+# `version` and `path` together on purpose. The workspace builds against the
+# sibling for development, and any *released* form of this crate must depend on
+# the published `candid-core` — the two crates' release cycles are independent
+# by decision (issue #38). Cargo drops `path` at publish time and keeps the
+# version requirement, so this declaration is already the released shape.
+candid-core = { version = "=0.1.0-beta.1", path = "../..", default-features = false }

@@ -71,6 +71,7 @@ include = [
 # records that here so a future member glob cannot swallow it.
 [workspace]
 resolver = "2"
+members = [".", "crates/candid-core-ts"]
 exclude = ["fuzz"]
 
 # One published package, three optional build surfaces. The implicit base — the
