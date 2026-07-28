@@ -24,3 +24,24 @@ repository = "https://github.com/b3hr4d/candid-core"
 # by decision (issue #38). Cargo drops `path` at publish time and keeps the
 # version requirement, so this declaration is already the released shape.
 candid-core = { version = "=0.1.0-beta.1", path = "../..", default-features = false }
+
+# Opt-in bridge from a compilation provenance sidecar to a TsNames table.
+# Mirrors the upstream feature name so `candid-core-ts/compiler` reads as what
+# it is; the library without it stays a pure base-surface consumer.
+[features]
+compiler = ["candid-core/compiler"]
+
+[dev-dependencies]
+# The golden tests compile .did fixtures into Contracts, which needs the
+# compiler surface — as a dev-dependency, exactly the pattern candid-core
+# itself uses for candid_parser. Dev-dependencies never reach a downstream
+# consumer, so the library boundary claim above is untouched; the featureless
+# build is separately enforced by `cargo check -p candid-core-ts` in CI.
+candid-core = { path = "../..", default-features = false, features = ["compiler"] }
+# The authoritative Candid name hash, used by tests to state expected `_id_`
+# keys without hardcoding hash values — the same authority candid-core itself
+# pins its internal hash against.
+candid_parser = "=0.4.0"
+# Exact-pinned to match the crate under test: the determinism test round-trips
+# a Contract through its serialized form.
+serde_json = "=1.0.150"

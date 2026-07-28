@@ -16,3 +16,8 @@ __pycache__/
 /fuzz/target/
 /fuzz/corpus/
 /fuzz/artifacts/
+
+# The golden-TypeScript type-check installs its pinned compiler here
+# (crates/candid-core-ts/ts). Only package.json and package-lock.json are
+# tracked; the installed tree never is.
+/crates/candid-core-ts/ts/node_modules/

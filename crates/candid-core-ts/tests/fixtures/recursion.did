@@ -1,0 +1,4 @@
+type List = opt record { head : nat; tail : List };
+type Even = record { next : opt Odd };
+type Odd = record { next : opt Even };
+type ListAlias = List;

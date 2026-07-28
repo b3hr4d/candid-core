@@ -1,0 +1,4 @@
+type Callback = func (nat) -> (text) query;
+type Registry = service { register : (text) -> (nat) };
+type Kept = record { value : nat };
+service : { ping : () -> () }

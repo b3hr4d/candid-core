@@ -18,10 +18,27 @@ capability, and no host-value ABI. If a change here ever needs a feature, that
 is a design boundary being crossed and belongs in review, not in a lockfile
 diff.
 
-**Not covered by the root CI jobs.** The root is a non-virtual workspace, so
+**Covered by its own CI job.** The root is a non-virtual workspace, so
 `cargo test`/`cargo clippy` at the repository root select the root package
-only. This crate gains its own CI wiring together with the first generator
-slice — a job that tests an empty scaffold would be evidence of nothing.
+only; the `Generator crate` job in `Verify` checks the featureless library,
+lints and tests both feature configurations, and type-checks the goldens.
+
+**The first generator slice is in.** `generate_module` covers all eighteen
+primitives, `opt`, `vec`, `record` (tuple-shaped records become TypeScript
+tuples), `variant`, and named declaration references, recursion included.
+`func`, `service`, and `class` are deferred: top-level declarations of those
+kinds are skipped with a header note, and a deferred construct nested inside a
+supported type fails closed rather than emitting `unknown`. Field names are
+caller-supplied through `TsNames` — the semantic Contract stores only label
+IDs — with a `compiler`-feature bridge from a compilation's provenance sidecar.
+
+**Golden tests carry the mapping decisions.** Each fixture under
+`tests/fixtures/` must generate byte-identical output to its checked-in golden
+in `tests/goldens/`; regenerate deliberately with `UPDATE_GOLDENS=1` and review
+the diff. The goldens are additionally compiled by the exact TypeScript pinned
+in `ts/package-lock.json` under `strict` (`npm ci && npx tsc --noEmit` in
+`ts/`), with the `Principal` import resolved to a local type stub so the check
+is hermetic.
 
 Scope and non-goals are recorded on issue #38 and restated in `src/lib.rs`:
 `@icp-sdk/bindgen` is a differential oracle rather than the specification, and

@@ -195,6 +195,47 @@ jobs:
           '${{ steps.chrome.outputs.chrome-path }}' --version
           '${{ steps.chrome.outputs.chromedriver-path }}' --version
           wasm-pack test --headless --chrome --chromedriver '${{ steps.chrome.outputs.chromedriver-path }}' -- --locked --test browser_wasm --no-default-features --features compiler
+  generator:
+    name: Generator crate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      # The boundary claim from issue #38, enforced rather than narrated: the
+      # library builds on the base surface with no feature at all. The golden
+      # tests need `compiler` (they compile fixtures and use the provenance
+      # name bridge), so both configurations run.
+      - name: Check the featureless library
+        run: cargo check -p candid-core-ts --locked
+      - name: Lint both feature configurations
+        run: |
+          set -euxo pipefail
+          cargo clippy -p candid-core-ts --all-targets --locked -- -D warnings
+          cargo clippy -p candid-core-ts --all-targets --features compiler --locked -- -D warnings
+      - name: Test both feature configurations
+        run: |
+          set -euxo pipefail
+          cargo test -p candid-core-ts --locked
+          cargo test -p candid-core-ts --features compiler --locked
+      # Golden TypeScript that does not type-check is not evidence of anything,
+      # so the checked-in goldens are compiled by the exact TypeScript pinned in
+      # ts/package-lock.json under strict mode. SHA-pinned like the release
+      # workflows' actions: this step is where Node enters CI, and a new
+      # supply-chain surface gets the strictest pin available. The Principal
+      # import resolves to a local type stub via tsconfig paths, so the check
+      # needs no npm package beyond the compiler itself.
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24.18.0'
+      - name: Type-check the golden TypeScript
+        working-directory: crates/candid-core-ts/ts
+        run: |
+          set -euxo pipefail
+          npm ci
+          npx tsc --noEmit
+
   benchmark-smoke:
     name: Benchmark smoke test
     runs-on: ubuntu-latest
