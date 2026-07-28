@@ -1,0 +1,3 @@
+type Status = variant { ok; busy : nat32; failed : text };
+type Numbered = variant { 0 : null; 5 : nat };
+type Tree = variant { leaf : nat; node : record { left : Tree; right : Tree } };

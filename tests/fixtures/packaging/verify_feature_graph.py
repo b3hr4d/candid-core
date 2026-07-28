@@ -6,22 +6,29 @@ Issue #24 split one published package into a base Contract model plus the
 makes that split worth anything is a claim about *dependency graphs*: a pure
 Contract consumer must not be made to build a Candid source engine, and a
 consumer that never touches a filesystem must not be made to build a filesystem
-capability crate. This script checks that claim directly against
-`cargo metadata`, which resolves exactly what Cargo would build.
+capability crate. This script checks that claim with `cargo tree`, resolving
+what Cargo would build for a consumer of the selected feature set.
 
 Standard library only, so it runs anywhere `cargo` and `python3` do:
 
     python3 tests/fixtures/packaging/verify_feature_graph.py
 
-Two deliberate scoping decisions:
+Three deliberate scoping decisions:
 
-* **Only normal and build dependencies are followed.** Dev-dependencies exist
-  to test *this* package and never appear in a downstream consumer's graph.
-  `candid_parser` is a dev-dependency precisely so the tests can compare the
+* **Dev-dependencies are excluded from resolution itself** (`--edges no-dev`),
+  not merely from a walk over a resolved graph. Dev-dependencies exist to test
+  this repository and never appear in a downstream consumer's graph — and that
+  now includes *sibling workspace members'* dev-dependencies: the generator
+  crate's golden tests dev-depend on `candid-core` with `compiler` on, and a
+  whole-workspace resolve (what `cargo metadata` computes) unifies that feature
+  into `candid-core` before any edge filtering can help. This script previously
+  used `cargo metadata` with a normal/build edge walk, which was sound while
+  the package was alone in its workspace and silently stopped being sound when
+  it gained a sibling.
+* **`candid_parser` as a dev-dependency is not a leak.** The tests compare the
   crate's internal Candid name hash against the upstream reference in every
   feature configuration — including the one where the library does not link it.
-  Counting that as a leak would be wrong.
-* **The graph is resolved per target triple** with `--filter-platform`, because
+* **The graph is resolved per target triple** with `--target`, because
   `cap-std` is declared under `cfg(not(target_os = "unknown"))` as well as
   behind `filesystem-compiler`. Browser WASM therefore has no `cap-std` even
   with default features, and the expectations below say so per target rather
@@ -33,7 +40,6 @@ a consumer must *download*. They are separate gates on the same question and
 both belong in this directory.
 """
 
-import json
 import subprocess
 import sys
 from pathlib import Path
@@ -65,21 +71,34 @@ def host_triple() -> str:
 
 
 def graph(features: str, target: str) -> set:
-    """Package names reachable from candid-core over normal/build edges only.
+    """Package names in candid-core's consumer graph for one feature set.
 
     `features` is a comma-separated feature list applied on top of
     `--no-default-features`, or the sentinel `"default"` / `"all"`.
+
+    `--edges no-dev` keeps normal, build, and proc-macro dependencies and —
+    unlike an edge walk over a `cargo metadata` resolve — removes
+    dev-dependencies from feature unification too, so a sibling workspace
+    member's test-only requirements cannot activate this package's optional
+    dependencies. `--format {p}` prints one package spec per line; the leading
+    token is the package name.
     """
     command = [
         "cargo",
-        "metadata",
-        "--format-version",
-        "1",
+        "tree",
         "--locked",
         "--manifest-path",
         str(MANIFEST),
-        "--filter-platform",
+        "--package",
+        "candid-core",
+        "--edges",
+        "no-dev",
+        "--target",
         target,
+        "--prefix",
+        "none",
+        "--format",
+        "{p}",
     ]
     if features == "all":
         command.append("--all-features")
@@ -88,29 +107,24 @@ def graph(features: str, target: str) -> set:
         if features:
             command += ["--features", features]
 
-    metadata = json.loads(
-        subprocess.run(command, check=True, capture_output=True, text=True).stdout
-    )
-    names = {package["id"]: package["name"] for package in metadata["packages"]}
-    nodes = {node["id"]: node for node in metadata["resolve"]["nodes"]}
-    root = metadata["resolve"]["root"]
-
-    reached, pending = set(), [root]
-    while pending:
-        current = pending.pop()
-        if current in reached:
-            continue
-        reached.add(current)
-        for dependency in nodes[current]["deps"]:
-            kinds = {
-                entry.get("kind")
-                for entry in dependency.get("dep_kinds", [{"kind": None}])
-            }
-            # `None` is a normal dependency; "build" is a build script's. Only
-            # "dev" is excluded.
-            if kinds & {None, "build"}:
-                pending.append(dependency["pkg"])
-    return {names[identifier] for identifier in reached}
+    result = subprocess.run(command, capture_output=True, text=True)
+    if result.returncode != 0:
+        # A raw traceback here would hide cargo's own diagnostic — which is the
+        # actionable part, e.g. `--locked` refusing a stale lockfile.
+        sys.stderr.write(result.stderr)
+        raise SystemExit(f"`{' '.join(command)}` exited {result.returncode}")
+    output = result.stdout
+    packages = set()
+    for line in output.splitlines():
+        line = line.strip()
+        if line:
+            packages.add(line.split(" ", 1)[0])
+    if "candid-core" not in packages:
+        raise SystemExit(
+            "cargo tree output does not contain candid-core itself; "
+            "refusing to treat an empty or mis-scoped graph as evidence"
+        )
+    return packages
 
 
 def check(label, features, target, required=(), forbidden=()):

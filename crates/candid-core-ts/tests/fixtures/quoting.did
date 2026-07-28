@@ -1,0 +1,1 @@
+type Weird = record { "has space" : nat; "naïve" : text; "quote\"mark" : bool };

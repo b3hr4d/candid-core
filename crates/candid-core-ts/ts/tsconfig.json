@@ -1,0 +1,22 @@
+{
+  "compilerOptions": {
+    "strict": true,
+    "noEmit": true,
+    "target": "es2020",
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "paths": {
+      "@icp-sdk/core/principal": [
+        "./principal-stub.d.ts"
+      ],
+      "@candid-core/schema": [
+        "./schema.ts"
+      ]
+    }
+  },
+  "include": [
+    "../tests/goldens/**/*.ts",
+    "./principal-stub.d.ts",
+    "./schema.ts"
+  ]
+}
