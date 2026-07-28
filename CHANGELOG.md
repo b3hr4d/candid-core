@@ -7,7 +7,29 @@ release procedure that produces an entry here is [docs/releasing.md](docs/releas
 API, the serialized Contract/Compilation/envelope shapes, the canonical bytes,
 and therefore the identities computed over them. Pin an exact version.
 
-## Unreleased
+## 0.1.0-beta.2 — prepared, not yet published
+
+The second prerelease. As with every release, the archive is built and
+digested before publication, so the copy of this file inside the published
+archive necessarily says "prepared"; the release record carries the
+publication evidence. This version follows the issue #81 bump protocol:
+`ProducerInfo::current().version` (and therefore the octets of newly
+serialized documents) is the only observable change from the bump itself — no
+`contract_id`, `interface_id`, `source_bundle_id`, or frozen exact-octet
+vector moved, and `tests/release_metadata.rs` asserts the change and the
+non-change together.
+
+### Release automation
+
+- **The tag, crates.io publish, and GitHub release are performed by a
+  dispatch-only workflow behind three separately-approved protected
+  environments** ([issue #89]). The guard repackages the release commit with
+  the pinned Cargo and refuses on any digest mismatch; publication uses
+  crates.io Trusted Publishing, so no long-lived registry credential exists
+  anywhere; the published checksum is read back from crates.io and compared
+  automatically. [docs/releasing.md](docs/releasing.md) §7 now documents the
+  dispatch-and-approve procedure, with the manual path retained as a recorded
+  fallback. This version is the first released through it.
 
 ### Release gates
 
@@ -16,9 +38,10 @@ and therefore the identities computed over them. Pin an exact version.
   the latest release and reports breaking changes. Because this crate is pre-1.0
   and reserves the right to break, the gate does not forbid them — it forbids
   *undocumented* ones: a reported break must be acknowledged by a list item in
-  this Unreleased section that begins with a bolded `BREAKING` marker followed
-  by a colon. The marker has to start the item; a mention inside prose does not
-  count, which is why this paragraph does not itself acknowledge anything.
+  the Unreleased section of this file that begins with a bolded `BREAKING`
+  marker followed by a colon. The marker has to start the item; a mention
+  inside prose does not count, which is why this entry does not itself
+  acknowledge anything.
   Adding this gate does not promise semver stability before 1.0, and does not
   promote the Contract format to a stable v1.
 
@@ -36,6 +59,20 @@ and therefore the identities computed over them. Pin an exact version.
   over. No behaviour changed: this release documents what the code already did.
   The failure was, and remains, structured and deadline-interruptible rather
   than a hang.
+- **Benchmark comparison governance is documented**
+  ([issue #39], now delivered and closed).
+  [docs/benchmarks.md](docs/benchmarks.md) records the durable-baseline
+  format, the comparison tool that refuses rather than guesses when runs are
+  not comparable, the three CI tiers, and the standing decision that no timing
+  or allocation measurement ever fails a workflow in this repository.
+
+### Packaging
+
+- **The repository became a Cargo workspace** ahead of the TypeScript
+  generator crate ([issue #38]). This is invisible to consumers: Cargo strips
+  the `[workspace]` table from the normalized manifest, the archive remains
+  exactly the intentional allowlist, and the packaged-consumer gates prove it.
+  The generator crate itself is unpublishable and outside the archive.
 
 ## 0.1.0-beta.1 — published 2026-07-27
 
