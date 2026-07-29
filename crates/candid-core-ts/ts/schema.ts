@@ -1,7 +1,9 @@
 // The minimal schema core the generated builders target — the seed of the
 // Zod-style runtime recorded on issue #38. Combinators carry the structure a
-// future validator, codec, and form generator will walk; this slice defines
-// shape and static inference only.
+// validator, codec, and form generator walk; this file defines shape and
+// static inference, and `validate.ts` (issue #102) is the first walker. The
+// node interfaces are exported for exactly that purpose: a walker narrows on
+// `kind` instead of casting blindly, and the compiler checks the narrowing.
 //
 // `Schema<in out T>` is deliberately invariant. The generator annotates every
 // declaration as `export const X: Schema<X> = …`, so the TypeScript compiler
@@ -28,26 +30,26 @@ export interface Schema<in out T> {
 /** The static type a schema describes: `Infer<typeof X>`. */
 export type Infer<S> = S extends Schema<infer T> ? T : never;
 
-interface PrimitiveSchema<T> extends Schema<T> {
+export interface PrimitiveSchema<T> extends Schema<T> {
   readonly kind: "primitive";
   readonly primitive: string;
 }
 
-interface OptSchema<T> extends Schema<T | null> {
+export interface OptSchema<T> extends Schema<T | null> {
   readonly kind: "opt";
   readonly inner: Schema<T>;
 }
 
-interface VecSchema<T> extends Schema<T[]> {
+export interface VecSchema<T> extends Schema<T[]> {
   readonly kind: "vec";
   readonly inner: Schema<T>;
 }
 
-interface BlobSchema extends Schema<Uint8Array> {
+export interface BlobSchema extends Schema<Uint8Array> {
   readonly kind: "blob";
 }
 
-interface UnitSchema extends Schema<Record<string, never>> {
+export interface UnitSchema extends Schema<Record<string, never>> {
   readonly kind: "unit";
 }
 
@@ -55,12 +57,12 @@ interface UnitSchema extends Schema<Record<string, never>> {
 // would reject every concrete schema. `any` is the variance wildcard in
 // constraint position and never leaks into inferred output types.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-type AnySchema = Schema<any>;
-type FieldSchemas = Record<string, AnySchema>;
+export type AnySchema = Schema<any>;
+export type FieldSchemas = Record<string, AnySchema>;
 
 type RecordInfer<F extends FieldSchemas> = { [K in keyof F]: Infer<F[K]> };
 
-interface RecordSchema<F extends FieldSchemas> extends Schema<RecordInfer<F>> {
+export interface RecordSchema<F extends FieldSchemas> extends Schema<RecordInfer<F>> {
   readonly kind: "record";
   readonly fields: F;
 }
@@ -69,7 +71,7 @@ type TupleInfer<S extends readonly AnySchema[]> = {
   -readonly [I in keyof S]: Infer<S[I]>;
 };
 
-interface TupleSchema<S extends readonly AnySchema[]>
+export interface TupleSchema<S extends readonly AnySchema[]>
   extends Schema<TupleInfer<S>> {
   readonly kind: "tuple";
   readonly elements: S;
@@ -85,13 +87,13 @@ type VariantInfer<A extends FieldSchemas> = {
     : { tag: K; value: Infer<A[K]> };
 }[keyof A & string];
 
-interface VariantSchema<A extends FieldSchemas>
+export interface VariantSchema<A extends FieldSchemas>
   extends Schema<VariantInfer<A>> {
   readonly kind: "variant";
   readonly arms: A;
 }
 
-interface RecSchema<T> extends Schema<T> {
+export interface RecSchema<T> extends Schema<T> {
   readonly kind: "rec";
   readonly body: () => Schema<T>;
 }

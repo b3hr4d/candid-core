@@ -28,23 +28,26 @@ fn generate_fixture(name: &str) -> String {
         .expect("fixture must generate")
 }
 
-fn assert_golden(name: &str) {
-    let generated = generate_fixture(name);
+fn assert_golden_file(file_name: &str, generated: &str) {
     let golden_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("tests")
         .join("goldens")
-        .join(format!("{name}.ts"));
+        .join(file_name);
     if std::env::var_os("UPDATE_GOLDENS").is_some() {
-        std::fs::write(&golden_path, &generated).expect("golden must be writable");
+        std::fs::write(&golden_path, generated).expect("golden must be writable");
         return;
     }
     let golden = std::fs::read_to_string(&golden_path)
         .unwrap_or_else(|_| panic!("missing golden {golden_path:?}; run with UPDATE_GOLDENS=1"));
     assert_eq!(
         generated, golden,
-        "generated TypeScript for `{name}` diverged from its golden; \
+        "generated content for `{file_name}` diverged from its golden; \
          if the change is intended, regenerate with UPDATE_GOLDENS=1 and review the diff"
     );
+}
+
+fn assert_golden(name: &str) {
+    assert_golden_file(&format!("{name}.ts"), &generate_fixture(name));
 }
 
 #[test]
@@ -75,6 +78,80 @@ fn golden_quoting() {
 #[test]
 fn golden_deferred() {
     assert_golden("deferred");
+}
+
+/// The schema runtime (issue #102) consumes these same fixtures as data: each
+/// fixture's Contract JSON document and field-name table are goldens too,
+/// read by `ts/tests/crosscheck.test.ts` to prove the dynamically built
+/// schema validates exactly the values the generated builder describes.
+///
+/// Two deliberate normalizations, both proven harmless by re-validating the
+/// result through `Contract::from_json`:
+/// - the `producer` block is a fixed sentinel, so release version bumps do
+///   not churn these goldens — producer metadata is untrusted provenance
+///   excluded from the semantic identities by documented design;
+/// - the document is pretty-printed with serde_json's sorted keys for
+///   reviewability. It is a valid Contract document in the canonical format,
+///   not the canonical byte serialization, which nothing here consumes.
+#[test]
+fn golden_runtime_contract_documents() {
+    for name in [
+        "primitives",
+        "collections",
+        "variants",
+        "recursion",
+        "quoting",
+        "deferred",
+    ] {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests");
+        let source = std::fs::read_to_string(root.join("fixtures").join(format!("{name}.did")))
+            .expect("fixture must be readable");
+        let compilation = compile_did(&source).expect("fixture must compile");
+
+        let mut document =
+            serde_json::to_value(compilation.contract()).expect("contract must serialize");
+        document["producer"] = serde_json::json!({
+            "name": "candid-core",
+            "version": "0.0.0-golden",
+            "candid_version": "0.0.0-golden",
+            "candid_parser_version": "0.0.0-golden",
+        });
+        let normalized = serde_json::to_string(&document).expect("document must serialize");
+        let reparsed = candid_core::Contract::from_json(&normalized)
+            .expect("the normalized document must still be a valid canonical Contract");
+        let pretty = serde_json::to_value(&reparsed).expect("contract must serialize");
+        let mut text = serde_json::to_string_pretty(&pretty).expect("document must pretty-print");
+        text.push('\n');
+        assert_golden_file(&format!("{name}.contract.json"), &text);
+
+        // The name table the runtime needs: `(container, id, name)` triples,
+        // named labels only — a numeric Candid label has no name and must
+        // render by the `_id_` convention, the same rule as
+        // `TsNames::from_source_info`.
+        let source_info = compilation
+            .source_info()
+            .expect("compile_did retains provenance by default");
+        let mut triples: Vec<(u32, u32, &str)> = source_info
+            .field_labels()
+            .iter()
+            .filter_map(|provenance| match &provenance.label {
+                candid_core::SourceLabel::Named { name } => {
+                    Some((provenance.container, provenance.id, name.as_str()))
+                }
+                _ => None,
+            })
+            .collect();
+        triples.sort();
+        triples.dedup();
+        let entries: Vec<serde_json::Value> = triples
+            .iter()
+            .map(|(container, id, label)| serde_json::json!([container, id, label]))
+            .collect();
+        let mut names_text = serde_json::to_string_pretty(&serde_json::Value::Array(entries))
+            .expect("name table must serialize");
+        names_text.push('\n');
+        assert_golden_file(&format!("{name}.names.json"), &names_text);
+    }
 }
 
 /// Byte-identical output for the same Contract, and for the same Contract

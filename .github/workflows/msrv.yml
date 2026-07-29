@@ -235,6 +235,15 @@ jobs:
           set -euxo pipefail
           npm ci
           npx tsc --noEmit
+      # The schema runtime (issue #102) runs on Node's built-in test runner
+      # with native type stripping: no test framework enters the supply chain,
+      # and the exact-pinned Node above is the entire runtime. The suite
+      # includes the golden cross-check — the dynamically loaded Contract JSON
+      # schemas must validate exactly the values the generated builders
+      # describe — so a failure here is a mapping regression, not flake.
+      - name: Run the schema runtime tests
+        working-directory: crates/candid-core-ts/ts
+        run: npm test
 
   benchmark-smoke:
     name: Benchmark smoke test

@@ -1,7 +1,10 @@
 {
   "name": "candid-core-ts-typecheck",
   "private": true,
-  "description": "Type-checks the golden TypeScript; not a published package.",
+  "description": "Type-checks the golden TypeScript and runs the schema runtime tests; not a published package.",
+  "scripts": {
+    "test": "node --test --import ./tests/register.ts tests/*.test.ts"
+  },
   "devDependencies": {
     "typescript": "7.0.2"
   }
