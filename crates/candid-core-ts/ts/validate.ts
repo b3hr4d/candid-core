@@ -26,6 +26,15 @@
 // `rec` chain terminate — so linked-list-shaped data consumes depth per
 // element, exactly as it does in candid-core's value domain.
 //
+// The no-throw guarantee holds even against values that fight inspection —
+// own accessors that throw, Proxies with hostile traps, revoked Proxies: the
+// entire walk runs behind one fail-closed choke point that converts any
+// exception a value raises into a terminal `unreadable_value` issue at the
+// path being examined. `maxElements` charges every traversal step, examined
+// record keys included; it bounds the work this walker performs, not the
+// engine's own key-list materialization, which JavaScript enumeration
+// (`Object.keys` and `for..in` alike) pays in one linear step at loop entry.
+//
 // # Strictness decisions (fail closed, recorded on issue #102)
 //
 // - `nat`/`int`/`nat64`/`int64` require `bigint`; a `number` there is
@@ -33,6 +42,10 @@
 //   range; 255 passes `nat8`, 256 does not.
 // - Records reject unknown keys and require every declared key, including
 //   `opt` fields: the domain shape is `T | null` with the property present.
+//   Presence means an **own enumerable** property — the projection
+//   `JSON.stringify`, spread, and structured clone all see. A non-enumerable
+//   property neither satisfies a required field nor counts as unknown, so a
+//   validated value never serializes to something the schema rejects.
 // - Tag-only variant arms (`null` payload) reject a present `value` key; the
 //   one domain shape is `{ tag }`, not `{ tag, value: null }`.
 // - `float32` accepts any JavaScript number: f32 representability is a codec
@@ -73,6 +86,7 @@ export type ValidationCode =
   | "invalid_length"
   | "uninhabited_type"
   | "unsupported_schema"
+  | "unreadable_value"
   | "resource_limit_exceeded";
 
 /** The `{resource, limit, observed}` triple, as candid-core serializes it. */
@@ -121,7 +135,21 @@ export function validate<T>(
   options: ValidateOptions = {},
 ): ValidateResult {
   const walk = new Walk(options);
-  walk.visit(schema, value, [], 0);
+  // The fail-closed choke point behind the no-throw guarantee: a value can
+  // fight inspection — an own accessor that throws, a Proxy trap, a revoked
+  // Proxy that makes even `Array.isArray` throw — and every such read
+  // happens inside this one call. The walk mutates a single shared path
+  // array, so the catch still knows exactly which value was being examined.
+  const path: PathSegment[] = [];
+  try {
+    walk.visit(schema, value, path, 0);
+  } catch {
+    walk.issues.push({
+      code: "unreadable_value",
+      path: renderPath(path),
+      message: "the value threw while being inspected",
+    });
+  }
   return walk.issues.length === 0
     ? { ok: true }
     : { ok: false, issues: walk.issues };
@@ -171,7 +199,7 @@ function describe(value: unknown): string {
   if (Array.isArray(value)) {
     return "array";
   }
-  if (value instanceof Uint8Array) {
+  if (isUint8Array(value)) {
     return "Uint8Array";
   }
   return typeof value;
@@ -181,13 +209,37 @@ function hasOwn(target: object, key: string): boolean {
   return Object.prototype.hasOwnProperty.call(target, key);
 }
 
+/**
+ * Value-side presence: an own **enumerable** property — the projection
+ * serialization and spread see. `hasOwn` stays for schema-side maps, which
+ * this module builds itself.
+ */
+function hasOwnEnumerable(target: object, key: string): boolean {
+  return Object.prototype.propertyIsEnumerable.call(target, key);
+}
+
+// The %TypedArray%.prototype[@@toStringTag] getter reads the internal
+// [[TypedArrayName]] slot: it answers "Uint8Array" for a genuine Uint8Array
+// from any realm (Buffer subclasses included), and `undefined` for prototype
+// forgeries like `Object.create(Uint8Array.prototype)` — which `instanceof`
+// gets wrong in both directions. `Symbol.toStringTag` on a plain object
+// cannot spoof it.
+const typedArrayTag = Object.getOwnPropertyDescriptor(
+  Object.getPrototypeOf(Uint8Array.prototype) as object,
+  Symbol.toStringTag,
+)?.get;
+
+function isUint8Array(value: unknown): value is Uint8Array {
+  return typedArrayTag?.call(value) === "Uint8Array";
+}
+
 /** A non-null object that is not one of the array-like domain shapes. */
 function isPlainCandidate(value: unknown): value is Record<string, unknown> {
   return (
     typeof value === "object" &&
     value !== null &&
     !Array.isArray(value) &&
-    !(value instanceof Uint8Array)
+    !isUint8Array(value)
   );
 }
 
@@ -244,7 +296,7 @@ class Walk {
         this.vec(node, value, path, depth);
         return;
       case "blob":
-        if (!(value instanceof Uint8Array)) {
+        if (!isUint8Array(value)) {
           this.issue(
             "invalid_type",
             path,
@@ -253,7 +305,7 @@ class Walk {
         }
         return;
       case "unit":
-        this.unit(value, path);
+        this.unit(value, path, depth);
         return;
       case "record":
         this.record(node, value, path, depth);
@@ -464,7 +516,7 @@ class Walk {
     }
   }
 
-  private unit(value: unknown, path: PathSegment[]): void {
+  private unit(value: unknown, path: PathSegment[], depth: number): void {
     if (!isPlainCandidate(value)) {
       this.issue(
         "invalid_type",
@@ -474,7 +526,9 @@ class Walk {
       return;
     }
     for (const key of Object.keys(value)) {
-      if (this.halted) {
+      // Examined keys are traversal work: charge them so a hostile value
+      // with millions of keys fails closed at the configured budget.
+      if (this.halted || !this.step(path, depth)) {
         return;
       }
       path.push(key);
@@ -498,7 +552,7 @@ class Walk {
         return;
       }
       path.push(key);
-      if (!hasOwn(value, key)) {
+      if (!hasOwnEnumerable(value, key)) {
         this.issue("missing_field", path, "required field is missing");
       } else {
         this.visit(field, value[key], path, depth + 1);
@@ -506,7 +560,9 @@ class Walk {
       path.pop();
     }
     for (const key of Object.keys(value)) {
-      if (this.halted) {
+      // Examined keys are traversal work: charge them so a hostile value
+      // with millions of keys fails closed at the configured budget.
+      if (this.halted || !this.step(path, depth)) {
         return;
       }
       // Own-key membership, not `in`: a value key like "toString" must not
@@ -555,7 +611,7 @@ class Walk {
       return;
     }
     path.push("tag");
-    if (!hasOwn(value, "tag")) {
+    if (!hasOwnEnumerable(value, "tag")) {
       this.issue("missing_field", path, "a variant value carries a tag");
       path.pop();
       return;
@@ -575,15 +631,18 @@ class Walk {
     // Arm classification must see through `rec`: a dynamically built arm
     // wraps its payload schema in a lazy thunk, and `{ tag }` versus
     // `{ tag, value }` is decided by the resolved payload, exactly as the
-    // generator decides it by the payload *node*.
+    // generator decides it by the payload *node*. The resolved node is then
+    // what validates the payload, so each rec hop is charged exactly once —
+    // the documented one-extra-element-per-hop model.
     const arm = this.resolve(node.arms[tag], path, depth);
     if (arm === undefined) {
       return;
     }
-    const tagOnly = arm.kind === "primitive" && arm.primitive === "null";
+    const tagOnly =
+      arm.node.kind === "primitive" && arm.node.primitive === "null";
     if (tagOnly) {
       for (const key of Object.keys(value)) {
-        if (this.halted) {
+        if (this.halted || !this.step(path, depth)) {
           return;
         }
         if (key !== "tag") {
@@ -599,15 +658,15 @@ class Walk {
       return;
     }
     path.push("value");
-    if (!hasOwn(value, "value")) {
+    if (!hasOwnEnumerable(value, "value")) {
       this.issue("missing_field", path, "this arm carries a payload");
       path.pop();
     } else {
-      this.visit(node.arms[tag], value.value, path, depth + 1);
+      this.visit(arm.node, value.value, path, arm.depth + 1);
       path.pop();
     }
     for (const key of Object.keys(value)) {
-      if (this.halted) {
+      if (this.halted || !this.step(path, depth)) {
         return;
       }
       if (key !== "tag" && key !== "value") {
@@ -619,14 +678,16 @@ class Walk {
   }
 
   /**
-   * Unwrap `rec` chains to the structural node beneath, charging depth for
-   * each hop. `undefined` means the walk halted or the schema is unusable.
+   * Unwrap `rec` chains to the structural node beneath, charging depth once
+   * per hop; the returned depth is where the unwrapping ended, so the caller
+   * continues from it instead of re-walking the chain. `undefined` means the
+   * walk halted or the schema is unusable.
    */
   private resolve(
     schema: AnySchema,
     path: PathSegment[],
     depth: number,
-  ): SchemaNode | undefined {
+  ): { node: SchemaNode; depth: number } | undefined {
     let node = schema as SchemaNode;
     let hops = depth;
     while (node.kind === "rec") {
@@ -645,6 +706,6 @@ class Walk {
       }
       node = body as SchemaNode;
     }
-    return node;
+    return { node, depth: hops };
   }
 }

@@ -343,6 +343,214 @@ test("an adversarially deep type chain builds and validates without overflow", (
   }
 });
 
+test("a field, arm, or declaration named __proto__ is an ordinary key", () => {
+  // On a plain object, assigning "__proto__" invokes the inherited prototype
+  // setter and silently drops the entry — for records that was fail-open:
+  // validate(schema, {}) reported ok for a schema with a required field. The
+  // builders use null-prototype maps, so the name is just a key.
+  const recordDoc = document(
+    [primitive("nat8"), { kind: "record", fields: [{ id: 1, type: 0 }] }],
+    [{ name: "R", type: 1 }],
+  );
+  const record = schemaFromContract(recordDoc, { names: [[1, 1, "__proto__"]] });
+  assert(record.ok);
+  if (record.ok) {
+    const empty = validate(record.schemas.R, {});
+    assert(!empty.ok, "the __proto__ field is required");
+    if (!empty.ok) {
+      assert.deepStrictEqual(
+        empty.issues.map((issue) => [issue.code, issue.path]),
+        [["missing_field", "$.__proto__"]],
+      );
+    }
+    // JSON.parse creates an own enumerable "__proto__" data property — the
+    // exact domain value this schema describes.
+    assert.deepStrictEqual(
+      validate(record.schemas.R, JSON.parse('{"__proto__": 5}')),
+      { ok: true },
+    );
+  }
+
+  const variantDoc = document(
+    [primitive("nat8"), { kind: "variant", fields: [{ id: 1, type: 0 }] }],
+    [{ name: "V", type: 1 }],
+  );
+  const variant = schemaFromContract(variantDoc, { names: [[1, 1, "__proto__"]] });
+  assert(variant.ok);
+  if (variant.ok) {
+    assert.deepStrictEqual(
+      validate(variant.schemas.V, { tag: "__proto__", value: 5 }),
+      { ok: true },
+    );
+  }
+
+  const declarationDoc = document(
+    [primitive("nat")],
+    [{ name: "__proto__", type: 0 }],
+  );
+  const declaration = schemaFromContract(declarationDoc);
+  assert(declaration.ok);
+  if (declaration.ok) {
+    assert.deepStrictEqual(Object.keys(declaration.schemas), ["__proto__"]);
+    assert.deepStrictEqual(
+      validate(declaration.schemas["__proto__"], 1n),
+      { ok: true },
+    );
+  }
+});
+
+test("the declaration count cap fails closed with the resource triple", () => {
+  const declarations: Json[] = [];
+  for (let i = 0; i < 3; i += 1) {
+    declarations.push({ name: `D${i}`, type: 0 });
+  }
+  const result = schemaFromContract(document([primitive("nat")], declarations), {
+    maxDeclarations: 2,
+  });
+  assert(!result.ok);
+  if (!result.ok) {
+    assert.strictEqual(result.issues[0].code, "resource_limit_exceeded");
+    assert.deepStrictEqual(result.issues[0].resource_limit, {
+      resource: "declarations",
+      limit: 2,
+      observed: 3,
+    });
+  }
+});
+
+test("an oversized name table fails closed instead of amplifying issues", () => {
+  const names = new Array(500_001).fill([0, 0, "x"]) as [number, number, string][];
+  const result = schemaFromContract(
+    document([primitive("nat")], [{ name: "A", type: 0 }]),
+    { names },
+  );
+  assert(!result.ok);
+  if (!result.ok) {
+    assert.strictEqual(result.issues.length, 1);
+    assert.strictEqual(result.issues[0].code, "resource_limit_exceeded");
+    assert.strictEqual(result.issues[0].resource_limit?.resource, "name_table_entries");
+  }
+});
+
+test("a document that throws while inspected fails closed", () => {
+  const hostile = {
+    get format(): string {
+      throw new Error("boom");
+    },
+  };
+  const result = schemaFromContract(hostile);
+  assert(!result.ok);
+  if (!result.ok) {
+    assert.deepStrictEqual(
+      result.issues.map((issue) => [issue.code, issue.path]),
+      [["invalid_contract_document", "$"]],
+    );
+  }
+  const proxied = schemaFromContract(
+    new Proxy({}, {
+      get() {
+        throw new Error("boom");
+      },
+    }),
+  );
+  assert(!proxied.ok);
+});
+
+test("name collisions on a tuple-shaped record do not reject: tuples have no keys", () => {
+  // The generator renders tuple elements positionally and never consults the
+  // name table, so a colliding table must not fail a document the generator
+  // accepts.
+  const doc = document(
+    [
+      {
+        kind: "record",
+        fields: [
+          { id: 0, type: 1 },
+          { id: 1, type: 2 },
+        ],
+      },
+      primitive("nat"),
+      primitive("text"),
+    ],
+    [{ name: "Pair", type: 0 }],
+  );
+  const result = schemaFromContract(doc, {
+    names: [
+      [0, 0, "same"],
+      [0, 1, "same"],
+    ],
+  });
+  assert(result.ok, "tuple-shaped records render no keys to collide");
+  if (result.ok) {
+    assert.deepStrictEqual(validate(result.schemas.Pair, [1n, "x"]), { ok: true });
+  }
+});
+
+test("a nat8 vec whose element type is declared by name stays a vec", () => {
+  // The blob rule applies to the *anonymous* nat8 node only: `type Byte =
+  // nat8; type Bytes = vec Byte` is a deliberate abstraction and renders
+  // c.vec(Byte) in the generator, so the dynamic schema must expect number
+  // arrays, not Uint8Array.
+  const doc = document(
+    [primitive("nat8"), { kind: "vec", inner: 0 }],
+    [
+      { name: "Byte", type: 0 },
+      { name: "Bytes", type: 1 },
+    ],
+  );
+  const result = schemaFromContract(doc);
+  assert(result.ok);
+  if (result.ok) {
+    assert.deepStrictEqual(validate(result.schemas.Bytes, [1, 2]), { ok: true });
+    const blobValue = validate(result.schemas.Bytes, new Uint8Array([1, 2]));
+    assert(!blobValue.ok, "a declared element type is not a blob");
+  }
+});
+
+test("a func nested under opt or vec fails closed too", () => {
+  for (const kind of ["opt", "vec"] as const) {
+    const result = schemaFromContract(
+      document(
+        [
+          { kind, inner: 1 },
+          { kind: "func", args: [], results: [], mode: "query" },
+        ],
+        [{ name: "Holder", type: 0 }],
+      ),
+    );
+    failsWith(result, "unsupported_construct", "$.types[0].inner");
+  }
+});
+
+test("numeric ids starting at 0 but not contiguous build a record, not a tuple", () => {
+  // Candid `record { 0 : nat; 5 : text }` is tuple-like only in its first
+  // field; the generator's is_tuple_shaped demands ids exactly 0..n-1.
+  const doc = document(
+    [
+      {
+        kind: "record",
+        fields: [
+          { id: 0, type: 1 },
+          { id: 5, type: 2 },
+        ],
+      },
+      primitive("nat"),
+      primitive("text"),
+    ],
+    [{ name: "Sparse", type: 0 }],
+  );
+  const result = schemaFromContract(doc);
+  assert(result.ok);
+  if (result.ok) {
+    assert.deepStrictEqual(
+      validate(result.schemas.Sparse, { _0_: 1n, _5_: "x" }),
+      { ok: true },
+    );
+    const asTuple = validate(result.schemas.Sparse, [1n, "x"]);
+    assert(!asTuple.ok, "a sparse-id record is not a tuple");
+  }
+});
+
 test("declaration names need not be TypeScript identifiers", () => {
   // A deliberate divergence from the generator, which emits source text and
   // must refuse `type delete`; a map key has no such constraint.

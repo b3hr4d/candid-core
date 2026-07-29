@@ -25,6 +25,10 @@ declare module "node:fs" {
   export function readFileSync(path: URL | string, encoding: "utf8"): string;
 }
 
+declare module "node:vm" {
+  export function runInNewContext(code: string): unknown;
+}
+
 declare module "node:module" {
   interface ResolveResult {
     url: string;

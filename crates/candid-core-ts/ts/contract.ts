@@ -35,15 +35,22 @@
 // (`unsupported_contract_format`, `unsupported_format_version`,
 // `unsupported_semantics_profile`, `unsupported_canonicalization_profile`,
 // `dangling_type_ref`, `duplicate_field_id`, `empty_declaration_name`,
-// `duplicate_declaration_name`, `resource_limit_exceeded`). Arena size and
-// total field count are capped by the same defaults as candid-core's
-// `Limits` (`max_type_nodes` 100_000, `max_fields` 500_000). Checks run in
-// one pass over the arena before anything is built, so construction is
-// non-recursive: every edge becomes a lazy `c.rec` thunk, memoized per node,
-// and an adversarially deep type graph costs O(1) construction depth.
-// Unknown node kinds and unknown primitive names fail closed
-// (`invalid_contract_document`): a future format revision must be adopted
-// deliberately, not half-read.
+// `duplicate_declaration_name`, `resource_limit_exceeded`). Arena size,
+// total field count, and declaration count are capped by the same defaults
+// as candid-core's `Limits` (`max_type_nodes` 100_000, `max_fields` 500_000,
+// `max_declarations` 100_000), and the caller's name table by its own
+// entry cap. Checks run in one pass over the arena before anything is
+// built, so construction is non-recursive: every edge becomes a lazy
+// `c.rec` thunk, memoized per node, and an adversarially deep type graph
+// costs O(1) construction depth. Unknown node kinds and unknown primitive
+// names fail closed (`invalid_contract_document`): a future format revision
+// must be adopted deliberately, not half-read. Nothing throws even when the
+// document itself fights inspection (accessors, Proxies): the whole
+// construction runs behind a fail-closed choke point that converts such an
+// exception into an `invalid_contract_document` issue. Schema maps — record
+// fields, variant arms, the schemas-by-name result — are built with a null
+// prototype, so a field or declaration legitimately named `__proto__` is an
+// ordinary own key, never a prototype write.
 //
 // What is deliberately *not* checked: the `identities` hashes. Verifying
 // `candid-core:contract:v1` requires the canonicalization procedure, which is
@@ -80,7 +87,7 @@ export interface ContractIssue {
 }
 
 export interface ContractResourceLimitInfo {
-  readonly resource: "type_nodes" | "fields";
+  readonly resource: "type_nodes" | "fields" | "declarations" | "name_table_entries";
   readonly limit: number;
   readonly observed: number;
 }
@@ -103,6 +110,8 @@ export interface ContractSchemaOptions {
   readonly maxTypeNodes?: number;
   /** Total field cap across all nodes, mirroring `Limits::max_fields`. */
   readonly maxFields?: number;
+  /** Declaration count cap, mirroring `Limits::max_declarations`. */
+  readonly maxDeclarations?: number;
 }
 
 export interface DeferredDeclaration {
@@ -124,6 +133,12 @@ export type SchemaFromContractResult =
 
 export const DEFAULT_MAX_TYPE_NODES = 100_000;
 export const DEFAULT_MAX_FIELDS = 500_000;
+export const DEFAULT_MAX_DECLARATIONS = 100_000;
+/**
+ * The name table is caller-side input with no candid-core counterpart; it
+ * addresses fields, so it shares the field cap's magnitude.
+ */
+export const DEFAULT_MAX_NAME_TABLE_ENTRIES = 500_000;
 
 const PRIMITIVES: { readonly [name: string]: AnySchema } = {
   null: c.null,
@@ -174,6 +189,32 @@ function isObject(value: unknown): value is Record<string, unknown> {
 export function schemaFromContract(
   contract: unknown,
   options: ContractSchemaOptions = {},
+): SchemaFromContractResult {
+  // The fail-closed choke point behind the no-throw claim: a document that is
+  // not plain parsed JSON — accessors that throw, hostile Proxy traps — blows
+  // up inside one of the reads below, and the failure must be an issue, not
+  // an escaping exception. The lazy thunks built on success only ever read
+  // the plain parsed structures, never the raw document, so they cannot
+  // throw later.
+  try {
+    return buildFromContract(contract, options);
+  } catch {
+    return {
+      ok: false,
+      issues: [
+        {
+          code: "invalid_contract_document",
+          path: "$",
+          message: "the document threw while being inspected",
+        },
+      ],
+    };
+  }
+}
+
+function buildFromContract(
+  contract: unknown,
+  options: ContractSchemaOptions,
 ): SchemaFromContractResult {
   const issues: ContractIssue[] = [];
   const push = (code: ContractIssueCode, path: string, message: string) => {
@@ -235,6 +276,24 @@ export function schemaFromContract(
         resource: "type_nodes",
         limit: maxTypeNodes,
         observed: types.length,
+      },
+    });
+    return { ok: false, issues };
+  }
+
+  // The third mirrored cap: a tiny arena with millions of uniquely named
+  // declarations must fail closed exactly as candid-core's own validator
+  // fails it (resource "declarations", `Limits::max_declarations`).
+  const maxDeclarations = options.maxDeclarations ?? DEFAULT_MAX_DECLARATIONS;
+  if (declarations.length > maxDeclarations) {
+    issues.push({
+      code: "resource_limit_exceeded",
+      path: "$.declarations",
+      message: `declarations limit ${maxDeclarations} exceeded (observed ${declarations.length})`,
+      resource_limit: {
+        resource: "declarations",
+        limit: maxDeclarations,
+        observed: declarations.length,
       },
     });
     return { ok: false, issues };
@@ -453,9 +512,24 @@ export function schemaFromContract(
     parsedDeclarations.push({ name: declaration.name, type: declaration.type });
   }
 
-  // The caller's name table, validated like any other input.
+  // The caller's name table, validated like any other input — its entry
+  // count included, so a corrupted table cannot amplify into an unbounded
+  // issue list or Map.
   const nameTable = new Map<string, string>();
   const rawNames = options.names ?? [];
+  if (rawNames.length > DEFAULT_MAX_NAME_TABLE_ENTRIES) {
+    issues.push({
+      code: "resource_limit_exceeded",
+      path: "$.names",
+      message: `name_table_entries limit ${DEFAULT_MAX_NAME_TABLE_ENTRIES} exceeded (observed ${rawNames.length})`,
+      resource_limit: {
+        resource: "name_table_entries",
+        limit: DEFAULT_MAX_NAME_TABLE_ENTRIES,
+        observed: rawNames.length,
+      },
+    });
+    return { ok: false, issues };
+  }
   for (let index = 0; index < rawNames.length; index += 1) {
     const entry: unknown = rawNames[index];
     if (
@@ -484,10 +558,19 @@ export function schemaFromContract(
 
   // Rendered keys must be unique per node: two ids mapping to one supplied
   // name (or a supplied name colliding with an `_id_` rendering) would
-  // silently drop a field from the built record. Fail closed instead.
+  // silently drop a field from the built record. Fail closed instead. The
+  // check skips exactly the nodes whose build never renders a key — empty
+  // records (unit) and tuple-shaped records — because the generator ignores
+  // name collisions there too: a positional tuple has no keys to collide.
   for (let index = 0; index < types.length; index += 1) {
     const node = parsed[index];
     if (node === undefined || (node.kind !== "record" && node.kind !== "variant")) {
+      continue;
+    }
+    if (
+      node.kind === "record" &&
+      node.fields.every((field, position) => field.id === position)
+    ) {
       continue;
     }
     const seenKeys = new Set<string>();
@@ -559,14 +642,18 @@ export function schemaFromContract(
         if (node.fields.every((field, position) => field.id === position)) {
           return c.tuple(node.fields.map((field) => lazy(field.type)));
         }
-        const fields: { [key: string]: AnySchema } = {};
+        // Null-prototype maps throughout: on a plain `{}`, assigning the key
+        // "__proto__" invokes the inherited prototype setter and silently
+        // drops the field — a fail-open for a legitimately quoted Candid
+        // name. With no prototype, every key is an ordinary own property.
+        const fields: { [key: string]: AnySchema } = Object.create(null);
         for (const field of node.fields) {
           fields[fieldKey(ref, field.id)] = lazy(field.type);
         }
         return c.record(fields);
       }
       case "variant": {
-        const arms: { [key: string]: AnySchema } = {};
+        const arms: { [key: string]: AnySchema } = Object.create(null);
         for (const field of node.fields) {
           arms[fieldKey(ref, field.id)] = lazy(field.type);
         }
@@ -581,7 +668,7 @@ export function schemaFromContract(
     }
   };
 
-  const schemas: { [name: string]: AnySchema } = {};
+  const schemas: { [name: string]: AnySchema } = Object.create(null);
   const deferred: DeferredDeclaration[] = [];
   for (const declaration of parsedDeclarations) {
     const node = sound[declaration.type];

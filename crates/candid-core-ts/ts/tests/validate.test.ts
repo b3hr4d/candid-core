@@ -5,6 +5,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { runInNewContext } from "node:vm";
 
 import { c, type Schema } from "../schema.ts";
 import {
@@ -339,6 +340,129 @@ test("a malformed schema object fails closed", () => {
   fails(bogusPrimitive, null, "unsupported_schema");
   const bogusRec = c.rec(() => undefined as unknown as Schema<null>);
   fails(bogusRec, null, "unsupported_schema");
+});
+
+test("values that throw while inspected fail closed with unreadable_value", () => {
+  const cases: readonly [schema: { readonly kind: string }, value: unknown][] = [
+    // An own accessor on a required record field.
+    [c.record({ a: c.bool }), { get a(): boolean { throw new Error("boom"); } }],
+    // Accessors on the variant tag and payload.
+    [c.variant({ ok: c.null }), { get tag(): string { throw new Error("boom"); } }],
+    [
+      c.variant({ busy: c.nat32 }),
+      { tag: "busy", get value(): number { throw new Error("boom"); } },
+    ],
+    // An accessor behind the principal duck check.
+    [c.principal, { get toText(): () => string { throw new Error("boom"); } }],
+    // Proxy traps: ownKeys, get, getOwnPropertyDescriptor, getPrototypeOf.
+    [c.record({ a: c.bool }), new Proxy({}, { ownKeys() { throw new Error("boom"); } })],
+    // The target carries the property so presence passes; the read traps.
+    [c.record({ a: c.bool }), new Proxy({ a: true }, { get() { throw new Error("boom"); } })],
+    // The target needs a key for Object.keys to consult the trap at all.
+    // (A getPrototypeOf trap is no longer reachable anywhere: the typed-array
+    // brand check reads internal slots, not the prototype chain.)
+    [
+      c.unit(),
+      new Proxy({ z: 1 }, { getOwnPropertyDescriptor() { throw new Error("boom"); } }),
+    ],
+    // An array whose element is an accessor, nested one level down.
+    [
+      c.vec(c.record({ a: c.bool })),
+      [{ get a(): boolean { throw new Error("boom"); } }],
+    ],
+    [
+      c.tuple([c.nat]),
+      new Proxy([1n], { get(_t, key) { if (key === "length") { throw new Error("boom"); } return undefined; } }),
+    ],
+  ];
+  for (const [schema, value] of cases) {
+    const result = validate(schema as Schema<unknown>, value);
+    assert(!result.ok, "hostile value must not validate");
+    if (!result.ok) {
+      const last = result.issues[result.issues.length - 1];
+      assert.strictEqual(last.code, "unreadable_value");
+    }
+  }
+  // A revoked Proxy makes even Array.isArray throw; primitives included.
+  const { proxy, revoke } = Proxy.revocable({}, {});
+  revoke();
+  for (const schema of [c.text, c.record({ a: c.bool }), c.blob()]) {
+    const result = validate(schema as Schema<unknown>, proxy);
+    assert(!result.ok);
+    if (!result.ok) {
+      assert.strictEqual(result.issues[0].code, "unreadable_value");
+    }
+  }
+});
+
+test("unreadable_value points at the value that threw", () => {
+  const schema = c.record({ a: c.record({ b: c.bool }) });
+  const value = { a: { get b(): boolean { throw new Error("boom"); } } };
+  const result = validate(schema, value as unknown as { a: { b: boolean } });
+  assert(!result.ok);
+  if (!result.ok) {
+    assert.deepStrictEqual(
+      result.issues.map((issue) => [issue.code, issue.path]),
+      [["unreadable_value", "$.a.b"]],
+    );
+  }
+});
+
+test("blob checks the typed-array brand, not the prototype chain", () => {
+  // A prototype forgery has no typed-array internal slots: every real
+  // Uint8Array operation would throw on it, so accepting it is fail-open.
+  fails(c.blob(), Object.create(Uint8Array.prototype), "invalid_type");
+  // A genuine Uint8Array from another realm has the slots but a different
+  // prototype chain; rejecting it would be a false negative.
+  ok(c.blob(), runInNewContext("new Uint8Array([1, 2])"));
+});
+
+test("presence means own enumerable: the serialized projection is what validates", () => {
+  const hidden: Record<string, unknown> = {};
+  Object.defineProperty(hidden, "a", { value: true, enumerable: false });
+  // JSON.stringify(hidden) is "{}", and {} does not satisfy the record — so
+  // neither must this value.
+  fails(c.record({ a: c.bool }), hidden, "missing_field", "$.a");
+  // A non-enumerable extra is invisible to the same projection: not unknown.
+  const extra: Record<string, unknown> = { a: true };
+  Object.defineProperty(extra, "z", { value: 1, enumerable: false });
+  ok(c.record({ a: c.bool }), extra);
+  const unitExtra: Record<string, unknown> = {};
+  Object.defineProperty(unitExtra, "z", { value: 1, enumerable: false });
+  ok(c.unit(), unitExtra);
+});
+
+test("examined record keys are charged against the element budget", () => {
+  const value: Record<string, boolean> = { a: true };
+  for (let i = 0; i < 1000; i += 1) {
+    value[`extra${i}`] = true;
+  }
+  const result = validate(c.record({ a: c.bool }), value, {
+    maxElements: 10,
+    maxIssues: 1_000_000,
+  });
+  assert(!result.ok);
+  if (!result.ok) {
+    const last = result.issues[result.issues.length - 1];
+    assert.strictEqual(last.code, "resource_limit_exceeded");
+    assert.strictEqual(last.resource_limit?.resource, "value_elements");
+  }
+});
+
+test("a rec hop on a variant payload is charged exactly once", () => {
+  // Documented accounting: one extra element per rec hop. The dynamic loader
+  // wraps every arm edge in c.rec, so double-charging would reject valid
+  // values one budget step early.
+  // Cost model for { tag, value }: 1 variant node + 1 payload node + 2
+  // examined keys in the unknown-key scan = 4; the rec wrapper adds exactly
+  // its 1 hop.
+  const direct = c.variant({ busy: c.nat32 });
+  const wrapped = c.variant({ busy: c.rec(() => c.nat32) });
+  const value = { tag: "busy", value: 3 };
+  assert.deepStrictEqual(validate(direct, value, { maxElements: 4 }), { ok: true });
+  assert.deepStrictEqual(validate(wrapped, value, { maxElements: 5 }), { ok: true });
+  const short = validate(wrapped, value, { maxElements: 4 });
+  assert(!short.ok);
 });
 
 test("validate never throws on hostile values", () => {
