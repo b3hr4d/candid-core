@@ -1,0 +1,52 @@
+{
+  "canonicalization_profile": "candid-core-canon-1",
+  "declarations": [
+    {
+      "name": "Weird",
+      "type": 0
+    }
+  ],
+  "format": "candid-core",
+  "format_version": 1,
+  "identities": {
+    "contract": "candid-core:contract:v1:sha256:f178391a8ed8a150dcca42417e2d3e15d452d9db62c4995a2dc880f02ddf1b10"
+  },
+  "producer": {
+    "candid_parser_version": "0.0.0-golden",
+    "candid_version": "0.0.0-golden",
+    "name": "candid-core",
+    "version": "0.0.0-golden"
+  },
+  "semantics_profile": "candid-1",
+  "types": [
+    {
+      "fields": [
+        {
+          "id": 734960755,
+          "type": 1
+        },
+        {
+          "id": 1451868782,
+          "type": 2
+        },
+        {
+          "id": 1495684992,
+          "type": 3
+        }
+      ],
+      "kind": "record"
+    },
+    {
+      "kind": "primitive",
+      "primitive": "bool"
+    },
+    {
+      "kind": "primitive",
+      "primitive": "text"
+    },
+    {
+      "kind": "primitive",
+      "primitive": "nat"
+    }
+  ]
+}

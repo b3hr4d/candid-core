@@ -55,6 +55,22 @@ exactly the reviewed alias. The builders carry the structure the Zod-style
 runtime recorded on issue #38 will walk: validation, form metadata, and the
 TS-native Candid codec are later slices over these same objects.
 
+**The schemas do something at runtime (issue #102).** `ts/validate.ts`
+validates JavaScript values against any schema — every combinator, bounded
+depth and traversal budgets, fail closed, no exceptions for control flow —
+with path-addressed issues in candid-core's own diagnostic shape
+(`{code, path, message, resource_limit?}`, stable snake_case codes,
+`$`-rooted paths). `ts/contract.ts` builds the same schemas dynamically from
+a canonical Contract JSON document, applying every generator mapping decision
+(anonymous `vec nat8` → blob, tuple-shaped records, the collapsing-`opt`
+rejection, deferred `func`/`service`/`class`) with label text from the same
+caller-supplied name-table shape `TsNames` takes. The golden cross-check test
+proves the two paths agree: for every fixture, the dynamically built schema
+must return the identical `validate` result the generated builder returns,
+sample by sample. The suites run on Node's built-in test runner with native
+type stripping — no test framework, no `@types/node`, no npm dependency
+beyond the pinned TypeScript.
+
 **Golden tests carry the mapping decisions.** Each fixture under
 `tests/fixtures/` must generate byte-identical output to its checked-in golden
 in `tests/goldens/`; regenerate deliberately with `UPDATE_GOLDENS=1` and review

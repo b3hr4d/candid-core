@@ -68,10 +68,15 @@ Generator crate (both feature configurations are load-bearing):
     cargo test  -p candid-core-ts --locked
     cargo test  -p candid-core-ts --features compiler --locked
     (cd crates/candid-core-ts/ts && npm ci && npx tsc --noEmit)   # the equality gate
+    (cd crates/candid-core-ts/ts && npm test)                     # the runtime cross-check
 
 The tsc run is a proof, not a lint: `Schema<in out T>` is invariant, so every
 generated `export const X: Schema<X> = c.rec(() => …)` compiles only if the
-builder's inferred type equals the reviewed alias in both directions.
+builder's inferred type equals the reviewed alias in both directions. `npm
+test` (Node's built-in runner, native type stripping, zero test-framework
+dependencies) runs the schema runtime suites, including the cross-check that
+the schemas `schemaFromContract` builds from the golden `*.contract.json`
+documents validate exactly the values the generated builders describe.
 Regenerate goldens deliberately with `UPDATE_GOLDENS=1 cargo test -p
 candid-core-ts --features compiler`, then review the diff — goldens are where
 the owner-reviewed mapping decisions live (modern domain shapes: `T | null`

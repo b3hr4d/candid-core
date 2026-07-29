@@ -5,6 +5,7 @@
     "target": "es2020",
     "module": "esnext",
     "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
     "paths": {
       "@icp-sdk/core/principal": [
         "./principal-stub.d.ts"
@@ -17,6 +18,10 @@
   "include": [
     "../tests/goldens/**/*.ts",
     "./principal-stub.d.ts",
-    "./schema.ts"
+    "./node-builtins-stub.d.ts",
+    "./schema.ts",
+    "./validate.ts",
+    "./contract.ts",
+    "./tests/**/*.ts"
   ]
 }
