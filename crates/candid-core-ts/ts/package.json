@@ -1,6 +1,7 @@
 {
   "name": "candid-core-ts-typecheck",
   "private": true,
+  "type": "module",
   "description": "Type-checks the golden TypeScript; not a published package.",
   "devDependencies": {
     "typescript": "7.0.2"

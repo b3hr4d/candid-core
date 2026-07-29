@@ -1,0 +1,20 @@
+{
+  "name": "candid-start",
+  "private": true,
+  "description": "Prototype full-stack canister framework over candid-core; not a published package. The name is a working name: npm names are permanent, and naming is gated on the issue #106 decision.",
+  "type": "module",
+  "engines": {
+    "node": ">=22.18.0"
+  },
+  "scripts": {
+    "check": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.client.json",
+    "test": "node --test tests/*.test.ts",
+    "test:integration": "node --test tests-integration/*.test.ts",
+    "generate": "node scripts/generate.ts",
+    "dev": "node example/notes/serve.ts"
+  },
+  "devDependencies": {
+    "@types/node": "26.1.2",
+    "typescript": "7.0.2"
+  }
+}

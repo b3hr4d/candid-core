@@ -31,6 +31,13 @@ candid-core = { version = "=0.1.0-beta.2", path = "../..", default-features = fa
 [features]
 compiler = ["candid-core/compiler"]
 
+# Dev-only: the candid-start prototype's schema regeneration driver. Gated so
+# the featureless build (`cargo check -p candid-core-ts`) never compiles it —
+# `TsNames::from_source_info` is `compiler`-feature surface.
+[[example]]
+name = "generate"
+required-features = ["compiler"]
+
 [dev-dependencies]
 # The golden tests compile .did fixtures into Contracts, which needs the
 # compiler surface — as a dev-dependency, exactly the pattern candid-core

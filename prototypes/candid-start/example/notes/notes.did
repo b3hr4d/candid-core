@@ -1,0 +1,35 @@
+// The example app's domain, as a Candid interface: the single source of
+// truth the schema module is generated from. Regenerate with `npm run
+// generate` after editing. Self-contained on purpose — the dev driver uses
+// candid-core's in-memory compile_did, which takes no imports.
+type NoteId = nat64;
+
+type NoteStatus = variant {
+  draft;
+  published : record { at_ns : nat64 };
+  archived;
+};
+
+type Note = record {
+  id : NoteId;
+  title : text;
+  body : text;
+  tags : vec text;
+  created_at_ns : nat64;
+  owner : principal;
+  status : NoteStatus;
+  attachment : opt blob;
+};
+
+type NewNote = record {
+  title : text;
+  body : text;
+  tags : vec text;
+  attachment : opt blob;
+};
+
+type PublishResult = variant {
+  ok : Note;
+  not_found;
+  already_published;
+};
