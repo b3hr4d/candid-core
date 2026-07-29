@@ -47,10 +47,10 @@ fails closed, because `T | null` cannot distinguish `None` from `Some(None)`.
 
 **The generated artifact is a runtime schema, not just types.** Each
 declaration emits an invariantly-annotated builder alongside its alias —
- — targeting the schema core in
- (imported as , a placeholder until the npm
-package and its permanent name exist). Because  is invariant,
-the annotation makes  itself prove on every golden that the builder infers
+`export const X: Schema<X> = c.rec(() => …)` — targeting the schema core in
+`ts/schema.ts` (imported as `@candid-core/schema`, a placeholder until the npm
+package and its permanent name exist). Because `Schema<in out T>` is invariant,
+the annotation makes `tsc` itself prove on every golden that the builder infers
 exactly the reviewed alias. The builders carry the structure the Zod-style
 runtime recorded on issue #38 will walk: validation, form metadata, and the
 TS-native Candid codec are later slices over these same objects.
