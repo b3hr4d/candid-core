@@ -60,6 +60,7 @@
 
 import { c, type AnySchema } from "./schema.ts";
 import type { ResourceLimitInfo } from "./validate.ts";
+import { candidLabelHash, isNumericShapedName } from "./labels.ts";
 
 /** Stable failure codes for contract loading. Closed: additions are API changes. */
 export type ContractIssueCode =
@@ -97,6 +98,12 @@ export interface ContractResourceLimitInfo {
  * triples — the same table `TsNames::from_pairs` takes in Rust, because the
  * semantic Contract stores only authoritative label ids. A field with no
  * entry renders by the ecosystem's `_id_` convention.
+ *
+ * Entries are hash-enforced (issue #103): a name must be the Candid preimage
+ * of its id (`candidLabelHash(name) === id`), and `_N_`-shaped names are
+ * refused — erased to a schema key they are indistinguishable from the
+ * numeric-id rendering, and the codec derives wire ids from keys. A table
+ * from real provenance always satisfies both; a lying one fails closed.
  */
 export type FieldNameEntry = readonly [
   container: number,
@@ -550,7 +557,29 @@ function buildFromContract(
       );
       continue;
     }
-    nameTable.set(`${entry[0]}:${entry[1]}`, entry[2]);
+    // Hash consistency is the wire-correctness invariant (issue #103): the
+    // codec derives every field's wire id from its rendered key, so a name
+    // that does not hash back to its entry's id would silently encode a
+    // wrong id. `_N_`-shaped names are refused outright — erased to a key,
+    // they are indistinguishable from the numeric-id rendering convention.
+    const name = entry[2];
+    if (isNumericShapedName(name)) {
+      push(
+        "invalid_name_table",
+        `$.names[${index}]`,
+        "a name shaped like the _N_ id rendering is reserved",
+      );
+      continue;
+    }
+    if (candidLabelHash(name) !== entry[1]) {
+      push(
+        "invalid_name_table",
+        `$.names[${index}]`,
+        `${JSON.stringify(name)} hashes to ${candidLabelHash(name)}, not ${entry[1]}`,
+      );
+      continue;
+    }
+    nameTable.set(`${entry[0]}:${entry[1]}`, name);
   }
 
   const fieldKey = (container: number, id: number): string =>

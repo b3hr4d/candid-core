@@ -22,6 +22,8 @@
     "./schema.ts",
     "./validate.ts",
     "./contract.ts",
+    "./labels.ts",
+    "./codec.ts",
     "./tests/**/*.ts"
   ]
 }

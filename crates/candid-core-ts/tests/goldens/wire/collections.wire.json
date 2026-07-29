@@ -1,0 +1,50 @@
+[
+  {
+    "declaration": "Unit",
+    "hex": "4449444c016c000100",
+    "name": "unit",
+    "textual": "(record {})"
+  },
+  {
+    "declaration": "Pair",
+    "hex": "4449444c016c02007d01710100010178",
+    "name": "pair",
+    "textual": "(record { 1; \"x\" })"
+  },
+  {
+    "declaration": "Item",
+    "hex": "4449444c026c03dbb70179f49bbcfd06718effd6e90e016d7b01000700000005736576656e020102",
+    "name": "item",
+    "textual": "(record { id = 7; label = \"seven\"; payload = blob \"\\01\\02\" })"
+  },
+  {
+    "declaration": "MaybeItem",
+    "hex": "4449444c036e016c03dbb70179f49bbcfd06718effd6e90e026d7b010000",
+    "name": "maybe_item_none",
+    "textual": "(null)"
+  },
+  {
+    "declaration": "MaybeItem",
+    "hex": "4449444c036e016c03dbb70179f49bbcfd06718effd6e90e026d7b0100010700000005736576656e0107",
+    "name": "maybe_item_some",
+    "textual": "(opt record { id = 7; label = \"seven\"; payload = blob \"\\07\" })"
+  },
+  {
+    "declaration": "Note",
+    "hex": "4449444c016e71010001016e",
+    "name": "note_some",
+    "textual": "(opt \"n\")"
+  },
+  {
+    "declaration": "Items",
+    "hex": "4449444c036d016c03dbb70179f49bbcfd06718effd6e90e026d7b01000101000000016100",
+    "name": "items",
+    "textual": "(vec { record { id = 1; label = \"a\"; payload = blob \"\" } })"
+  },
+  {
+    "declaration": "Grid",
+    "hex": "4449444c026d016d7b010002010100",
+    "name": "grid",
+    "textual": "(vec { blob \"\\01\"; blob \"\" })"
+  }
+]

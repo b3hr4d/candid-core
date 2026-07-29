@@ -236,7 +236,7 @@ test("duplicate field ids fail closed", () => {
   );
 });
 
-test("colliding rendered field keys fail closed rather than dropping a field", () => {
+test("a lying name table fails closed at the table, before any key renders", () => {
   const doc = document(
     [
       {
@@ -250,17 +250,25 @@ test("colliding rendered field keys fail closed rather than dropping a field", (
     ],
     [{ name: "A", type: 0 }],
   );
-  // Two different ids mapped to one supplied name.
-  const named = schemaFromContract(doc, {
-    names: [
-      [0, 1, "same"],
-      [0, 2, "same"],
-    ],
-  });
-  failsWith(named, "duplicate_field_name", "$.types[0].fields[1]");
-  // A supplied name colliding with an unnamed field's `_id_` rendering.
-  const collided = schemaFromContract(doc, { names: [[0, 1, "_2_"]] });
-  failsWith(collided, "duplicate_field_name", "$.types[0].fields[1]");
+  // A name that does not hash back to its id would make the codec encode a
+  // wrong wire id; hash enforcement (issue #103) rejects the entry itself.
+  const lying = schemaFromContract(doc, { names: [[0, 1, "same"]] });
+  failsWith(lying, "invalid_name_table", "$.names[0]");
+  // `_N_`-shaped names are reserved for the numeric-id rendering: erased to
+  // a key, `_2_` the name and `_2_` the rendering of id 2 are identical.
+  const reserved = schemaFromContract(doc, { names: [[0, 1, "_2_"]] });
+  failsWith(reserved, "invalid_name_table", "$.names[0]");
+  // The shape refusal must hold even when the hash is honest: "_2_" hashes
+  // to 4735500, so this entry passes the hash check and only the reserved
+  // shape stands between the codec and a silently wrong wire id.
+  const honestHash = schemaFromContract(
+    document(
+      [{ kind: "record", fields: [{ id: 4_735_500, type: 1 }] }, primitive("nat")],
+      [{ name: "A", type: 0 }],
+    ),
+    { names: [[0, 4_735_500, "_2_"]] },
+  );
+  failsWith(honestHash, "invalid_name_table", "$.names[0]");
 });
 
 test("a malformed name table entry fails closed", () => {
@@ -348,11 +356,14 @@ test("a field, arm, or declaration named __proto__ is an ordinary key", () => {
   // setter and silently drops the entry — for records that was fail-open:
   // validate(schema, {}) reported ok for a schema with a required field. The
   // builders use null-prototype maps, so the name is just a key.
+  // The honest id for the name: hash enforcement (issue #103) refuses a
+  // table entry whose name does not hash back to its id.
+  const protoId = 2_111_641_832;
   const recordDoc = document(
-    [primitive("nat8"), { kind: "record", fields: [{ id: 1, type: 0 }] }],
+    [primitive("nat8"), { kind: "record", fields: [{ id: protoId, type: 0 }] }],
     [{ name: "R", type: 1 }],
   );
-  const record = schemaFromContract(recordDoc, { names: [[1, 1, "__proto__"]] });
+  const record = schemaFromContract(recordDoc, { names: [[1, protoId, "__proto__"]] });
   assert(record.ok);
   if (record.ok) {
     const empty = validate(record.schemas.R, {});
@@ -372,10 +383,10 @@ test("a field, arm, or declaration named __proto__ is an ordinary key", () => {
   }
 
   const variantDoc = document(
-    [primitive("nat8"), { kind: "variant", fields: [{ id: 1, type: 0 }] }],
+    [primitive("nat8"), { kind: "variant", fields: [{ id: protoId, type: 0 }] }],
     [{ name: "V", type: 1 }],
   );
-  const variant = schemaFromContract(variantDoc, { names: [[1, 1, "__proto__"]] });
+  const variant = schemaFromContract(variantDoc, { names: [[1, protoId, "__proto__"]] });
   assert(variant.ok);
   if (variant.ok) {
     assert.deepStrictEqual(
@@ -456,10 +467,12 @@ test("a document that throws while inspected fails closed", () => {
   assert(!proxied.ok);
 });
 
-test("name collisions on a tuple-shaped record do not reject: tuples have no keys", () => {
+test("tuple-shaped records build positionally; a lying table still fails at the table", () => {
   // The generator renders tuple elements positionally and never consults the
-  // name table, so a colliding table must not fail a document the generator
-  // accepts.
+  // name table. With hash enforcement (issue #103) an honest table cannot
+  // name tuple positions at all — a name for id 0 would have to hash to 0 —
+  // so the positional build needs no entries, and entries that lie fail
+  // closed before any node is considered.
   const doc = document(
     [
       {
@@ -474,16 +487,13 @@ test("name collisions on a tuple-shaped record do not reject: tuples have no key
     ],
     [{ name: "Pair", type: 0 }],
   );
-  const result = schemaFromContract(doc, {
-    names: [
-      [0, 0, "same"],
-      [0, 1, "same"],
-    ],
-  });
-  assert(result.ok, "tuple-shaped records render no keys to collide");
-  if (result.ok) {
-    assert.deepStrictEqual(validate(result.schemas.Pair, [1n, "x"]), { ok: true });
+  const bare = schemaFromContract(doc);
+  assert(bare.ok, "tuple-shaped records build with no name entries");
+  if (bare.ok) {
+    assert.deepStrictEqual(validate(bare.schemas.Pair, [1n, "x"]), { ok: true });
   }
+  const lying = schemaFromContract(doc, { names: [[0, 0, "same"]] });
+  failsWith(lying, "invalid_name_table", "$.names[0]");
 });
 
 test("a nat8 vec whose element type is declared by name stays a vec", () => {

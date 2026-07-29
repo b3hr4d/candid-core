@@ -1,0 +1,74 @@
+[
+  {
+    "name": "null",
+    "hex": "4449444c00017f"
+  },
+  {
+    "name": "bool_true",
+    "hex": "4449444c00017e01"
+  },
+  {
+    "name": "nat_big",
+    "hex": "4449444c00017dffffffffffffffffffffffffffffffffffff03"
+  },
+  {
+    "name": "int_negative_big",
+    "hex": "4449444c00017c8080808080808080808080808080808080807e"
+  },
+  {
+    "name": "nat8_max",
+    "hex": "4449444c00017bff"
+  },
+  {
+    "name": "nat16",
+    "hex": "4449444c00017affff"
+  },
+  {
+    "name": "nat32",
+    "hex": "4449444c000179ffffffff"
+  },
+  {
+    "name": "nat64_max",
+    "hex": "4449444c000178ffffffffffffffff"
+  },
+  {
+    "name": "int8_min",
+    "hex": "4449444c00017780"
+  },
+  {
+    "name": "int16_min",
+    "hex": "4449444c0001760080"
+  },
+  {
+    "name": "int32_min",
+    "hex": "4449444c00017500000080"
+  },
+  {
+    "name": "int64_min",
+    "hex": "4449444c0001740000000000000080"
+  },
+  {
+    "name": "float32",
+    "hex": "4449444c0001730000c03f"
+  },
+  {
+    "name": "float64_neg_zero",
+    "hex": "4449444c0001720000000000000080"
+  },
+  {
+    "name": "text_unicode",
+    "hex": "4449444c0001710a68c3a96c6c6f20e29883"
+  },
+  {
+    "name": "reserved",
+    "hex": "4449444c000170"
+  },
+  {
+    "name": "principal_management",
+    "hex": "4449444c0001680100"
+  },
+  {
+    "name": "principal_anonymous",
+    "hex": "4449444c000168010104"
+  }
+]

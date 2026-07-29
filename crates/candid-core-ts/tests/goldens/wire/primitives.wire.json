@@ -1,0 +1,110 @@
+[
+  {
+    "declaration": "P00",
+    "hex": "4449444c00017f",
+    "name": "null",
+    "textual": "(null)"
+  },
+  {
+    "declaration": "P01",
+    "hex": "4449444c00017e01",
+    "name": "bool_true",
+    "textual": "(true)"
+  },
+  {
+    "declaration": "P02",
+    "hex": "4449444c00017dffffffffffffffffffffffffffffffffffff03",
+    "name": "nat_big",
+    "textual": "(340282366920938463463374607431768211455)"
+  },
+  {
+    "declaration": "P03",
+    "hex": "4449444c00017c8080808080808080808080808080808080807e",
+    "name": "int_negative_big",
+    "textual": "(-170141183460469231731687303715884105728)"
+  },
+  {
+    "declaration": "P04",
+    "hex": "4449444c00017bff",
+    "name": "nat8_max",
+    "textual": "(255)"
+  },
+  {
+    "declaration": "P05",
+    "hex": "4449444c00017affff",
+    "name": "nat16",
+    "textual": "(65535)"
+  },
+  {
+    "declaration": "P06",
+    "hex": "4449444c000179ffffffff",
+    "name": "nat32",
+    "textual": "(4294967295)"
+  },
+  {
+    "declaration": "P07",
+    "hex": "4449444c000178ffffffffffffffff",
+    "name": "nat64_max",
+    "textual": "(18446744073709551615)"
+  },
+  {
+    "declaration": "P08",
+    "hex": "4449444c00017780",
+    "name": "int8_min",
+    "textual": "(-128)"
+  },
+  {
+    "declaration": "P09",
+    "hex": "4449444c0001760080",
+    "name": "int16_min",
+    "textual": "(-32768)"
+  },
+  {
+    "declaration": "P10",
+    "hex": "4449444c00017500000080",
+    "name": "int32_min",
+    "textual": "(-2147483648)"
+  },
+  {
+    "declaration": "P11",
+    "hex": "4449444c0001740000000000000080",
+    "name": "int64_min",
+    "textual": "(-9223372036854775808)"
+  },
+  {
+    "declaration": "P12",
+    "hex": "4449444c0001730000c03f",
+    "name": "float32",
+    "textual": "(1.5)"
+  },
+  {
+    "declaration": "P13",
+    "hex": "4449444c0001720000000000000080",
+    "name": "float64_neg_zero",
+    "textual": "(-0.0)"
+  },
+  {
+    "declaration": "P14",
+    "hex": "4449444c0001710a68c3a96c6c6f20e29883",
+    "name": "text_unicode",
+    "textual": "(\"héllo ☃\")"
+  },
+  {
+    "declaration": "P15",
+    "hex": "4449444c000170",
+    "name": "reserved",
+    "textual": "(null)"
+  },
+  {
+    "declaration": "P17",
+    "hex": "4449444c0001680100",
+    "name": "principal_management",
+    "textual": "(principal \"aaaaa-aa\")"
+  },
+  {
+    "declaration": "P17",
+    "hex": "4449444c000168010104",
+    "name": "principal_anonymous",
+    "textual": "(principal \"2vxsx-fae\")"
+  }
+]
