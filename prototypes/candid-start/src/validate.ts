@@ -11,6 +11,7 @@
 import type { Schema } from "./schema.ts";
 import { isPrincipalLike } from "./principal.ts";
 import {
+  MAX_REC_DEPTH,
   ownEntry,
   PRIMITIVE_KINDS,
   resolveShape,
@@ -511,7 +512,11 @@ class Walker {
       this.issue("unsupported_schema", "variant arm schema does not resolve");
       return;
     }
-    if (armShape.kind === "primitive" && armShape.primitive === "null") {
+    if (isNullDomain(armShape)) {
+      // The arm's only inhabitant is `null`, so the type collapses it to a
+      // tag-only `{ tag }` — `null` (`{ tag, value: null }` is a type error)
+      // and `opt` of an uninhabited type (`opt empty`, whose sole value is
+      // `None`) both land here, and the runtime agrees: no payload.
       if (hasValue) {
         this.path.push("value");
         this.issue(
@@ -522,14 +527,15 @@ class Walker {
       }
       return;
     }
-    if (armShape.kind === "primitive" && armShape.primitive === "empty") {
-      // Type-level, `[never] extends [null]` puts an `empty` arm in the
+    if (isUninhabited(armShape)) {
+      // Type-level, `[never] extends [null]` puts a bare `empty` arm in the
       // tag-only branch — but selecting an uninhabited arm can never be a
       // valid Candid value, so the validator rejects it rather than mirroring
-      // the type-level artifact.
+      // the type-level artifact. (This is the one variant case where the
+      // runtime is deliberately stricter than the inferred type.)
       this.issue(
         "variant_arm_uninhabited",
-        `arm ${JSON.stringify(tag)} has an \`empty\` payload and cannot be selected`,
+        `arm ${JSON.stringify(tag)} has an uninhabited payload and cannot be selected`,
       );
       return;
     }
@@ -546,6 +552,34 @@ class Walker {
     this.visit(arm, candidate["value"], depth + 1);
     this.path.pop();
   }
+}
+
+/** A schema no value inhabits: bare `empty`, or a variant with zero arms. */
+function isUninhabited(shape: SchemaShape): boolean {
+  if (shape.kind === "primitive") {
+    return shape.primitive === "empty";
+  }
+  if (shape.kind === "variant") {
+    return shape.arms !== undefined && Object.keys(shape.arms).length === 0;
+  }
+  return false;
+}
+
+/**
+ * A schema whose only domain value is `null`: the `null` primitive, or an
+ * `opt` of an uninhabited type (`opt empty` can only ever be `None`). These
+ * are exactly the variant arms whose `Infer` collapses to `null`, so the
+ * runtime's tag-only treatment matches the generated type.
+ */
+function isNullDomain(shape: SchemaShape): boolean {
+  if (shape.kind === "primitive") {
+    return shape.primitive === "null";
+  }
+  if (shape.kind === "opt" && shape.inner !== undefined) {
+    const inner = resolveShape(shape.inner);
+    return inner !== null && isUninhabited(inner);
+  }
+  return false;
 }
 
 export function validate<T>(
@@ -572,13 +606,16 @@ export interface SchemaCheckIssue {
  * app ever serves a request, mirroring the generator's
  * `UnrepresentableOption` rule. Cycle-safe: each schema object is visited
  * once by identity, which terminates on generated graphs because recursion
- * always flows through the shared per-declaration `rec` constant.
+ * always flows through the shared per-declaration `rec` constant. A straight
+ * `rec` chain of distinct nodes deeper than the codec can resolve
+ * (`MAX_REC_DEPTH`) is refused here rather than passing construction and then
+ * failing on every wire call.
  */
 export function checkSchema(schema: AnySchema): SchemaCheckIssue[] {
   const issues: SchemaCheckIssue[] = [];
   const visited = new Set<object>();
 
-  const visit = (node: AnySchema, path: string): void => {
+  const visit = (node: AnySchema, path: string, recRun: number): void => {
     if (visited.has(node)) {
       return;
     }
@@ -611,7 +648,8 @@ export function checkSchema(schema: AnySchema): SchemaCheckIssue[] {
           issues.push({ code: "unrepresentable_option", path });
           return;
         }
-        visit(shape.inner, `${path}/opt`);
+        // A structural node breaks the consecutive-`rec` chain: reset.
+        visit(shape.inner, `${path}/opt`, 0);
         return;
       }
       case "vec":
@@ -619,7 +657,7 @@ export function checkSchema(schema: AnySchema): SchemaCheckIssue[] {
           issues.push({ code: "unsupported_schema", path });
           return;
         }
-        visit(shape.inner, `${path}/vec`);
+        visit(shape.inner, `${path}/vec`, 0);
         return;
       case "record":
       case "variant": {
@@ -631,7 +669,7 @@ export function checkSchema(schema: AnySchema): SchemaCheckIssue[] {
         for (const key of Object.keys(table)) {
           const child = table[key];
           if (child !== undefined) {
-            visit(child, `${path}/${shape.kind}.${key}`);
+            visit(child, `${path}/${shape.kind}.${key}`, 0);
           }
         }
         return;
@@ -642,7 +680,7 @@ export function checkSchema(schema: AnySchema): SchemaCheckIssue[] {
           return;
         }
         shape.elements.forEach((element, index) => {
-          visit(element, `${path}/tuple[${index}]`);
+          visit(element, `${path}/tuple[${index}]`, 0);
         });
         return;
       case "rec":
@@ -650,7 +688,11 @@ export function checkSchema(schema: AnySchema): SchemaCheckIssue[] {
           issues.push({ code: "unsupported_schema", path });
           return;
         }
-        visit(shape.body(), `${path}/rec`);
+        if (recRun >= MAX_REC_DEPTH) {
+          issues.push({ code: "rec_chain_too_deep", path });
+          return;
+        }
+        visit(shape.body(), `${path}/rec`, recRun + 1);
         return;
       default:
         issues.push({ code: "unsupported_schema", path });
@@ -658,7 +700,7 @@ export function checkSchema(schema: AnySchema): SchemaCheckIssue[] {
     }
   };
 
-  visit(schema, "schema");
+  visit(schema, "schema", 0);
   return issues;
 }
 

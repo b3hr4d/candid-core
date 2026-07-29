@@ -9,9 +9,10 @@
 // input. Any future `dangerouslySetInnerHTML`-style API is a deliberate
 // decision to make in review, not a convenience to slip in.
 //
-// SSR carries no event handlers: function-valued props are skipped at render
-// time. A future client runtime attaches behavior after hydration instead
-// (TanStack Start's model, and the reason this stays a render concern).
+// SSR carries no event handlers: every `on*` prop is skipped at render time,
+// whether its value is a function or a string. A future client runtime
+// attaches behavior after hydration instead (TanStack Start's model, and the
+// reason this stays a render concern).
 import { CandidStartError } from "./errors.ts";
 
 export type Child =
@@ -71,7 +72,13 @@ const URL_ATTRIBUTES: ReadonlySet<string> = new Set([
   "src",
   "action",
   "formaction",
+  "data", // <object data="…">
 ]);
+
+// Event-handler attribute names (`onclick`, `onload`, …). SSR never emits
+// these: behavior is attached after hydration, so a string-valued handler is
+// as much a footgun as a function-valued one and is skipped either way.
+const EVENT_HANDLER_NAME = /^on[a-z]/i;
 
 export function h(
   tag: string,
@@ -89,7 +96,13 @@ export function h(
   ...children: readonly Child[]
 ): VNode {
   if (typeof tag === "function") {
-    return { kind: "component", component: tag, props: (props ?? {}) as Props };
+    // Children passed to a component are threaded through `props.children`
+    // (the React/TanStack convention) so they are never silently dropped; a
+    // component reads them by declaring `children` in its props type.
+    const base = (props ?? {}) as Props;
+    const merged =
+      children.length > 0 ? { ...base, children } : base;
+    return { kind: "component", component: tag, props: merged };
   }
   if (!TAG_NAME.test(tag)) {
     throw new CandidStartError(
@@ -172,6 +185,21 @@ function checkUrl(name: string, value: string): void {
       `attribute ${JSON.stringify(name)} carries a script-scheme URL`,
     );
   }
+  // `data:` is script-bearing too: `data:text/html` and `data:image/svg+xml`
+  // execute script when loaded as an `<iframe>`/`<object>` source. Allow only
+  // a raster-image allowlist and refuse the rest, rather than block every
+  // data: URL and break legitimate inline images.
+  if (
+    lowered.startsWith("data:") &&
+    !/^data:image\/(png|jpe?g|gif|webp|avif|bmp|x-icon|vnd\.microsoft\.icon)[;,]/.test(
+      lowered,
+    )
+  ) {
+    throw new CandidStartError(
+      "render_unsafe_url",
+      `attribute ${JSON.stringify(name)} carries a non-image data: URL`,
+    );
+  }
 }
 
 function renderAttributes(props: Props): string {
@@ -181,8 +209,8 @@ function renderAttributes(props: Props): string {
     if (value === null || value === undefined || value === false) {
       continue;
     }
-    if (typeof value === "function") {
-      // Server render carries no event handlers.
+    if (typeof value === "function" || EVENT_HANDLER_NAME.test(name)) {
+      // Server render carries no event handlers, string-valued ones included.
       continue;
     }
     if (!ATTRIBUTE_NAME.test(name)) {
@@ -217,6 +245,15 @@ function renderAttributes(props: Props): string {
 const MAX_RENDER_DEPTH = 256;
 
 function renderChild(child: Child, depth: number): string {
+  if (depth > MAX_RENDER_DEPTH) {
+    // Array-nested children recurse here without touching renderNode, so the
+    // bound must be enforced on this path too — otherwise a deeply nested
+    // array bypasses it and overflows the stack with a raw RangeError.
+    throw new CandidStartError(
+      "render_depth_exceeded",
+      `render nesting exceeded ${MAX_RENDER_DEPTH} levels`,
+    );
+  }
   if (child === null || child === undefined || typeof child === "boolean") {
     return "";
   }

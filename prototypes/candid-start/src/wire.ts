@@ -25,6 +25,16 @@
 //   reserved                 null in both directions (the value carries no
 //                            information)
 //   empty                    unencodable; fails closed
+//
+// Accepted interim-codec limitations (all resolved by the #103 binary codec):
+//   - negative zero: JSON.stringify serializes -0 as "0", so -0.0 round-trips
+//     as +0.0 through every real transport;
+//   - NaN payload bits are not preserved (a single canonical NaN token);
+//   - `reserved` carries no information in either direction;
+//   - two schemas with the same Candid type but different structural spelling
+//     (`blob` vs `vec nat8`, `unit` vs the empty tuple) share an interface_id
+//     yet encode differently here — the JSON shape is schema-position-driven,
+//     so a value must be decoded under the same schema it was encoded with.
 import type { Schema } from "./schema.ts";
 import { CandidStartError } from "./errors.ts";
 import { isPrincipalLike, principalFromText } from "./principal.ts";
@@ -163,7 +173,7 @@ function encode(schema: AnySchema, value: unknown): WireValue {
         if (fieldSchema === undefined) {
           continue;
         }
-        out[key] = encode(fieldSchema, record[key]);
+        safeSet(out, key, encode(fieldSchema, record[key]));
       }
       return out;
     }
@@ -283,6 +293,7 @@ export function fromWire<T>(schema: Schema<T>, wire: unknown): DecodeResult<T> {
 }
 
 const MAX_WIRE_DEPTH = 64;
+const MAX_BIGINT_DIGITS = 1024;
 
 class Decoder {
   readonly issues: ValidationIssue[] = [];
@@ -380,7 +391,7 @@ class Decoder {
             continue;
           }
           this.path.push(key);
-          out[key] = this.decode(fieldSchema, wire[key], depth + 1);
+          safeSet(out, key, this.decode(fieldSchema, wire[key], depth + 1));
           this.path.pop();
         }
         for (const key of Object.keys(wire)) {
@@ -515,6 +526,17 @@ class Decoder {
             `expected a decimal string for ${primitive}`,
           );
         }
+        // `BigInt(str)` is O(n^2) in the digit count, so a multi-megabyte
+        // decimal string within the 2 MiB body bound could still burn
+        // hundreds of ms of synchronous CPU. Cap the digit count well above
+        // any legitimate value (2^64 is 20 digits; 1024 digits is ~3400
+        // bits) and fail closed before the conversion runs.
+        if (wire.length > MAX_BIGINT_DIGITS) {
+          return this.issue(
+            "wire_number_too_large",
+            `decimal string for ${primitive} exceeds ${MAX_BIGINT_DIGITS} digits`,
+          );
+        }
         return BigInt(wire);
       }
       case "nat8":
@@ -557,4 +579,23 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
     !Array.isArray(value) &&
     !(value instanceof Uint8Array)
   );
+}
+
+/**
+ * Assign an own property even when the key is `__proto__`. A legal Candid
+ * label `__proto__` would otherwise hit `Object.prototype`'s setter — the
+ * field would vanish from the encoded document and the decoded object rather
+ * than round-trip. The reads already use `ownEntry`; the writes match it.
+ */
+function safeSet<V>(target: Record<string, V>, key: string, value: V): void {
+  if (key === "__proto__") {
+    Object.defineProperty(target, key, {
+      value,
+      enumerable: true,
+      writable: true,
+      configurable: true,
+    });
+  } else {
+    target[key] = value;
+  }
 }

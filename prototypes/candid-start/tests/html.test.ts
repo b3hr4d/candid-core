@@ -37,7 +37,41 @@ test("script-scheme URLs fail closed, smuggling included", () => {
 
 test("hostile tag and attribute names are rejected", () => {
   assert.throws(() => h("scr ipt", null));
-  assert.throws(() => renderToString(h("div", { "onx><script": "1" })));
+  assert.throws(() => renderToString(h("div", { "x><script": "1" })));
+  // An `on*`-shaped hostile name is skipped as an event handler before the
+  // name check, so it renders nothing rather than throwing — still safe.
+  assert.equal(renderToString(h("div", { "onx><script": "1" })), "<div></div>");
+});
+
+test("event-handler props are skipped whether function or string", () => {
+  assert.equal(
+    renderToString(h("button", { onclick: "alert(1)", onmouseover: () => 0 }, "ok")),
+    "<button>ok</button>",
+  );
+  // A non-handler attribute of the same value still renders.
+  assert.equal(
+    renderToString(h("button", { "data-x": "v" }, "ok")),
+    '<button data-x="v">ok</button>',
+  );
+});
+
+test("data: URLs are refused except a raster-image allowlist", () => {
+  assert.throws(
+    () => renderToString(h("iframe", { src: "data:text/html,<script>alert(1)</script>" })),
+    /render_unsafe_url|data:/,
+  );
+  assert.throws(
+    () => renderToString(h("img", { src: "data:image/svg+xml,<svg onload=alert(1)>" })),
+    /render_unsafe_url|data:/,
+  );
+  assert.throws(
+    () => renderToString(h("object", { data: "data:text/html,<script>1</script>" })),
+    /render_unsafe_url|data:/,
+  );
+  assert.equal(
+    renderToString(h("img", { src: "data:image/png;base64,iVBORw0KGgo=" })),
+    '<img src="data:image/png;base64,iVBORw0KGgo=">',
+  );
 });
 
 test("void elements refuse children", () => {
@@ -99,4 +133,16 @@ test("render depth is bounded", () => {
     node = h("div", null, node);
   }
   assert.throws(() => renderToString(node), /render_depth_exceeded|nesting/);
+});
+
+test("render depth is bounded on array-nested children too", () => {
+  let node = h("span", null, "x");
+  let children: import("../src/html.ts").Child = node;
+  for (let index = 0; index < 300; index += 1) {
+    children = [children];
+  }
+  assert.throws(
+    () => renderToString(h("div", null, children)),
+    /render_depth_exceeded|nesting/,
+  );
 });

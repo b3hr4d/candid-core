@@ -141,3 +141,62 @@ test("method-name and structural failures are closed", () => {
     /did_unrepresentable_option|opt/,
   );
 });
+
+test("`true`/`false` labels and method names fail closed (no named spelling)", () => {
+  // candid_parser rejects `true`/`false` as a record/variant label in every
+  // form, quoted included, so the emitter refuses rather than emit text the
+  // pinned compiler cannot parse.
+  assert.throws(
+    () =>
+      emitServiceDid([
+        {
+          name: "flags",
+          mode: "query",
+          input: c.record({ true: c.nat }) as AnySchema,
+          output: c.bool as AnySchema,
+        },
+      ]),
+    /did_unencodable_label|Boolean token/,
+  );
+  assert.throws(
+    () =>
+      emitServiceDid([
+        {
+          name: "flags",
+          mode: "query",
+          input: null,
+          output: c.variant({ false: c.null }) as AnySchema,
+        },
+      ]),
+    /did_unencodable_label|Boolean token/,
+  );
+  assert.throws(
+    () => emitServiceDid([{ name: "true", mode: "query", input: null, output: c.bool as AnySchema }]),
+    /did_invalid_method_name|identifier/,
+  );
+});
+
+test("lone-surrogate labels fail closed instead of drifting on disk", () => {
+  assert.throws(
+    () =>
+      emitServiceDid([
+        {
+          name: "m",
+          mode: "query",
+          input: c.record({ ["a\uD800b"]: c.text }) as AnySchema,
+          output: c.bool as AnySchema,
+        },
+      ]),
+    /did_unencodable_label|surrogate/,
+  );
+  // A valid astral character (surrogate *pair*) stays allowed.
+  const ok = emitServiceDid([
+    {
+      name: "m",
+      mode: "query",
+      input: c.record({ ["a\u{1F600}b"]: c.text }) as AnySchema,
+      output: c.bool as AnySchema,
+    },
+  ]);
+  assert.match(ok, /"a\u{1F600}b" : text/u);
+});

@@ -29,11 +29,16 @@ export function shapeOf(schema: AnySchema): SchemaShape {
  * Resolve through `rec` indirections to the underlying structural node.
  * Bounded: a `rec` chain longer than the budget returns `null` rather than
  * recursing forever on a pathological hand-built schema. Generated schemas
- * are exactly one `rec` deep.
+ * are exactly one `rec` deep. The default budget is shared with the
+ * construction-time `checkSchema` gate (`MAX_REC_DEPTH`), so a schema whose
+ * `rec` nesting the codec cannot resolve is refused at construction rather
+ * than passing every gate and then failing on every wire call.
  */
+export const MAX_REC_DEPTH = 64;
+
 export function resolveShape(
   schema: AnySchema,
-  budget: number = 32,
+  budget: number = MAX_REC_DEPTH,
 ): SchemaShape | null {
   let shape = shapeOf(schema);
   let remaining = budget;

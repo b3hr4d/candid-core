@@ -55,12 +55,14 @@ still land on the same identity as any named spelling. The integration suite
 proves that with the real compiler: an inline-emitted interface and a
 hand-named equivalent produce identical `interface_id`s. The practical
 consequence is **deploy-time drift detection**: compare the `interface_id` of
-the build you are about to deploy with the one running, and a breaking
-interface change is a string comparison, not a code review.
+the build you are about to deploy with the one running, and *any* change to
+the wire interface — breaking or not — shows up as a string inequality.
+Whether a flagged change is actually breaking is a separate judgment the id
+does not make; it tells you the interface moved, not how.
 
 ## What runs today
 
-Everything below is exercised by the test suites (67 unit tests, 3
+Everything below is exercised by the test suites (76 unit tests, 3
 cargo-backed integration tests) and by `npm run dev`:
 
 - **SSR**: GET `/` and `/notes/:id` render through route loaders into
@@ -141,19 +143,31 @@ harness's own `npm ci && npx tsc --noEmit` gate.
 
 The prototype inherits the repository's posture — refuse rather than guess:
 
-- unknown schema kinds and primitives (`unsupported_schema`), everywhere
+- unknown schema kinds and primitives — every layer fails closed, under a
+  layer-specific stable code (`unsupported_schema` in validation/checkSchema,
+  `wire_internal` in the codec, `did_unsupported_schema` in emission)
 - collapsing options at three layers: schema check, validation, emission
-- unrepresentable labels: control characters, out-of-u32 numeric labels
+- unrepresentable labels: control characters, lone UTF-16 surrogates,
+  out-of-u32 numeric labels, and `true`/`false` (Candid Boolean tokens, which
+  candid_parser rejects as a label in every spelling) — refused as both
+  labels and method names
+- `rec` chains deeper than the codec resolves (`MAX_REC_DEPTH`) refused at
+  construction, so no schema passes every gate and then fails on every call
 - non-candid method and route names; `__`-prefixed names reserved
-- variant tags resolved only as own properties (no prototype-chain hits)
+- variant tags and record fields treated only as own properties — reads via
+  `ownEntry`, writes via a `__proto__`-safe setter (no prototype-chain hits)
 - handler output that breaks the advertised schema → 500 `invalid_result`,
-  details to the error observer, never to the wire
-- RPC body size bound before parsing (413), wire depth bound, validation
-  depth/work/issue bounds
+  details to the error observer, never to the wire; the RPC client re-runs
+  `validate` after decode, so a misbehaving peer cannot inject out-of-domain
+  values into typed client code
+- RPC body size bound before parsing (413), wire depth bound, bigint decode
+  digit cap, validation depth/work/issue bounds, render depth bound (array
+  children included)
 - strict base64 (canonical padding and trailing bits)
-- `renderToString`: no raw-HTML API, attribute/tag name validation, script
-  scheme URL refusal (control-character smuggling included), void-element
-  child refusal
+- `renderToString`: no raw-HTML API, attribute/tag name validation, URL
+  scheme refusal for `javascript:`/`vbscript:`/non-image `data:`
+  (control-character smuggling included), all `on*` event-handler props
+  skipped (string or function), void-element child refusal
 
 ## Open decisions (maintainer)
 
@@ -188,3 +202,20 @@ The prototype inherits the repository's posture — refuse rather than guess:
   `ic0.time`.
 - `errors.ts` codes are stable strings, but the error *messages* are not
   stable surface, matching candid-core's diagnostics discipline.
+- **`empty` in composite positions is not ergonomic.** `Schema<never>`
+  (`c.empty`) sits outside the `Schema<any>` variance wildcard the framework
+  uses, so a bare `empty` arm/field/element/output needs an `as` cast to
+  typecheck, and a bare `empty` variant arm is inference-tag-only yet
+  runtime-uninhabited (the runtime is deliberately stricter). Widening this
+  belongs to the shared, golden-gated schema core, not the prototype. A
+  generated schema using bare `empty` inside a composite is therefore out of
+  the prototype's ergonomic scope, though `opt empty` (domain `null`) works.
+- The interim JSON wire codec has documented seams that the #103 binary codec
+  removes: `-0.0` round-trips as `+0.0` (JSON serializes both as `0`), NaN
+  payload bits are not preserved, `reserved` carries nothing, and two schemas
+  with the same `interface_id` but different structural spelling (`blob` vs
+  `vec nat8`, `unit` vs empty tuple) encode differently — a value must be
+  decoded under the same schema it was encoded with.
+- The Node version is floored (`>=22.18.0`), not pinned: the prototype has no
+  CI job of its own, so there is no workflow-side toolchain pin as the schema
+  core's harness has. Pinning is a decision for whenever this graduates to CI.

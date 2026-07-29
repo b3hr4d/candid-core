@@ -65,13 +65,26 @@ const CANDID_KEYWORDS: ReadonlySet<string> = new Set([
   "empty",
 ]);
 
+// Candid's Boolean literal tokens. Unlike the type/service keywords above —
+// which candid_parser accepts as *quoted* labels (`"record" : nat` parses) —
+// `true`/`false` are rejected as a record/variant label in every spelling,
+// bare or quoted, verified against candid_parser 0.4.0. The only Candid
+// representation is the numeric hash id, which this emitter cannot produce
+// (it has the label *name*, not candid's field hash), so such a label and a
+// method of either name both fail closed rather than emit unparseable text.
+const UNSPELLABLE_LABELS: ReadonlySet<string> = new Set(["true", "false"]);
+
 const CANDID_IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const NUMERIC_LABEL = /^_(0|[1-9][0-9]*)_$/;
 const LABEL_ID_MAX = 4_294_967_295; // Candid label ids are u32.
 
 /** A method name must be a plain Candid identifier; fail closed otherwise. */
 export function checkMethodName(name: string): void {
-  if (!CANDID_IDENTIFIER.test(name) || CANDID_KEYWORDS.has(name)) {
+  if (
+    !CANDID_IDENTIFIER.test(name) ||
+    CANDID_KEYWORDS.has(name) ||
+    UNSPELLABLE_LABELS.has(name)
+  ) {
     throw new CandidStartError(
       "did_invalid_method_name",
       `method name ${JSON.stringify(name)} is not a plain Candid identifier`,
@@ -80,6 +93,13 @@ export function checkMethodName(name: string): void {
 }
 
 function labelText(key: string): string {
+  if (UNSPELLABLE_LABELS.has(key)) {
+    throw new CandidStartError(
+      "did_unencodable_label",
+      `label ${JSON.stringify(key)} is a Candid Boolean token and has no ` +
+        `named spelling; represent it by numeric field id instead`,
+    );
+  }
   const numeric = NUMERIC_LABEL.exec(key);
   if (numeric !== null) {
     const id = Number(numeric[1]);
@@ -95,8 +115,12 @@ function labelText(key: string): string {
     return key;
   }
   // Quoted form, matching what candid_parser accepts for hostile labels (see
-  // the quoting golden): backslash and quote escaped, control characters
-  // refused rather than mis-emitted.
+  // the quoting golden): backslash and quote escaped, control characters and
+  // lone surrogates refused rather than mis-emitted. `for…of` yields whole
+  // code points, so a valid surrogate pair reads as one char above 0xFFFF
+  // while an unpaired surrogate stays in 0xD800–0xDFFF and is rejected — a
+  // label that cannot survive UTF-8 would otherwise become U+FFFD on disk and
+  // silently drift the compiled Contract's identity from the schema key.
   let out = '"';
   for (const char of key) {
     const code = char.codePointAt(0) ?? 0;
@@ -104,6 +128,12 @@ function labelText(key: string): string {
       throw new CandidStartError(
         "did_unencodable_label",
         `label ${JSON.stringify(key)} contains a control character`,
+      );
+    }
+    if (code >= 0xd800 && code <= 0xdfff) {
+      throw new CandidStartError(
+        "did_unencodable_label",
+        `label ${JSON.stringify(key)} contains a lone UTF-16 surrogate`,
       );
     }
     if (char === "\\" || char === '"') {

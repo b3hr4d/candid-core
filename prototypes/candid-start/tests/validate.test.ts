@@ -216,3 +216,32 @@ test("hostile record keys render bracket-quoted paths", () => {
     assert.equal(result.issues[0]?.path, '$["has space"]');
   }
 });
+
+test("opt(empty) variant arm is tag-only, matching its inferred type", () => {
+  // Infer collapses `opt empty` to null, so the type is { tag: "k" }; the
+  // runtime must agree and require no payload.
+  const schema = c.variant({ k: c.opt(c.empty as unknown as AnySchema) });
+  assert.equal(validate(schema, { tag: "k" }).ok, true);
+  assert.equal(
+    firstCode(schema, { tag: "k", value: null }),
+    "variant_payload_unexpected",
+  );
+});
+
+test("checkSchema refuses a rec chain deeper than the codec can resolve", () => {
+  const build = (depth: number): AnySchema => {
+    let schema = c.text as AnySchema;
+    for (let index = 0; index < depth; index += 1) {
+      const prev = schema;
+      schema = c.rec(() => prev);
+    }
+    return schema;
+  };
+  // A chain within the shared budget passes construction *and* round-trips.
+  const shallow = build(33);
+  assert.deepEqual(checkSchema(shallow), []);
+  assert.equal(validate(shallow, "hello").ok, true);
+  // A chain past the budget is refused at construction, not left to fail on
+  // every wire call.
+  assert.equal(checkSchema(build(70))[0]?.code, "rec_chain_too_deep");
+});

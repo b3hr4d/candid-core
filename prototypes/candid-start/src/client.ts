@@ -5,10 +5,10 @@
 // fetch-capable host) calls server functions with domain values and full
 // static types. What is deliberately still a sketch: `hydrate` swaps
 // `innerHTML` on navigation instead of diffing, and no bundling story
-// exists — shipping this file to a browser is the missing piece, and
-// bundler integration is a recorded non-goal of the prototype (see the
-// README's roadmap). Nothing here runs under Node's test suite; the file is
-// type-checked against DOM types by `tsconfig.client.json`.
+// exists — shipping this file to a browser is the missing piece, and a
+// bundler choice is left open (README, "Open decisions" item 2). Nothing
+// here runs under Node's test suite; the file is type-checked against DOM
+// types by `tsconfig.client.json`.
 import type { Schema } from "./schema.ts";
 import { CandidStartError } from "./errors.ts";
 import { renderToString, type VNode } from "./html.ts";
@@ -72,6 +72,20 @@ export function createRpcClient(baseUrl: string = ""): RpcClient {
             .join("; "),
         );
       }
+      // `fromWire` is structural only; its contract is that the caller then
+      // validates. The canister honors that on both directions, so the client
+      // must too — otherwise a peer answering with a structurally-decodable
+      // but out-of-domain value (a negative `nat`, a fractional `nat8`) would
+      // resolve the typed Promise with a value its schema forbids.
+      const checked = validate(target.output, decoded.value);
+      if (!checked.ok) {
+        throw new CandidStartError(
+          "rpc_invalid_result",
+          checked.issues
+            .map((issue) => `${issue.code} at ${issue.path}`)
+            .join("; "),
+        );
+      }
       return decoded.value;
     },
   };
@@ -88,11 +102,24 @@ export function readHydrationPayload(): HydrationPayload | null {
   if (element === null || element.textContent === null) {
     return null;
   }
+  let parsed: unknown;
   try {
-    return JSON.parse(element.textContent) as HydrationPayload;
+    parsed = JSON.parse(element.textContent);
   } catch {
     return null;
   }
+  // The cast is only sound if the shape actually holds; a tampered or absent
+  // payload must read as `null`, not as a typed object with missing fields.
+  if (
+    typeof parsed !== "object" ||
+    parsed === null ||
+    typeof (parsed as { route?: unknown }).route !== "string" ||
+    typeof (parsed as { params?: unknown }).params !== "object" ||
+    (parsed as { params: unknown }).params === null
+  ) {
+    return null;
+  }
+  return parsed as HydrationPayload;
 }
 
 export interface ClientOptions {

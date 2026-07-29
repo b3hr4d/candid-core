@@ -149,3 +149,32 @@ test("wire depth is bounded", () => {
     assert.equal(decoded.issues[0]?.code, "wire_depth_exceeded");
   }
 });
+
+test("a `__proto__` record field round-trips as an own property", () => {
+  const schema = c.record({ ["__proto__"]: c.text, a: c.nat8 });
+  const value = JSON.parse('{"__proto__":"y","a":2}') as {
+    ["__proto__"]: string;
+    a: number;
+  };
+  const wire = toWire(schema, value) as Record<string, unknown>;
+  assert.equal(Object.prototype.hasOwnProperty.call(wire, "__proto__"), true);
+  assert.equal((wire as Record<string, unknown>)["__proto__"], "y");
+  const decoded = fromWire(schema, JSON.parse('{"__proto__":"x","a":1}'));
+  assert.equal(decoded.ok, true);
+  if (decoded.ok) {
+    const out = decoded.value as Record<string, unknown>;
+    assert.equal(Object.prototype.hasOwnProperty.call(out, "__proto__"), true);
+    assert.equal(out["__proto__"], "x");
+  }
+});
+
+test("bigint decode caps the digit count before the O(n^2) conversion", () => {
+  const decoded = fromWire(c.nat, "1".repeat(2000));
+  assert.equal(decoded.ok, false);
+  if (!decoded.ok) {
+    assert.equal(decoded.issues[0]?.code, "wire_number_too_large");
+  }
+  // A normal-width value still decodes.
+  const ok = fromWire(c.nat, "12345678901234567890");
+  assert.equal(ok.ok, true);
+});
