@@ -700,3 +700,67 @@ test("a class actor denotes its running service; classes elsewhere are refused",
     "$.types[0]",
   );
 });
+
+test("core-validator parity: oneway results, empty methods, class edges (PR #121 review)", () => {
+  // oneway_has_results, mirrored.
+  failsWith(
+    schemaFromContract(
+      document(
+        [{ kind: "func", args: [], results: [1], mode: "oneway" }, primitive("nat")],
+        [{ name: "F", type: 0 }],
+      ),
+    ),
+    "invalid_contract_document",
+    "$.types[0].results",
+  );
+  // empty_method_name, mirrored — hash("") is 0, so the hash check alone
+  // would pass this document.
+  failsWith(
+    schemaFromContract(
+      document(
+        [
+          { kind: "service", methods: [{ name: "", id: 0, function: 1 }] },
+          { kind: "func", args: [], results: [], mode: "update" },
+        ],
+        [{ name: "S", type: 0 }],
+      ),
+    ),
+    "invalid_contract_document",
+    "$.types[0].methods[0].name",
+  );
+  // class_not_first_class_type, mirrored: the actor-root exception must not
+  // let a class become a first-class type via its own init...
+  failsWith(
+    schemaFromContract(
+      document(
+        [
+          { kind: "class", init: [0], service: 1 },
+          { kind: "service", methods: [] },
+        ],
+        [],
+        { kind: "class", class: 0 },
+      ),
+    ),
+    "invalid_contract_document",
+    "$.types[0].init[0]",
+  );
+  // ...or via a func result reaching back to it.
+  failsWith(
+    schemaFromContract(
+      document(
+        [
+          { kind: "class", init: [], service: 1 },
+          {
+            kind: "service",
+            methods: [{ name: "make", id: 1213610478, function: 2 }],
+          },
+          { kind: "func", args: [], results: [0], mode: "update" },
+        ],
+        [],
+        { kind: "class", class: 0 },
+      ),
+    ),
+    "invalid_contract_document",
+    "$.types[2].results[0]",
+  );
+});

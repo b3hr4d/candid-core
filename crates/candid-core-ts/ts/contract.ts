@@ -469,6 +469,17 @@ function buildFromContract(
           );
           break;
         }
+        // candid-core's oneway_has_results rule: a oneway function cannot
+        // carry results — an actor built from one would await a reply the
+        // call never provides.
+        if (mode === "oneway" && Array.isArray(node.results) && node.results.length > 0) {
+          push(
+            "invalid_contract_document",
+            `${base}.results`,
+            "a oneway function has no results",
+          );
+          break;
+        }
         if (args !== undefined && results !== undefined) {
           parsed[index] = { kind: "func", args, results, mode };
         }
@@ -511,6 +522,17 @@ function buildFromContract(
               "invalid_contract_document",
               methodBase,
               "a service method is { name, id, function }",
+            );
+            sound = false;
+            continue;
+          }
+          // candid-core's empty_method_name rule; hash("") is 0, so the
+          // hash-consistency check below cannot catch this on its own.
+          if (method.name.length === 0) {
+            push(
+              "invalid_contract_document",
+              `${methodBase}.name`,
+              "a service method name is non-empty",
             );
             sound = false;
             continue;
@@ -914,14 +936,52 @@ function buildFromContract(
       ? (raw.class as number)
       : undefined;
   })();
+  const isClassRef = (ref: number): boolean => parsed[ref]?.kind === "class";
   for (let index = 0; index < types.length; index += 1) {
-    if (parsed[index]?.kind === "class" && index !== actorClassTarget) {
+    const node = parsed[index];
+    if (node === undefined) {
+      continue;
+    }
+    if (node.kind === "class" && index !== actorClassTarget) {
       push(
         "invalid_contract_document",
         `$.types[${index}]`,
         "class nodes are only valid as the top-level class actor root",
       );
       return { ok: false, issues };
+    }
+    // candid-core's class_not_first_class_type rule: no type edge — func
+    // args/results and a class's own init/service included — may target a
+    // class, actor-root or not. Opt/vec inners and record/variant fields
+    // are already refused by the pass-two nested checks.
+    const edges: readonly (readonly [number, string])[] =
+      node.kind === "func"
+        ? [
+            ...node.args.map((ref, i) => [ref, `$.types[${index}].args[${i}]`] as const),
+            ...node.results.map(
+              (ref, i) => [ref, `$.types[${index}].results[${i}]`] as const,
+            ),
+          ]
+        : node.kind === "class"
+          ? [
+              ...node.init.map((ref, i) => [ref, `$.types[${index}].init[${i}]`] as const),
+              [node.service, `$.types[${index}].service`] as const,
+            ]
+          : node.kind === "service"
+            ? node.methods.map(
+                (method, i) =>
+                  [method.func, `$.types[${index}].methods[${i}].function`] as const,
+              )
+            : [];
+    for (const [ref, path] of edges) {
+      if (isClassRef(ref)) {
+        push(
+          "invalid_contract_document",
+          path,
+          "a class is not a first-class type; no type edge may target one",
+        );
+        return { ok: false, issues };
+      }
     }
   }
 
