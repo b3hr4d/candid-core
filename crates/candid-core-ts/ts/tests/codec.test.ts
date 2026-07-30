@@ -1099,3 +1099,56 @@ test("the 29-byte principal bound holds on skip paths too", () => {
     assert.strictEqual(serviceRejected.issues[0].code, "invalid_principal");
   }
 });
+
+test("reference subtyping is checked on decode: mismatches trap, opt absorbs", () => {
+  // The spec's one real subtype CHECK during deserialisation. Annotation
+  // sets must be equal: a query func on the wire is not an update func.
+  const funcValue = { principal: principal("aaaaa-aa"), method: "go" };
+  const asQuery = encode(c.func([c.nat], [c.text], "query"), funcValue);
+  assert(asQuery.ok);
+  if (asQuery.ok) {
+    const same = decode(c.func([c.nat], [c.text], "query"), asQuery.bytes);
+    assert(same.ok, "an equal signature decodes");
+    if (same.ok) {
+      assert.deepStrictEqual(normalize(same.value), normalize(funcValue));
+    }
+    failsDecode(c.func([c.nat], [c.text], "update"), asQuery.bytes, "type_mismatch");
+    // Param contravariance: a wire func taking int serves where nat is
+    // expected (callers pass nats; nat <: int), not the reverse.
+    const asInt = encode(c.func([c.int], [c.text], "query"), funcValue);
+    assert(asInt.ok);
+    if (asInt.ok) {
+      assert(decode(c.func([c.nat], [c.text], "query"), asInt.bytes).ok);
+    }
+    failsDecode(c.func([c.int], [c.text], "query"), asQuery.bytes, "type_mismatch");
+    // Result covariance: a wire nat result serves an expected int result.
+    const natResult = encode(c.func([], [c.nat], "query"), funcValue);
+    assert(natResult.ok);
+    if (natResult.ok) {
+      assert(decode(c.func([], [c.int], "query"), natResult.bytes).ok);
+      failsDecode(c.func([], [c.nat8], "query"), natResult.bytes, "type_mismatch");
+    }
+    // The enclosing-opt absorption the coercion relation mandates.
+    assert.deepStrictEqual(
+      decode(c.opt(c.func([c.nat], [c.text], "update")), asQuery.bytes),
+      { ok: true, value: null },
+    );
+  }
+  // Service width: an expected method the wire type lacks is a mismatch.
+  const narrow = c.service({ ping: c.func([], [], "update") });
+  const wide = c.service({
+    ping: c.func([], [], "update"),
+    stop: c.func([], [], "update"),
+  });
+  const serviceValue = principal("aaaaa-aa");
+  const narrowBytes = encode(narrow, serviceValue);
+  assert(narrowBytes.ok);
+  if (narrowBytes.ok) {
+    failsDecode(wide, narrowBytes.bytes, "type_mismatch");
+  }
+  const wideBytes = encode(wide, serviceValue);
+  assert(wideBytes.ok);
+  if (wideBytes.ok) {
+    assert(decode(narrow, wideBytes.bytes).ok, "a wider wire service serves");
+  }
+});
