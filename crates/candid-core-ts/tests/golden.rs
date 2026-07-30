@@ -260,6 +260,45 @@ fn principal_import_is_escaped() {
     );
 }
 
+/// A source name shaped like the `_N_` id rendering is refused (issue #115):
+/// erased to a schema key it is indistinguishable from numeric label id N,
+/// so the codec would encode wire id N instead of the name's hash — the
+/// silent-wrong-id fail-open the reservation exists to prevent. The loader
+/// enforces the identical reservation on its name table (issue #103), so
+/// both paths reject the same documents; the TS suite pins the loader half.
+#[test]
+fn numeric_shaped_source_names_are_refused() {
+    for source in [
+        "type Holder = record { _123_ : nat8 };",
+        "type Event = variant { _123_ : nat8; idle };",
+        // The original #115 collision repro: the reservation refuses it
+        // before any duplicate key could render.
+        "type T = record { _123_ : nat8; 123 : text };",
+    ] {
+        let compilation = compile_did(source).expect("compile");
+        let names = TsNames::from_source_info(compilation.source_info().expect("provenance"));
+        let error = generate_module(compilation.contract(), &names, &TsOptions::default())
+            .expect_err("a _N_-shaped source name must refuse generation");
+        assert!(
+            matches!(&error, TsGenError::ReservedFieldName { name, .. } if name == "_123_"),
+            "unexpected error for {source}: {error}"
+        );
+        // Message hygiene: a joined multi-line literal bakes indentation
+        // into the user-facing text, which no format gate catches.
+        assert!(
+            !error.to_string().contains("  "),
+            "error message carries embedded space runs: {error}"
+        );
+    }
+    // Non-canonical shapes are ordinary names: a leading zero never renders
+    // from a numeric id, so `_007_` stays hash-addressed and unambiguous.
+    let compilation = compile_did("type Ok = record { _007_ : nat8 };").expect("compile");
+    let names = TsNames::from_source_info(compilation.source_info().expect("provenance"));
+    let output = generate_module(compilation.contract(), &names, &TsOptions::default())
+        .expect("a non-canonical shape is not reserved");
+    assert!(output.contains("_007_"), "the name must render: {output}");
+}
+
 /// Without a name table every field renders by the `_id_` convention — the
 /// documented base-surface behaviour, pinned so it cannot drift silently.
 #[test]

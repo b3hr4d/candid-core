@@ -269,6 +269,17 @@ test("a lying name table fails closed at the table, before any key renders", () 
     { names: [[0, 4_735_500, "_2_"]] },
   );
   failsWith(honestHash, "invalid_name_table", "$.names[0]");
+  // Cross-path agreement with the generator (#115): the document its
+  // ReservedFieldName refuses — a source field genuinely named "_123_",
+  // hash 3550129612 — is refused here too, by the same reservation.
+  const generatorTwin = schemaFromContract(
+    document(
+      [{ kind: "record", fields: [{ id: 3_550_129_612, type: 1 }] }, primitive("nat8")],
+      [{ name: "Holder", type: 0 }],
+    ),
+    { names: [[0, 3_550_129_612, "_123_"]] },
+  );
+  failsWith(generatorTwin, "invalid_name_table", "$.names[0]");
 });
 
 test("a malformed name table entry fails closed", () => {
