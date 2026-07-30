@@ -496,3 +496,15 @@ test("validate never throws on hostile values", () => {
     }
   }
 });
+
+test("func values are strict: extras rejected, both fields required", () => {
+  const schema = c.func([], [], "update");
+  const principal = { toText: () => "aaaaa-aa" };
+  ok(schema, { principal, method: "go" });
+  fails(schema, { principal, method: "go", extra: 1 }, "unexpected_field", "$.extra");
+  fails(schema, { principal }, "missing_field", "$.method");
+  fails(schema, { method: "go" }, "missing_field", "$.principal");
+  fails(schema, { principal, method: "" }, "invalid_type", "$.method");
+  ok(c.service({}), principal);
+  fails(c.service({}), "aaaaa-aa", "invalid_type", "$");
+});

@@ -1152,3 +1152,141 @@ test("reference subtyping is checked on decode: mismatches trap, opt absorbs", (
     assert(decode(narrow, wideBytes.bytes).ok, "a wider wire service serves");
   }
 });
+
+test("recursive reference types decode under generated-style fresh rec thunks", () => {
+  // The coinductive memo must key on stable schema identity: generated
+  // builders mint fresh nodes on every rec body() call, and the pristine
+  // memo never saw a revisit — rejecting byte-identical recursive
+  // signatures the reference implementation accepts (review P1).
+  const List: AnySchema = c.rec(() =>
+    c.variant({ nil: c.null, cons: c.record({ head: c.nat, tail: List }) }),
+  );
+  const funcValue = { principal: principal("aaaaa-aa"), method: "m" };
+  const encoded = encode(c.func([List], [], "update"), funcValue);
+  assert(encoded.ok);
+  if (encoded.ok) {
+    const decoded = decode(c.func([List], [], "update"), encoded.bytes);
+    assert(decoded.ok, "identical recursive signatures are subtypes");
+  }
+  // The self-referencing service, whose cycle parity used to die as a HARD
+  // depth error no opt could absorb.
+  const S: AnySchema = c.rec(() => c.service({ m: c.func([], [S], "update") }));
+  const serviceBytes = encode(S, principal("aaaaa-aa"));
+  assert(serviceBytes.ok);
+  if (serviceBytes.ok) {
+    assert(decode(S, serviceBytes.bytes).ok, "self-recursive service accepts itself");
+  }
+  // Mismatched recursive pairs still fail (the memo must not accept
+  // everything).
+  const OtherList: AnySchema = c.rec(() =>
+    c.variant({ nil: c.null, cons: c.record({ head: c.bool, tail: OtherList }) }),
+  );
+  if (encoded.ok) {
+    failsDecode(c.func([OtherList], [], "update"), encoded.bytes, "type_mismatch");
+  }
+});
+
+test("unit and blob follow the width and depth rules in both directions", () => {
+  const funcValue = { principal: principal("aaaaa-aa"), method: "m" };
+  // unit in a contravariant position accepts a wire record whose extra
+  // fields are all opt-like (the spec's field-removal rule) …
+  const widened = encode(
+    c.func([c.record({ a: c.opt(c.nat) })], [], "update"),
+    funcValue,
+  );
+  assert(widened.ok);
+  if (widened.ok) {
+    assert(
+      decode(c.func([c.unit()], [], "update"), widened.bytes).ok,
+      "unit <: record { a : opt nat } holds",
+    );
+  }
+  // … but not one with a mandatory extra field.
+  const mandatory = encode(c.func([c.record({ a: c.nat })], [], "update"), funcValue);
+  assert(mandatory.ok);
+  if (mandatory.ok) {
+    failsDecode(c.func([c.unit()], [], "update"), mandatory.bytes, "type_mismatch");
+  }
+  // blob recurses elementwise: vec empty <: vec nat8 covariantly.
+  const vecEmpty = encode(c.func([], [c.vec(c.empty as AnySchema)], "update"), funcValue);
+  assert(vecEmpty.ok);
+  if (vecEmpty.ok) {
+    assert(
+      decode(c.func([], [c.blob()], "update"), vecEmpty.bytes).ok,
+      "vec empty <: blob holds covariantly",
+    );
+  }
+});
+
+test("double contravariance exercises the mirrored variance directions", () => {
+  const funcValue = { principal: principal("aaaaa-aa"), method: "m" };
+  // A func nested in a func's args flips the direction: the outer wire
+  // func's ARG func's params are compared with the schema on the left.
+  const outer = (inner: AnySchema) => c.func([inner], [], "update");
+  // Contravariance twice points back the original way at one level deeper:
+  // outer wire <: expected needs expected-arg-func <: wire-arg-func, whose
+  // OWN param rule flips again — wire-arg params <: expected-arg params.
+  // Wire arg-func takes nat, expected takes int: nat <: int holds; accept.
+  const wireNat = encode(outer(c.func([c.nat], [], "update")), funcValue);
+  assert(wireNat.ok);
+  if (wireNat.ok) {
+    assert(decode(outer(c.func([c.int], [], "update")), wireNat.bytes).ok);
+  }
+  // Wire arg-func takes int, expected takes nat: int <: nat fails; trap.
+  const wireInt = encode(outer(c.func([c.int], [], "update")), funcValue);
+  assert(wireInt.ok);
+  if (wireInt.ok) {
+    failsDecode(outer(c.func([c.nat], [], "update")), wireInt.bytes, "type_mismatch");
+  }
+  // Results of the nested arg-func: mirrored covariance. Wire arg-func
+  // returns int, expected returns nat: inner result check (schema-left)
+  // nat <: int holds; the reverse traps.
+  const wireResInt = encode(outer(c.func([], [c.int], "update")), funcValue);
+  assert(wireResInt.ok);
+  if (wireResInt.ok) {
+    assert(decode(outer(c.func([], [c.nat], "update")), wireResInt.bytes).ok);
+  }
+  const wireResNat = encode(outer(c.func([], [c.nat], "update")), funcValue);
+  assert(wireResNat.ok);
+  if (wireResNat.ok) {
+    failsDecode(outer(c.func([], [c.int], "update")), wireResNat.bytes, "type_mismatch");
+  }
+  // Service width in the same mirrored position: the wire arg-service has
+  // fewer methods than the expected arg-service — schema-left width fails.
+  const narrowService = c.service({ ping: c.func([], [], "update") });
+  const wideService = c.service({
+    ping: c.func([], [], "update"),
+    stop: c.func([], [], "update"),
+  });
+  const wireNarrow = encode(outer(narrowService), funcValue);
+  assert(wireNarrow.ok);
+  if (wireNarrow.ok) {
+    assert(decode(outer(wideService), wireNarrow.bytes).ok, "wide expected accepts");
+  }
+  const wireWide = encode(outer(wideService), funcValue);
+  assert(wireWide.ok);
+  if (wireWide.ok) {
+    failsDecode(outer(narrowService), wireWide.bytes, "type_mismatch");
+  }
+});
+
+test("the encoder refuses a service whose method is not a func schema", () => {
+  const result = encode(
+    c.service({ ping: c.nat as AnySchema }),
+    principal("aaaaa-aa"),
+  );
+  assert(!result.ok);
+  if (!result.ok) {
+    assert.strictEqual(result.issues[0].code, "unsupported_schema");
+  }
+});
+
+test("a wire func value with an empty method name fails closed on decode", () => {
+  // Bytes: DIDL, table [func () -> ()], arg [0], value tag1 tag1 len0 (the
+  // management principal) then method length 0.
+  const bytes = Uint8Array.from([
+    0x44, 0x49, 0x44, 0x4c, 0x01, 0x6a, 0x00, 0x00, 0x00, 0x01, 0x00,
+    0x01, 0x01, 0x00, 0x00,
+  ]);
+  failsDecode(c.func([], [], "update"), bytes, "invalid_length");
+});

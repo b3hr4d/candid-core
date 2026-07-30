@@ -44,8 +44,9 @@
 // from the schema's *type* (by design: schemas carry values, not calls), so
 // the interface cannot be re-derived from `typeof` — it travels explicitly.
 
-import type { AnySchema, FuncValue } from "./schema.ts";
+import type { AnySchema, FuncValue, Schema } from "./schema.ts";
 import { encodeArgs, decodeArgs, type CodecIssue } from "./codec.ts";
+import { validate } from "./validate.ts";
 
 /** Where a call goes; `effectiveCanisterId` only matters for system routing. */
 export interface CallTarget {
@@ -196,6 +197,18 @@ export function callFunc(
   transport: Transport,
 ): Promise<unknown> {
   const func = resolveFunc(schema, "the func value's schema");
+  // The reference is data from a decoded message; guard it like every other
+  // data path rather than letting a malformed value pick the call target.
+  const shape = validate(schema as Schema<unknown>, value);
+  if (!shape.ok) {
+    return Promise.reject(
+      new ActorError(
+        "encode",
+        typeof value?.method === "string" ? value.method : "<func value>",
+        shape.issues.map((issue) => ({ ...issue })),
+      ),
+    );
+  }
   const target: CallTarget = {
     canisterId: value.principal.toText(),
     methodName: value.method,

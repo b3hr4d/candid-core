@@ -581,7 +581,8 @@ function buildFromContract(
   }
 
   // Pass two, on sound nodes only: the one-hop node checks the generator
-  // performs during rendering — collapsing opts and supported→deferred edges.
+  // performs during rendering — collapsing opts and the declaration-only rule
+  // for classes.
   for (let index = 0; index < types.length; index += 1) {
     const node = parsed[index];
     if (node === undefined) {
@@ -735,6 +736,42 @@ function buildFromContract(
 
   const fieldKey = (container: number, id: number): string =>
     nameTable.get(`${container}:${id}`) ?? `_${id}_`;
+
+  // Reference-type structural constraints (issue #104): a service method
+  // must denote a func node, and a class must denote a service node — the
+  // same constraints candid-core's own Contract validation enforces, so a
+  // hand-built document cannot smuggle a mis-kinded reference past the
+  // builder.
+  for (let index = 0; index < types.length; index += 1) {
+    const node = parsed[index];
+    if (node === undefined) {
+      continue;
+    }
+    if (node.kind === "service") {
+      for (let m = 0; m < node.methods.length; m += 1) {
+        const target = parsed[node.methods[m].func];
+        if (target === undefined || target.kind !== "func") {
+          push(
+            "invalid_contract_document",
+            `$.types[${index}].methods[${m}].function`,
+            "a service method must denote a func type",
+          );
+        }
+      }
+    } else if (node.kind === "class") {
+      const target = parsed[node.service];
+      if (target === undefined || target.kind !== "service") {
+        push(
+          "invalid_contract_document",
+          `$.types[${index}].service`,
+          "a class must denote a service type",
+        );
+      }
+    }
+  }
+  if (issues.length > 0) {
+    return { ok: false, issues };
+  }
 
   // Rendered keys must be unique per node: two ids mapping to one supplied
   // name (or a supplied name colliding with an `_id_` rendering) would

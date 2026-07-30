@@ -137,9 +137,10 @@ impl Default for TsOptions {
 /// placeholder TypeScript.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TsGenError {
-    /// A deferred construct (`func`, `service`, `class`) appears nested inside
-    /// a supported type. Top-level declarations of deferred kinds are skipped
-    /// with a header note instead.
+    /// A `class` type appears nested inside a value type — a shape no Candid
+    /// source can produce (classes exist only at declaration and actor
+    /// position); this guards hand-built Contracts. `func` and `service`
+    /// generate since issue #104.
     UnsupportedConstruct {
         declaration: String,
         kind: &'static str,
@@ -180,8 +181,8 @@ impl fmt::Display for TsGenError {
         match self {
             Self::UnsupportedConstruct { declaration, kind } => write!(
                 f,
-                "declaration `{declaration}` nests a `{kind}` type, which the \
-                 first generator slice defers (issue #38)"
+                "declaration `{declaration}` nests a `{kind}` type, which \
+                 exists only at declaration or actor position (issue #104)"
             ),
             Self::InvalidDeclarationName { name } => write!(
                 f,

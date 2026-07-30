@@ -225,6 +225,9 @@ type SchemaNode =
   | ServiceNode
   | RecNode;
 
+/** The nat8 element schema blob abbreviates, for the subtype relation. */
+const NAT8_NODE: PrimitiveNode = { kind: "primitive", primitive: "nat8" };
+
 /** Annotation byte per mode; `update` is the unannotated default. */
 const MODE_ANNOTATION: { readonly [mode: string]: number } = {
   update: 0,
@@ -901,6 +904,18 @@ class Encoder {
           for (const byte of method.bytes) {
             entry.push(byte);
           }
+          const resolvedMethod = this.resolveType(
+            node.methods[method.name] as SchemaNode,
+            path,
+            at,
+          );
+          if (resolvedMethod.node.kind !== "func") {
+            this.fail(
+              "unsupported_schema",
+              path,
+              `service method ${JSON.stringify(method.name)} must be a func schema`,
+            );
+          }
           writeSlebBig(
             entry,
             BigInt(this.typeRef(node.methods[method.name] as SchemaNode, path, at + 1)),
@@ -1572,6 +1587,8 @@ class Decoder {
   readonly entries: WireEntry[] = [];
   argTypes: number[] = [];
   private readonly schemaIds = new Map<object, number>();
+  /** One memo per decode run: reference checks repeat across values. */
+  private readonly subtypeMemo = new Map<string, boolean>();
   private offset = 0;
   private elements = 0;
 
@@ -2290,7 +2307,7 @@ class Decoder {
     if (entry.kind !== node.kind) {
       this.mismatch("type_mismatch", path, `wire ${entry.kind} at an expected ${node.kind}`);
     }
-    if (!this.wireSubtypeOfSchema(wire, node as unknown as AnySchema, new Map())) {
+    if (!this.wireSubtypeOfSchema(wire, node as unknown as AnySchema, this.subtypeMemo)) {
       this.mismatch(
         "type_mismatch",
         path,
@@ -2325,6 +2342,11 @@ class Decoder {
       const method = utf8Decode(this.raw(length, path));
       if (method === undefined) {
         this.fail("invalid_utf8", path, "method name is not well-formed UTF-8");
+      }
+      // Round-trip symmetry: validate and encode both refuse an empty
+      // method name, so decode must not produce one.
+      if (method.length === 0) {
+        this.fail("invalid_length", path, "a method name is a non-empty string");
       }
       return { principal, method };
     }
@@ -2374,17 +2396,52 @@ class Decoder {
     if (depth > this.limits.maxDepth) {
       return false;
     }
-    const { node } = this.resolveSchema(schema as SchemaNode, [], depth);
-    const key = `${wire}|${this.schemaId(node)}|${wireOnLeft ? "ws" : "sw"}`;
+    // The key uses the UNRESOLVED schema's identity: rec thunks mint fresh
+    // node objects on every body() call (that is how the generator emits
+    // every declaration), but the rec object a structure references is
+    // stable — the same anchor the encoder's table memo relies on. Keying
+    // on the resolved node would never see a cycle revisit and the
+    // coinductive assumption could not engage.
+    const key = `${wire}|${this.schemaId(schema)}|${wireOnLeft ? "ws" : "sw"}`;
     const cached = seen.get(key);
     if (cached !== undefined) {
       return cached;
     }
     // Coinductive assumption for recursive pairs.
     seen.set(key, true);
-    const result = this.refSubtypeUncached(wire, node, wireOnLeft, seen, depth);
+    const node = this.resolveTypeNode(schema as SchemaNode);
+    const result =
+      node === undefined
+        ? false
+        : this.refSubtypeUncached(wire, node, wireOnLeft, seen, depth);
     seen.set(key, result);
     return result;
+  }
+
+  /**
+   * Rec resolution for the subtype relation: depth-guarded, never charged
+   * against the value budgets — this is type-graph work, and charging it
+   * turned an accept into a hard resource error on one cycle parity.
+   * `undefined` (fail closed to "not a subtype") on garbage or over-deep
+   * chains.
+   */
+  private resolveTypeNode(schema: SchemaNode): Exclude<SchemaNode, RecNode> | undefined {
+    let node = schema;
+    for (let hops = 0; hops <= this.limits.maxDepth; hops += 1) {
+      if (node.kind !== "rec") {
+        return node as Exclude<SchemaNode, RecNode>;
+      }
+      const body: unknown = node.body();
+      if (
+        typeof body !== "object" ||
+        body === null ||
+        typeof (body as { kind?: unknown }).kind !== "string"
+      ) {
+        return undefined;
+      }
+      node = body as SchemaNode;
+    }
+    return undefined;
   }
 
   private refSubtypeUncached(
@@ -2451,23 +2508,30 @@ class Decoder {
           this.refSubtype(entry.inner, node.inner, wireOnLeft, seen, depth + 1)
         );
       case "blob":
-        return entry.kind === "vec" && entry.inner === OP.nat8;
+        // blob is vec nat8: same elementwise depth rule as vec, not exact
+        // opcode equality (`vec empty <: vec nat8` holds covariantly).
+        return (
+          entry.kind === "vec" &&
+          this.refSubtype(entry.inner, NAT8_NODE as AnySchema, wireOnLeft, seen, depth + 1)
+        );
       case "unit":
-        // The empty record: wire record <: unit needs nothing; unit <: wire
-        // record needs every wire field opt-like, which width rules cover.
-        return entry.kind === "record" && (wireIsLeft || entry.ids.length === 0);
       case "record":
       case "tuple": {
         if (entry.kind !== "record") {
           return false;
         }
+        // The empty record (unit) is the zero-field case of the same width
+        // rules: extra wire fields are fine on the wire-left side, and must
+        // be opt-like on the schema-left side — never simply forbidden.
         const expected =
           node.kind === "record"
             ? Object.keys(node.fields).map((fieldKey) => ({
                 id: fieldIdOfKey(fieldKey),
                 schema: node.fields[fieldKey],
               }))
-            : node.elements.map((element, index) => ({ id: index, schema: element }));
+            : node.kind === "tuple"
+              ? node.elements.map((element, index) => ({ id: index, schema: element }))
+              : [];
         if (wireIsLeft) {
           // wire <: schema: every schema field present in the wire with a
           // subtype, or opt-like.
@@ -2477,7 +2541,7 @@ class Decoder {
               if (!this.refSubtype(entry.types[at], field.schema, true, seen, depth + 1)) {
                 return false;
               }
-            } else if (!this.optLikeSchema(field.schema, depth)) {
+            } else if (!this.optLikeSchema(field.schema)) {
               return false;
             }
           }
@@ -2559,7 +2623,7 @@ class Decoder {
           } else {
             const optLike = wireOnLeft
               ? this.optLikeWire(entry.args[i])
-              : this.optLikeSchema(node.args[i], depth);
+              : this.optLikeSchema(node.args[i]);
             if (!optLike) {
               return false;
             }
@@ -2577,7 +2641,7 @@ class Decoder {
             }
           } else {
             const optLike = wireOnLeft
-              ? this.optLikeSchema(node.results[i], depth)
+              ? this.optLikeSchema(node.results[i])
               : this.optLikeWire(entry.results[i]);
             if (!optLike) {
               return false;
@@ -2622,12 +2686,13 @@ class Decoder {
     }
   }
 
-  private optLikeSchema(schema: AnySchema, depth: number): boolean {
-    const { node } = this.resolveSchema(schema as SchemaNode, [], depth);
+  private optLikeSchema(schema: AnySchema): boolean {
+    const node = this.resolveTypeNode(schema as SchemaNode);
     return (
-      node.kind === "opt" ||
-      (node.kind === "primitive" &&
-        (node.primitive === "null" || node.primitive === "reserved"))
+      node !== undefined &&
+      (node.kind === "opt" ||
+        (node.kind === "primitive" &&
+          (node.primitive === "null" || node.primitive === "reserved")))
     );
   }
 
