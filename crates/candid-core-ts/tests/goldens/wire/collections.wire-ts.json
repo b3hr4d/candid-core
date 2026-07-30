@@ -1,0 +1,34 @@
+[
+  {
+    "name": "unit",
+    "hex": "4449444c016c000100"
+  },
+  {
+    "name": "pair",
+    "hex": "4449444c016c02007d01710100010178"
+  },
+  {
+    "name": "item",
+    "hex": "4449444c026c03dbb70179f49bbcfd06718effd6e90e016d7b01000700000005736576656e020102"
+  },
+  {
+    "name": "maybe_item_none",
+    "hex": "4449444c036e016c03dbb70179f49bbcfd06718effd6e90e026d7b010000"
+  },
+  {
+    "name": "maybe_item_some",
+    "hex": "4449444c036e016c03dbb70179f49bbcfd06718effd6e90e026d7b0100010700000005736576656e0107"
+  },
+  {
+    "name": "note_some",
+    "hex": "4449444c016e71010001016e"
+  },
+  {
+    "name": "items",
+    "hex": "4449444c036d016c03dbb70179f49bbcfd06718effd6e90e026d7b01000101000000016100"
+  },
+  {
+    "name": "grid",
+    "hex": "4449444c026d016d7b010002010100"
+  }
+]

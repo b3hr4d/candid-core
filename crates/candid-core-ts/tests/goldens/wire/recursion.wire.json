@@ -1,0 +1,20 @@
+[
+  {
+    "declaration": "List",
+    "hex": "4449444c036e016c02a0d2aca8047d90eddae704026e01010000",
+    "name": "list_empty",
+    "textual": "(null)"
+  },
+  {
+    "declaration": "List",
+    "hex": "4449444c036e016c02a0d2aca8047d90eddae704026e0101000101010200",
+    "name": "list_two",
+    "textual": "(opt record { head = 1; tail = opt record { head = 2; tail = null } })"
+  },
+  {
+    "declaration": "Even",
+    "hex": "4449444c056c01f3898ac804016e026c01f3898ac804036e046c01f3898ac8040101000100",
+    "name": "even_two_hops",
+    "textual": "(record { next = opt record { next = null } })"
+  }
+]

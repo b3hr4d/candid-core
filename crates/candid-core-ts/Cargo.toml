@@ -42,6 +42,12 @@ candid-core = { path = "../..", default-features = false, features = ["compiler"
 # keys without hardcoding hash values — the same authority candid-core itself
 # pins its internal hash against.
 candid_parser = "=0.4.0"
+# The reference wire-format implementation, generating the issue #103
+# conformance vectors and decoding the TS encoder's checked-in bytes back —
+# both directions of the differential gate. The version matches the root
+# crate's optional pin exactly (cargo unifies to one `candid` per graph);
+# `value` gates `IDLArgs`. Dev-only: it never reaches a downstream consumer.
+candid = { version = "=0.10.30", features = ["value"] }
 # Exact-pinned to match the crate under test: the determinism test round-trips
 # a Contract through its serialized form.
 serde_json = "=1.0.150"

@@ -1,0 +1,38 @@
+[
+  {
+    "declaration": "Status",
+    "hex": "4449444c016b039cc2017fb9aa80890479bd8bfbbf0e71010000",
+    "name": "status_ok",
+    "textual": "(variant { ok })"
+  },
+  {
+    "declaration": "Status",
+    "hex": "4449444c016b039cc2017fb9aa80890479bd8bfbbf0e7101000103000000",
+    "name": "status_busy",
+    "textual": "(variant { busy = 3 })"
+  },
+  {
+    "declaration": "Status",
+    "hex": "4449444c016b039cc2017fb9aa80890479bd8bfbbf0e7101000203776879",
+    "name": "status_failed",
+    "textual": "(variant { failed = \"why\" })"
+  },
+  {
+    "declaration": "Numbered",
+    "hex": "4449444c016b02007f057d010000",
+    "name": "numbered_0",
+    "textual": "(variant { 0 })"
+  },
+  {
+    "declaration": "Numbered",
+    "hex": "4449444c016b02007f057d01000104",
+    "name": "numbered_5",
+    "textual": "(variant { 5 = 4 })"
+  },
+  {
+    "declaration": "Tree",
+    "hex": "4449444c036b029e87c0bd047d8294a8c804016c028790c0bd0402dc9790cb0e026b029e87c0bd047d8294a8c8040101000100010002",
+    "name": "tree",
+    "textual": "(variant { node = record { left = variant { leaf = 1 }; right = variant { leaf = 2 } } })"
+  }
+]

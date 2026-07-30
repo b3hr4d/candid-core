@@ -212,6 +212,7 @@ dependencies = [
 name = "candid-core-ts"
 version = "0.0.0"
 dependencies = [
+ "candid",
  "candid-core",
  "candid_parser",
  "serde_json",

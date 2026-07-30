@@ -1,0 +1,14 @@
+[
+  {
+    "name": "list_empty",
+    "hex": "4449444c026e016c02a0d2aca8047d90eddae70400010000"
+  },
+  {
+    "name": "list_two",
+    "hex": "4449444c026e016c02a0d2aca8047d90eddae7040001000101010200"
+  },
+  {
+    "name": "even_two_hops",
+    "hex": "4449444c026c01f3898ac804016e0001000100"
+  }
+]

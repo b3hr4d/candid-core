@@ -23,10 +23,20 @@ declare module "node:assert/strict" {
 
 declare module "node:fs" {
   export function readFileSync(path: URL | string, encoding: "utf8"): string;
+  // Widened for the wire-vector goldens (issue #103): UPDATE_GOLDENS=1 npm
+  // test rewrites the TS-encoder hex files the Rust differential reads back.
+  export function writeFileSync(path: URL | string, data: string): void;
 }
 
 declare module "node:vm" {
   export function runInNewContext(code: string): unknown;
+}
+
+declare module "node:process" {
+  // Widened for the wire-vector goldens (issue #103): the codec suite reads
+  // UPDATE_GOLDENS to decide whether to rewrite the TS-encoder hex files.
+  const process: { readonly env: { readonly [name: string]: string | undefined } };
+  export default process;
 }
 
 declare module "node:module" {

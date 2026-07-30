@@ -1,0 +1,8 @@
+[
+  {
+    "declaration": "Weird",
+    "hex": "4449444c016c03f3b8bade027eee84a7b4057180af99c9057d010001017801",
+    "name": "weird",
+    "textual": "(record { \"has space\" = 1; \"naïve\" = \"x\"; \"quote\\\"mark\" = true })"
+  }
+]
