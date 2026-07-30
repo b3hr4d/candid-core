@@ -80,6 +80,14 @@ fn golden_deferred() {
     assert_golden("deferred");
 }
 
+/// `"__proto__"` is a legal quoted Candid name; the builder must render it as
+/// a computed key, because a non-computed one sets the prototype at runtime —
+/// a divergence the tsc equality gate provably cannot see (#114).
+#[test]
+fn golden_proto() {
+    assert_golden("proto");
+}
+
 /// The schema runtime (issue #102) consumes these same fixtures as data: each
 /// fixture's Contract JSON document and field-name table are goldens too,
 /// read by `ts/tests/crosscheck.test.ts` to prove the dynamically built
@@ -102,6 +110,7 @@ fn golden_runtime_contract_documents() {
         "recursion",
         "quoting",
         "deferred",
+        "proto",
     ] {
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests");
         let source = std::fs::read_to_string(root.join("fixtures").join(format!("{name}.did")))

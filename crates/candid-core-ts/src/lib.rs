@@ -434,7 +434,7 @@ impl Generator<'_> {
                 }
                 let mut members = Vec::with_capacity(fields.len());
                 for field in &fields {
-                    let key = self.field_key(reference, field.id);
+                    let key = self.field_key(reference, field.id, target);
                     let value = self.render(field.ty, declaration, target)?;
                     members.push(format!("{key}: {value}"));
                 }
@@ -480,7 +480,7 @@ impl Generator<'_> {
                             }
                         }
                         Target::Builder => {
-                            let key = self.field_key(reference, field.id);
+                            let key = self.field_key(reference, field.id, target);
                             let value = self.render(field.ty, declaration, target)?;
                             arms.push(format!("{key}: {value}"));
                         }
@@ -573,8 +573,18 @@ impl Generator<'_> {
 
     /// A property key: the supplied name when one exists (quoted when it is
     /// not shaped like an identifier), else the ecosystem's `_id_` convention.
-    fn field_key(&self, container: TypeRef, id: u32) -> String {
+    ///
+    /// The exact name `__proto__` renders as a computed key in builder object
+    /// literals: a non-computed `__proto__` property definition — bare or
+    /// quoted — sets the object's prototype instead of defining the field,
+    /// and TypeScript does not model that runtime special case, so the tsc
+    /// equality gate cannot catch the divergence. Type literals have no such
+    /// case, so aliases keep the plain form.
+    fn field_key(&self, container: TypeRef, id: u32, target: Target) -> String {
         match self.names.get(container, id) {
+            Some(name) if name == "__proto__" && target == Target::Builder => {
+                format!("[{}]", quote_string(name))
+            }
             Some(name) if is_ts_property_identifier(name) => name.to_string(),
             Some(name) => quote_string(name),
             None => format!("_{id}_"),

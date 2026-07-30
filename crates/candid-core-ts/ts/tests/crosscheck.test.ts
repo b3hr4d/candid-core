@@ -26,6 +26,7 @@ import * as variants from "../../tests/goldens/variants.ts";
 import * as recursion from "../../tests/goldens/recursion.ts";
 import * as quoting from "../../tests/goldens/quoting.ts";
 import * as deferred from "../../tests/goldens/deferred.ts";
+import * as proto from "../../tests/goldens/proto.ts";
 
 interface Fixture {
   readonly name: string;
@@ -168,6 +169,22 @@ const FIXTURES: readonly Fixture[] = [
     },
     deferredNames: ["Callback", "Registry"],
   },
+  {
+    name: "proto",
+    module: proto,
+    samples: {
+      // JSON.parse, never a literal: `{"__proto__": 5}` written as a literal
+      // in this file would set the sample's prototype — the very hazard the
+      // fixture pins (#114).
+      Holder: [JSON.parse('{"__proto__": 5}'), JSON.parse('{"__proto__": true}'), {}],
+      Event: [
+        { tag: "__proto__", value: 5 },
+        { tag: "idle" },
+        { tag: "__proto__" },
+        { tag: "absent" },
+      ],
+    },
+  },
 ];
 
 for (const fixture of FIXTURES) {
@@ -207,3 +224,27 @@ for (const fixture of FIXTURES) {
     }
   });
 }
+
+// The #114 regression the tsc equality gate provably cannot make: TypeScript
+// types a non-computed `__proto__` object-literal key as an ordinary
+// property, but at runtime it sets the prototype and the field vanishes. Only
+// executing the generated builder can pin that the emitted computed key
+// creates an own field.
+test("a generated __proto__ field is an own key, not a prototype write", () => {
+  const empty = validate(proto.Holder, {});
+  assert(!empty.ok, "the __proto__ field is required");
+  if (!empty.ok) {
+    assert.deepStrictEqual(
+      empty.issues.map((issue) => [issue.code, issue.path]),
+      [["missing_field", "$.__proto__"]],
+    );
+  }
+  assert.deepStrictEqual(
+    validate(proto.Holder, JSON.parse('{"__proto__": 5}')),
+    { ok: true },
+  );
+  assert.deepStrictEqual(
+    validate(proto.Event, { tag: "__proto__", value: 5 }),
+    { ok: true },
+  );
+});

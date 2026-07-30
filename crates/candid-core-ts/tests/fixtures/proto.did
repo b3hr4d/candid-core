@@ -1,0 +1,2 @@
+type Holder = record { "__proto__" : nat8 };
+type Event = variant { idle; "__proto__" : nat8 };
