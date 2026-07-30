@@ -283,12 +283,6 @@ fn numeric_shaped_source_names_are_refused() {
             matches!(&error, TsGenError::ReservedFieldName { name, .. } if name == "_123_"),
             "unexpected error for {source}: {error}"
         );
-        // Message hygiene: a joined multi-line literal bakes indentation
-        // into the user-facing text, which no format gate catches.
-        assert!(
-            !error.to_string().contains("  "),
-            "error message carries embedded space runs: {error}"
-        );
     }
     // Non-canonical shapes are ordinary names: a leading zero never renders
     // from a numeric id, so `_007_` stays hash-addressed and unambiguous.
@@ -297,6 +291,55 @@ fn numeric_shaped_source_names_are_refused() {
     let output = generate_module(compilation.contract(), &names, &TsOptions::default())
         .expect("a non-canonical shape is not reserved");
     assert!(output.contains("_007_"), "the name must render: {output}");
+}
+
+/// A declaration named after one of the module's own imports would emit a
+/// module that can never load (`export const c` against `import { c }`) —
+/// refused instead, unconditionally: `Principal` is reserved even in a
+/// contract that never uses the principal primitive (issue #116).
+#[test]
+fn import_shadowing_declaration_names_are_refused() {
+    for source in [
+        "type c = nat8;",
+        "type Schema = nat8;",
+        "type Principal = record { p : principal };",
+        // No principal primitive anywhere: still refused by decision.
+        "type Principal = nat8;",
+        // The ambient types the lowerings emit are bindings too: a
+        // declaration by these names shadows them module-wide.
+        "type Array = nat8; type V = vec text;",
+        "type Record = nat8; type E = record {};",
+        "type Uint8Array = text; type B = blob;",
+        // And unconditionally, without the lowering that references them.
+        "type Array = nat8;",
+    ] {
+        let compilation = compile_did(source).expect("compile");
+        let error = generate_module(
+            compilation.contract(),
+            &TsNames::new(),
+            &TsOptions::default(),
+        )
+        .expect_err("an import-shadowing declaration name must refuse generation");
+        assert!(
+            matches!(error, TsGenError::ReservedDeclarationName { .. }),
+            "unexpected error for {source}: {error}"
+        );
+        // Message hygiene: a joined multi-line literal bakes indentation
+        // into the user-facing text, which no format gate catches.
+        assert!(
+            !error.to_string().contains("  "),
+            "error message carries embedded space runs: {error}"
+        );
+    }
+    // Near-misses are ordinary names.
+    let compilation = compile_did("type Principal2 = nat8;").expect("compile");
+    let output = generate_module(
+        compilation.contract(),
+        &TsNames::new(),
+        &TsOptions::default(),
+    )
+    .expect("a near-miss name is not reserved");
+    assert!(output.contains("Principal2"));
 }
 
 /// Without a name table every field renders by the `_id_` convention — the

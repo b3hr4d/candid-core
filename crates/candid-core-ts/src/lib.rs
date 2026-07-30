@@ -147,6 +147,17 @@ pub enum TsGenError {
     /// codec would derive the wrong wire id from it — the same reservation
     /// `schemaFromContract` enforces on its name table (issues #103, #115).
     ReservedFieldName { declaration: String, name: String },
+    /// A declaration named after a binding the generated module itself
+    /// references: an imported binding (`c`, `Schema`, `Principal`) or an
+    /// ambient type its lowerings emit (`Array`, `Record`, `Uint8Array`).
+    /// Emitting it would produce a module that cannot load or compile — a
+    /// duplicate or shadowed module-scope binding — so generation refuses
+    /// instead of emitting known-broken text. Unconditional by owner
+    /// decision on issue #116: every name is refused even when the contract
+    /// happens not to exercise the lowering that references it, so adding
+    /// one field to a contract cannot start breaking a previously-working
+    /// declaration name.
+    ReservedDeclarationName { name: String },
     /// An `opt` whose inner type can itself be `null` in TypeScript — another
     /// `opt`, `null`, or `reserved` — cannot be carried by `T | null` without
     /// collapsing `None` into `Some(None)`. Fail closed rather than corrupt.
@@ -177,6 +188,13 @@ impl fmt::Display for TsGenError {
                  shaped like the `_N_` numeric-id rendering: erased to a schema \
                  key it would make the codec derive wire id N instead of the \
                  name's hash, so generation refuses (issues #103, #115)"
+            ),
+            Self::ReservedDeclarationName { name } => write!(
+                f,
+                "declaration name `{name}` collides with a binding the \
+                 generated module itself references (its imports and the \
+                 ambient types its lowerings use), so the module could \
+                 never compile; generation refuses (issue #116)"
             ),
             Self::UnrepresentableOption { declaration, inner } => write!(
                 f,
@@ -250,6 +268,11 @@ impl Generator<'_> {
         for declaration in self.contract.declarations() {
             if !is_ts_type_identifier(&declaration.name) {
                 return Err(TsGenError::InvalidDeclarationName {
+                    name: declaration.name.clone(),
+                });
+            }
+            if RESERVED_MODULE_BINDINGS.contains(&declaration.name.as_str()) {
+                return Err(TsGenError::ReservedDeclarationName {
                     name: declaration.name.clone(),
                 });
             }
@@ -654,6 +677,14 @@ fn is_reserved_numeric_name(name: &str) -> bool {
     }
     digits.parse::<u64>().is_ok_and(|value| value < 1 << 32)
 }
+/// Names the generated module itself references: the imported bindings
+/// (`import { c, type Schema }` always, `import type { Principal }` when the
+/// principal primitive is used) and the ambient types its lowerings emit
+/// (`Array<T>` for vecs, `Record<string, never>` for the empty record,
+/// `Uint8Array` for anonymous `vec nat8`). A declaration by any of these
+/// names shadows the referenced binding for the whole module.
+const RESERVED_MODULE_BINDINGS: &[&str] =
+    &["c", "Schema", "Principal", "Array", "Record", "Uint8Array"];
 
 /// Property names may be any identifier-shaped text, keywords included —
 /// `{ delete: T }` is legal TypeScript — so only the character shape matters.
