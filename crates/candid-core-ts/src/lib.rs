@@ -141,6 +141,12 @@ pub enum TsGenError {
     },
     /// A declaration name cannot be a TypeScript type identifier.
     InvalidDeclarationName { name: String },
+    /// A field or arm name shaped like the `_N_` id rendering (canonical
+    /// decimal below 2^32). Erased to a schema key, such a name is
+    /// indistinguishable from the rendering of numeric label id N, so the
+    /// codec would derive the wrong wire id from it — the same reservation
+    /// `schemaFromContract` enforces on its name table (issues #103, #115).
+    ReservedFieldName { declaration: String, name: String },
     /// An `opt` whose inner type can itself be `null` in TypeScript — another
     /// `opt`, `null`, or `reserved` — cannot be carried by `T | null` without
     /// collapsing `None` into `Some(None)`. Fail closed rather than corrupt.
@@ -164,6 +170,13 @@ impl fmt::Display for TsGenError {
             Self::InvalidDeclarationName { name } => write!(
                 f,
                 "declaration name `{name}` is not a valid TypeScript type identifier"
+            ),
+            Self::ReservedFieldName { declaration, name } => write!(
+                f,
+                "declaration `{declaration}` names a field `{name}`, which is \
+                 shaped like the `_N_` numeric-id rendering: erased to a schema \
+                 key it would make the codec derive wire id N instead of the \
+                 name's hash, so generation refuses (issues #103, #115)"
             ),
             Self::UnrepresentableOption { declaration, inner } => write!(
                 f,
@@ -434,6 +447,7 @@ impl Generator<'_> {
                 }
                 let mut members = Vec::with_capacity(fields.len());
                 for field in &fields {
+                    self.check_reserved_name(reference, field.id, declaration)?;
                     let key = self.field_key(reference, field.id, target);
                     let value = self.render(field.ty, declaration, target)?;
                     members.push(format!("{key}: {value}"));
@@ -463,6 +477,7 @@ impl Generator<'_> {
                 // keeps the two representations provably aligned.
                 let mut arms = Vec::with_capacity(fields.len());
                 for field in &fields {
+                    self.check_reserved_name(reference, field.id, declaration)?;
                     match target {
                         Target::Alias => {
                             let tag = self.tag_literal(reference, field.id);
@@ -571,6 +586,25 @@ impl Generator<'_> {
         }
     }
 
+    /// Refuse a supplied name shaped like the `_N_` id rendering wherever a
+    /// key or tag would render it. Tuple-shaped records never render keys and
+    /// are exempt by construction — and unreachable besides: a `_N_`-shaped
+    /// name hashes far outside the `0..n-1` id range tuples require.
+    fn check_reserved_name(
+        &self,
+        container: TypeRef,
+        id: u32,
+        declaration: &str,
+    ) -> Result<(), TsGenError> {
+        match self.names.get(container, id) {
+            Some(name) if is_reserved_numeric_name(name) => Err(TsGenError::ReservedFieldName {
+                declaration: declaration.to_string(),
+                name: name.to_string(),
+            }),
+            _ => Ok(()),
+        }
+    }
+
     /// A property key: the supplied name when one exists (quoted when it is
     /// not shaped like an identifier), else the ecosystem's `_id_` convention.
     ///
@@ -599,6 +633,26 @@ fn is_tuple_shaped(fields: &[Field]) -> bool {
         .iter()
         .enumerate()
         .all(|(index, field)| field.id as usize == index)
+}
+
+/// Whether a name is the canonical `_N_` id rendering: underscore, decimal
+/// digits, underscore, no leading zero (unless the single digit 0), value
+/// below 2^32. Mirrors `ts/labels.ts`'s `numericKeyId` exactly — the two
+/// sides must reserve the same set, or one of them mis-derives a wire id.
+fn is_reserved_numeric_name(name: &str) -> bool {
+    let Some(digits) = name
+        .strip_prefix('_')
+        .and_then(|rest| rest.strip_suffix('_'))
+    else {
+        return false;
+    };
+    if digits.is_empty() || !digits.bytes().all(|byte| byte.is_ascii_digit()) {
+        return false;
+    }
+    if digits.len() > 1 && digits.starts_with('0') {
+        return false;
+    }
+    digits.parse::<u64>().is_ok_and(|value| value < 1 << 32)
 }
 
 /// Property names may be any identifier-shaped text, keywords included —
@@ -727,6 +781,27 @@ mod tests {
         // Reserved at ES-module top level even though it is not a keyword
         // everywhere: `export type await = ...` does not parse.
         assert!(!is_ts_type_identifier("await"));
+    }
+
+    #[test]
+    fn reserved_numeric_name_shapes_mirror_the_ts_predicate() {
+        // Must match ts/labels.ts numericKeyId exactly: canonical decimal
+        // below 2^32, no leading zero unless the single digit 0.
+        for reserved in ["_0_", "_5_", "_123_", "_4294967295_"] {
+            assert!(is_reserved_numeric_name(reserved), "{reserved}");
+        }
+        for ordinary in [
+            "_007_",
+            "_4294967296_",
+            "__",
+            "_x1_",
+            "_1",
+            "1_",
+            "x",
+            "_1_2_",
+        ] {
+            assert!(!is_reserved_numeric_name(ordinary), "{ordinary}");
+        }
     }
 
     #[test]
