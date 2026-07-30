@@ -905,6 +905,26 @@ function buildFromContract(
     schemas[declaration.name] = c.rec(() => schemaAt(declaration.type));
   }
 
+  // candid-core restricts class nodes to the actor root
+  // (`class_not_actor_root`); mirror it so the two loaders refuse the same
+  // documents.
+  const actorClassTarget = (() => {
+    const raw: unknown = contract.actor;
+    return isObject(raw) && raw.kind === "class" && typeof raw.class === "number"
+      ? (raw.class as number)
+      : undefined;
+  })();
+  for (let index = 0; index < types.length; index += 1) {
+    if (parsed[index]?.kind === "class" && index !== actorClassTarget) {
+      push(
+        "invalid_contract_document",
+        `$.types[${index}]`,
+        "class nodes are only valid as the top-level class actor root",
+      );
+      return { ok: false, issues };
+    }
+  }
+
   // The actor interface, when the document carries one: a service schema,
   // with a class actor unwrapped to its running service. Fail closed on any
   // shape the canonical format does not produce.

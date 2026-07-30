@@ -664,7 +664,7 @@ test("reference structural constraints fail closed (issue #104 review)", () => {
   );
 });
 
-test("a class actor and a class declaration denote the running service", () => {
+test("a class actor denotes its running service; classes elsewhere are refused", () => {
   const doc = document(
     [
       { kind: "class", init: [1], service: 2 },
@@ -672,19 +672,31 @@ test("a class actor and a class declaration denote the running service", () => {
       { kind: "service", methods: [{ name: "ping", id: 1247277682, function: 3 }] },
       { kind: "func", args: [], results: [], mode: "update" },
     ],
-    [{ name: "Main", type: 0 }],
+    [],
     { kind: "class", class: 0 },
   );
   const result = schemaFromContract(doc);
-  assert(result.ok, "a canonical class document loads");
+  assert(result.ok, "a canonical class-actor document loads");
   if (result.ok) {
     const principal = { toText: () => "aaaaa-aa" };
-    // Both the class-typed declaration and the class actor are the running
-    // service: principal-valued.
-    assert.deepStrictEqual(validate(result.schemas.Main, principal), { ok: true });
     assert(result.actor !== undefined);
     if (result.actor !== undefined) {
       assert.deepStrictEqual(validate(result.actor, principal), { ok: true });
     }
   }
+  // candid-core's class_not_actor_root rule, mirrored: a class anywhere but
+  // the actor root — a declaration included — fails closed.
+  failsWith(
+    schemaFromContract(
+      document(
+        [
+          { kind: "class", init: [], service: 1 },
+          { kind: "service", methods: [] },
+        ],
+        [{ name: "Main", type: 0 }],
+      ),
+    ),
+    "invalid_contract_document",
+    "$.types[0]",
+  );
 });

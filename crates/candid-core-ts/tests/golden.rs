@@ -374,6 +374,35 @@ fn import_shadowing_declaration_names_are_refused() {
     assert!(output.contains("Principal2"));
 }
 
+/// The actor surface's sharp edges (issue #104 review): a class actor
+/// unwraps to its running service, and a method legally named `__proto__`
+/// must render as a computed key — a plain literal would set the prototype
+/// and silently drop the method from the schema.
+#[test]
+fn actor_emission_covers_class_unwrap_and_proto_methods() {
+    let class_actor =
+        compile_did("service : (nat) -> { ping : () -> () };").expect("a class actor compiles");
+    let names = TsNames::from_source_info(class_actor.source_info().expect("provenance"));
+    let output = generate_module(class_actor.contract(), &names, &TsOptions::default())
+        .expect("a class actor generates its running service");
+    assert!(output.contains("export const actor"), "{output}");
+    assert!(output.contains("ping: () => Promise<void>;"), "{output}");
+    assert!(
+        output.contains("init args are install-time"),
+        "the class note must be present: {output}"
+    );
+
+    let proto = compile_did("service : { \"__proto__\" : () -> () };")
+        .expect("a __proto__ method compiles");
+    let names = TsNames::from_source_info(proto.source_info().expect("provenance"));
+    let output =
+        generate_module(proto.contract(), &names, &TsOptions::default()).expect("generate");
+    assert!(
+        output.contains("c.service({ [\"__proto__\"]: c.func"),
+        "the method key must be computed: {output}"
+    );
+}
+
 /// Without a name table every field renders by the `_id_` convention — the
 /// documented base-surface behaviour, pinned so it cannot drift silently.
 #[test]
