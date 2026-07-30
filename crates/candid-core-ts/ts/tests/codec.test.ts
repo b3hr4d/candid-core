@@ -989,3 +989,95 @@ test("a skipped wire variant with an out-of-range index fails with its own issue
     assert.strictEqual(result.issues[0].code, "invalid_length");
   }
 });
+
+// ---------------------------------------------------------------------------
+// PR #118 review-bot regressions (each rejection verified against the
+// reference implementation, candid 0.10.30, before fixing)
+// ---------------------------------------------------------------------------
+
+test("encode enforces the numeric byte cap on unbounded nat and int", () => {
+  const capped = encode(c.nat, 128n, { maxNumericBytes: 1 });
+  assert(!capped.ok, "128 needs two LEB groups");
+  if (!capped.ok) {
+    assert.strictEqual(capped.issues[0].resource_limit?.resource, "numeric_bytes");
+  }
+  const cappedInt = encode(c.int, -(2n ** 100n), { maxNumericBytes: 5 });
+  assert(!cappedInt.ok);
+  // The bounded emitters stay byte-compatible: a large value inside the cap
+  // round-trips, and small edge encodings are unchanged minimal forms.
+  const big = 2n ** 7000n - 3n;
+  const encoded = encode(c.nat, big);
+  assert(encoded.ok);
+  if (encoded.ok) {
+    assert.deepStrictEqual(decode(c.nat, encoded.bytes), { ok: true, value: big });
+  }
+  for (const edge of [0n, 63n, 64n, 127n, 128n, -1n, -64n, -65n, -128n]) {
+    const schema = edge < 0n ? c.int : c.nat;
+    const bytes = encode(schema, edge);
+    assert(bytes.ok);
+    if (bytes.ok) {
+      assert.deepStrictEqual(decode(schema, bytes.bytes), { ok: true, value: edge });
+    }
+  }
+});
+
+test("a function type with more than one annotation fails closed", () => {
+  // Reference: REJECTED (two annotations), ACCEPTED (one).
+  const two = decodeArgs([], Uint8Array.from([0x44, 0x49, 0x44, 0x4c, 0x01, 0x6a, 0x00, 0x00, 0x02, 0x01, 0x02, 0x00]));
+  assert(!two.ok);
+  if (!two.ok) {
+    assert.strictEqual(two.issues[0].code, "malformed_type_table");
+  }
+  const one = decodeArgs([], Uint8Array.from([0x44, 0x49, 0x44, 0x4c, 0x01, 0x6a, 0x00, 0x00, 0x01, 0x01, 0x00]));
+  assert(one.ok, "one annotation is the accepted form");
+});
+
+test("service type-table entries are validated even when only skipped", () => {
+  // Duplicate method names — reference: REJECTED.
+  const duplicate = decodeArgs([], Uint8Array.from([0x44, 0x49, 0x44, 0x4c, 0x02, 0x6a, 0x00, 0x00, 0x00, 0x69, 0x02, 0x01, 0x61, 0x00, 0x01, 0x61, 0x00, 0x00]));
+  assert(!duplicate.ok);
+  if (!duplicate.ok) {
+    assert.strictEqual(duplicate.issues[0].code, "malformed_type_table");
+  }
+  // Unsorted method names — reference: REJECTED.
+  const unsorted = decodeArgs([], Uint8Array.from([0x44, 0x49, 0x44, 0x4c, 0x02, 0x6a, 0x00, 0x00, 0x00, 0x69, 0x02, 0x01, 0x62, 0x00, 0x01, 0x61, 0x00, 0x00]));
+  assert(!unsorted.ok);
+  // A method type that is not a function — reference: REJECTED.
+  const nonFunc = decodeArgs([], Uint8Array.from([0x44, 0x49, 0x44, 0x4c, 0x02, 0x6c, 0x00, 0x69, 0x01, 0x01, 0x61, 0x00, 0x00]));
+  assert(!nonFunc.ok);
+  if (!nonFunc.ok) {
+    assert.strictEqual(nonFunc.issues[0].code, "malformed_type_table");
+  }
+  // Control: sorted unique methods on a func — reference: ACCEPTED.
+  const wellFormed = decodeArgs([], Uint8Array.from([0x44, 0x49, 0x44, 0x4c, 0x02, 0x6a, 0x00, 0x00, 0x00, 0x69, 0x02, 0x01, 0x61, 0x00, 0x01, 0x62, 0x00, 0x00]));
+  assert(wellFormed.ok);
+});
+
+test("the 29-byte principal bound holds on skip paths too", () => {
+  // A 30-byte principal id in an extra (skipped) argument — reference:
+  // REJECTED; 29 bytes — ACCEPTED.
+  const long = [0x44, 0x49, 0x44, 0x4c, 0x00, 0x01, 0x68, 0x01, 30];
+  for (let i = 0; i < 30; i += 1) {
+    long.push(0);
+  }
+  const rejected = decodeArgs([], Uint8Array.from(long));
+  assert(!rejected.ok);
+  if (!rejected.ok) {
+    assert.strictEqual(rejected.issues[0].code, "invalid_principal");
+  }
+  const ok = [0x44, 0x49, 0x44, 0x4c, 0x00, 0x01, 0x68, 0x01, 29];
+  for (let i = 0; i < 29; i += 1) {
+    ok.push(0);
+  }
+  assert(decodeArgs([], Uint8Array.from(ok)).ok);
+  // The same bound inside a skipped service value's id form.
+  const service = [0x44, 0x49, 0x44, 0x4c, 0x02, 0x6a, 0x00, 0x00, 0x00, 0x69, 0x00, 0x01, 0x01, 0x01, 30];
+  for (let i = 0; i < 30; i += 1) {
+    service.push(0);
+  }
+  const serviceRejected = decodeArgs([], Uint8Array.from(service));
+  assert(!serviceRejected.ok);
+  if (!serviceRejected.ok) {
+    assert.strictEqual(serviceRejected.issues[0].code, "invalid_principal");
+  }
+});

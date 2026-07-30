@@ -375,18 +375,6 @@ function writeLebNumber(out: number[], value: number): void {
   } while (v > 0);
 }
 
-function writeLebBig(out: number[], value: bigint): void {
-  let v = value;
-  do {
-    let byte = Number(v & 0x7fn);
-    v >>= 7n;
-    if (v > 0n) {
-      byte |= 0x80;
-    }
-    out.push(byte);
-  } while (v > 0n);
-}
-
 function writeSlebBig(out: number[], value: bigint): void {
   let v = value;
   for (;;) {
@@ -398,6 +386,63 @@ function writeSlebBig(out: number[], value: bigint): void {
       return;
     }
     out.push(byte | 0x80);
+  }
+}
+
+/** Lexicographic comparison of raw byte sequences. */
+function compareBytes(a: Uint8Array, b: Uint8Array): number {
+  const shorter = Math.min(a.length, b.length);
+  for (let i = 0; i < shorter; i += 1) {
+    if (a[i] !== b[i]) {
+      return a[i] - b[i];
+    }
+  }
+  return a.length - b.length;
+}
+
+/** Bit length of a non-negative bigint, via one hex rendering. */
+function bitLength(value: bigint): number {
+  if (value === 0n) {
+    return 0;
+  }
+  const hex = value.toString(16);
+  return (hex.length - 1) * 4 + (32 - Math.clz32(parseInt(hex[0], 16)));
+}
+
+/** Minimal LEB128 group count for an unsigned value. */
+function lebGroupCount(value: bigint): number {
+  return value === 0n ? 1 : Math.ceil(bitLength(value) / 7);
+}
+
+/** Minimal SLEB128 group count for a signed value. */
+function slebGroupCount(value: bigint): number {
+  const magnitude = value >= 0n ? value : -value - 1n;
+  return Math.max(1, Math.ceil((bitLength(magnitude) + 1) / 7));
+}
+
+/**
+ * Emit exactly `groups` 7-bit groups of the unsigned image, least
+ * significant first, by recursive halving — the shift-per-group loop the
+ * plain writers use is quadratic in the value's size, which would turn a
+ * caller-supplied astronomical bigint into a CPU sink even under the byte
+ * cap. Continuation bits are stamped afterward.
+ */
+function emitLebGroups(out: number[], value: bigint, groups: number): void {
+  if (groups === 1) {
+    out.push(Number(value & 0x7fn));
+    return;
+  }
+  const half = groups >> 1;
+  const shift = BigInt(7 * half);
+  emitLebGroups(out, value & ((1n << shift) - 1n), half);
+  emitLebGroups(out, value >> shift, groups - half);
+}
+
+function writeLebGroups(out: number[], unsignedImage: bigint, groups: number): void {
+  const start = out.length;
+  emitLebGroups(out, unsignedImage, groups);
+  for (let i = start; i < out.length - 1; i += 1) {
+    out[i] |= 0x80;
   }
 }
 
@@ -1024,6 +1069,35 @@ class Encoder {
     }
   }
 
+  /**
+   * An unbounded nat/int value, capped by the same numeric byte budget the
+   * decoder enforces — encode and decode share one resource model — and
+   * emitted by recursive halving so the cap bounds time as well as output.
+   */
+  private writeUnbounded(
+    out: number[],
+    value: bigint,
+    signed: boolean,
+    path: readonly PathSegment[],
+  ): void {
+    const groups = signed ? slebGroupCount(value) : lebGroupCount(value);
+    if (groups > this.limits.maxNumericBytes) {
+      this.fail(
+        "resource_limit_exceeded",
+        path,
+        `numeric_bytes limit ${this.limits.maxNumericBytes} exceeded`,
+        {
+          resource: "numeric_bytes",
+          limit: this.limits.maxNumericBytes,
+          observed: groups,
+        },
+      );
+    }
+    const image =
+      value >= 0n ? value : value + (1n << BigInt(7 * groups));
+    writeLebGroups(out, image, groups);
+  }
+
   private primitive(
     name: string,
     value: unknown,
@@ -1054,13 +1128,13 @@ class Encoder {
         if (value < 0n) {
           this.fail("out_of_range", path, "nat is non-negative");
         }
-        writeLebBig(out, value);
+        this.writeUnbounded(out, value, false, path);
         return;
       case "int":
         if (typeof value !== "bigint") {
           this.fail("invalid_type", path, `expected a bigint, got ${describe(value)}`);
         }
-        writeSlebBig(out, value);
+        this.writeUnbounded(out, value, true, path);
         return;
       case "nat64":
       case "int64": {
@@ -1559,6 +1633,18 @@ class Decoder {
       ) {
         for (const type of entry.types) {
           this.checkRef(type, path);
+          // A service method type must denote a function type — the one
+          // structural constraint the spec states about reference types.
+          if (
+            entry.kind === "service" &&
+            (type < 0 || this.entries[type].kind !== "func")
+          ) {
+            this.fail(
+              "malformed_type_table",
+              path,
+              "a service method must denote a function type",
+            );
+          }
         }
       }
     }
@@ -1631,6 +1717,15 @@ class Decoder {
           types.push(this.typeRef(path));
         }
         const annotations = this.lebU32(path, "func annotation count");
+        // The reference implementation refuses more than one annotation;
+        // mirror it — fail-closed parity on headers, not just values.
+        if (annotations > 1) {
+          this.fail(
+            "malformed_type_table",
+            path,
+            "a function type carries at most one annotation",
+          );
+        }
         for (let i = 0; i < annotations; i += 1) {
           const annotation = this.byte(path);
           if (annotation < 1 || annotation > 3) {
@@ -1642,13 +1737,24 @@ class Decoder {
       case OP.service: {
         const types: number[] = [];
         const methods = this.lebU32(path, "service method count");
+        let previousName: Uint8Array | undefined;
         for (let i = 0; i < methods; i += 1) {
           this.step(path, 0);
           const length = this.lebU32(path, "method name length");
-          const name = utf8Decode(this.raw(length, path));
-          if (name === undefined) {
+          const raw = Uint8Array.from(this.raw(length, path));
+          if (utf8Decode(raw) === undefined) {
             this.fail("invalid_utf8", path, "method name is not well-formed UTF-8");
           }
+          // Sorted strictly by name bytes, duplicates included — the
+          // reference implementation refuses both.
+          if (previousName !== undefined && compareBytes(previousName, raw) >= 0) {
+            this.fail(
+              "malformed_type_table",
+              path,
+              "service method names must be strictly increasing",
+            );
+          }
+          previousName = raw;
           types.push(this.typeRef(path));
         }
         return { kind: "service", types };
@@ -2244,6 +2350,11 @@ class Decoder {
           this.fail("invalid_tag_byte", path, "a principal value starts with 0 or 1");
         }
         const length = this.lebU32(path, "principal length");
+        // Skipping is not a validation exemption: the reference rejects an
+        // over-long principal id wherever it appears.
+        if (length > 29) {
+          this.fail("invalid_principal", path, "a principal id is at most 29 bytes");
+        }
         this.raw(length, path);
         return;
       }
@@ -2268,6 +2379,9 @@ class Decoder {
       this.fail("invalid_tag_byte", path, "a service value starts with 0 or 1");
     }
     const length = this.lebU32(path, "service id length");
+    if (length > 29) {
+      this.fail("invalid_principal", path, "a principal id is at most 29 bytes");
+    }
     this.raw(length, path);
   }
 }
