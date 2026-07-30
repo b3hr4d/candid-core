@@ -15,6 +15,13 @@ declare module "node:assert/strict" {
   interface Assert {
     (value: unknown, message?: string): void;
     strictEqual(actual: unknown, expected: unknown, message?: string): void;
+    // Widened for the actor integration suite (issue #104): promise
+    // rejection and synchronous-throw assertions.
+    rejects(
+      block: () => Promise<unknown>,
+      check?: (error: unknown) => boolean,
+    ): Promise<void>;
+    throws(block: () => unknown, expected?: unknown): void;
     deepStrictEqual(actual: unknown, expected: unknown, message?: string): void;
   }
   const assert: Assert;

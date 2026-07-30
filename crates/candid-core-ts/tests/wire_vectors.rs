@@ -229,6 +229,26 @@ const VECTORS: &[(&str, &[Case])] = &[
         ],
     ),
     (
+        "deferred",
+        &[
+            Case {
+                name: "kept",
+                declaration: "Kept",
+                textual: "(record { value = 1 })",
+            },
+            Case {
+                name: "callback_value",
+                declaration: "Callback",
+                textual: "(func \"aaaaa-aa\".\"go\")",
+            },
+            Case {
+                name: "registry_value",
+                declaration: "Registry",
+                textual: "(service \"aaaaa-aa\")",
+            },
+        ],
+    ),
+    (
         "quoting",
         &[Case {
             name: "weird",

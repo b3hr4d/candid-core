@@ -94,7 +94,7 @@ test("collapsing opts are rejected at construction: the aliased form", () => {
   failsWith(result, "unrepresentable_option", "$.types[0].inner");
 });
 
-test("a func nested in a supported type fails closed", () => {
+test("a func nested in a supported type builds (issue #104)", () => {
   const result = schemaFromContract(
     document(
       [
@@ -107,10 +107,18 @@ test("a func nested in a supported type fails closed", () => {
       [{ name: "Holder", type: 0 }],
     ),
   );
-  failsWith(result, "unsupported_construct", "$.types[0].fields[0].type");
+  assert(result.ok, "nested funcs are constructible since #104");
+  if (result.ok) {
+    const value = {
+      _1_: { principal: { toText: () => "aaaaa-aa" }, method: "go" },
+    };
+    assert.deepStrictEqual(validate(result.schemas.Holder, value), { ok: true });
+    assert(!validate(result.schemas.Holder, { _1_: "nope" }).ok);
+  }
 });
 
-test("top-level func and service declarations are skipped and reported", () => {
+test("reference declarations build and the actor is a service schema", () => {
+  // Issue #104: func/service/class are no longer deferred.
   const result = schemaFromContract(
     document(
       [
@@ -126,25 +134,29 @@ test("top-level func and service declarations are skipped and reported", () => {
       { kind: "service", service: 1 },
     ),
   );
-  assert(result.ok, "supported declarations must still build");
+  assert(result.ok, "every declaration must build");
   if (result.ok) {
-    assert.deepStrictEqual(Object.keys(result.schemas), ["Kept"]);
-    assert.deepStrictEqual(result.deferred, [
-      { name: "Callback", kind: "func" },
-      { name: "Registry", kind: "service" },
-    ]);
-    assert.strictEqual(result.actorDeferred, true);
+    assert.deepStrictEqual(Object.keys(result.schemas), ["Callback", "Registry", "Kept"]);
+    assert(result.actor !== undefined, "the document carries an actor");
+    // A func value is { principal, method }; a service value is a principal.
+    const funcValue = { principal: { toText: () => "aaaaa-aa" }, method: "go" };
+    assert.deepStrictEqual(validate(result.schemas.Callback, funcValue), { ok: true });
+    assert.deepStrictEqual(
+      validate(result.schemas.Registry, { toText: () => "aaaaa-aa" }),
+      { ok: true },
+    );
     assert.deepStrictEqual(validate(result.schemas.Kept, {}), { ok: true });
+    assert(!validate(result.schemas.Callback, { method: "go" }).ok);
   }
 });
 
-test("an actorless document reports actorDeferred false", () => {
+test("an actorless document has no actor schema", () => {
   const result = schemaFromContract(
     document([{ kind: "record", fields: [] }], [{ name: "Unit", type: 0 }]),
   );
   assert(result.ok);
   if (result.ok) {
-    assert.strictEqual(result.actorDeferred, false);
+    assert.strictEqual(result.actor, undefined);
   }
 });
 
@@ -528,7 +540,8 @@ test("a nat8 vec whose element type is declared by name stays a vec", () => {
   }
 });
 
-test("a func nested under opt or vec fails closed too", () => {
+test("a func nested under opt or vec builds too (issue #104)", () => {
+  const funcValue = { principal: { toText: () => "aaaaa-aa" }, method: "go" };
   for (const kind of ["opt", "vec"] as const) {
     const result = schemaFromContract(
       document(
@@ -539,7 +552,11 @@ test("a func nested under opt or vec fails closed too", () => {
         [{ name: "Holder", type: 0 }],
       ),
     );
-    failsWith(result, "unsupported_construct", "$.types[0].inner");
+    assert(result.ok, `${kind} of func is constructible since #104`);
+    if (result.ok) {
+      const sample = kind === "opt" ? funcValue : [funcValue];
+      assert.deepStrictEqual(validate(result.schemas.Holder, sample), { ok: true });
+    }
   }
 });
 

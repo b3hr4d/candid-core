@@ -27,13 +27,13 @@ import * as recursion from "../../tests/goldens/recursion.ts";
 import * as quoting from "../../tests/goldens/quoting.ts";
 import * as deferred from "../../tests/goldens/deferred.ts";
 import * as proto from "../../tests/goldens/proto.ts";
+import * as ledger from "../../tests/goldens/ledger.ts";
 
 interface Fixture {
   readonly name: string;
   readonly module: Record<string, unknown>;
   /** Sample values per declaration: valid and invalid alike. */
   readonly samples: Record<string, readonly unknown[]>;
-  readonly deferredNames?: readonly string[];
 }
 
 function load(name: string): { contract: unknown; names: FieldNameEntry[] } {
@@ -166,8 +166,13 @@ const FIXTURES: readonly Fixture[] = [
     module: deferred,
     samples: {
       Kept: [{ value: 1n }, { value: 1 }, {}],
+      Callback: [
+        { principal: { toText: () => "aaaaa-aa" }, method: "go" },
+        { principal: { toText: () => "aaaaa-aa" } },
+        "nope",
+      ],
+      Registry: [{ toText: () => "aaaaa-aa" }, "aaaaa-aa", null],
     },
-    deferredNames: ["Callback", "Registry"],
   },
   {
     name: "proto",
@@ -185,6 +190,73 @@ const FIXTURES: readonly Fixture[] = [
       ],
     },
   },
+  {
+    name: "ledger",
+    module: ledger,
+    samples: {
+      Account: [
+        { owner: principal, subaccount: null },
+        { owner: principal, subaccount: new Uint8Array(32) },
+        { owner: "aaaaa-aa", subaccount: null },
+        {},
+      ],
+      ArchiveCallback: [
+        { principal, method: "get" },
+        { principal, method: "" },
+        { principal },
+        principal,
+      ],
+      ArchivedRange: [
+        { callback: { principal, method: "get" }, start: 1n, length: 2n },
+        { callback: null, start: 1n, length: 2n },
+      ],
+      Tokens: [{ e8s: 5n }, { e8s: 5 }, {}],
+      Transaction: [
+        {
+          to: null,
+          fee: null,
+          from: null,
+          memo: null,
+          timestamp: 1n,
+          index: 2n,
+          amount: { e8s: 3n },
+        },
+        { timestamp: 1n },
+      ],
+      TransactionRange: [{ transactions: [] }, { transactions: null }],
+      TransactionsResponse: [
+        {
+          log_length: 9n,
+          transactions: [],
+          archived_transactions: [
+            { callback: { principal, method: "get" }, start: 0n, length: 9n },
+          ],
+        },
+        { log_length: 9n },
+      ],
+      TransferArg: [
+        {
+          to: { owner: principal, subaccount: null },
+          fee: null,
+          memo: null,
+          from_subaccount: null,
+          created_at_time: null,
+          amount: { e8s: 1n },
+        },
+        { to: null },
+      ],
+      TransferError: [
+        { tag: "too_old" },
+        { tag: "bad_fee", value: { expected_fee: { e8s: 1n } } },
+        { tag: "nope" },
+      ],
+      TransferResult: [
+        { tag: "ok", value: 5n },
+        { tag: "err", value: { tag: "too_old" } },
+        { tag: "ok" },
+      ],
+    },
+  },
 ];
 
 for (const fixture of FIXTURES) {
@@ -196,13 +268,26 @@ for (const fixture of FIXTURES) {
       return;
     }
 
-    // The dynamic schema set is exactly the generated declaration set.
-    const generatedNames = Object.keys(fixture.module).sort();
+    // The dynamic schema set is exactly the generated declaration set. The
+    // `actor` export is the actor surface, not a declaration — compared
+    // against `built.actor` separately.
+    const generatedNames = Object.keys(fixture.module)
+      .filter((key) => key !== "actor")
+      .sort();
     assert.deepStrictEqual(Object.keys(built.schemas).sort(), generatedNames);
-    assert.deepStrictEqual(
-      built.deferred.map((entry) => entry.name),
-      fixture.deferredNames ?? [],
+    const generatedActor = (fixture.module as { actor?: AnySchema }).actor;
+    assert.strictEqual(
+      built.actor !== undefined,
+      generatedActor !== undefined,
+      "both paths agree on whether the contract carries an actor",
     );
+    if (built.actor !== undefined && generatedActor !== undefined) {
+      const principalSample = { toText: () => "aaaaa-aa" };
+      assert.deepStrictEqual(
+        validate(built.actor, principalSample),
+        validate(generatedActor, principalSample),
+      );
+    }
 
     // Every declaration has samples; every sample must get the identical
     // result — verdict, codes, paths, and messages — from both schemas.

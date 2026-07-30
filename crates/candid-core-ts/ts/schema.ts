@@ -98,6 +98,50 @@ export interface RecSchema<T> extends Schema<T> {
   readonly body: () => Schema<T>;
 }
 
+/**
+ * A Candid `func` *value*: a reference to a method on some service. The
+ * modern domain shape recorded on issue #104, mirroring candid-core's
+ * `HostValueKind::Func { principal, method }`. Invoking one is the actor
+ * layer's job (`callFunc` in `actor.ts`) — the value itself stays inert
+ * data, so it round-trips validation and the codec symmetrically.
+ */
+export interface FuncValue {
+  readonly principal: Principal;
+  readonly method: string;
+}
+
+/** Candid method modes; `update` is the unannotated default made explicit. */
+export type MethodMode = "update" | "query" | "composite_query" | "oneway";
+
+/**
+ * The signature lives in the node — args, results, mode — while the *value*
+ * type is always [`FuncValue`]: what a func-typed field carries at runtime
+ * is a reference, not a closure. The actor layer reads the node
+ * structurally, which is why no generic parameters are needed here (and why
+ * none would survive `c.rec`'s type erasure anyway).
+ */
+export interface FuncSchema extends Schema<FuncValue> {
+  readonly kind: "func";
+  readonly args: readonly AnySchema[];
+  readonly results: readonly AnySchema[];
+  readonly mode: MethodMode;
+}
+
+/**
+ * A Candid `service` *value* is the principal of a running service (issue
+ * #104); the method map is what `createActor` walks to build a call surface.
+ */
+export interface ServiceSchema extends Schema<Principal> {
+  readonly kind: "service";
+  /**
+   * `AnySchema`, not `FuncSchema`: the dynamic loader wraps every method in
+   * a lazy `rec` thunk (cyclic services exist), so walkers resolve each
+   * method to its func node structurally, exactly as they do everywhere
+   * else. Generated builders still pass `c.func(...)` directly.
+   */
+  readonly methods: { readonly [name: string]: AnySchema };
+}
+
 function primitive<T>(name: string): PrimitiveSchema<T> {
   return { kind: "primitive", primitive: name };
 }
@@ -151,6 +195,18 @@ export const c = {
 
   variant<A extends FieldSchemas>(arms: A): VariantSchema<A> {
     return { kind: "variant", arms };
+  },
+
+  func(
+    args: readonly AnySchema[],
+    results: readonly AnySchema[],
+    mode: MethodMode,
+  ): FuncSchema {
+    return { kind: "func", args, results, mode };
+  },
+
+  service(methods: { readonly [name: string]: AnySchema }): ServiceSchema {
+    return { kind: "service", methods };
   },
 
   /**

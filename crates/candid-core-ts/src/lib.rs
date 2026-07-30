@@ -17,15 +17,20 @@
 //! `compiler` feature on, [`TsNames::from_source_info`] fills the table from a
 //! compilation's provenance sidecar.
 //!
-//! # Scope of the first slice
+//! # Scope
 //!
 //! All eighteen primitives, `opt`, `vec`, `record` (tuple-shaped records
-//! become TypeScript tuples), `variant`, and named declaration references,
-//! recursion included. `func`, `service`, and `class` are deferred: a
-//! top-level declaration of a deferred kind is skipped with a note in the
-//! generated header, while a deferred construct *nested* inside a supported
-//! type fails closed with [`TsGenError::UnsupportedConstruct`] rather than
-//! silently emitting `unknown`.
+//! become TypeScript tuples), `variant`, named declaration references with
+//! recursion — and, since issue #104, the reference types: a `func` value is
+//! the inert `{ principal, method }` reference (its signature lives in the
+//! `c.func` builder), a `service` value is the principal of a running
+//! service, and a contract with an actor emits `export const actor` (the
+//! service schema) plus `export type Actor` (the call interface
+//! `ts/actor.ts`'s `createActor` takes explicitly). A `class` declaration or
+//! actor denotes its running service; init args are install-time metadata,
+//! noted per declaration and not exposed. A `class` *nested* inside a value
+//! type — which no Candid source can produce — fails closed with
+//! [`TsGenError::UnsupportedConstruct`].
 //!
 //! # A clean domain model, not the wire shape
 //!
@@ -276,49 +281,109 @@ impl Generator<'_> {
                     name: declaration.name.clone(),
                 });
             }
-            match self.node(declaration.ty)? {
-                TypeNode::Func { .. } => deferred.push((declaration.name.clone(), "func")),
-                TypeNode::Service { .. } => deferred.push((declaration.name.clone(), "service")),
-                TypeNode::Class { .. } => deferred.push((declaration.name.clone(), "class")),
-                _ => {
-                    // The alias is the reviewed type; the builder is the
-                    // runtime schema annotated with it. `Schema<T>` is
-                    // invariant, so the annotation makes `tsc` prove the
-                    // builder infers exactly the alias — the golden type-check
-                    // is the equality gate, not a convention.
-                    //
-                    // Every declaration is wrapped in `c.rec`: emission order
-                    // is canonical (name-sorted), not dependency-sorted, and
-                    // the lazy thunk is what makes a forward reference safe at
-                    // module initialization.
-                    let alias =
-                        self.declaration_body(declaration.ty, &declaration.name, Target::Alias)?;
-                    let builder =
-                        self.declaration_body(declaration.ty, &declaration.name, Target::Builder)?;
-                    aliases.push(format!(
-                        "export type {name} = {alias};\nexport const {name}: Schema<{name}> = c.rec(() => {builder});\n",
-                        name = declaration.name,
+            // A class declaration denotes its running service (issue #104):
+            // init args are install-time metadata a call surface never
+            // consumes, noted per declaration below.
+            let target_ty = match self.node(declaration.ty)? {
+                TypeNode::Class { service, .. } => {
+                    deferred.push((declaration.name.clone(), "class"));
+                    *service
+                }
+                _ => declaration.ty,
+            };
+            // The alias is the reviewed type; the builder is the
+            // runtime schema annotated with it. `Schema<T>` is
+            // invariant, so the annotation makes `tsc` prove the
+            // builder infers exactly the alias — the golden type-check
+            // is the equality gate, not a convention.
+            //
+            // Every declaration is wrapped in `c.rec`: emission order
+            // is canonical (name-sorted), not dependency-sorted, and
+            // the lazy thunk is what makes a forward reference safe at
+            // module initialization.
+            let alias = self.declaration_body(target_ty, &declaration.name, Target::Alias)?;
+            let builder = self.declaration_body(target_ty, &declaration.name, Target::Builder)?;
+            aliases.push(format!(
+                "export type {name} = {alias};\nexport const {name}: Schema<{name}> = c.rec(() => {builder});\n",
+                name = declaration.name,
+            ));
+        }
+
+        // The actor surface: the service schema plus the directly-emitted
+        // call interface — one async method per service method, the reply
+        // convention being zero results ⇒ void, one ⇒ the value, several ⇒ a
+        // tuple. `createActor` in ts/actor.ts takes `Actor` explicitly.
+        let mut actor_out = String::new();
+        if let Some(actor) = self.contract.actor() {
+            let (service_ty, is_class) = match actor {
+                candid_core::Actor::Service { service } => (*service, false),
+                candid_core::Actor::Class { class } => match self.node(*class)? {
+                    TypeNode::Class { service, .. } => (*service, true),
+                    _ => (*class, false),
+                },
+            };
+            let builder = self.declaration_body(service_ty, "actor", Target::Builder)?;
+            self.uses_principal = true;
+            let methods = match self.node(service_ty)? {
+                TypeNode::Service { methods } => methods.clone(),
+                _ => Vec::new(),
+            };
+            let mut signatures = Vec::with_capacity(methods.len());
+            for method in &methods {
+                let func = match self.node(method.function)? {
+                    TypeNode::Func { args, results, .. } => (args.clone(), results.clone()),
+                    _ => (Vec::new(), Vec::new()),
+                };
+                let mut params = Vec::with_capacity(func.0.len());
+                for (position, arg) in func.0.iter().enumerate() {
+                    params.push(format!(
+                        "arg{position}: {}",
+                        self.render(*arg, "actor", Target::Alias)?
                     ));
                 }
+                let reply = match func.1.len() {
+                    0 => "void".to_string(),
+                    1 => self.render(func.1[0], "actor", Target::Alias)?,
+                    _ => {
+                        let mut parts = Vec::with_capacity(func.1.len());
+                        for result in &func.1 {
+                            parts.push(self.render(*result, "actor", Target::Alias)?);
+                        }
+                        format!("[{}]", parts.join(", "))
+                    }
+                };
+                signatures.push(format!(
+                    "  {key}: ({params}) => Promise<{reply}>;",
+                    key = method_key(&method.name),
+                    params = params.join(", "),
+                ));
+            }
+            actor_out.push_str(&format!(
+                "export const actor: Schema<Principal> = c.rec(() => {builder});\n"
+            ));
+            actor_out.push_str(&format!(
+                "export type Actor = {{\n{}\n}};\n",
+                signatures.join("\n")
+            ));
+            if is_class {
+                actor_out.push_str(
+                    "// Note: the actor is a service class; init args are install-time \
+                     metadata not exposed here (issue #104).\n",
+                );
             }
         }
 
         let mut out = String::from(
             "// Generated by candid-core-ts from a candid-core Contract. Do not edit.\n",
         );
-        for (name, kind) in &deferred {
+        for (name, _) in &deferred {
             out.push_str(&format!(
-                "// Deferred: `{name}` is a `{kind}` declaration; \
-                 func/service/class arrive in a later slice (issue #38).\n"
+                "// Note: `{name}` is a service class; the declaration denotes its \
+                 running service, and init args are install-time metadata not \
+                 exposed here (issue #104).\n"
             ));
         }
-        if self.contract.actor().is_some() {
-            out.push_str(
-                "// Deferred: the actor interface; func/service/class arrive in a \
-                 later slice (issue #38).\n",
-            );
-        }
-        if !aliases.is_empty() {
+        if !aliases.is_empty() || !actor_out.is_empty() {
             out.push_str("import { c, type Schema } from \"@candid-core/schema\";\n");
         }
         if self.uses_principal {
@@ -330,6 +395,10 @@ impl Generator<'_> {
         if !aliases.is_empty() {
             out.push('\n');
             out.push_str(&aliases.join("\n"));
+        }
+        if !actor_out.is_empty() {
+            out.push('\n');
+            out.push_str(&actor_out);
         }
         Ok(out)
     }
@@ -371,16 +440,10 @@ impl Generator<'_> {
             // with a header note, so a reference to its name would be an
             // undefined type in the output — exactly the silent hole the
             // fail-closed rule exists to prevent.
-            let kind = match self.node(reference)? {
-                TypeNode::Func { .. } => Some("func"),
-                TypeNode::Service { .. } => Some("service"),
-                TypeNode::Class { .. } => Some("class"),
-                _ => None,
-            };
-            if let Some(kind) = kind {
+            if matches!(self.node(reference)?, TypeNode::Class { .. }) {
                 return Err(TsGenError::UnsupportedConstruct {
                     declaration: declaration.to_string(),
-                    kind,
+                    kind: "class",
                 });
             }
             return Ok(name.clone());
@@ -529,14 +592,55 @@ impl Generator<'_> {
                     Target::Builder => format!("c.variant({{ {} }})", arms.join(", ")),
                 })
             }
-            TypeNode::Func { .. } => Err(TsGenError::UnsupportedConstruct {
-                declaration: declaration.to_string(),
-                kind: "func",
-            }),
-            TypeNode::Service { .. } => Err(TsGenError::UnsupportedConstruct {
-                declaration: declaration.to_string(),
-                kind: "service",
-            }),
+            TypeNode::Func {
+                args,
+                results,
+                mode,
+            } => {
+                // A func *value* is inert reference data — `{ principal,
+                // method }` — while the signature lives in the builder
+                // (issue #104).
+                match target {
+                    Target::Alias => {
+                        self.uses_principal = true;
+                        Ok("{ principal: Principal; method: string }".to_string())
+                    }
+                    Target::Builder => {
+                        let mut rendered_args = Vec::with_capacity(args.len());
+                        for arg in &args {
+                            rendered_args.push(self.render(*arg, declaration, target)?);
+                        }
+                        let mut rendered_results = Vec::with_capacity(results.len());
+                        for result in &results {
+                            rendered_results.push(self.render(*result, declaration, target)?);
+                        }
+                        Ok(format!(
+                            "c.func([{}], [{}], \"{}\")",
+                            rendered_args.join(", "),
+                            rendered_results.join(", "),
+                            mode_text(mode),
+                        ))
+                    }
+                }
+            }
+            TypeNode::Service { methods } => {
+                // A service *value* is the principal of a running service.
+                match target {
+                    Target::Alias => {
+                        self.uses_principal = true;
+                        Ok("Principal".to_string())
+                    }
+                    Target::Builder => {
+                        let mut members = Vec::with_capacity(methods.len());
+                        for method in &methods {
+                            let key = method_key(&method.name);
+                            let value = self.render(method.function, declaration, target)?;
+                            members.push(format!("{key}: {value}"));
+                        }
+                        Ok(format!("c.service({{ {} }})", members.join(", ")))
+                    }
+                }
+            }
             TypeNode::Class { .. } => Err(TsGenError::UnsupportedConstruct {
                 declaration: declaration.to_string(),
                 kind: "class",
@@ -680,11 +784,46 @@ fn is_reserved_numeric_name(name: &str) -> bool {
 /// Names the generated module itself references: the imported bindings
 /// (`import { c, type Schema }` always, `import type { Principal }` when the
 /// principal primitive is used) and the ambient types its lowerings emit
+/// The Candid method mode as the builder literal the schema core takes.
+fn mode_text(mode: candid_core::MethodMode) -> &'static str {
+    match mode {
+        candid_core::MethodMode::Update => "update",
+        candid_core::MethodMode::Query => "query",
+        candid_core::MethodMode::CompositeQuery => "composite_query",
+        candid_core::MethodMode::Oneway => "oneway",
+    }
+}
+
+/// A service-method property key: bare when identifier-shaped, quoted
+/// otherwise, computed for exactly `__proto__` (the #114 rule — a method may
+/// legally carry that name, and a non-computed literal would set the
+/// prototype). Methods carry their name explicitly on the wire, so the
+/// `_N_` id-rendering reservation does not apply here.
+fn method_key(name: &str) -> String {
+    if name == "__proto__" {
+        format!("[{}]", quote_string(name))
+    } else if is_ts_property_identifier(name) {
+        name.to_string()
+    } else {
+        quote_string(name)
+    }
+}
+
 /// (`Array<T>` for vecs, `Record<string, never>` for the empty record,
 /// `Uint8Array` for anonymous `vec nat8`). A declaration by any of these
 /// names shadows the referenced binding for the whole module.
-const RESERVED_MODULE_BINDINGS: &[&str] =
-    &["c", "Schema", "Principal", "Array", "Record", "Uint8Array"];
+/// …plus the actor surface's own emission names (`actor`, `Actor`), reserved
+/// since issue #104 for the same reason.
+const RESERVED_MODULE_BINDINGS: &[&str] = &[
+    "c",
+    "Schema",
+    "Principal",
+    "Array",
+    "Record",
+    "Uint8Array",
+    "actor",
+    "Actor",
+];
 
 /// Property names may be any identifier-shaped text, keywords included —
 /// `{ delete: T }` is legal TypeScript — so only the character shape matters.

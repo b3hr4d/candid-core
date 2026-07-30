@@ -40,6 +40,7 @@ import * as collections from "../../tests/goldens/collections.ts";
 import * as variants from "../../tests/goldens/variants.ts";
 import * as recursion from "../../tests/goldens/recursion.ts";
 import * as quoting from "../../tests/goldens/quoting.ts";
+import * as deferred from "../../tests/goldens/deferred.ts";
 
 const goldens = new URL("../../tests/goldens/", import.meta.url);
 
@@ -163,6 +164,13 @@ const EXPECTED: Record<string, Record<string, unknown>> = {
   quoting: {
     weird: { "has space": 1n, "naïve": "x", 'quote"mark': true },
   },
+  deferred: {
+    kept: { value: 1n },
+    // Reference values (issue #104): a func is { principal, method }, a
+    // service is its principal.
+    callback_value: { principal: principal("aaaaa-aa"), method: "go" },
+    registry_value: principal("aaaaa-aa"),
+  },
 };
 
 const GENERATED: Record<string, Record<string, unknown>> = {
@@ -171,6 +179,7 @@ const GENERATED: Record<string, Record<string, unknown>> = {
   variants,
   recursion,
   quoting,
+  deferred,
 };
 
 for (const fixture of Object.keys(EXPECTED)) {
@@ -632,6 +641,13 @@ function generate(schema: AnySchema, rand: () => number, depth: number): unknown
       }
       return out;
     }
+    case "func":
+      return {
+        principal: randomPrincipal(rand),
+        method: ["go", "get", "page_7"][Math.floor(rand() * 3)],
+      };
+    case "service":
+      return randomPrincipal(rand);
     case "variant": {
       const arms = node.arms as Record<string, AnySchema>;
       const keys = Object.keys(arms);
@@ -658,6 +674,14 @@ function resolveGen(schema: AnySchema): GenNode {
     node = (node as { body(): AnySchema }).body() as unknown as GenNode;
   }
   return node;
+}
+
+function randomPrincipal(rand: () => number): { toText(): string } {
+  return principal(
+    principalTextFromBytes(
+      Uint8Array.from({ length: Math.floor(rand() * 8) }, () => Math.floor(rand() * 256)),
+    ),
+  );
 }
 
 function generatePrimitive(name: string, rand: () => number): unknown {
@@ -694,13 +718,7 @@ function generatePrimitive(name: string, rand: () => number): unknown {
     case "text":
       return TEXT_POOL[Math.floor(rand() * TEXT_POOL.length)];
     case "principal":
-      return principal(
-        principalTextFromBytes(
-          Uint8Array.from({ length: Math.floor(rand() * 8) }, () =>
-            Math.floor(rand() * 256),
-          ),
-        ),
-      );
+      return randomPrincipal(rand);
     default:
       throw new Error(`generator has no case for primitive ${name}`);
   }

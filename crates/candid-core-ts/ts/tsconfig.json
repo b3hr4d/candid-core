@@ -24,6 +24,7 @@
     "./contract.ts",
     "./labels.ts",
     "./codec.ts",
+    "./actor.ts",
     "./tests/**/*.ts"
   ]
 }
