@@ -244,6 +244,11 @@ jobs:
       - name: Run the schema runtime tests
         working-directory: crates/candid-core-ts/ts
         run: npm test
+      # The packaged-consumer gate (issue #106): the artifact npm would ship
+      # must stand alone — root and subpath exports resolving, compiling
+      # under the pinned tsc, and executing a real round-trip.
+      - name: Verify the npm package artifact
+        run: python3 tests/fixtures/packaging/verify_npm_package.py
 
   benchmark-smoke:
     name: Benchmark smoke test

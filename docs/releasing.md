@@ -359,3 +359,50 @@ If a release has to be withdrawn:
 For a prerelease specifically: because `"0.1"` does not select any
 prerelease, a broken beta reaches only consumers who asked for it by exact
 version. That narrows the blast radius; it does not remove the permanence.
+
+
+## npm: `@candid-core/schema`
+
+npm names and versions are as permanent as crates.io's; the same three
+properties hold. **Prerequisites, once, all three required before the first dispatch:**
+
+1. Register the `@candid-core` npm organization — scope ownership is the
+   anti-squat measure.
+2. Enable OIDC trusted publishing for this repository on the package; no
+   token is created, stored, or reachable from any PR-triggered workflow.
+3. **Create the `npm-publish` environment with required reviewers.** GitHub
+   creates a referenced-but-missing environment at run time with *no*
+   protection rules, so without this step the "protected" publish job would
+   run unapproved — the same failure mode the crates.io section warns about.
+   The workflow's verify job checks this and refuses to proceed, so the
+   omission fails closed rather than publishing silently.
+
+Publishing is `npm release` (`.github/workflows/npm-release.yml`),
+dispatch-only, with `{commit, version}`:
+
+1. The `verify` job shape-checks both inputs (`commit` must be a full
+   40-character SHA — a branch name could resolve differently after the
+   approval pause — and it must be reachable from `origin/main`, so
+   unreviewed bytes cannot be published), confirms the `npm-publish`
+   environment is genuinely protected, refuses a `version` input that
+   differs from `ts/package.json` at that commit, then reruns the type gate,
+   the runtime suites, and the packaged-consumer verification
+   (`tests/fixtures/packaging/verify_npm_package.py` — the artifact `npm
+   pack` produces must ship exactly the promised files, compile under strict
+   TypeScript *without* `skipLibCheck`, and execute standalone).
+2. The `publish` job sits behind the protected `npm-publish` environment;
+   the owner's approval there is the explicit authorization for the
+   irreversible step. It publishes with `--provenance`.
+
+`@icp-sdk/core` is a type-only peer: the shipped declarations reference its
+`Principal`, so TypeScript consumers must install it, while npm's install
+metadata marks it optional because nothing imports it at runtime (which is
+also what keeps this repository's own lockfile free of a dependency tree it
+never executes). The smoke asserts both directions — the package compiles
+with the peer present, and its absence is a clear missing-module error
+rather than a silent `any`.
+
+The package versions independently of the crate (pre-1.0). Bump
+`ts/package.json` in an ordinary reviewed PR; state in that PR's body which
+`candid-core` generator version the release pairs with, and record the pair
+in the npm release notes.
