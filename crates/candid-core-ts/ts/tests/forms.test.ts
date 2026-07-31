@@ -213,5 +213,8 @@ test("validation issues address form nodes through the shared path grammar", () 
   if (!weirdResult.ok) {
     const node = formNodeAt(weird, weirdResult.issues[0].path);
     assert.strictEqual(node?.control, "checkbox");
+    // The node's own path must be the issue's path verbatim — the quoted
+    // rendering included, or the two grammars have diverged.
+    assert.strictEqual(node?.path, weirdResult.issues[0].path);
   }
 });
