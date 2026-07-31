@@ -1,0 +1,20 @@
+[
+  {
+    "declaration": "Kept",
+    "hex": "4449444c016c01f1fee18d037d010001",
+    "name": "kept",
+    "textual": "(record { value = 1 })"
+  },
+  {
+    "declaration": "Callback",
+    "hex": "4449444c016a017d01710101010001010002676f",
+    "name": "callback_value",
+    "textual": "(func \"aaaaa-aa\".\"go\")"
+  },
+  {
+    "declaration": "Registry",
+    "hex": "4449444c026901087265676973746572016a0171017d0001000100",
+    "name": "registry_value",
+    "textual": "(service \"aaaaa-aa\")"
+  }
+]

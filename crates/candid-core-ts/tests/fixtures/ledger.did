@@ -1,0 +1,49 @@
+type Tokens = record { e8s: nat64 };
+type Account = record { owner: principal; subaccount: opt vec nat8 };
+type TransferArg = record {
+  from_subaccount: opt vec nat8;
+  to: Account;
+  amount: Tokens;
+  fee: opt Tokens;
+  memo: opt vec nat8;
+  created_at_time: opt nat64;
+};
+type TransferError = variant {
+  bad_fee: record { expected_fee: Tokens };
+  bad_burn: record { min_burn_amount: Tokens };
+  insufficient_funds: record { balance: Tokens };
+  too_old;
+  created_in_future: record { ledger_time: nat64 };
+  duplicate: record { duplicate_of: nat };
+  temporarily_unavailable;
+  generic_error: record { error_code: nat; message: text };
+};
+type TransferResult = variant { ok: nat; err: TransferError };
+type Transaction = record {
+  index: nat;
+  timestamp: nat64;
+  from: opt Account;
+  to: opt Account;
+  amount: Tokens;
+  fee: opt Tokens;
+  memo: opt vec nat8;
+};
+type TransactionRange = record { transactions: vec Transaction };
+type ArchiveCallback = func (record { start: nat; length: nat }) -> (TransactionRange) query;
+type ArchivedRange = record { start: nat; length: nat; callback: ArchiveCallback };
+type TransactionsResponse = record {
+  log_length: nat;
+  transactions: vec Transaction;
+  archived_transactions: vec ArchivedRange;
+};
+
+service : {
+  name: () -> (text) query;
+  symbol: () -> (text) query;
+  decimals: () -> (nat8) query;
+  fee: () -> (Tokens) query;
+  total_supply: () -> (Tokens) query;
+  balance_of: (Account) -> (Tokens) query;
+  transfer: (TransferArg) -> (TransferResult);
+  get_transactions: (record { start: nat; length: nat }) -> (TransactionsResponse) query;
+};

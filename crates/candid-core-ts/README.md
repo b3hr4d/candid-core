@@ -26,9 +26,15 @@ lints and tests both feature configurations, and type-checks the goldens.
 **The first generator slice is in.** `generate_module` covers all eighteen
 primitives, `opt`, `vec`, `record` (tuple-shaped records become TypeScript
 tuples), `variant`, and named declaration references, recursion included.
-`func`, `service`, and `class` are deferred: top-level declarations of those
-kinds are skipped with a header note, and a deferred construct nested inside a
-supported type fails closed rather than emitting `unknown`. Field names are
+Since issue #104 the reference types generate too: a `func` value is the
+inert `{ principal, method }` reference, a `service` value is the principal
+of a running service, and a contract with an actor emits the service schema
+(`export const actor`) plus the call interface (`export type Actor`) that
+`ts/actor.ts`'s `createActor` takes explicitly — methods dispatched onto a
+two-method byte-pipe transport (`query` for query/composite_query, `call`
+for update/oneway), with the codec doing all encoding. A `class` denotes its
+running service; init args are install-time metadata, noted per declaration
+and not exposed. Field names are
 caller-supplied through `TsNames` — the semantic Contract stores only label
 IDs — with a `compiler`-feature bridge from a compilation's provenance sidecar.
 
@@ -63,7 +69,7 @@ with path-addressed issues in candid-core's own diagnostic shape
 `$`-rooted paths). `ts/contract.ts` builds the same schemas dynamically from
 a canonical Contract JSON document, applying every generator mapping decision
 (anonymous `vec nat8` → blob, tuple-shaped records, the collapsing-`opt`
-rejection, deferred `func`/`service`/`class`) with label text from the same
+rejection, reference types and the actor included) with label text from the same
 caller-supplied name-table shape `TsNames` takes. The golden cross-check test
 proves the two paths agree: for every fixture, the dynamically built schema
 must return the identical `validate` result the generated builder returns,

@@ -17,10 +17,12 @@
 //   with `unrepresentable_option` — `T | null` cannot carry `None` versus
 //   `Some(None)`, and the check is on the node, so an aliased opt collapses
 //   just as surely;
-// - top-level `func`/`service`/`class` declarations are skipped and reported
-//   in `deferred`; one *nested* in a supported type fails closed with
-//   `unsupported_construct` (issue #38 defers them). An actor interface is
-//   likewise deferred and only reported via `actorDeferred`.
+// - reference types build like everything else (issue #104): a func schema
+//   carries its signature and describes `{ principal, method }` values, a
+//   service schema carries its methods and describes principal values, and a
+//   `class` — declaration or actor — denotes its running service (init args
+//   are install-time metadata). The actor interface, when present, is built
+//   as a service schema and returned as `actor`.
 //
 // One deliberate divergence: declaration names are not required to be
 // TypeScript identifiers. The generator emits source text and must refuse
@@ -121,20 +123,13 @@ export interface ContractSchemaOptions {
   readonly maxDeclarations?: number;
 }
 
-export interface DeferredDeclaration {
-  readonly name: string;
-  readonly kind: "func" | "service" | "class";
-}
-
 export type SchemaFromContractResult =
   | {
       readonly ok: true;
-      /** One schema per supported declaration, in declaration order. */
+      /** One schema per declaration, in declaration order (issue #104: reference kinds included; classes denote their running service). */
       readonly schemas: { readonly [name: string]: AnySchema };
-      /** Top-level func/service/class declarations, skipped like the generator skips them. */
-      readonly deferred: readonly DeferredDeclaration[];
-      /** True when the document carries an actor interface (deferred wholesale). */
-      readonly actorDeferred: boolean;
+      /** The actor interface as a service schema, when the document has one. */
+      readonly actor?: AnySchema;
     }
   | { readonly ok: false; readonly issues: readonly ContractIssue[] };
 
@@ -171,18 +166,28 @@ const PRIMITIVES: { readonly [name: string]: AnySchema } = {
   principal: c.principal,
 };
 
-const DEFERRED_KINDS = new Set(["func", "service", "class"]);
-
 interface ParsedField {
   readonly id: number;
   readonly type: number;
+}
+
+interface ParsedMethod {
+  readonly name: string;
+  readonly func: number;
 }
 
 type ParsedNode =
   | { readonly kind: "primitive"; readonly primitive: string }
   | { readonly kind: "opt" | "vec"; readonly inner: number }
   | { readonly kind: "record" | "variant"; readonly fields: readonly ParsedField[] }
-  | { readonly kind: "func" | "service" | "class" };
+  | {
+      readonly kind: "func";
+      readonly args: readonly number[];
+      readonly results: readonly number[];
+      readonly mode: "update" | "query" | "composite_query" | "oneway";
+    }
+  | { readonly kind: "service"; readonly methods: readonly ParsedMethod[] }
+  | { readonly kind: "class"; readonly init: readonly number[]; readonly service: number };
 
 function hasOwn(target: object, key: string): boolean {
   return Object.prototype.hasOwnProperty.call(target, key);
@@ -316,6 +321,38 @@ function buildFromContract(
   // node is examined alone, and edges are checked as bare indices.
   const parsed: (ParsedNode | undefined)[] = new Array(types.length);
   let totalFields = 0;
+  /** A validated list of in-arena type refs, or undefined after issues. */
+  const refList = (value: unknown, base: string): number[] | undefined => {
+    if (!Array.isArray(value)) {
+      push("invalid_contract_document", base, "expected an array of type references");
+      return undefined;
+    }
+    const refs: number[] = [];
+    let sound = true;
+    for (let i = 0; i < value.length; i += 1) {
+      totalFields += 1;
+      if (totalFields > maxFields) {
+        issues.push({
+          code: "resource_limit_exceeded",
+          path: base,
+          message: `fields limit ${maxFields} exceeded`,
+          resource_limit: { resource: "fields", limit: maxFields, observed: totalFields },
+        });
+        return undefined;
+      }
+      if (!validRef(value[i])) {
+        push(
+          "dangling_type_ref",
+          `${base}[${i}]`,
+          "type reference is outside the Contract arena",
+        );
+        sound = false;
+        continue;
+      }
+      refs.push(value[i] as number);
+    }
+    return sound ? refs : undefined;
+  };
   for (let index = 0; index < types.length; index += 1) {
     const base = `$.types[${index}]`;
     const node = types[index];
@@ -413,13 +450,149 @@ function buildFromContract(
         }
         break;
       }
-      case "func":
-      case "service":
-      case "class":
-        // Deferred kinds are never built, so their internals are not parsed —
-        // the generator never looks inside them either.
-        parsed[index] = { kind: node.kind };
+      case "func": {
+        // Reference types ship with issue #104: internals are parsed and
+        // ref-checked like any other node.
+        const args = refList(node.args, `${base}.args`);
+        const results = refList(node.results, `${base}.results`);
+        const mode = node.mode;
+        if (
+          mode !== "update" &&
+          mode !== "query" &&
+          mode !== "composite_query" &&
+          mode !== "oneway"
+        ) {
+          push(
+            "invalid_contract_document",
+            `${base}.mode`,
+            `unknown method mode ${JSON.stringify(mode)}`,
+          );
+          break;
+        }
+        // candid-core's oneway_has_results rule: a oneway function cannot
+        // carry results — an actor built from one would await a reply the
+        // call never provides.
+        if (mode === "oneway" && Array.isArray(node.results) && node.results.length > 0) {
+          push(
+            "invalid_contract_document",
+            `${base}.results`,
+            "a oneway function has no results",
+          );
+          break;
+        }
+        if (args !== undefined && results !== undefined) {
+          parsed[index] = { kind: "func", args, results, mode };
+        }
         break;
+      }
+      case "service": {
+        if (!Array.isArray(node.methods)) {
+          push(
+            "invalid_contract_document",
+            `${base}.methods`,
+            "a service node carries a methods array",
+          );
+          break;
+        }
+        const methods: ParsedMethod[] = [];
+        let sound = true;
+        const seenMethodNames = new Set<string>();
+        for (let m = 0; m < node.methods.length; m += 1) {
+          totalFields += 1;
+          if (totalFields > maxFields) {
+            issues.push({
+              code: "resource_limit_exceeded",
+              path: `${base}.methods`,
+              message: `fields limit ${maxFields} exceeded`,
+              resource_limit: { resource: "fields", limit: maxFields, observed: totalFields },
+            });
+            return { ok: false, issues };
+          }
+          const method: unknown = node.methods[m];
+          const methodBase = `${base}.methods[${m}]`;
+          if (
+            !isObject(method) ||
+            typeof method.name !== "string" ||
+            typeof method.id !== "number" ||
+            !Number.isInteger(method.id) ||
+            typeof method.function !== "number" ||
+            !Number.isInteger(method.function)
+          ) {
+            push(
+              "invalid_contract_document",
+              methodBase,
+              "a service method is { name, id, function }",
+            );
+            sound = false;
+            continue;
+          }
+          // candid-core's empty_method_name rule; hash("") is 0, so the
+          // hash-consistency check below cannot catch this on its own.
+          if (method.name.length === 0) {
+            push(
+              "invalid_contract_document",
+              `${methodBase}.name`,
+              "a service method name is non-empty",
+            );
+            sound = false;
+            continue;
+          }
+          // The id is the Candid hash of the name — the same invariant the
+          // name table enforces, and what makes the wire encoding honest.
+          if (candidLabelHash(method.name) !== method.id) {
+            push(
+              "invalid_contract_document",
+              `${methodBase}.id`,
+              `${JSON.stringify(method.name)} hashes to ${candidLabelHash(method.name)}, not ${method.id}`,
+            );
+            sound = false;
+            continue;
+          }
+          if (seenMethodNames.has(method.name)) {
+            push(
+              "invalid_contract_document",
+              `${methodBase}.name`,
+              "duplicate service method name",
+            );
+            sound = false;
+            continue;
+          }
+          seenMethodNames.add(method.name);
+          if (!validRef(method.function)) {
+            push(
+              "dangling_type_ref",
+              `${methodBase}.function`,
+              "type reference is outside the Contract arena",
+            );
+            sound = false;
+            continue;
+          }
+          methods.push({ name: method.name, func: method.function });
+        }
+        if (sound) {
+          parsed[index] = { kind: "service", methods };
+        }
+        break;
+      }
+      case "class": {
+        const init = refList(node.init, `${base}.init`);
+        if (
+          typeof node.service !== "number" ||
+          !Number.isInteger(node.service) ||
+          !validRef(node.service)
+        ) {
+          push(
+            "dangling_type_ref",
+            `${base}.service`,
+            "type reference is outside the Contract arena",
+          );
+          break;
+        }
+        if (init !== undefined) {
+          parsed[index] = { kind: "class", init, service: node.service };
+        }
+        break;
+      }
       default:
         push(
           "invalid_contract_document",
@@ -430,7 +603,8 @@ function buildFromContract(
   }
 
   // Pass two, on sound nodes only: the one-hop node checks the generator
-  // performs during rendering — collapsing opts and supported→deferred edges.
+  // performs during rendering — collapsing opts and the declaration-only rule
+  // for classes.
   for (let index = 0; index < types.length; index += 1) {
     const node = parsed[index];
     if (node === undefined) {
@@ -459,21 +633,21 @@ function buildFromContract(
           continue;
         }
       }
-      if (DEFERRED_KINDS.has(inner.kind)) {
+      if (inner.kind === "class") {
         push(
           "unsupported_construct",
           `${base}.inner`,
-          `a \`${inner.kind}\` type nests inside a supported type; func/service/class are deferred (issue #38)`,
+          `a \`class\` type nests inside a supported type; classes exist only at declaration position`,
         );
       }
     } else if (node.kind === "record" || node.kind === "variant") {
       for (let j = 0; j < node.fields.length; j += 1) {
         const inner = parsed[node.fields[j].type];
-        if (inner !== undefined && DEFERRED_KINDS.has(inner.kind)) {
+        if (inner !== undefined && inner.kind === "class") {
           push(
             "unsupported_construct",
             `${base}.fields[${j}].type`,
-            `a \`${inner.kind}\` type nests inside a supported type; func/service/class are deferred (issue #38)`,
+            `a \`class\` type nests inside a supported type; classes exist only at declaration position`,
           );
         }
       }
@@ -585,6 +759,42 @@ function buildFromContract(
   const fieldKey = (container: number, id: number): string =>
     nameTable.get(`${container}:${id}`) ?? `_${id}_`;
 
+  // Reference-type structural constraints (issue #104): a service method
+  // must denote a func node, and a class must denote a service node — the
+  // same constraints candid-core's own Contract validation enforces, so a
+  // hand-built document cannot smuggle a mis-kinded reference past the
+  // builder.
+  for (let index = 0; index < types.length; index += 1) {
+    const node = parsed[index];
+    if (node === undefined) {
+      continue;
+    }
+    if (node.kind === "service") {
+      for (let m = 0; m < node.methods.length; m += 1) {
+        const target = parsed[node.methods[m].func];
+        if (target === undefined || target.kind !== "func") {
+          push(
+            "invalid_contract_document",
+            `$.types[${index}].methods[${m}].function`,
+            "a service method must denote a func type",
+          );
+        }
+      }
+    } else if (node.kind === "class") {
+      const target = parsed[node.service];
+      if (target === undefined || target.kind !== "service") {
+        push(
+          "invalid_contract_document",
+          `$.types[${index}].service`,
+          "a class must denote a service type",
+        );
+      }
+    }
+  }
+  if (issues.length > 0) {
+    return { ok: false, issues };
+  }
+
   // Rendered keys must be unique per node: two ids mapping to one supplied
   // name (or a supplied name colliding with an `_id_` rendering) would
   // silently drop a field from the built record. Fail closed instead. The
@@ -688,32 +898,131 @@ function buildFromContract(
         }
         return c.variant(arms);
       }
+      case "func":
+        return c.func(node.args.map(lazy), node.results.map(lazy), node.mode);
+      case "service": {
+        const methods: { [name: string]: AnySchema } = Object.create(null);
+        for (const method of node.methods) {
+          methods[method.name] = lazy(method.func);
+        }
+        return c.service(methods);
+      }
+      case "class":
+        // A class-typed reference denotes the running service (issue #104):
+        // init args are install-time metadata a call surface never consumes.
+        return schemaAt(node.service);
       default:
-        // Unreachable: deferred nodes are never built (declarations of these
-        // kinds are skipped, and nested ones failed closed above). A `rec`
-        // thunk that somehow reached one would still fail closed in
-        // `validate` as an unsupported schema.
+        // Unreachable by construction; a rec thunk that somehow reached an
+        // unknown node still fails closed in `validate`.
         return { kind: "unsupported" } as AnySchema;
     }
   };
 
   const schemas: { [name: string]: AnySchema } = Object.create(null);
-  const deferred: DeferredDeclaration[] = [];
   for (const declaration of parsedDeclarations) {
-    const node = sound[declaration.type];
-    if (node.kind === "func" || node.kind === "service" || node.kind === "class") {
-      deferred.push({ name: declaration.name, kind: node.kind });
-      continue;
-    }
     // The same shape the generator emits: every declaration wrapped in
     // `c.rec`, so aliases of one node share the memoized structure beneath.
+    // Reference kinds build like everything else since issue #104; a class
+    // declaration denotes its running service.
     schemas[declaration.name] = c.rec(() => schemaAt(declaration.type));
   }
 
-  return {
-    ok: true,
-    schemas,
-    deferred,
-    actorDeferred: contract.actor !== undefined && contract.actor !== null,
-  };
+  // candid-core restricts class nodes to the actor root
+  // (`class_not_actor_root`); mirror it so the two loaders refuse the same
+  // documents.
+  const actorClassTarget = (() => {
+    const raw: unknown = contract.actor;
+    return isObject(raw) && raw.kind === "class" && typeof raw.class === "number"
+      ? (raw.class as number)
+      : undefined;
+  })();
+  const isClassRef = (ref: number): boolean => parsed[ref]?.kind === "class";
+  for (let index = 0; index < types.length; index += 1) {
+    const node = parsed[index];
+    if (node === undefined) {
+      continue;
+    }
+    if (node.kind === "class" && index !== actorClassTarget) {
+      push(
+        "invalid_contract_document",
+        `$.types[${index}]`,
+        "class nodes are only valid as the top-level class actor root",
+      );
+      return { ok: false, issues };
+    }
+    // candid-core's class_not_first_class_type rule: no type edge — func
+    // args/results and a class's own init/service included — may target a
+    // class, actor-root or not. Opt/vec inners and record/variant fields
+    // are already refused by the pass-two nested checks.
+    const edges: readonly (readonly [number, string])[] =
+      node.kind === "func"
+        ? [
+            ...node.args.map((ref, i) => [ref, `$.types[${index}].args[${i}]`] as const),
+            ...node.results.map(
+              (ref, i) => [ref, `$.types[${index}].results[${i}]`] as const,
+            ),
+          ]
+        : node.kind === "class"
+          ? [
+              ...node.init.map((ref, i) => [ref, `$.types[${index}].init[${i}]`] as const),
+              [node.service, `$.types[${index}].service`] as const,
+            ]
+          : node.kind === "service"
+            ? node.methods.map(
+                (method, i) =>
+                  [method.func, `$.types[${index}].methods[${i}].function`] as const,
+              )
+            : [];
+    for (const [ref, path] of edges) {
+      if (isClassRef(ref)) {
+        push(
+          "invalid_contract_document",
+          path,
+          "a class is not a first-class type; no type edge may target one",
+        );
+        return { ok: false, issues };
+      }
+    }
+  }
+
+  // The actor interface, when the document carries one: a service schema,
+  // with a class actor unwrapped to its running service. Fail closed on any
+  // shape the canonical format does not produce.
+  let actor: AnySchema | undefined;
+  if (contract.actor !== undefined && contract.actor !== null) {
+    const raw: unknown = contract.actor;
+    if (
+      !isObject(raw) ||
+      (raw.kind !== "service" && raw.kind !== "class") ||
+      typeof raw[raw.kind as "service" | "class"] !== "number"
+    ) {
+      push("invalid_contract_document", "$.actor", "an actor is { kind, service|class }");
+      return { ok: false, issues };
+    }
+    const target = raw[raw.kind as "service" | "class"] as number;
+    if (!validRef(target)) {
+      push(
+        "dangling_type_ref",
+        `$.actor.${raw.kind}`,
+        "type reference is outside the Contract arena",
+      );
+      return { ok: false, issues };
+    }
+    const node = sound[target];
+    const resolved = node.kind === "class" ? sound[node.service] : node;
+    if (
+      (raw.kind === "service" && node.kind !== "service" && node.kind !== "class") ||
+      resolved.kind !== "service"
+    ) {
+      push(
+        "invalid_contract_document",
+        `$.actor.${raw.kind}`,
+        "an actor must denote a service (or a class of one)",
+      );
+      return { ok: false, issues };
+    }
+    actor = c.rec(() => schemaAt(target));
+  }
+
+  return { ok: true, schemas, actor };
 }

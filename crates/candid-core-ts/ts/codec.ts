@@ -202,6 +202,16 @@ interface RecNode {
   readonly kind: "rec";
   body(): AnySchema;
 }
+interface FuncNode {
+  readonly kind: "func";
+  readonly args: readonly AnySchema[];
+  readonly results: readonly AnySchema[];
+  readonly mode: "update" | "query" | "composite_query" | "oneway";
+}
+interface ServiceNode {
+  readonly kind: "service";
+  readonly methods: { readonly [name: string]: AnySchema };
+}
 type SchemaNode =
   | PrimitiveNode
   | OptNode
@@ -211,7 +221,20 @@ type SchemaNode =
   | RecordNode
   | TupleNode
   | VariantNode
+  | FuncNode
+  | ServiceNode
   | RecNode;
+
+/** The nat8 element schema blob abbreviates, for the subtype relation. */
+const NAT8_NODE: PrimitiveNode = { kind: "primitive", primitive: "nat8" };
+
+/** Annotation byte per mode; `update` is the unannotated default. */
+const MODE_ANNOTATION: { readonly [mode: string]: number } = {
+  update: 0,
+  query: 1,
+  oneway: 2,
+  composite_query: 3,
+};
 
 type PathSegment = string | number;
 
@@ -842,6 +865,64 @@ class Encoder {
         }
         break;
       }
+      case "func": {
+        writeSlebBig(entry, BigInt(OP.func));
+        writeLebNumber(entry, node.args.length);
+        for (const arg of node.args) {
+          writeSlebBig(entry, BigInt(this.typeRef(arg as SchemaNode, path, at + 1)));
+        }
+        writeLebNumber(entry, node.results.length);
+        for (const result of node.results) {
+          writeSlebBig(entry, BigInt(this.typeRef(result as SchemaNode, path, at + 1)));
+        }
+        const annotation = MODE_ANNOTATION[node.mode];
+        if (annotation === undefined) {
+          this.fail("unsupported_schema", path, `unknown method mode ${JSON.stringify(node.mode)}`);
+        }
+        if (annotation === 0) {
+          writeLebNumber(entry, 0);
+        } else {
+          writeLebNumber(entry, 1);
+          entry.push(annotation);
+        }
+        break;
+      }
+      case "service": {
+        // Methods sorted by name bytes — the wire order the spec fixes.
+        const methods = Object.keys(node.methods).map((name) => {
+          const bytes = utf8BytesStrict(name);
+          if (bytes === undefined) {
+            this.fail("invalid_text", path, "a method name is Unicode scalar values");
+          }
+          return { name, bytes };
+        });
+        methods.sort((a, b) => compareBytes(a.bytes, b.bytes));
+        writeSlebBig(entry, BigInt(OP.service));
+        writeLebNumber(entry, methods.length);
+        for (const method of methods) {
+          writeLebNumber(entry, method.bytes.length);
+          for (const byte of method.bytes) {
+            entry.push(byte);
+          }
+          const resolvedMethod = this.resolveType(
+            node.methods[method.name] as SchemaNode,
+            path,
+            at,
+          );
+          if (resolvedMethod.node.kind !== "func") {
+            this.fail(
+              "unsupported_schema",
+              path,
+              `service method ${JSON.stringify(method.name)} must be a func schema`,
+            );
+          }
+          writeSlebBig(
+            entry,
+            BigInt(this.typeRef(node.methods[method.name] as SchemaNode, path, at + 1)),
+          );
+        }
+        break;
+      }
     }
     this.table[index] = entry;
     return index;
@@ -1066,7 +1147,93 @@ class Encoder {
         }
         return;
       }
+      case "func": {
+        // A func value is inert reference data: { principal, method },
+        // emitted in the transparent public form (issue #104).
+        if (!this.isPlainCandidate(value)) {
+          this.fail(
+            "invalid_type",
+            path,
+            `expected a func reference ({ principal, method }), got ${describe(value)}`,
+          );
+        }
+        path.push("principal");
+        if (!hasOwnEnumerable(value, "principal")) {
+          this.fail("missing_field", path, "a func reference names a principal");
+        }
+        const principalBytes = this.principalValueBytes(value.principal, path);
+        path.pop();
+        path.push("method");
+        if (!hasOwnEnumerable(value, "method")) {
+          this.fail("missing_field", path, "a func reference names a method");
+        }
+        const method = value.method;
+        if (typeof method !== "string" || method.length === 0) {
+          this.fail("invalid_type", path, "a method name is a non-empty string");
+        }
+        const methodBytes = utf8BytesStrict(method);
+        if (methodBytes === undefined) {
+          this.fail("invalid_text", path, "a method name is Unicode scalar values");
+        }
+        path.pop();
+        for (const key of Object.keys(value)) {
+          this.step(path, at);
+          if (key !== "principal" && key !== "method") {
+            path.push(key);
+            this.fail(
+              "unexpected_field",
+              path,
+              "a func reference is { principal, method }",
+            );
+          }
+        }
+        out.push(1);
+        out.push(1);
+        writeLebNumber(out, principalBytes.length);
+        for (const byte of principalBytes) {
+          out.push(byte);
+        }
+        writeLebNumber(out, methodBytes.length);
+        for (const byte of methodBytes) {
+          out.push(byte);
+        }
+        return;
+      }
+      case "service": {
+        // A service value is the principal of a running service.
+        const bytes = this.principalValueBytes(value, path);
+        out.push(1);
+        writeLebNumber(out, bytes.length);
+        for (const byte of bytes) {
+          out.push(byte);
+        }
+        return;
+      }
     }
+  }
+
+  /** The raw id bytes of a principal-shaped value, or fail closed. */
+  private principalValueBytes(value: unknown, path: PathSegment[]): Uint8Array {
+    if (
+      (typeof value !== "object" && typeof value !== "function") ||
+      value === null ||
+      typeof (value as { toText?: unknown }).toText !== "function"
+    ) {
+      this.fail(
+        "invalid_type",
+        path,
+        `expected a Principal (an object with a toText method), got ${describe(value)}`,
+      );
+    }
+    const text: unknown = (value as { toText(): unknown }).toText();
+    if (typeof text !== "string") {
+      this.fail("invalid_principal", path, "toText() did not return a string");
+    }
+    const bytes = principalBytesFromText(text);
+    if (bytes === undefined) {
+      this.fail("invalid_principal", path, "toText() is not canonical principal text");
+    }
+    return bytes;
   }
 
   /**
@@ -1381,7 +1548,17 @@ type WireEntry =
       readonly ids: readonly number[];
       readonly types: readonly number[];
     }
-  | { readonly kind: "func" | "service"; readonly types: readonly number[] }
+  | {
+      readonly kind: "func";
+      readonly args: readonly number[];
+      readonly results: readonly number[];
+      /** 0 = update (no annotation); else the 1..3 annotation byte. */
+      readonly annotation: number;
+    }
+  | {
+      readonly kind: "service";
+      readonly methods: readonly { readonly name: string; readonly type: number }[];
+    }
   | { readonly kind: "future" };
 
 /**
@@ -1409,6 +1586,9 @@ class Decoder {
   readonly issues: CodecIssue[] = [];
   readonly entries: WireEntry[] = [];
   argTypes: number[] = [];
+  private readonly schemaIds = new Map<object, number>();
+  /** One memo per decode run: reference checks repeat across values. */
+  private readonly subtypeMemo = new Map<string, boolean>();
   private offset = 0;
   private elements = 0;
 
@@ -1625,20 +1805,20 @@ class Decoder {
     for (const entry of this.entries) {
       if (entry.kind === "opt" || entry.kind === "vec") {
         this.checkRef(entry.inner, path);
-      } else if (
-        entry.kind === "record" ||
-        entry.kind === "variant" ||
-        entry.kind === "func" ||
-        entry.kind === "service"
-      ) {
+      } else if (entry.kind === "record" || entry.kind === "variant") {
         for (const type of entry.types) {
           this.checkRef(type, path);
+        }
+      } else if (entry.kind === "func") {
+        for (const type of [...entry.args, ...entry.results]) {
+          this.checkRef(type, path);
+        }
+      } else if (entry.kind === "service") {
+        for (const method of entry.methods) {
+          this.checkRef(method.type, path);
           // A service method type must denote a function type — the one
           // structural constraint the spec states about reference types.
-          if (
-            entry.kind === "service" &&
-            (type < 0 || this.entries[type].kind !== "func")
-          ) {
+          if (method.type < 0 || this.entries[method.type].kind !== "func") {
             this.fail(
               "malformed_type_table",
               path,
@@ -1705,16 +1885,17 @@ class Decoder {
           : { kind: "variant", ids, types };
       }
       case OP.func: {
-        const types: number[] = [];
-        const args = this.lebU32(path, "func argument count");
-        for (let i = 0; i < args; i += 1) {
+        const args: number[] = [];
+        const argCount = this.lebU32(path, "func argument count");
+        for (let i = 0; i < argCount; i += 1) {
           this.step(path, 0);
-          types.push(this.typeRef(path));
+          args.push(this.typeRef(path));
         }
-        const results = this.lebU32(path, "func result count");
-        for (let i = 0; i < results; i += 1) {
+        const results: number[] = [];
+        const resultCount = this.lebU32(path, "func result count");
+        for (let i = 0; i < resultCount; i += 1) {
           this.step(path, 0);
-          types.push(this.typeRef(path));
+          results.push(this.typeRef(path));
         }
         const annotations = this.lebU32(path, "func annotation count");
         // The reference implementation refuses more than one annotation;
@@ -1726,23 +1907,25 @@ class Decoder {
             "a function type carries at most one annotation",
           );
         }
+        let annotation = 0;
         for (let i = 0; i < annotations; i += 1) {
-          const annotation = this.byte(path);
+          annotation = this.byte(path);
           if (annotation < 1 || annotation > 3) {
             this.fail("malformed_type_table", path, "unknown function annotation");
           }
         }
-        return { kind: "func", types };
+        return { kind: "func", args, results, annotation };
       }
       case OP.service: {
-        const types: number[] = [];
-        const methods = this.lebU32(path, "service method count");
+        const methods: { name: string; type: number }[] = [];
+        const methodCount = this.lebU32(path, "service method count");
         let previousName: Uint8Array | undefined;
-        for (let i = 0; i < methods; i += 1) {
+        for (let i = 0; i < methodCount; i += 1) {
           this.step(path, 0);
           const length = this.lebU32(path, "method name length");
           const raw = Uint8Array.from(this.raw(length, path));
-          if (utf8Decode(raw) === undefined) {
+          const name = utf8Decode(raw);
+          if (name === undefined) {
             this.fail("invalid_utf8", path, "method name is not well-formed UTF-8");
           }
           // Sorted strictly by name bytes, duplicates included — the
@@ -1755,9 +1938,9 @@ class Decoder {
             );
           }
           previousName = raw;
-          types.push(this.typeRef(path));
+          methods.push({ name, type: this.typeRef(path) });
         }
-        return { kind: "service", types };
+        return { kind: "service", methods };
       }
       default: {
         // A future type: self-describing length, skippable by construction.
@@ -1837,6 +2020,10 @@ class Decoder {
       return this.optAt(wire, node, path, at);
     }
 
+    if (node.kind === "func" || node.kind === "service") {
+      return this.referenceAt(wire, node, path);
+    }
+
     if (wire >= 0) {
       const entry = this.entry(wire);
       switch (entry.kind) {
@@ -1852,11 +2039,17 @@ class Decoder {
           return this.variantAt(entry, node, path, at);
         case "func":
         case "service":
+          this.mismatch(
+            "type_mismatch",
+            path,
+            `a wire ${entry.kind} value at a non-reference expected type`,
+          );
+          break;
         case "future":
           this.mismatch(
             "type_mismatch",
             path,
-            `a wire ${entry.kind} value has no expected counterpart in this slice`,
+            "a wire future value has no expected counterpart",
           );
       }
     }
@@ -2090,6 +2283,424 @@ class Decoder {
     const value = this.valueAt(entry.types[index], resolved.node, path, resolved.depth + 1);
     path.pop();
     return { tag: match.key, value };
+  }
+
+  /**
+   * Decode a func/service *value* at an expected reference schema. The spec
+   * makes references the one place deserialisation performs a real subtype
+   * CHECK: the wire type must be a structural subtype of the expected type
+   * (function params contravariant, results covariant, annotation sets
+   * equal; service methods width-and-depth). A failed check is a coercion
+   * mismatch — absorbable by an enclosing expected opt — while malformed
+   * bytes stay hard errors. Opaque reference forms (tag 0) are refused, as
+   * recorded for this codec slice.
+   */
+  private referenceAt(
+    wire: number,
+    node: FuncNode | ServiceNode,
+    path: PathSegment[],
+  ): unknown {
+    if (wire < 0) {
+      this.mismatch("type_mismatch", path, `wire type ${wire} at an expected ${node.kind}`);
+    }
+    const entry = this.entry(wire);
+    if (entry.kind !== node.kind) {
+      this.mismatch("type_mismatch", path, `wire ${entry.kind} at an expected ${node.kind}`);
+    }
+    if (!this.wireSubtypeOfSchema(wire, node as unknown as AnySchema, this.subtypeMemo)) {
+      this.mismatch(
+        "type_mismatch",
+        path,
+        `the wire ${node.kind} type is not a subtype of the expected ${node.kind}`,
+      );
+    }
+    const tag = this.byte(path);
+    if (tag === 0) {
+      this.fail(
+        "invalid_principal",
+        path,
+        "opaque references are unsupported in this slice",
+      );
+    }
+    if (tag !== 1) {
+      this.fail("invalid_tag_byte", path, `a ${node.kind} value starts with 0 or 1`);
+    }
+    if (node.kind === "func") {
+      const inner = this.byte(path);
+      if (inner === 0) {
+        this.fail(
+          "invalid_principal",
+          path,
+          "opaque references are unsupported in this slice",
+        );
+      }
+      if (inner !== 1) {
+        this.fail("invalid_tag_byte", path, "a service value starts with 0 or 1");
+      }
+      const principal = this.principalBody(path);
+      const length = this.lebU32(path, "method name length");
+      const method = utf8Decode(this.raw(length, path));
+      if (method === undefined) {
+        this.fail("invalid_utf8", path, "method name is not well-formed UTF-8");
+      }
+      // Round-trip symmetry: validate and encode both refuse an empty
+      // method name, so decode must not produce one.
+      if (method.length === 0) {
+        this.fail("invalid_length", path, "a method name is a non-empty string");
+      }
+      return { principal, method };
+    }
+    return this.principalBody(path);
+  }
+
+  private principalBody(path: readonly PathSegment[]): DecodedPrincipal {
+    const length = this.lebU32(path, "principal length");
+    if (length > 29) {
+      this.fail("invalid_principal", path, "a principal id is at most 29 bytes");
+    }
+    const text = principalTextFromBytes(Uint8Array.from(this.raw(length, path)));
+    return { toText: () => text };
+  }
+
+  /**
+   * The static subtype relation between a wire type and an expected schema
+   * (`wire <: schema`), with the mirrored direction for contravariant
+   * positions. Coinductive: a pair under test is assumed true on revisit, so
+   * recursive types terminate. Depth of schema rec unwrapping is bounded by
+   * the depth limit; the pair memo bounds everything else.
+   */
+  private wireSubtypeOfSchema(
+    wire: number,
+    schema: AnySchema,
+    seen: Map<string, boolean>,
+  ): boolean {
+    return this.refSubtype(wire, schema, true, seen, 0);
+  }
+
+  private schemaId(schema: object): number {
+    let id = this.schemaIds.get(schema);
+    if (id === undefined) {
+      id = this.schemaIds.size;
+      this.schemaIds.set(schema, id);
+    }
+    return id;
+  }
+
+  private refSubtype(
+    wire: number,
+    schema: AnySchema,
+    wireOnLeft: boolean,
+    seen: Map<string, boolean>,
+    depth: number,
+  ): boolean {
+    if (depth > this.limits.maxDepth) {
+      return false;
+    }
+    // The key uses the UNRESOLVED schema's identity: rec thunks mint fresh
+    // node objects on every body() call (that is how the generator emits
+    // every declaration), but the rec object a structure references is
+    // stable — the same anchor the encoder's table memo relies on. Keying
+    // on the resolved node would never see a cycle revisit and the
+    // coinductive assumption could not engage.
+    const key = `${wire}|${this.schemaId(schema)}|${wireOnLeft ? "ws" : "sw"}`;
+    const cached = seen.get(key);
+    if (cached !== undefined) {
+      return cached;
+    }
+    // Coinductive assumption for recursive pairs.
+    seen.set(key, true);
+    const node = this.resolveTypeNode(schema as SchemaNode);
+    const result =
+      node === undefined
+        ? false
+        : this.refSubtypeUncached(wire, node, wireOnLeft, seen, depth);
+    seen.set(key, result);
+    return result;
+  }
+
+  /**
+   * Rec resolution for the subtype relation: depth-guarded, never charged
+   * against the value budgets — this is type-graph work, and charging it
+   * turned an accept into a hard resource error on one cycle parity.
+   * `undefined` (fail closed to "not a subtype") on garbage or over-deep
+   * chains.
+   */
+  private resolveTypeNode(schema: SchemaNode): Exclude<SchemaNode, RecNode> | undefined {
+    let node = schema;
+    for (let hops = 0; hops <= this.limits.maxDepth; hops += 1) {
+      if (node.kind !== "rec") {
+        return node as Exclude<SchemaNode, RecNode>;
+      }
+      const body: unknown = node.body();
+      if (
+        typeof body !== "object" ||
+        body === null ||
+        typeof (body as { kind?: unknown }).kind !== "string"
+      ) {
+        return undefined;
+      }
+      node = body as SchemaNode;
+    }
+    return undefined;
+  }
+
+  private refSubtypeUncached(
+    wire: number,
+    node: Exclude<SchemaNode, RecNode>,
+    wireOnLeft: boolean,
+    seen: Map<string, boolean>,
+    depth: number,
+  ): boolean {
+    // The universal rules first: empty on the left, reserved or opt on the
+    // right — each true regardless of the other side.
+    const wireIsLeft = wireOnLeft;
+    if (wireIsLeft && wire === OP.empty) {
+      return true;
+    }
+    if (!wireIsLeft && node.kind === "primitive" && node.primitive === "empty") {
+      return true;
+    }
+    if (wireIsLeft && node.kind === "primitive" && node.primitive === "reserved") {
+      return true;
+    }
+    if (!wireIsLeft && wire === OP.reserved) {
+      return true;
+    }
+    if (wireIsLeft && node.kind === "opt") {
+      return true;
+    }
+    if (!wireIsLeft && wire >= 0 && this.entry(wire).kind === "opt") {
+      return true;
+    }
+    if (!wireIsLeft && wire === OP.opt) {
+      return true;
+    }
+
+    if (node.kind === "primitive") {
+      const opcode = PRIMITIVE_OPCODES[node.primitive];
+      if (opcode === undefined) {
+        return false;
+      }
+      if (wire === opcode) {
+        return true;
+      }
+      // nat <: int, in whichever direction has nat on the left.
+      if (wireIsLeft) {
+        return wire === OP.nat && opcode === OP.int;
+      }
+      return opcode === OP.nat && wire === OP.int;
+    }
+
+    if (wire < 0) {
+      return false;
+    }
+    const entry = this.entry(wire);
+
+    switch (node.kind) {
+      case "opt": {
+        // Schema opt on the left (schema <: wire): only opt <: opt depth rule
+        // reaches here (wire opt on the right was handled above).
+        return false;
+      }
+      case "vec":
+        return (
+          entry.kind === "vec" &&
+          this.refSubtype(entry.inner, node.inner, wireOnLeft, seen, depth + 1)
+        );
+      case "blob":
+        // blob is vec nat8: same elementwise depth rule as vec, not exact
+        // opcode equality (`vec empty <: vec nat8` holds covariantly).
+        return (
+          entry.kind === "vec" &&
+          this.refSubtype(entry.inner, NAT8_NODE as AnySchema, wireOnLeft, seen, depth + 1)
+        );
+      case "unit":
+      case "record":
+      case "tuple": {
+        if (entry.kind !== "record") {
+          return false;
+        }
+        // The empty record (unit) is the zero-field case of the same width
+        // rules: extra wire fields are fine on the wire-left side, and must
+        // be opt-like on the schema-left side — never simply forbidden.
+        const expected =
+          node.kind === "record"
+            ? Object.keys(node.fields).map((fieldKey) => ({
+                id: fieldIdOfKey(fieldKey),
+                schema: node.fields[fieldKey],
+              }))
+            : node.kind === "tuple"
+              ? node.elements.map((element, index) => ({ id: index, schema: element }))
+              : [];
+        if (wireIsLeft) {
+          // wire <: schema: every schema field present in the wire with a
+          // subtype, or opt-like.
+          for (const field of expected) {
+            const at = entry.ids.indexOf(field.id);
+            if (at >= 0) {
+              if (!this.refSubtype(entry.types[at], field.schema, true, seen, depth + 1)) {
+                return false;
+              }
+            } else if (!this.optLikeSchema(field.schema)) {
+              return false;
+            }
+          }
+          return true;
+        }
+        // schema <: wire: every wire field present in the schema with a
+        // subtype, or opt-like on the wire side.
+        for (let i = 0; i < entry.ids.length; i += 1) {
+          const match = expected.find((field) => field.id === entry.ids[i]);
+          if (match !== undefined) {
+            if (!this.refSubtype(entry.types[i], match.schema, false, seen, depth + 1)) {
+              return false;
+            }
+          } else if (!this.optLikeWire(entry.types[i])) {
+            return false;
+          }
+        }
+        return true;
+      }
+      case "variant": {
+        if (entry.kind !== "variant") {
+          return false;
+        }
+        const arms = Object.keys(node.arms).map((armKey) => ({
+          id: fieldIdOfKey(armKey),
+          schema: node.arms[armKey],
+        }));
+        if (wireIsLeft) {
+          // wire <: schema: every wire arm exists in the schema.
+          for (let i = 0; i < entry.ids.length; i += 1) {
+            const match = arms.find((arm) => arm.id === entry.ids[i]);
+            if (
+              match === undefined ||
+              !this.refSubtype(entry.types[i], match.schema, true, seen, depth + 1)
+            ) {
+              return false;
+            }
+          }
+          return true;
+        }
+        // schema <: wire: every schema arm exists on the wire.
+        for (const arm of arms) {
+          const at = entry.ids.indexOf(arm.id);
+          if (at < 0 || !this.refSubtype(entry.types[at], arm.schema, false, seen, depth + 1)) {
+            return false;
+          }
+        }
+        return true;
+      }
+      case "func": {
+        if (entry.kind !== "func") {
+          return false;
+        }
+        const annotation = MODE_ANNOTATION[node.mode];
+        if (annotation === undefined || entry.annotation !== annotation) {
+          return false;
+        }
+        // func t <: t' — params contravariant (t'.args <: t.args as tuples),
+        // results covariant (t.results <: t'.results), where a tuple A <: B
+        // needs every B element present in A as a subtype or opt-like; extra
+        // A elements are ignored. `wireOnLeft` decides which side is t.
+        const sub = wireOnLeft
+          ? { args: entry.args, results: entry.results }
+          : { args: node.args, results: node.results };
+        const sup = wireOnLeft
+          ? { args: node.args, results: node.results }
+          : { args: entry.args, results: entry.results };
+        // Params: iterate the SUBTYPE side's args (B of the tuple rule).
+        for (let i = 0; i < sub.args.length; i += 1) {
+          const supArg = sup.args[i];
+          if (supArg !== undefined) {
+            // t'.args[i] <: t.args[i] — the flipped direction.
+            const holds = wireOnLeft
+              ? this.refSubtype(entry.args[i], node.args[i], false, seen, depth + 1)
+              : this.refSubtype(entry.args[i], node.args[i], true, seen, depth + 1);
+            if (!holds) {
+              return false;
+            }
+          } else {
+            const optLike = wireOnLeft
+              ? this.optLikeWire(entry.args[i])
+              : this.optLikeSchema(node.args[i]);
+            if (!optLike) {
+              return false;
+            }
+          }
+        }
+        // Results: iterate the SUPERTYPE side's results (B of the rule).
+        for (let i = 0; i < sup.results.length; i += 1) {
+          const subResult = sub.results[i];
+          if (subResult !== undefined) {
+            const holds = wireOnLeft
+              ? this.refSubtype(entry.results[i], node.results[i], true, seen, depth + 1)
+              : this.refSubtype(entry.results[i], node.results[i], false, seen, depth + 1);
+            if (!holds) {
+              return false;
+            }
+          } else {
+            const optLike = wireOnLeft
+              ? this.optLikeSchema(node.results[i])
+              : this.optLikeWire(entry.results[i]);
+            if (!optLike) {
+              return false;
+            }
+          }
+        }
+        return true;
+      }
+      case "service": {
+        if (entry.kind !== "service") {
+          return false;
+        }
+        if (wireIsLeft) {
+          // wire <: schema: every expected method exists on the wire with a
+          // wire func subtype of the expected func.
+          for (const name of Object.keys(node.methods)) {
+            const method = entry.methods.find((candidate) => candidate.name === name);
+            if (
+              method === undefined ||
+              !this.refSubtype(method.type, node.methods[name], true, seen, depth + 1)
+            ) {
+              return false;
+            }
+          }
+          return true;
+        }
+        // schema <: wire: every wire method exists in the schema.
+        for (const method of entry.methods) {
+          const schemaMethod = node.methods[method.name];
+          if (
+            schemaMethod === undefined ||
+            !hasOwn(node.methods, method.name) ||
+            !this.refSubtype(method.type, schemaMethod, false, seen, depth + 1)
+          ) {
+            return false;
+          }
+        }
+        return true;
+      }
+      default:
+        return false;
+    }
+  }
+
+  private optLikeSchema(schema: AnySchema): boolean {
+    const node = this.resolveTypeNode(schema as SchemaNode);
+    return (
+      node !== undefined &&
+      (node.kind === "opt" ||
+        (node.kind === "primitive" &&
+          (node.primitive === "null" || node.primitive === "reserved")))
+    );
+  }
+
+  private optLikeWire(wire: number): boolean {
+    if (wire === OP.null || wire === OP.reserved) {
+      return true;
+    }
+    return wire >= 0 && this.entry(wire).kind === "opt";
   }
 
   private primitiveAt(

@@ -80,6 +80,31 @@ fn golden_deferred() {
     assert_golden("deferred");
 }
 
+/// The issue #104 headline: the real ledger corpus — whose nested
+/// `ArchiveCallback` func made generation refuse for three slices — now
+/// generates end-to-end. The fixture is a byte-identical copy of the corpus
+/// file, pinned in sync below so the two can never drift.
+#[test]
+fn golden_ledger() {
+    assert_golden("ledger");
+}
+
+#[test]
+fn ledger_fixture_matches_the_corpus() {
+    let fixture = std::fs::read_to_string(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/ledger.did"),
+    )
+    .expect("fixture must be readable");
+    let corpus = std::fs::read_to_string(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../benches/corpus/ledger.did"),
+    )
+    .expect("corpus must be readable");
+    assert_eq!(
+        fixture, corpus,
+        "the ledger fixture mirrors the corpus byte-for-byte"
+    );
+}
+
 /// `"__proto__"` is a legal quoted Candid name; the builder must render it as
 /// a computed key, because a non-computed one sets the prototype at runtime —
 /// a divergence the tsc equality gate provably cannot see (#114).
@@ -111,6 +136,7 @@ fn golden_runtime_contract_documents() {
         "quoting",
         "deferred",
         "proto",
+        "ledger",
     ] {
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests");
         let source = std::fs::read_to_string(root.join("fixtures").join(format!("{name}.did")))
@@ -187,33 +213,39 @@ fn generation_is_deterministic_across_serde_round_trips() {
 }
 
 /// A deferred construct nested inside a supported type fails closed rather
-/// than silently emitting `unknown` — whether it is anonymous or reached
-/// through a declared name. The named case is the sharper one: the alias the
-/// reference would name was *skipped*, so emitting it would produce an
-/// undefined TypeScript type while reporting success (review finding on the
-/// first slice, and this test originally constructed exactly that case while
-/// classifying it as safe).
+/// than silently emitting `unknown`. Since issue #104 lifted the func
+/// deferral, both the anonymous and the named nesting generate — the value
+/// type is the inert `{ principal, method }` reference — and the standing
+/// refusal is pinned in reverse.
 #[test]
-fn nested_func_fails_closed() {
+fn nested_func_generates() {
     let anonymous = compile_did("type Holder = record { hook : func (nat) -> (text) };")
         .expect("source must compile");
-    let error = generate_module(anonymous.contract(), &TsNames::new(), &TsOptions::default())
-        .expect_err("anonymous nested func must fail closed");
-    assert!(matches!(
-        error,
-        TsGenError::UnsupportedConstruct { kind: "func", .. }
-    ));
+    let names = TsNames::from_source_info(anonymous.source_info().expect("provenance"));
+    let output = generate_module(anonymous.contract(), &names, &TsOptions::default())
+        .expect("anonymous nested func generates since #104");
+    assert!(
+        output.contains("hook: { principal: Principal; method: string }"),
+        "{output}"
+    );
+    assert!(
+        output.contains("c.func([c.nat], [c.text], \"update\")"),
+        "{output}"
+    );
 
     let named = compile_did(
-        "type Callback = func (nat) -> (text);\ntype Holder = record { hook : Callback };",
+        "type Callback = func (nat) -> (text) query;\ntype Holder = record { hook : Callback };",
     )
     .expect("source must compile");
-    let error = generate_module(named.contract(), &TsNames::new(), &TsOptions::default())
-        .expect_err("a reference to a skipped deferred alias must fail closed");
-    assert!(matches!(
-        error,
-        TsGenError::UnsupportedConstruct { kind: "func", .. }
-    ));
+    let names = TsNames::from_source_info(named.source_info().expect("provenance"));
+    let output = generate_module(named.contract(), &names, &TsOptions::default())
+        .expect("a reference to a func alias generates since #104");
+    assert!(
+        output.contains("export type Callback = { principal: Principal; method: string };"),
+        "{output}"
+    );
+    assert!(output.contains("hook: Callback"), "{output}");
+    assert!(output.contains("\"query\""), "{output}");
 }
 
 /// `T | null` cannot carry Candid optionality when the inner type can itself
@@ -340,6 +372,35 @@ fn import_shadowing_declaration_names_are_refused() {
     )
     .expect("a near-miss name is not reserved");
     assert!(output.contains("Principal2"));
+}
+
+/// The actor surface's sharp edges (issue #104 review): a class actor
+/// unwraps to its running service, and a method legally named `__proto__`
+/// must render as a computed key — a plain literal would set the prototype
+/// and silently drop the method from the schema.
+#[test]
+fn actor_emission_covers_class_unwrap_and_proto_methods() {
+    let class_actor =
+        compile_did("service : (nat) -> { ping : () -> () };").expect("a class actor compiles");
+    let names = TsNames::from_source_info(class_actor.source_info().expect("provenance"));
+    let output = generate_module(class_actor.contract(), &names, &TsOptions::default())
+        .expect("a class actor generates its running service");
+    assert!(output.contains("export const actor"), "{output}");
+    assert!(output.contains("ping: () => Promise<void>;"), "{output}");
+    assert!(
+        output.contains("init args are install-time"),
+        "the class note must be present: {output}"
+    );
+
+    let proto = compile_did("service : { \"__proto__\" : () -> () };")
+        .expect("a __proto__ method compiles");
+    let names = TsNames::from_source_info(proto.source_info().expect("provenance"));
+    let output =
+        generate_module(proto.contract(), &names, &TsOptions::default()).expect("generate");
+    assert!(
+        output.contains("c.service({ [\"__proto__\"]: c.func"),
+        "the method key must be computed: {output}"
+    );
 }
 
 /// Without a name table every field renders by the `_id_` convention — the

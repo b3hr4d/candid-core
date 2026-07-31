@@ -94,7 +94,7 @@ test("collapsing opts are rejected at construction: the aliased form", () => {
   failsWith(result, "unrepresentable_option", "$.types[0].inner");
 });
 
-test("a func nested in a supported type fails closed", () => {
+test("a func nested in a supported type builds (issue #104)", () => {
   const result = schemaFromContract(
     document(
       [
@@ -107,10 +107,18 @@ test("a func nested in a supported type fails closed", () => {
       [{ name: "Holder", type: 0 }],
     ),
   );
-  failsWith(result, "unsupported_construct", "$.types[0].fields[0].type");
+  assert(result.ok, "nested funcs are constructible since #104");
+  if (result.ok) {
+    const value = {
+      _1_: { principal: { toText: () => "aaaaa-aa" }, method: "go" },
+    };
+    assert.deepStrictEqual(validate(result.schemas.Holder, value), { ok: true });
+    assert(!validate(result.schemas.Holder, { _1_: "nope" }).ok);
+  }
 });
 
-test("top-level func and service declarations are skipped and reported", () => {
+test("reference declarations build and the actor is a service schema", () => {
+  // Issue #104: func/service/class are no longer deferred.
   const result = schemaFromContract(
     document(
       [
@@ -126,25 +134,29 @@ test("top-level func and service declarations are skipped and reported", () => {
       { kind: "service", service: 1 },
     ),
   );
-  assert(result.ok, "supported declarations must still build");
+  assert(result.ok, "every declaration must build");
   if (result.ok) {
-    assert.deepStrictEqual(Object.keys(result.schemas), ["Kept"]);
-    assert.deepStrictEqual(result.deferred, [
-      { name: "Callback", kind: "func" },
-      { name: "Registry", kind: "service" },
-    ]);
-    assert.strictEqual(result.actorDeferred, true);
+    assert.deepStrictEqual(Object.keys(result.schemas), ["Callback", "Registry", "Kept"]);
+    assert(result.actor !== undefined, "the document carries an actor");
+    // A func value is { principal, method }; a service value is a principal.
+    const funcValue = { principal: { toText: () => "aaaaa-aa" }, method: "go" };
+    assert.deepStrictEqual(validate(result.schemas.Callback, funcValue), { ok: true });
+    assert.deepStrictEqual(
+      validate(result.schemas.Registry, { toText: () => "aaaaa-aa" }),
+      { ok: true },
+    );
     assert.deepStrictEqual(validate(result.schemas.Kept, {}), { ok: true });
+    assert(!validate(result.schemas.Callback, { method: "go" }).ok);
   }
 });
 
-test("an actorless document reports actorDeferred false", () => {
+test("an actorless document has no actor schema", () => {
   const result = schemaFromContract(
     document([{ kind: "record", fields: [] }], [{ name: "Unit", type: 0 }]),
   );
   assert(result.ok);
   if (result.ok) {
-    assert.strictEqual(result.actorDeferred, false);
+    assert.strictEqual(result.actor, undefined);
   }
 });
 
@@ -528,7 +540,8 @@ test("a nat8 vec whose element type is declared by name stays a vec", () => {
   }
 });
 
-test("a func nested under opt or vec fails closed too", () => {
+test("a func nested under opt or vec builds too (issue #104)", () => {
+  const funcValue = { principal: { toText: () => "aaaaa-aa" }, method: "go" };
   for (const kind of ["opt", "vec"] as const) {
     const result = schemaFromContract(
       document(
@@ -539,7 +552,11 @@ test("a func nested under opt or vec fails closed too", () => {
         [{ name: "Holder", type: 0 }],
       ),
     );
-    failsWith(result, "unsupported_construct", "$.types[0].inner");
+    assert(result.ok, `${kind} of func is constructible since #104`);
+    if (result.ok) {
+      const sample = kind === "opt" ? funcValue : [funcValue];
+      assert.deepStrictEqual(validate(result.schemas.Holder, sample), { ok: true });
+    }
   }
 });
 
@@ -582,4 +599,168 @@ test("declaration names need not be TypeScript identifiers", () => {
   if (result.ok) {
     assert.deepStrictEqual(validate(result.schemas.delete, 1n), { ok: true });
   }
+});
+
+test("reference structural constraints fail closed (issue #104 review)", () => {
+  // A service method must denote a func type.
+  failsWith(
+    schemaFromContract(
+      document(
+        [
+          { kind: "service", methods: [{ name: "ping", id: 1247277682, function: 1 }] },
+          primitive("nat"),
+        ],
+        [{ name: "R", type: 0 }],
+      ),
+    ),
+    "invalid_contract_document",
+    "$.types[0].methods[0].function",
+  );
+  // A method id must be the Candid hash of its name.
+  failsWith(
+    schemaFromContract(
+      document(
+        [
+          { kind: "service", methods: [{ name: "ping", id: 1, function: 1 }] },
+          { kind: "func", args: [], results: [], mode: "update" },
+        ],
+        [{ name: "R", type: 0 }],
+      ),
+    ),
+    "invalid_contract_document",
+    "$.types[0].methods[0].id",
+  );
+  // A class must denote a service type.
+  failsWith(
+    schemaFromContract(
+      document(
+        [{ kind: "class", init: [], service: 1 }, primitive("nat")],
+        [{ name: "C", type: 0 }],
+      ),
+    ),
+    "invalid_contract_document",
+    "$.types[0].service",
+  );
+  // The actor must be shaped { kind, service|class } and denote a service.
+  failsWith(
+    schemaFromContract(
+      document([{ kind: "record", fields: [] }], [{ name: "U", type: 0 }], {
+        kind: "record",
+        record: 0,
+      }),
+    ),
+    "invalid_contract_document",
+    "$.actor",
+  );
+  failsWith(
+    schemaFromContract(
+      document([primitive("nat")], [{ name: "A", type: 0 }], {
+        kind: "service",
+        service: 0,
+      }),
+    ),
+    "invalid_contract_document",
+    "$.actor.service",
+  );
+});
+
+test("a class actor denotes its running service; classes elsewhere are refused", () => {
+  const doc = document(
+    [
+      { kind: "class", init: [1], service: 2 },
+      primitive("nat"),
+      { kind: "service", methods: [{ name: "ping", id: 1247277682, function: 3 }] },
+      { kind: "func", args: [], results: [], mode: "update" },
+    ],
+    [],
+    { kind: "class", class: 0 },
+  );
+  const result = schemaFromContract(doc);
+  assert(result.ok, "a canonical class-actor document loads");
+  if (result.ok) {
+    const principal = { toText: () => "aaaaa-aa" };
+    assert(result.actor !== undefined);
+    if (result.actor !== undefined) {
+      assert.deepStrictEqual(validate(result.actor, principal), { ok: true });
+    }
+  }
+  // candid-core's class_not_actor_root rule, mirrored: a class anywhere but
+  // the actor root — a declaration included — fails closed.
+  failsWith(
+    schemaFromContract(
+      document(
+        [
+          { kind: "class", init: [], service: 1 },
+          { kind: "service", methods: [] },
+        ],
+        [{ name: "Main", type: 0 }],
+      ),
+    ),
+    "invalid_contract_document",
+    "$.types[0]",
+  );
+});
+
+test("core-validator parity: oneway results, empty methods, class edges (PR #121 review)", () => {
+  // oneway_has_results, mirrored.
+  failsWith(
+    schemaFromContract(
+      document(
+        [{ kind: "func", args: [], results: [1], mode: "oneway" }, primitive("nat")],
+        [{ name: "F", type: 0 }],
+      ),
+    ),
+    "invalid_contract_document",
+    "$.types[0].results",
+  );
+  // empty_method_name, mirrored — hash("") is 0, so the hash check alone
+  // would pass this document.
+  failsWith(
+    schemaFromContract(
+      document(
+        [
+          { kind: "service", methods: [{ name: "", id: 0, function: 1 }] },
+          { kind: "func", args: [], results: [], mode: "update" },
+        ],
+        [{ name: "S", type: 0 }],
+      ),
+    ),
+    "invalid_contract_document",
+    "$.types[0].methods[0].name",
+  );
+  // class_not_first_class_type, mirrored: the actor-root exception must not
+  // let a class become a first-class type via its own init...
+  failsWith(
+    schemaFromContract(
+      document(
+        [
+          { kind: "class", init: [0], service: 1 },
+          { kind: "service", methods: [] },
+        ],
+        [],
+        { kind: "class", class: 0 },
+      ),
+    ),
+    "invalid_contract_document",
+    "$.types[0].init[0]",
+  );
+  // ...or via a func result reaching back to it.
+  failsWith(
+    schemaFromContract(
+      document(
+        [
+          { kind: "class", init: [], service: 1 },
+          {
+            kind: "service",
+            methods: [{ name: "make", id: 1213610478, function: 2 }],
+          },
+          { kind: "func", args: [], results: [0], mode: "update" },
+        ],
+        [],
+        { kind: "class", class: 0 },
+      ),
+    ),
+    "invalid_contract_document",
+    "$.types[2].results[0]",
+  );
 });

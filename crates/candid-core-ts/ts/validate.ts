@@ -62,6 +62,8 @@
 
 import type {
   AnySchema,
+  FuncSchema,
+  ServiceSchema,
   BlobSchema,
   FieldSchemas,
   OptSchema,
@@ -168,6 +170,8 @@ type SchemaNode =
   | RecordSchema<FieldSchemas>
   | TupleSchema<readonly AnySchema[]>
   | VariantSchema<FieldSchemas>
+  | FuncSchema
+  | ServiceSchema
   | RecSchema<any>;
 /* eslint-enable @typescript-eslint/no-explicit-any */
 
@@ -315,6 +319,14 @@ class Walk {
         return;
       case "variant":
         this.variant(node, value, path, depth);
+        return;
+      case "func":
+        this.func(value, path, depth);
+        return;
+      case "service":
+        // A service value is the principal of a running service (issue
+        // #104) — the same structural check the principal primitive uses.
+        this.principalShaped(value, path, "a service value is a Principal");
         return;
       case "rec": {
         const body: unknown = node.body();
@@ -477,17 +489,11 @@ class Walk {
         this.issue("uninhabited_type", path, "empty has no values");
         return;
       case "principal":
-        if (
-          (typeof value !== "object" && typeof value !== "function") ||
-          value === null ||
-          typeof (value as { toText?: unknown }).toText !== "function"
-        ) {
-          this.issue(
-            "invalid_type",
-            path,
-            `expected a Principal (an object with a toText method), got ${describe(value)}`,
-          );
-        }
+        this.principalShaped(
+          value,
+          path,
+          `expected a Principal (an object with a toText method), got ${describe(value)}`,
+        );
         return;
       default:
         this.issue(
@@ -672,6 +678,64 @@ class Walk {
       if (key !== "tag" && key !== "value") {
         path.push(key);
         this.issue("unexpected_field", path, "a variant value is { tag, value }");
+        path.pop();
+      }
+    }
+  }
+
+  private principalShaped(
+    value: unknown,
+    path: PathSegment[],
+    message: string,
+  ): void {
+    if (
+      (typeof value !== "object" && typeof value !== "function") ||
+      value === null ||
+      typeof (value as { toText?: unknown }).toText !== "function"
+    ) {
+      this.issue("invalid_type", path, message);
+    }
+  }
+
+  /**
+   * A func value is `{ principal, method }` — inert reference data, the
+   * modern shape recorded on issue #104. Strict like records: both keys
+   * required (own enumerable), the method non-empty, nothing else present.
+   */
+  private func(value: unknown, path: PathSegment[], depth: number): void {
+    if (!isPlainCandidate(value)) {
+      this.issue(
+        "invalid_type",
+        path,
+        `expected a func reference ({ principal, method }), got ${describe(value)}`,
+      );
+      return;
+    }
+    path.push("principal");
+    if (!hasOwnEnumerable(value, "principal")) {
+      this.issue("missing_field", path, "a func reference names a principal");
+    } else {
+      this.principalShaped(
+        value.principal,
+        path,
+        `expected a Principal (an object with a toText method), got ${describe(value.principal)}`,
+      );
+    }
+    path.pop();
+    path.push("method");
+    if (!hasOwnEnumerable(value, "method")) {
+      this.issue("missing_field", path, "a func reference names a method");
+    } else if (typeof value.method !== "string" || value.method.length === 0) {
+      this.issue("invalid_type", path, "a method name is a non-empty string");
+    }
+    path.pop();
+    for (const key of Object.keys(value)) {
+      if (this.halted || !this.step(path, depth)) {
+        return;
+      }
+      if (key !== "principal" && key !== "method") {
+        path.push(key);
+        this.issue("unexpected_field", path, "a func reference is { principal, method }");
         path.pop();
       }
     }
