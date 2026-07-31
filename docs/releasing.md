@@ -377,6 +377,68 @@ properties hold. **Prerequisites, once, all three required before the first disp
    The workflow's verify job checks this and refuses to proceed, so the
    omission fails closed rather than publishing silently.
 
+### The first publish of a new package is manual, once
+
+npm has no "pending publisher": a trusted publisher can only be attached to
+a package that **already exists** on the registry (`npm trust` documents it
+as a prerequisite — "the package you're configuring must already exist" —
+and npm/cli#8544, open since September 2025, is the request to lift this).
+So the workflow cannot perform a package's *first* publish, and it will fail
+with an auth or 404 error if pointed at a name that has never been published.
+
+The bootstrap, done once per package name by the owner, from a local
+checkout of the merged commit:
+
+```bash
+cd crates/candid-core-ts/ts
+npm ci                                          # the pinned compiler, not a global one
+npm login                                       # interactive, 2FA
+npm version 0.0.0-bootstrap --no-git-tag-version
+npm run build
+npm publish --access public --tag bootstrap     # never becomes `latest`
+npm logout                                      # invalidate the credential login created
+git checkout package.json package-lock.json     # discard the local version bump
+```
+
+`npm ci` comes first because `npm run build` resolves `tsc` from
+`node_modules/.bin`: without it, a machine with a global TypeScript silently
+builds the permanent artifact with the wrong compiler, and a machine without
+one just fails. `npm version` updates the manifest and the lockfile
+together, so they stay in sync and `npm ci` remains valid either side of the
+bump.
+
+`--tag bootstrap` is what keeps the placeholder inert: `latest` still moves
+to the first real version, and a plain `npm i` never resolves to it. The
+version bump is deliberately local and discarded — the repository's manifest
+stays at the version the workflow will verify.
+
+`npm login` **does** create a credential: it writes a registry token into
+`~/.npmrc`, which is why `npm logout` follows immediately — that invalidates
+the token rather than leaving a publish credential on the workstation. This
+is the one moment in the whole pipeline where a publishing credential
+exists; it lasts for the two commands between login and logout, and after
+that the OIDC-only posture holds with nothing to revoke.
+
+Then configure the trusted publisher (npmjs.com → the package → Settings →
+Trusted publishing → GitHub Actions), with values that must match this
+repository exactly:
+
+| Field | Value |
+| --- | --- |
+| Organization or user | `b3hr4d` |
+| Repository | `candid-core` |
+| Workflow filename | `npm-release.yml` |
+| Environment | `npm-publish` |
+| Allowed actions | publish (at least one is required since 2026-05-20) |
+
+npm does not validate this configuration when saved — a typo surfaces only
+as a failed publish. After the first successful workflow publish, harden the
+package: Settings → Publishing access → require two-factor authentication
+and disallow tokens. That setting affects token auth only; trusted
+publishing keeps working, because OIDC is not a token.
+
+### Every publish after that
+
 Publishing is `npm release` (`.github/workflows/npm-release.yml`),
 dispatch-only, with `{commit, version}`:
 
@@ -393,6 +455,11 @@ dispatch-only, with `{commit, version}`:
 2. The `publish` job sits behind the protected `npm-publish` environment;
    the owner's approval there is the explicit authorization for the
    irreversible step. It publishes with `--provenance`.
+
+The pinned Node (24.18.0) ships npm 11.16.0, above both floors that matter:
+11.5.1 for OIDC publishing and 11.15.0 for the `npm trust` CLI. Trusted
+publishing also requires a GitHub-hosted runner and, for automatic
+provenance, a public repository publishing a public package — all true here.
 
 `@icp-sdk/core` is a type-only peer: the shipped declarations reference its
 `Principal`, so TypeScript consumers must install it, while npm's install
