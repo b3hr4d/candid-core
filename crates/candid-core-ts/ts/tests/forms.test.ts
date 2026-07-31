@@ -386,3 +386,24 @@ test("the path resolver's remaining branches: indices, opts, and dead ends", () 
   assert.strictEqual(formNodeAt(account, "$..broken"), undefined);
   assert.strictEqual(formNodeAt(account, "nope"), undefined);
 });
+
+test("PR #122 review: value-named fields and malformed escapes", () => {
+  // A single-arm variant whose payload has a field literally named "value":
+  // $.value is the payload, $.value.value is that field.
+  const single = formModel(c.variant({ a: c.record({ value: c.nat8 }) }));
+  const singleResult = validate(
+    c.variant({ a: c.record({ value: c.nat8 }) }),
+    { tag: "a", value: { value: 999 } } as never,
+  );
+  assert(!singleResult.ok);
+  if (!singleResult.ok) {
+    assert.strictEqual(singleResult.issues[0].path, "$.value.value");
+    const node = formNodeAt(single, singleResult.issues[0].path);
+    assert.strictEqual(node?.control, "integer");
+    assert.strictEqual(node?.path, "$.value.value");
+  }
+  // Multi-arm variants still resolve deep nested-variant paths (pinned
+  // above) — and a malformed quoted escape is undefined, never a throw.
+  const account = formModel(ledger.Account as AnySchema);
+  assert.strictEqual(formNodeAt(account, '$["\\x"]'), undefined);
+});

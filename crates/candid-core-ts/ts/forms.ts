@@ -204,7 +204,13 @@ function takeSegment(rest: string): [string | number, string] | undefined {
     }
     const quoted = /^\[("(?:[^"\\]|\\.)*")\]/.exec(rest);
     if (quoted !== null) {
-      return [JSON.parse(quoted[1]) as string, rest.slice(quoted[0].length)];
+      // The regex admits any backslash escape; JSON does not. A malformed
+      // escape is a malformed path — undefined, never a throw.
+      try {
+        return [JSON.parse(quoted[1]) as string, rest.slice(quoted[0].length)];
+      } catch {
+        return undefined;
+      }
     }
   }
   return undefined;
@@ -233,8 +239,19 @@ function descend(node: FormNode, segment: string | number): FormNode | undefined
       // the arms and is returned only when exactly one arm's payload
       // describes it — the model cannot know the chosen tag, but distinct
       // arm shapes usually make the deep path unambiguous.
-      if (segment === "tag" || segment === "value") {
-        return { ...node, path: extendPath(node.path, segment) };
+      if (segment === "tag") {
+        return { ...node, path: extendPath(node.path, "tag") };
+      }
+      if (segment === "value") {
+        // Into the payload: unambiguous when exactly one arm carries one —
+        // that arm's editor, at its own `$.value` path. Otherwise the
+        // re-pathed choice, and deeper segments resolve through the arms.
+        const payloads = node.arms
+          .map((arm) => arm.payload())
+          .filter((payload): payload is FormNode => payload !== undefined);
+        return payloads.length === 1
+          ? payloads[0]
+          : { ...node, path: extendPath(node.path, "value") };
       }
       const matches: FormNode[] = [];
       for (const arm of node.arms) {
