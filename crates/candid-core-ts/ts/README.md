@@ -14,7 +14,7 @@ const Account = c.record({ owner: c.principal, balance: c.nat });
 type Account = Infer<typeof Account>; // { owner: Principal; balance: bigint }
 
 validate(Account, value);       // { ok: true } | { ok: false, issues }
-encode(Account, value);         // Candid wire bytes
+encode(Account, value);         // { ok: true, bytes } | { ok: false, issues }
 ```
 
 Modules, each a subpath export:
@@ -43,8 +43,21 @@ Types describe the modern domain, not the agent-js runtime shapes: `opt T` is
 `nat`/`int`/64-bit integers are `bigint`. Compatibility with agent-js value
 shapes is an explicit non-goal, recorded on the project's issue tracker.
 
-`@icp-sdk/core` is an optional type-only peer: the `principal` primitive
-types against its `Principal`, but nothing here imports it at runtime.
+`@icp-sdk/core` is a **type-only peer dependency, and it is required**: the
+`principal` primitive types against its `Principal`, so the shipped
+declaration files import that type and a consumer without the peer installed
+cannot type-check this package. Nothing imports it at runtime — no bundled
+bytes, no runtime dependency — but `npm i @icp-sdk/core` (or any package
+providing `@icp-sdk/core/principal`'s types) is needed to compile.
+
+## Verification
+
+Every published artifact passes a packaged-consumer gate before release: the
+tarball `npm pack` produces is extracted into a clean project, compiled under
+strict TypeScript with `skipLibCheck` off, and executed — root and every
+subpath export, a real encode/validate round-trip. The codec is additionally
+verified in both directions against the reference implementation's own wire
+vectors.
 
 ## Provenance
 

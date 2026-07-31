@@ -2,15 +2,24 @@
 """The packaged-consumer smoke for @candid-core/schema (issue #106).
 
 Builds the package, packs the exact artifact `npm publish` would ship,
-extracts it into a scratch consumer, and proves the artifact stands alone:
-the root and every subpath export resolve, compile under the pinned strict
-TypeScript, and execute a real encode/validate round-trip under node.
-Consumption goes through the extracted tarball only — never the repository
-sources — so a manifest that ships the wrong files fails here, not on npm.
+extracts it into a scratch consumer, and proves the artifact stands up on
+its own: the shipped file list is exactly what the manifest promises, the
+root and every subpath export resolve, everything compiles under the pinned
+strict TypeScript *without* `skipLibCheck` — so a broken declaration is a
+failure here rather than a permanent mistake on npm — and a real
+encode/validate round-trip executes under node. Consumption goes through the
+extracted tarball only, never the repository sources.
+
+The type-only `@icp-sdk/core` peer is installed as a minimal stub providing
+exactly the `Principal` surface the declarations reference. That keeps the
+gate honest in both directions: `Principal` stays a real nominal type (so a
+wrong value is a compile error, not silently `any`), and the missing-peer
+case is asserted separately as a clear, actionable error.
 """
 
 import json
 import pathlib
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -40,6 +49,58 @@ def main():
         run(["tar", "-xzf", str(tarball), "-C", str(scratch)], scratch)
         (scratch / "package").rename(extracted)
 
+        # The shipped file list is exactly the manifest's promise — a stray
+        # test file or a missing declaration fails here.
+        shipped = sorted(
+            str(path.relative_to(extracted))
+            for path in extracted.rglob("*")
+            if path.is_file()
+        )
+        modules = ["actor", "codec", "contract", "forms", "labels", "schema", "validate"]
+        expected = sorted(
+            ["LICENSE", "README.md", "package.json"]
+            + [f"dist/{name}.js" for name in modules]
+            + [f"dist/{name}.d.ts" for name in modules]
+        )
+        if shipped != expected:
+            raise SystemExit(
+                f"the packed file list is not the manifest's promise:\n"
+                f"  shipped:  {shipped}\n  expected: {expected}"
+            )
+
+        # The type-only peer, as a minimal stub: `Principal` must stay a real
+        # nominal type in the consumer, or the compile proves nothing.
+        peer = scratch / "node_modules" / "@icp-sdk" / "core"
+        (peer / "principal").mkdir(parents=True)
+        (peer / "package.json").write_text(
+            json.dumps(
+                {
+                    "name": "@icp-sdk/core",
+                    "version": "6.0.0",
+                    "type": "module",
+                    "exports": {
+                        "./principal": {
+                            "types": "./principal/index.d.ts",
+                            "default": "./principal/index.js",
+                        }
+                    },
+                }
+            )
+        )
+        (peer / "principal" / "index.d.ts").write_text(
+            "export declare class Principal {\n"
+            "  private readonly _isPrincipal: true;\n"
+            "  toText(): string;\n"
+            "}\n"
+        )
+        # A runtime shape the validator accepts: canonical management-canister
+        # text, exactly what a real Principal's toText() returns.
+        (peer / "principal" / "index.js").write_text(
+            "export class Principal {\n"
+            '  toText() { return "aaaaa-aa"; }\n'
+            "}\n"
+        )
+
         consumer = scratch / "consumer"
         consumer.mkdir()
         (consumer / "package.json").write_text('{ "type": "module" }\n')
@@ -51,10 +112,12 @@ def main():
             'import { createActor, type Transport } from "@candid-core/schema/actor";\n'
             'import { formModel } from "@candid-core/schema/forms";\n'
             'import { candidLabelHash } from "@candid-core/schema/labels";\n'
+            'import { Principal } from "@icp-sdk/core/principal";\n'
             "\n"
             "const Account = c.record({ owner: c.principal, balance: c.nat });\n"
             "type Account = Infer<typeof Account>;\n"
-            'const value: Account = { owner: { toText: () => "aaaaa-aa" }, balance: 5n };\n'
+            'const owner = new Principal();\n'
+            "const value: Account = { owner, balance: 5n };\n"
             "const checked = validate(Account, value);\n"
             'if (!checked.ok) throw new Error("validate");\n'
             "const bytes = encode(Account, value);\n"
@@ -79,10 +142,9 @@ def main():
                         "module": "nodenext",
                         "moduleResolution": "nodenext",
                         "target": "es2022",
-                        # The optional type-only @icp-sdk peer is absent in
-                        # the consumer; its specifier only appears inside the
-                        # package's declaration files.
-                        "skipLibCheck": True,
+                        # Deliberately NOT skipLibCheck: the shipped
+                        # declarations must compile as they stand.
+                        "skipLibCheck": False,
                     },
                     "include": ["main.ts"],
                 }
@@ -93,7 +155,24 @@ def main():
         run([str(tsc), "-p", str(consumer / "tsconfig.json")], consumer)
         # Execute the emitted behavior under plain node, from the artifact.
         run(["node", "--experimental-strip-types", "--no-warnings", "main.ts"], consumer)
-    print("npm package artifact verified: root + 6 subpaths, compiled and executed")
+
+        # The peer really is required for types: without it the failure must
+        # be the clear missing-module error the README documents, not a
+        # silent `any`.
+        shutil.rmtree(scratch / "node_modules" / "@icp-sdk")
+        missing = subprocess.run(
+            [str(tsc), "-p", str(consumer / "tsconfig.json")],
+            cwd=consumer,
+            capture_output=True,
+            text=True,
+        )
+        if missing.returncode == 0 or "@icp-sdk/core/principal" not in missing.stdout:
+            raise SystemExit(
+                "expected a missing-peer type error naming @icp-sdk/core/principal, got:\n"
+                f"{missing.stdout}{missing.stderr}"
+            )
+    print("npm package artifact verified: manifest file list, root + 6 subpaths, "
+          "strict compile without skipLibCheck, executed round-trip, peer requirement")
 
 
 if __name__ == "__main__":
