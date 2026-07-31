@@ -394,10 +394,13 @@ dispatch-only, with `{commit, version}`:
    the owner's approval there is the explicit authorization for the
    irreversible step. It publishes with `--provenance`.
 
-`@icp-sdk/core` is a required type-only peer: the shipped declarations
-reference its `Principal`, and the smoke asserts both that the package
-compiles with the peer present and that its absence is a clear
-missing-module error.
+`@icp-sdk/core` is a type-only peer: the shipped declarations reference its
+`Principal`, so TypeScript consumers must install it, while npm's install
+metadata marks it optional because nothing imports it at runtime (which is
+also what keeps this repository's own lockfile free of a dependency tree it
+never executes). The smoke asserts both directions — the package compiles
+with the peer present, and its absence is a clear missing-module error
+rather than a silent `any`.
 
 The package versions independently of the crate (pre-1.0). Bump
 `ts/package.json` in an ordinary reviewed PR; state in that PR's body which

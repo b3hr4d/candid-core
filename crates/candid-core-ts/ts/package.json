@@ -54,5 +54,10 @@
   },
   "devDependencies": {
     "typescript": "7.0.2"
+  },
+  "peerDependenciesMeta": {
+    "@icp-sdk/core": {
+      "optional": true
+    }
   }
 }

@@ -43,12 +43,14 @@ Types describe the modern domain, not the agent-js runtime shapes: `opt T` is
 `nat`/`int`/64-bit integers are `bigint`. Compatibility with agent-js value
 shapes is an explicit non-goal, recorded on the project's issue tracker.
 
-`@icp-sdk/core` is a **type-only peer dependency, and it is required**: the
-`principal` primitive types against its `Principal`, so the shipped
-declaration files import that type and a consumer without the peer installed
-cannot type-check this package. Nothing imports it at runtime — no bundled
-bytes, no runtime dependency — but `npm i @icp-sdk/core` (or any package
-providing `@icp-sdk/core/principal`'s types) is needed to compile.
+`@icp-sdk/core` is a **type-only peer dependency**: the `principal`
+primitive types against its `Principal`, so the shipped declaration files
+import that type and **a TypeScript consumer must install it** — without it,
+compiling this package's types fails with a missing-module error naming
+`@icp-sdk/core/principal`. It is marked `optional` in npm's install metadata
+because nothing imports it at *runtime*: plain JavaScript consumers need
+nothing, and no bytes from it are bundled. Any package providing that
+subpath's types satisfies the requirement.
 
 ## Verification
 
