@@ -105,6 +105,23 @@ their precedence; an identity mismatch is only observable after hashing, so an
 exhausted identity budget reports `source_identity_work` where a mismatch
 would otherwise have been detected.
 
+The two type-depth guard walks — the parse-side preflight over declaration
+references and the checked-type walk before lowering — charge a dedicated
+`type_preflight_work` counter (`max_type_preflight_work`). Each walk first
+builds a recursion map (the declaration reference graph and the members of its
+cycles, computed iteratively) and then expands references with per-path cycle
+stopping, tracking only cycle-member names per path and deduplicating
+expansion states, so a subtree shared by many aliases is visited once per
+distinct `(node, depth, active recursive names)` state rather than once per
+referencing path; issue #125 records the exponential re-expansion this
+replaced, O(2^n) node visits from a sub-kilobyte source with nothing charged.
+One unit is charged per recursion-map node and per expansion state, plus one
+per recursive name tracked on the state's path — the real cost of cloning and
+comparing that set. The counter is separate from `max_canonicalization_work`
+for the same reason `provenance_work` is: both accrue on one budget in a
+single compilation, and metering the depth guards on the graph counter would
+let a type-heavy bundle starve the canonicalization that follows it.
+
 Producer metadata is untrusted, caller-supplied provenance. Its aggregate bytes
 are bounded (`max_producer_bytes`), but it is deliberately excluded from the
 semantic Contract identity payloads `candid-core:contract:v1` and
