@@ -391,19 +391,33 @@ checkout of the merged commit:
 
 ```bash
 cd crates/candid-core-ts/ts
+npm ci                                          # the pinned compiler, not a global one
 npm login                                       # interactive, 2FA
 npm version 0.0.0-bootstrap --no-git-tag-version
 npm run build
 npm publish --access public --tag bootstrap     # never becomes `latest`
+npm logout                                      # invalidate the credential login created
 git checkout package.json package-lock.json     # discard the local version bump
 ```
+
+`npm ci` comes first because `npm run build` resolves `tsc` from
+`node_modules/.bin`: without it, a machine with a global TypeScript silently
+builds the permanent artifact with the wrong compiler, and a machine without
+one just fails. `npm version` updates the manifest and the lockfile
+together, so they stay in sync and `npm ci` remains valid either side of the
+bump.
 
 `--tag bootstrap` is what keeps the placeholder inert: `latest` still moves
 to the first real version, and a plain `npm i` never resolves to it. The
 version bump is deliberately local and discarded — the repository's manifest
-stays at the version the workflow will verify. No token is created at any
-point; the manual publish authenticates as a 2FA'd human, so there is
-nothing to revoke afterwards.
+stays at the version the workflow will verify.
+
+`npm login` **does** create a credential: it writes a registry token into
+`~/.npmrc`, which is why `npm logout` follows immediately — that invalidates
+the token rather than leaving a publish credential on the workstation. This
+is the one moment in the whole pipeline where a publishing credential
+exists; it lasts for the two commands between login and logout, and after
+that the OIDC-only posture holds with nothing to revoke.
 
 Then configure the trusted publisher (npmjs.com → the package → Settings →
 Trusted publishing → GitHub Actions), with values that must match this
