@@ -16,6 +16,7 @@ import * as variants from "../../tests/goldens/variants.ts";
 import * as recursion from "../../tests/goldens/recursion.ts";
 import * as quoting from "../../tests/goldens/quoting.ts";
 import * as deferred from "../../tests/goldens/deferred.ts";
+import * as proto from "../../tests/goldens/proto.ts";
 import * as ledger from "../../tests/goldens/ledger.ts";
 
 function resolveLazy(node: FormNode): FormNode {
@@ -34,6 +35,7 @@ test("every golden schema yields a form model without gaps", () => {
     recursion,
     quoting,
     deferred,
+    proto,
     ledger,
   };
   let built = 0;
@@ -217,4 +219,170 @@ test("validation issues address form nodes through the shared path grammar", () 
     // rendering included, or the two grammars have diverged.
     assert.strictEqual(node?.path, weirdResult.issues[0].path);
   }
+});
+
+// ---------------------------------------------------------------------------
+// Review-cycle regressions (pre-publication adversarial review)
+// ---------------------------------------------------------------------------
+
+test("a self-referential rec chain throws instead of hanging", () => {
+  const evil = c.rec(() => evil as unknown as Schema<unknown>) as AnySchema;
+  assert.throws(() => formNodeAt(formModel(evil), "$"), TypeError);
+  assert.throws(
+    () => formNodeAt(formModel(c.record({ x: evil })), "$.x.y"),
+    TypeError,
+  );
+});
+
+test("variant and func issue paths map onto form nodes", () => {
+  const model = formModel(ledger.TransferResult as AnySchema);
+  // A deep issue inside a chosen arm resolves through unambiguous arms.
+  const bad = validate(ledger.TransferResult as Schema<unknown>, {
+    tag: "err",
+    value: { tag: "bad_fee", value: { expected_fee: { e8s: "wrong" } } },
+  });
+  assert(!bad.ok);
+  if (!bad.ok) {
+    const node = formNodeAt(model, bad.issues[0].path);
+    assert.strictEqual(node?.control, "bigint");
+    assert.strictEqual(node?.path, bad.issues[0].path);
+  }
+  // A bad tag addresses the re-pathed choice.
+  const badTag = validate(ledger.TransferResult as Schema<unknown>, { tag: "nope" });
+  assert(!badTag.ok);
+  if (!badTag.ok) {
+    const node = formNodeAt(model, badTag.issues[0].path);
+    assert.strictEqual(node?.control, "choice");
+    assert.strictEqual(node?.path, badTag.issues[0].path);
+  }
+  // A missing payload addresses the re-pathed choice at $.value.
+  const noValue = validate(ledger.TransferResult as Schema<unknown>, { tag: "ok" });
+  assert(!noValue.ok);
+  if (!noValue.ok) {
+    const node = formNodeAt(model, noValue.issues[0].path);
+    assert.strictEqual(node?.control, "choice");
+    assert.strictEqual(node?.path, noValue.issues[0].path);
+  }
+  // Func references expose their two editors at the paths validate uses.
+  const funcModel = formModel(deferred.Callback as AnySchema);
+  const badFunc = validate(deferred.Callback as Schema<unknown>, {
+    principal: 42,
+    method: "",
+  });
+  assert(!badFunc.ok);
+  if (!badFunc.ok) {
+    for (const issue of badFunc.issues) {
+      const node = formNodeAt(funcModel, issue.path);
+      assert(node !== undefined, `${issue.path} must address a node`);
+      assert.strictEqual(node?.path, issue.path);
+    }
+    assert.strictEqual(formNodeAt(funcModel, "$.principal")?.control, "principal");
+    assert.strictEqual(formNodeAt(funcModel, "$.method")?.control, "text");
+  }
+});
+
+test("a numeric-tagged arm's payload carries the numeric id too", () => {
+  const model = resolveLazy(formModel(c.variant({ _5_: c.nat8 })));
+  assert.strictEqual(model.control, "choice");
+  if (model.control === "choice") {
+    const payload = model.arms[0].payload();
+    assert(payload !== undefined);
+    assert.strictEqual(payload?.numericId, 5);
+    // And the positive tagOnly direction: a non-null primitive payload is
+    // NOT tag-only.
+    assert.strictEqual(model.arms[0].tagOnly, false);
+  }
+});
+
+test("prototype-hazard keys resolve through the model", () => {
+  const model = formModel(proto.Holder as AnySchema);
+  const result = validate(proto.Holder as Schema<unknown>, JSON.parse('{"__proto__": true}'));
+  assert(!result.ok);
+  if (!result.ok) {
+    const node = formNodeAt(model, result.issues[0].path);
+    assert.strictEqual(node?.control, "integer");
+    assert.strictEqual(node?.path, result.issues[0].path);
+  }
+});
+
+test("every fixed-width range and bigint bound is exactly the domain's", () => {
+  const expectations: readonly [AnySchema, number, number][] = [
+    [c.nat8, 0, 255],
+    [c.nat16, 0, 65_535],
+    [c.nat32, 0, 4_294_967_295],
+    [c.int8, -128, 127],
+    [c.int16, -32_768, 32_767],
+    [c.int32, -2_147_483_648, 2_147_483_647],
+  ];
+  for (const [schema, min, max] of expectations) {
+    const node = resolveLazy(formModel(schema));
+    assert.strictEqual(node.control, "integer");
+    if (node.control === "integer") {
+      assert.strictEqual(node.min, min);
+      assert.strictEqual(node.max, max);
+    }
+  }
+  const int64 = resolveLazy(formModel(c.int64));
+  assert.strictEqual(int64.control, "bigint");
+  if (int64.control === "bigint") {
+    assert.strictEqual(int64.min, -9_223_372_036_854_775_808n);
+    assert.strictEqual(int64.max, 9_223_372_036_854_775_807n);
+  }
+  const int = resolveLazy(formModel(c.int));
+  assert.strictEqual(int.control, "bigint");
+  if (int.control === "bigint") {
+    assert.strictEqual(int.min, undefined);
+    assert.strictEqual(int.max, undefined);
+  }
+});
+
+test("the path resolver's remaining branches: indices, opts, and dead ends", () => {
+  // The opt same-path rule: the inner editor sits at the field's own path.
+  const account = formModel(ledger.Account as AnySchema);
+  const viaOpt = formNodeAt(account, "$.subaccount");
+  assert.strictEqual(viaOpt?.control, "optional");
+  assert.strictEqual(viaOpt?.path, "$.subaccount");
+  const opt = resolveLazy(account);
+  if (opt.control === "group") {
+    const subaccount = resolveLazy(opt.fields[1]());
+    if (subaccount.control === "optional") {
+      assert.strictEqual(resolveLazy(subaccount.inner()).path, "$.subaccount");
+    }
+  }
+  // List and tuple indices.
+  const items = formModel(collections.Items as AnySchema);
+  assert.strictEqual(formNodeAt(items, "$[2].id")?.control, "integer");
+  const pair = formModel(collections.Pair as AnySchema);
+  assert.strictEqual(formNodeAt(pair, "$[1]")?.control, "text");
+  assert.strictEqual(formNodeAt(pair, "$[7]"), undefined);
+  // A wrong-typed opt value reports at the opt's own path and maps to the
+  // optional node itself...
+  const atOpt = validate(ledger.Account as Schema<unknown>, {
+    owner: { toText: () => "aaaaa-aa" },
+    subaccount: [1, 2],
+  });
+  assert(!atOpt.ok);
+  if (!atOpt.ok) {
+    assert.strictEqual(formNodeAt(account, atOpt.issues[0].path)?.control, "optional");
+  }
+  // ...while an issue INSIDE a present opt resolves through the wrapper.
+  const transaction = formModel(ledger.Transaction as AnySchema);
+  const deep = validate(ledger.Transaction as Schema<unknown>, {
+    to: { owner: 42, subaccount: null },
+    fee: null,
+    from: null,
+    memo: null,
+    timestamp: 1n,
+    index: 2n,
+    amount: { e8s: 3n },
+  });
+  assert(!deep.ok);
+  if (!deep.ok) {
+    assert.strictEqual(deep.issues[0].path, "$.to.owner");
+    assert.strictEqual(formNodeAt(transaction, deep.issues[0].path)?.control, "principal");
+  }
+  // Dead ends stay undefined: unknown keys, malformed paths, wrong roots.
+  assert.strictEqual(formNodeAt(account, "$.nope"), undefined);
+  assert.strictEqual(formNodeAt(account, "$..broken"), undefined);
+  assert.strictEqual(formNodeAt(account, "nope"), undefined);
 });

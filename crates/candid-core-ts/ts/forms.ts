@@ -6,9 +6,12 @@
 //
 // # The model mirrors the domain shapes
 //
-// Every combinator yields exactly one documented control node (the walk's
-// switch is exhaustive with a `never` check, so a new combinator breaks the
-// build here rather than silently rendering nothing):
+// Every combinator yields exactly one documented control node. The walk's
+// switch is exhaustive over this file's copy of the node union with a
+// `never`-typed default, so dropping a case is a compile error; a schema
+// kind this union has never heard of fails closed at runtime with
+// `TypeError` (the compiler cannot see additions to `schema.ts` through the
+// erased `AnySchema`, so build-breakage covers exactly the listed kinds):
 //
 // - fixed-width integers → `integer` with number-safe `min`/`max`;
 //   `nat`/`int`/`nat64`/`int64` → `bigint` with bigint bounds where they
@@ -36,11 +39,14 @@
 // # Paths round-trip with validation
 //
 // Node paths use exactly `validate`'s grammar (`$.next.tail[2].tag`), so a
-// validation issue's `path` addresses a form node directly: walk the model
-// with `formNodeAt` and attach the message. Building the model never throws
-// on any *schema this core constructs*; a foreign schema object is a
-// programmer error and throws `TypeError`, the same stance `createActor`
-// takes.
+// validation issue's `path` addresses a form node via `formNodeAt`: record,
+// tuple, list, opt, and func-reference paths resolve directly; a variant's
+// `.tag`/`.value` resolve to the re-pathed choice, and deeper segments
+// resolve through the arms when exactly one arm's shape describes them (the
+// model cannot know the chosen tag). Building the model never throws on any
+// schema a Contract can produce; a foreign schema object — or a rec chain
+// that never terminates, which no Contract builds — is a programmer error
+// and throws `TypeError`, the same stance `createActor` takes.
 
 import type {
   AnySchema,
@@ -159,9 +165,7 @@ export function formNodeAt(root: FormNode, path: string): FormNode | undefined {
     return undefined;
   }
   while (node !== undefined && rest.length > 0) {
-    while (node.control === "lazy") {
-      node = node.expand();
-    }
+    node = unwrapLazy(node);
     const step = takeSegment(rest);
     if (step === undefined) {
       return undefined;
@@ -170,10 +174,19 @@ export function formNodeAt(root: FormNode, path: string): FormNode | undefined {
     rest = remaining;
     node = descend(node, segment);
   }
-  while (node !== undefined && node.control === "lazy") {
-    node = node.expand();
+  return node === undefined ? undefined : unwrapLazy(node);
+}
+
+/** Bounded lazy unwrapping: a self-referential rec chain throws, not hangs. */
+function unwrapLazy(node: FormNode): FormNode {
+  let current = node;
+  for (let hops = 0; hops < 256; hops += 1) {
+    if (current.control !== "lazy") {
+      return current;
+    }
+    current = current.expand();
   }
-  return node;
+  throw new TypeError("rec chain exceeds the depth limit");
 }
 
 function takeSegment(rest: string): [string | number, string] | undefined {
@@ -215,11 +228,40 @@ function descend(node: FormNode, segment: string | number): FormNode | undefined
       return index >= 0 ? node.fields[index]() : undefined;
     }
     case "choice": {
-      // Issue paths inside variants address `.value` (and `.tag`); a form
-      // consumer resolves them against the currently chosen arm, which the
-      // model cannot know — so `.tag` addresses the choice itself and any
-      // other segment is per-arm territory left to the consumer.
-      return segment === "tag" ? node : undefined;
+      // `.tag` and `.value` address the choice itself, re-pathed so the
+      // node's path matches the issue's; anything deeper resolves through
+      // the arms and is returned only when exactly one arm's payload
+      // describes it — the model cannot know the chosen tag, but distinct
+      // arm shapes usually make the deep path unambiguous.
+      if (segment === "tag" || segment === "value") {
+        return { ...node, path: extendPath(node.path, segment) };
+      }
+      const matches: FormNode[] = [];
+      for (const arm of node.arms) {
+        const payload = arm.payload();
+        if (payload !== undefined) {
+          const resolved = descendInto(payload, segment);
+          if (resolved !== undefined) {
+            matches.push(resolved);
+          }
+        }
+      }
+      return matches.length === 1 ? matches[0] : undefined;
+    }
+    case "funcReference": {
+      // A func reference's two editors, synthesized so `$.principal` and
+      // `$.method` issues address real nodes.
+      if (segment === "principal") {
+        return {
+          path: extendPath(node.path, "principal"),
+          label: "principal",
+          control: "principal",
+        };
+      }
+      if (segment === "method") {
+        return { path: extendPath(node.path, "method"), label: "method", control: "text" };
+      }
+      return undefined;
     }
     default:
       return undefined;
@@ -227,16 +269,13 @@ function descend(node: FormNode, segment: string | number): FormNode | undefined
 }
 
 function descendInto(node: FormNode, segment: string | number): FormNode | undefined {
-  let current = node;
-  while (current.control === "lazy") {
-    current = current.expand();
-  }
-  return descend(current, segment);
+  return descend(unwrapLazy(node), segment);
 }
 
-// The typed union the switch is exhaustive over: a new combinator added to
-// schema.ts must be added here, and the `never`-typed default makes the
-// omission a compile error — the acceptance criterion's build-breakage.
+// The typed union the switch is exhaustive over. The `never`-typed default
+// turns a dropped case into a compile error; a combinator added to
+// schema.ts but not listed here surfaces as the runtime TypeError below,
+// since the erased `AnySchema` cannot carry the addition to the compiler.
 /* eslint-disable @typescript-eslint/no-explicit-any */
 type SchemaNode =
   | PrimitiveSchema<any>
@@ -341,6 +380,7 @@ function build(schema: AnySchema, site: Site): FormNode {
                 : build(arms[tag], {
                     path: extendPath(site.path, "value"),
                     label: tag,
+                    ...(numericId === undefined ? {} : { numericId }),
                   }),
           };
         }),
