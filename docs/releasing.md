@@ -359,3 +359,29 @@ If a release has to be withdrawn:
 For a prerelease specifically: because `"0.1"` does not select any
 prerelease, a broken beta reaches only consumers who asked for it by exact
 version. That narrows the blast radius; it does not remove the permanence.
+
+
+## npm: `@candid-core/schema`
+
+npm names and versions are as permanent as crates.io's; the same three
+properties hold. **Prerequisite, once**: the owner registers the
+`@candid-core` npm organization (scope ownership is the anti-squat measure)
+and enables OIDC trusted publishing for this repository on the package — no
+token is created, stored, or reachable from any PR-triggered workflow.
+
+Publishing is `npm release` (`.github/workflows/npm-release.yml`),
+dispatch-only, with `{commit, version}`:
+
+1. The `verify` job refuses a `version` input that differs from
+   `ts/package.json` at that commit, reruns the type gate, the runtime
+   suites, and the packaged-consumer verification
+   (`tests/fixtures/packaging/verify_npm_package.py` — the artifact `npm
+   pack` produces must compile and execute standalone).
+2. The `publish` job sits behind the protected `npm-publish` environment;
+   the owner's approval there is the explicit authorization for the
+   irreversible step. It publishes with `--provenance`.
+
+The package versions independently of the crate (pre-1.0). Bump
+`ts/package.json` in an ordinary reviewed PR; state in that PR's body which
+`candid-core` generator version the release pairs with, and record the pair
+in the npm release notes.

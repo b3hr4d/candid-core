@@ -1,0 +1,20 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "declaration": true,
+    "outDir": "dist",
+    "rewriteRelativeImportExtensions": true,
+    "allowImportingTsExtensions": true
+  },
+  "include": [
+    "./schema.ts",
+    "./validate.ts",
+    "./contract.ts",
+    "./codec.ts",
+    "./actor.ts",
+    "./forms.ts",
+    "./labels.ts",
+    "./principal-stub.d.ts"
+  ]
+}

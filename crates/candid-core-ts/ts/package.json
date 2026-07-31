@@ -1,8 +1,59 @@
 {
-  "name": "candid-core-ts-typecheck",
-  "private": true,
-  "description": "Type-checks the golden TypeScript and runs the schema runtime tests; not a published package.",
+  "name": "@candid-core/schema",
+  "version": "0.1.0",
+  "description": "Zod-style schema runtime for Candid: builders with static inference, structural validation, a TypeScript-native binary codec, typed actors over a transport-only agent, and form metadata — all driven by candid-core's canonical Contract model.",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/b3hr4d/candid-core.git",
+    "directory": "crates/candid-core-ts/ts"
+  },
+  "type": "module",
+  "sideEffects": false,
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/schema.d.ts",
+      "default": "./dist/schema.js"
+    },
+    "./validate": {
+      "types": "./dist/validate.d.ts",
+      "default": "./dist/validate.js"
+    },
+    "./contract": {
+      "types": "./dist/contract.d.ts",
+      "default": "./dist/contract.js"
+    },
+    "./codec": {
+      "types": "./dist/codec.d.ts",
+      "default": "./dist/codec.js"
+    },
+    "./actor": {
+      "types": "./dist/actor.d.ts",
+      "default": "./dist/actor.js"
+    },
+    "./forms": {
+      "types": "./dist/forms.d.ts",
+      "default": "./dist/forms.js"
+    },
+    "./labels": {
+      "types": "./dist/labels.d.ts",
+      "default": "./dist/labels.js"
+    }
+  },
+  "peerDependencies": {
+    "@icp-sdk/core": "*"
+  },
+  "peerDependenciesMeta": {
+    "@icp-sdk/core": {
+      "optional": true
+    }
+  },
   "scripts": {
+    "build": "tsc -p tsconfig.build.json",
     "test": "node --test --import ./tests/register.ts tests/*.test.ts"
   },
   "devDependencies": {
