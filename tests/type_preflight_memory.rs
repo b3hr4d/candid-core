@@ -20,6 +20,22 @@
 use candid_core::{compile_did_with_context, CompileOptions, Limits, RuntimeContext};
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Mutex, MutexGuard};
+
+/// The counters below are process globals, so only one test may measure at a
+/// time; the harness runs test functions in parallel by default. Held for a
+/// whole test body rather than around each measurement, because an
+/// unsynchronized allocation from another test would perturb the peak just as
+/// badly between two measurements as during one.
+static MEASURING: Mutex<()> = Mutex::new(());
+
+fn measuring() -> MutexGuard<'static, ()> {
+    // A panicking measurement poisons the lock; the counters are reset at the
+    // start of every measurement, so the next test can still measure.
+    MEASURING
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
 
 struct CountingAllocator;
 
@@ -182,6 +198,7 @@ fn padded_bundle(name_bytes: usize) -> String {
 /// reading.
 #[test]
 fn retained_memory_does_not_scale_with_identifier_length() {
+    let _measuring = measuring();
     const SHORT: usize = 4;
     const LONG: usize = 2_000;
 
@@ -221,4 +238,64 @@ fn retained_memory_does_not_scale_with_identifier_length() {
          depth walks are holding owned names the type_preflight_work counter never charges. \
          short={short_peak} long={long_peak}"
     );
+}
+
+/// A bundle with `towers` `opt` towers of distinct heights over one shared
+/// record of `fields` fields, and short identifiers throughout. Scaling both
+/// scales the state count, which is what the memo retains.
+fn state_heavy_bundle(towers: usize, fields: usize) -> String {
+    let fields: Vec<String> = (0..fields)
+        .map(|index| format!("f{index}: opt nat"))
+        .collect();
+    let mut source = format!("type Shared = record {{ {} }};\n", fields.join("; "));
+    let towers: Vec<String> = (0..towers)
+        .map(|height| format!("t{height}: {}Shared", "opt ".repeat(height)))
+        .collect();
+    source.push_str(&format!(
+        "type Recursive = variant {{ stop: null; go: Recursive; {} }};\n",
+        towers.join("; ")
+    ));
+    source.push_str("service : { go: (Recursive) -> () };");
+    source
+}
+
+/// `max_type_preflight_work` bounds memory, not only time, so the bytes it
+/// authorizes per unit are part of its contract.
+///
+/// Deduplication is what makes the depth walks cheap and also what makes them
+/// retain: every distinct state stays in a memo for the whole walk. A host
+/// sizing the limit for a constrained heap — the guidance
+/// `Limits::max_type_preflight_work` gives for `wasm32` — needs that exchange
+/// rate to be a measured, stable number rather than an implementation detail
+/// free to drift. Measured marginal cost across these four sizes, release
+/// profile: 58.8, 58.1, and 58.2 bytes per unit. The band below is wide
+/// enough to absorb allocator and profile differences and still catch a
+/// change that materially grows what a state retains.
+#[test]
+fn retained_bytes_per_charged_unit_stay_within_the_documented_band() {
+    let _measuring = measuring();
+    let mut previous: Option<(usize, usize)> = None;
+    let mut observed = Vec::new();
+    for (towers, fields) in [(60, 40), (120, 60), (180, 80), (240, 100)] {
+        let source = state_heavy_bundle(towers, fields);
+        let work = charged_work(&source);
+        let peak = peak_live_bytes(&source);
+        if let Some((previous_work, previous_peak)) = previous {
+            let bytes_per_unit =
+                peak.saturating_sub(previous_peak) as f64 / (work - previous_work) as f64;
+            observed.push(bytes_per_unit);
+        }
+        previous = Some((work, peak));
+    }
+
+    for bytes_per_unit in &observed {
+        assert!(
+            (20.0..=120.0).contains(bytes_per_unit),
+            "marginal retained bytes per charged unit is {bytes_per_unit:.1}, outside the \
+             20-120 band Limits::max_type_preflight_work documents as ~58. Its guidance for \
+             sizing this limit on a constrained heap is derived from that number, so a real \
+             move here has to be re-measured and re-documented, not just re-pinned. \
+             Observed across sizes: {observed:?}"
+        );
+    }
 }

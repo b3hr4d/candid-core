@@ -434,6 +434,28 @@ limit_fields! {
     /// orders of magnitude: the largest corpus fixture (`ledger.did`)
     /// consumes 806 units end to end, pinned by `tests/deep_nesting.rs`.
     ///
+    /// # Choosing a value for a small heap
+    ///
+    /// Deduplication is what makes these walks cheap, and it is also what
+    /// makes them *retain*: each distinct state stays in a memo for the
+    /// duration of the walk, where the previous tree walks held only a stack.
+    /// So this counter bounds memory as well as time, and the exchange rate
+    /// is measured rather than assumed: **about 58 bytes of peak live heap
+    /// per unit**, near-constant across bundle sizes and pinned by
+    /// `tests/type_preflight_memory.rs`.
+    ///
+    /// At this default that authorizes roughly 580 MB of peak heap before
+    /// the counter refuses — ample headroom on an ordinary host, and more
+    /// than a 32-bit `wasm32` heap can serve. A host whose allocator fails
+    /// before the counter does gets an allocation abort in place of the
+    /// clean, structured `resource_limit_exceeded` this is designed to
+    /// return, so a browser or other constrained host should lower this to
+    /// what its heap can actually hold: 1 000 000 keeps the walks under
+    /// ~58 MB and still clears every realistic contract by three orders of
+    /// magnitude. Rejecting costs no memory, so no input can drive an abort
+    /// by being *larger* than the configured bound — only by being accepted
+    /// under a bound the host cannot honor.
+    ///
     /// # Wire compatibility
     ///
     /// This override key is additive, exactly like

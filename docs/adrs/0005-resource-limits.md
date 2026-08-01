@@ -116,11 +116,24 @@ distinct `(node, depth, active recursive names)` state rather than once per
 referencing path; issue #125 records the exponential re-expansion this
 replaced, O(2^n) node visits from a sub-kilobyte source with nothing charged.
 One unit is charged per recursion-map node and per expansion state, plus one
-per recursive name tracked on the state's path — the real cost of cloning and
-comparing that set. The counter is separate from `max_canonicalization_work`
-for the same reason `provenance_work` is: both accrue on one budget in a
-single compilation, and metering the depth guards on the graph counter would
-let a type-heavy bundle starve the canonicalization that follows it.
+per recursive name tracked on the state's path. That per-name unit is honest
+only because both walks track *borrows* of names their input already owns —
+the parsed program's and the checked environment's respectively — so an active
+set costs one pointer pair per name whatever the name's length. Retaining
+owned copies instead would make the memo hold `states * names * name length`
+bytes against a charge that counts names, and Candid identifiers are bounded
+on this path only by `max_source_bytes`.
+
+Deduplication is also what makes these walks *retain*, where the tree walks
+they replaced held only a stack, so this counter bounds memory as well as
+time: about 58 bytes of peak live heap per unit, measured and pinned. That is
+a deliberate exchange — a bounded, configurable memory ceiling reached through
+a structured refusal, in place of an unbounded walk — and it makes the limit a
+heap knob for constrained hosts, which `Limits::max_type_preflight_work`
+documents. The counter is separate from `max_canonicalization_work` for the
+same reason `provenance_work` is: both accrue on one budget in a single
+compilation, and metering the depth guards on the graph counter would let a
+type-heavy bundle starve the canonicalization that follows it.
 
 Producer metadata is untrusted, caller-supplied provenance. Its aggregate bytes
 are bounded (`max_producer_bytes`), but it is deliberately excluded from the

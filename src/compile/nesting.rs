@@ -386,13 +386,40 @@ mod preflight_tests {
     }
 
     /// The issue #125 regression at the unit level: 2^24 states would dwarf
-    /// any of these numbers, while the deduplicated walk stays quadratic in
-    /// the chain length (each declaration root re-walks the chain below it
-    /// at its own depth offset) with a small constant.
+    /// any of these numbers.
+    ///
+    /// What remains grows about quadratically in the number of nested record
+    /// levels, because each level adds a depth at which the shared tail is a
+    /// distinct state. That factor is bounded by `max_type_depth`, since a
+    /// level that does not add depth cannot add a depth to be distinct at —
+    /// which is why a pure alias chain, below, is flatly linear.
     #[test]
     fn shared_subtrees_deduplicate_instead_of_doubling_per_level() {
         assert_eq!(preflight_work(&shared_fanout(6)), 138);
         assert_eq!(preflight_work(&shared_fanout(12)), 414);
         assert_eq!(preflight_work(&shared_fanout(24)), 1_398);
+    }
+
+    /// Aliases add no depth, so every reference to the chain's tail is the
+    /// same `(node, depth, active names)` state and each declaration root
+    /// contributes a constant: exactly four units per declaration, with no
+    /// dependence on how many roots re-enter the chain. This is the linear
+    /// bound issue #125 asks the guard to restore — the un-deduplicated walk
+    /// re-walked the whole tail once per root.
+    #[test]
+    fn alias_chains_cost_a_constant_per_declaration() {
+        let alias_chain = |length: usize| {
+            let mut source = String::new();
+            for index in 1..length {
+                source.push_str(&format!("type A{index} = A{};\n", index + 1));
+            }
+            source.push_str(&format!("type A{length} = nat;\n"));
+            source.push_str("service : { f: (A1) -> () };");
+            source
+        };
+        assert_eq!(preflight_work(&alias_chain(100)), 402);
+        assert_eq!(preflight_work(&alias_chain(500)), 2_002);
+        assert_eq!(preflight_work(&alias_chain(1_000)), 4_002);
+        assert_eq!(preflight_work(&alias_chain(2_000)), 8_002);
     }
 }
