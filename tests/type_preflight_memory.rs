@@ -372,7 +372,7 @@ fn memory_committed_before_a_charge_lands_stays_in_proportion() {
     assert!(
         bytes_per_charged_unit <= 60.0,
         "committed {peak} bytes against {BUDGET} charged units \
-         ({bytes_per_charged_unit:.0} bytes/unit), above the 60 ceiling \
+         ({bytes_per_charged_unit:.0} bytes/unit), over three times the ~19 \
          Limits::max_type_preflight_work documents. A state is allocating ahead of its \
          charge — most likely each child of a wide record is copying the path's active \
          set instead of sharing it."
