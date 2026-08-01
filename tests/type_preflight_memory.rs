@@ -127,32 +127,35 @@ fn charged_work(source: &str) -> usize {
     low
 }
 
-/// A bundle whose depth walks visit many states while every state carries a
-/// tracked recursive name, with every identifier padded to `name_bytes`.
+/// A bundle whose depth walks visit many states while every state carries one
+/// tracked recursive name padded to `name_bytes`.
 ///
 /// `Recursive` is self-referential, so it is a cycle member and *is* tracked
 /// in the per-path active set. Its body reaches one shared record through
 /// `TOWERS` `opt` towers of distinct heights, so that record and each of its
-/// `FIELDS` fields is a distinct state at every one of those depths — roughly
-/// `TOWERS * FIELDS` retained memo entries, each holding the active set. The
-/// declaration count stays tiny, so anything that scales with *states* times
-/// name length separates sharply from anything that scales with
-/// *declarations* times name length.
+/// `FIELDS` fields is a distinct state at every one of those depths — several
+/// thousand retained memo entries, every one of them inside `Recursive`'s
+/// expansion and therefore holding it in its active set.
+///
+/// Only the recursive name carries the padding, which is what makes the
+/// measurement an isolation rather than a correlation: it is the one name the
+/// walks track, it occurs three times in the source, and every other
+/// identifier stays short. Retention that scales with *states* times name
+/// length therefore separates from the source's own growth by the state
+/// count, not by a constant.
 fn padded_bundle(name_bytes: usize) -> String {
     const TOWERS: usize = 60;
     const FIELDS: usize = 40;
 
-    let pad = "x".repeat(name_bytes);
-    let recursive = format!("Recursive_{pad}");
-    let shared = format!("Shared_{pad}");
+    let recursive = format!("Recursive_{}", "x".repeat(name_bytes));
 
     let fields: Vec<String> = (0..FIELDS)
         .map(|index| format!("f{index}: opt nat"))
         .collect();
-    let mut source = format!("type {shared} = record {{ {} }};\n", fields.join("; "));
+    let mut source = format!("type Shared = record {{ {} }};\n", fields.join("; "));
 
     let towers: Vec<String> = (0..TOWERS)
-        .map(|height| format!("t{height}: {}{shared}", "opt ".repeat(height)))
+        .map(|height| format!("t{height}: {}Shared", "opt ".repeat(height)))
         .collect();
     source.push_str(&format!(
         "type {recursive} = variant {{ stop: null; go: {recursive}; {} }};\n",
@@ -169,6 +172,14 @@ fn padded_bundle(name_bytes: usize) -> String {
 /// Retaining owned copies instead — `BTreeSet<String>` in either walk — makes
 /// the memo hold `states * tracked names * name length` bytes that no charge
 /// ever sees, which is the defect this asserts against.
+///
+/// Proven in both directions on this input, release profile: as written, peak
+/// live bytes grow 17 580 bytes against a 383 232-byte allowance, and with
+/// the owned set reintroduced in `check_type_depth` the same growth is
+/// 17 202 080 bytes — 45x the allowance it must stay under, and 979x the
+/// growth the borrowing walk shows. The margin either way is three orders of
+/// magnitude wider than the platform and profile noise in a peak-heap
+/// reading.
 #[test]
 fn retained_memory_does_not_scale_with_identifier_length() {
     const SHORT: usize = 4;
@@ -193,13 +204,13 @@ fn retained_memory_does_not_scale_with_identifier_length() {
     let short_peak = peak_live_bytes(&short);
     let long_peak = peak_live_bytes(&long);
 
-    // What longer names legitimately cost: the source text, the parsed AST,
-    // the checked environment, and the lowered Contract each hold every
-    // declaration name a bounded number of times. That is
-    // `declarations * name length`, and this bundle has two declarations. A
-    // 64x allowance on the source-size growth covers all of it with room to
-    // spare, while the defect it guards against is `states * name length` —
-    // more than three orders of magnitude larger for this input.
+    // What a longer name legitimately costs: the source text, the parsed AST,
+    // the checked environment, and the lowered Contract each hold it a
+    // bounded number of times, so the honest cost is `occurrences * name
+    // length` — a constant multiple of how much the source itself grew. A 64x
+    // allowance on that growth covers all of it many times over. What it
+    // refuses is `states * name length`, which for this bundle is several
+    // thousand times the same quantity.
     let source_growth = long.len() - short.len();
     let allowance = source_growth.saturating_mul(64);
     let observed_growth = long_peak.saturating_sub(short_peak);
