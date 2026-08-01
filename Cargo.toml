@@ -255,3 +255,11 @@ required-features = ["compiler"]
 [[test]]
 name = "source_identity_bounds"
 required-features = ["compiler"]
+
+# Installs its own counting global allocator to measure what the type-depth
+# guard walks retain, so it must stay its own binary: the counters are process
+# globals and any other suite compiled beside them would perturb the
+# measurement.
+[[test]]
+name = "type_preflight_memory"
+required-features = ["compiler"]

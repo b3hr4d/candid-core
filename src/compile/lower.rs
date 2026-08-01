@@ -229,11 +229,18 @@ pub(super) fn lower_checked(
 /// every cycle never repeat on one expansion path, so the depth walk below
 /// leaves them out of its per-path active sets and identical states can
 /// deduplicate.
-fn recursive_environment_names(
-    environment: &TypeEnv,
+///
+/// The returned names borrow the environment's own keys, and the walk tracks
+/// those borrows rather than owned copies. That is what keeps the retained
+/// memo proportional to the charge: an active set costs one pointer pair per
+/// tracked name whatever the name's length, so a bundle of very long
+/// identifiers cannot retain memory the `type_preflight_work` counter never
+/// sees. `nesting` borrows the parsed program's names for the same reason.
+fn recursive_environment_names<'a>(
+    environment: &'a TypeEnv,
     max_work: usize,
     budget: &mut crate::budget::Budget<'_>,
-) -> Result<BTreeSet<String>, CompileError> {
+) -> Result<BTreeSet<&'a str>, CompileError> {
     let names: Vec<&str> = environment.0.keys().map(String::as_str).collect();
     let index_of: BTreeMap<&str, usize> = names
         .iter()
@@ -281,7 +288,7 @@ fn recursive_environment_names(
         .into_iter()
         .zip(&cyclic)
         .filter(|(_, &in_cycle)| in_cycle)
-        .map(|(name, _)| name.to_string())
+        .map(|(name, _)| name)
         .collect())
 }
 
@@ -303,7 +310,7 @@ fn check_type_depth(
     roots.extend(actor_type.cloned());
     let mut pending: Vec<_> = roots
         .into_iter()
-        .map(|ty| (ty, 0usize, BTreeSet::<String>::new()))
+        .map(|ty| (ty, 0usize, BTreeSet::<&str>::new()))
         .collect();
 
     let mut visited = BTreeSet::new();
@@ -339,21 +346,24 @@ fn check_type_depth(
         let next_depth = depth.saturating_add(1);
         match ty.as_ref() {
             TypeInner::Var(name) => {
-                let recursive_name = recursive.contains(name.as_str());
-                if !(recursive_name && active_names.contains(name.as_str())) {
+                // The set member, not the popped node's copy: it borrows the
+                // environment, so it outlives every state the memo retains.
+                let recursive_name = recursive.get(name.as_str()).copied();
+                if !recursive_name.is_some_and(|name| active_names.contains(name)) {
                     let resolved = environment
                         .find_type(name)
                         .map_err(|error| lower_error(error.to_string()))?
                         .clone();
-                    let next_names = if recursive_name {
-                        let mut next_names = active_names;
-                        next_names.insert(name.to_string());
-                        next_names
-                    } else {
+                    let next_names = match recursive_name {
+                        Some(name) => {
+                            let mut next_names = active_names;
+                            next_names.insert(name);
+                            next_names
+                        }
                         // A name outside every cycle cannot repeat on this
                         // path, so tracking it would only split
                         // otherwise-identical states.
-                        active_names
+                        None => active_names,
                     };
                     pending.push((resolved, depth, next_names));
                 }
