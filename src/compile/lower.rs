@@ -230,17 +230,18 @@ pub(super) fn lower_checked(
 /// leaves them out of its per-path active sets and identical states can
 /// deduplicate.
 ///
-/// The returned names borrow the environment's own keys, and the walk tracks
-/// those borrows rather than owned copies. That is what keeps the retained
-/// memo proportional to the charge: an active set costs one pointer pair per
-/// tracked name whatever the name's length, so a bundle of very long
-/// identifiers cannot retain memory the `type_preflight_work` counter never
-/// sees. `nesting` borrows the parsed program's names for the same reason.
+/// Each name is mapped to a dense index and the walk tracks only that index,
+/// never the name, exactly as the parse-side twin does. `type_preflight_work`
+/// charges one unit per tracked name, so the operations that unit pays for —
+/// set membership and the memo's ordering comparisons — must cost the same
+/// whatever the name is; comparing identifiers instead would walk their
+/// bytes, and a Candid identifier is bounded on this path only by
+/// `max_source_bytes`.
 fn recursive_environment_names<'a>(
     environment: &'a TypeEnv,
     max_work: usize,
     budget: &mut crate::budget::Budget<'_>,
-) -> Result<BTreeSet<&'a str>, CompileError> {
+) -> Result<BTreeMap<&'a str, usize>, CompileError> {
     let names: Vec<&str> = environment.0.keys().map(String::as_str).collect();
     let index_of: BTreeMap<&str, usize> = names
         .iter()
@@ -288,7 +289,8 @@ fn recursive_environment_names<'a>(
         .into_iter()
         .zip(&cyclic)
         .filter(|(_, &in_cycle)| in_cycle)
-        .map(|(name, _)| name)
+        .enumerate()
+        .map(|(index, (name, _))| (name, index))
         .collect())
 }
 
@@ -310,7 +312,7 @@ fn check_type_depth(
     roots.extend(actor_type.cloned());
     let mut pending: Vec<_> = roots
         .into_iter()
-        .map(|ty| (ty, 0usize, BTreeSet::<&str>::new()))
+        .map(|ty| (ty, 0usize, nesting::ActiveNames::default()))
         .collect();
 
     let mut visited = BTreeSet::new();
@@ -346,20 +348,16 @@ fn check_type_depth(
         let next_depth = depth.saturating_add(1);
         match ty.as_ref() {
             TypeInner::Var(name) => {
-                // The set member, not the popped node's copy: it borrows the
-                // environment, so it outlives every state the memo retains.
-                let recursive_name = recursive.get(name.as_str()).copied();
-                if !recursive_name.is_some_and(|name| active_names.contains(name)) {
+                let recursive_index = recursive.get(name.as_str()).copied();
+                if !recursive_index.is_some_and(|index| active_names.contains(&index)) {
                     let resolved = environment
                         .find_type(name)
                         .map_err(|error| lower_error(error.to_string()))?
                         .clone();
-                    let next_names = match recursive_name {
-                        Some(name) => {
-                            let mut next_names = active_names;
-                            next_names.insert(name);
-                            next_names
-                        }
+                    let next_names = match recursive_index {
+                        // The one transition that changes the set, so the one
+                        // place it is rebuilt; this state's charge covered it.
+                        Some(index) => active_names.with(index),
                         // A name outside every cycle cannot repeat on this
                         // path, so tracking it would only split
                         // otherwise-identical states.

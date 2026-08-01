@@ -63,6 +63,42 @@ pub(super) fn charge_type_preflight(
         .map_err(|error| budget_error(error, phase, operation))
 }
 
+/// The recursive declarations active on one expansion path, as interned
+/// indices.
+///
+/// Shared rather than copied. A record or variant pushes one child state per
+/// field and every one of them inherits the parent's set unchanged, so
+/// copying would allocate `fields * set` entries in a single loop iteration —
+/// *before* any of those children is popped and charged. That burst is
+/// attacker-controlled on both factors (field count and cycle length) and the
+/// parent's own charge does not cover it, which is the whole failure mode
+/// `type_preflight_work` exists to prevent. Sharing means a child costs a
+/// reference-count bump, so the memory a state can commit before its charge
+/// is a constant.
+///
+/// The set is rebuilt only by [`ActiveNames::with`], on the one transition
+/// that changes it — entering a recursive name — and that copy is bounded by
+/// the charge already paid for the state making it.
+#[derive(Clone, Default, PartialEq, Eq, PartialOrd, Ord)]
+pub(super) struct ActiveNames(std::rc::Rc<BTreeSet<usize>>);
+
+impl ActiveNames {
+    pub(super) fn contains(&self, index: &usize) -> bool {
+        self.0.contains(index)
+    }
+
+    pub(super) fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    /// This set plus `index`, as a new set. The only allocating operation.
+    pub(super) fn with(&self, index: usize) -> Self {
+        let mut next = (*self.0).clone();
+        next.insert(index);
+        Self(std::rc::Rc::new(next))
+    }
+}
+
 /// Nodes of a directed graph that lie on at least one cycle: members of a
 /// strongly connected component of size two or more, plus self-loops.
 ///
@@ -134,18 +170,28 @@ pub(super) fn cyclic_nodes(node_count: usize, edges: &[(usize, usize)]) -> Vec<b
     cyclic
 }
 
-/// Declarations that participate in a reference cycle.
+/// Declarations that participate in a reference cycle, each mapped to a dense
+/// index.
 ///
 /// A name outside every cycle can never repeat on one expansion path, so the
 /// depth walk need not track it in its per-path active set. That keeps active
 /// sets to the (small, usually empty) recursive core, which is what lets
 /// identical expansion states deduplicate instead of re-expanding a shared
 /// subtree once per incoming edge.
+///
+/// The walk tracks the *index*, never the name. `type_preflight_work` charges
+/// one unit per tracked name, so every operation that unit pays for has to
+/// cost the same whatever the name is: comparing indices is a machine-word
+/// compare, while comparing identifiers walks their bytes, and a Candid
+/// identifier is bounded on this path only by `max_source_bytes`. Set
+/// membership and the memo's ordering comparisons are both on this key, so
+/// interning is what keeps the advertised bound covering the real cost rather
+/// than a fixed multiple of an attacker-chosen length.
 fn recursive_declaration_names<'a>(
     declarations: &BTreeMap<&'a str, &'a IDLType>,
     max_work: usize,
     budget: &mut crate::budget::Budget<'_>,
-) -> Result<BTreeSet<&'a str>, CompileError> {
+) -> Result<BTreeMap<&'a str, usize>, CompileError> {
     let names: Vec<&str> = declarations.keys().copied().collect();
     let index_of: BTreeMap<&str, usize> = names
         .iter()
@@ -193,7 +239,8 @@ fn recursive_declaration_names<'a>(
         .into_iter()
         .zip(&cyclic)
         .filter(|(_, &in_cycle)| in_cycle)
-        .map(|(name, _)| name)
+        .enumerate()
+        .map(|(index, (name, _))| (name, index))
         .collect())
 }
 
@@ -234,7 +281,7 @@ pub(super) fn check_programs_type_depth<'a>(
                 .iter()
                 .filter_map(|program| program.actor.as_ref().map(|actor| &actor.typ)),
         )
-        .map(|ty| (ty, 0usize, BTreeSet::<&str>::new()))
+        .map(|ty| (ty, 0usize, ActiveNames::default()))
         .collect();
 
     let mut visited = BTreeSet::new();
@@ -266,17 +313,17 @@ pub(super) fn check_programs_type_depth<'a>(
         match ty {
             IDLType::VarT(name) => {
                 if let Some(resolved) = declarations.get(name.as_str()).copied() {
-                    let recursive_name = recursive.contains(name.as_str());
-                    if !(recursive_name && active_names.contains(name.as_str())) {
-                        let next_names = if recursive_name {
-                            let mut next_names = active_names;
-                            next_names.insert(name.as_str());
-                            next_names
-                        } else {
+                    let recursive_index = recursive.get(name.as_str()).copied();
+                    if !recursive_index.is_some_and(|index| active_names.contains(&index)) {
+                        let next_names = match recursive_index {
+                            // The one place the set actually changes, so the
+                            // one place it is rebuilt. That copy is O(set),
+                            // and this state's own charge already covered it.
+                            Some(index) => active_names.with(index),
                             // A name outside every cycle cannot repeat on
                             // this path, so tracking it would only split
                             // otherwise-identical states.
-                            active_names
+                            None => active_names,
                         };
                         pending.push((resolved, depth, next_names));
                     }

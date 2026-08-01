@@ -9,7 +9,8 @@
 //! tracked name while the walk retains an owned copy of that name would model
 //! that retention wrongly by a factor of the identifier length — and Candid
 //! identifiers are bounded only by `max_source_bytes`, a megabyte. The walks
-//! therefore track *borrows* of names their inputs already own.
+//! therefore intern names to dense indices and share each path's set between
+//! the children that inherit it unchanged.
 //!
 //! This suite pins that property the only way it is observable: measure it.
 //! The assertion is an invariance, not a magic number — two bundles identical
@@ -183,17 +184,17 @@ fn padded_bundle(name_bytes: usize) -> String {
 
 /// Long identifiers must cost what a longer source costs, and nothing more.
 ///
-/// Both walks track borrows of names their inputs already own, so an active
-/// set costs one pointer pair per tracked name however long that name is.
-/// Retaining owned copies instead — `BTreeSet<String>` in either walk — makes
-/// the memo hold `states * tracked names * name length` bytes that no charge
-/// ever sees, which is the defect this asserts against.
+/// Both walks intern names to dense indices, so an active set costs one
+/// machine word per tracked name however long that name is. Retaining owned
+/// copies instead — `BTreeSet<String>` in either walk — makes the memo hold
+/// `states * tracked names * name length` bytes that no charge ever sees,
+/// which is the defect this asserts against.
 ///
 /// Proven in both directions on this input, release profile: as written, peak
 /// live bytes grow 17 580 bytes against a 383 232-byte allowance, and with
 /// the owned set reintroduced in `check_type_depth` the same growth is
 /// 17 202 080 bytes — 45x the allowance it must stay under, and 979x the
-/// growth the borrowing walk shows. The margin either way is three orders of
+/// growth the interning walk shows. The margin either way is three orders of
 /// magnitude wider than the platform and profile noise in a peak-heap
 /// reading.
 #[test]
@@ -268,9 +269,11 @@ fn state_heavy_bundle(towers: usize, fields: usize) -> String {
 /// `Limits::max_type_preflight_work` gives for `wasm32` — needs that exchange
 /// rate to be a measured, stable number rather than an implementation detail
 /// free to drift. Measured marginal cost across these four sizes, release
-/// profile: 58.8, 58.1, and 58.2 bytes per unit. The band below is wide
-/// enough to absorb allocator and profile differences and still catch a
-/// change that materially grows what a state retains.
+/// profile: 19.4, 19.3, and 19.4 bytes per unit. The measured quantity is the
+/// size each allocation *requests*, not the block an allocator hands back, so
+/// it is a property of the data structures rather than of the platform; the
+/// band below is still wide enough to absorb profile differences while
+/// catching any change that materially moves what a state retains.
 #[test]
 fn retained_bytes_per_charged_unit_stay_within_the_documented_band() {
     let _measuring = measuring();
@@ -290,12 +293,88 @@ fn retained_bytes_per_charged_unit_stay_within_the_documented_band() {
 
     for bytes_per_unit in &observed {
         assert!(
-            (20.0..=120.0).contains(bytes_per_unit),
+            (8.0..=40.0).contains(bytes_per_unit),
             "marginal retained bytes per charged unit is {bytes_per_unit:.1}, outside the \
-             20-120 band Limits::max_type_preflight_work documents as ~58. Its guidance for \
+             8-40 band Limits::max_type_preflight_work documents as ~19. Its guidance for \
              sizing this limit on a constrained heap is derived from that number, so a real \
              move here has to be re-measured and re-documented, not just re-pinned. \
              Observed across sizes: {observed:?}"
         );
     }
+}
+
+/// A long reference cycle, ending in a wide record that closes it.
+///
+/// Walking `A1` enters each `A` in turn, and because the final record
+/// references `A1` again every one of them is a cycle member and so is
+/// tracked. By the time the walk reaches that record the active set holds
+/// `cycle` names, and the record then pushes one child state per field, each
+/// inheriting that set. Both factors are attacker-controlled.
+fn cycle_then_wide_record(cycle: usize, fields: usize) -> String {
+    let mut source = String::new();
+    for index in 1..cycle {
+        source.push_str(&format!("type A{index} = A{};\n", index + 1));
+    }
+    let fields: Vec<String> = (0..fields).map(|index| format!("f{index}: nat")).collect();
+    source.push_str(&format!(
+        "type A{cycle} = record {{ back: A1; {} }};\n",
+        fields.join("; ")
+    ));
+    source.push_str("service : { go: (A1) -> () };");
+    source
+}
+
+/// A state must not commit unbounded memory *before* its own charge lands.
+///
+/// Charging happens when a state is popped, but children are created when
+/// their parent is expanded. If each child copied the parent's active set, one
+/// expansion of a wide record would allocate `fields * set` entries against a
+/// parent charge of `1 + set` — memory the counter has not authorized and, at
+/// a nearly exhausted budget, never will. Sharing the set makes a child cost a
+/// reference-count bump instead.
+///
+/// The assertion is the documented exchange rate applied at the moment of
+/// refusal: whatever a compilation allocates before failing closed must still
+/// be in proportion to what it managed to charge. Measured on this input,
+/// release profile: 22 bytes per charged unit as written, against 559 with the
+/// set copied into every child — the copying walk overshoots the band that
+/// `Limits::max_type_preflight_work` documents by an order of magnitude, which
+/// is exactly the promise it breaks.
+#[test]
+fn memory_committed_before_a_charge_lands_stays_in_proportion() {
+    let _measuring = measuring();
+    const BUDGET: usize = 50_000;
+
+    let source = cycle_then_wide_record(200, 4_000);
+    ENABLED.store(false, Ordering::SeqCst);
+    LIVE_BYTES.store(0, Ordering::Relaxed);
+    PEAK_LIVE_BYTES.store(0, Ordering::Relaxed);
+    ENABLED.store(true, Ordering::SeqCst);
+    let result = compile_did_with_context(
+        &source,
+        CompileOptions::default(),
+        &RuntimeContext::new(Limits::default().with_max_type_preflight_work(BUDGET)),
+    );
+    let peak = PEAK_LIVE_BYTES.load(Ordering::Relaxed);
+    ENABLED.store(false, Ordering::SeqCst);
+
+    // The point of the input: it must actually exhaust the budget, so the
+    // measurement is of memory committed on the way to a refusal.
+    let error = result.expect_err("the tight budget must refuse this bundle");
+    let resource = error.diagnostics[0]
+        .resource_limit
+        .as_ref()
+        .expect("refusal must carry the resource triple");
+    assert_eq!(resource.resource, "type_preflight_work");
+    assert_eq!(resource.limit, BUDGET as u64);
+
+    let bytes_per_charged_unit = peak as f64 / BUDGET as f64;
+    assert!(
+        bytes_per_charged_unit <= 60.0,
+        "committed {peak} bytes against {BUDGET} charged units \
+         ({bytes_per_charged_unit:.0} bytes/unit), above the 60 ceiling \
+         Limits::max_type_preflight_work documents. A state is allocating ahead of its \
+         charge — most likely each child of a wide record is copying the path's active \
+         set instead of sharing it."
+    );
 }
