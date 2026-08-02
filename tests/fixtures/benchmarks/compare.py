@@ -63,6 +63,7 @@ import platform
 import statistics
 import subprocess
 import sys
+import tomllib
 from pathlib import Path
 
 # Bumped when the *stored baseline* layout changes. Independent of the Rust
@@ -141,8 +142,6 @@ def fnv1a64(data: bytes) -> str:
 
 
 def root_package_name(repo_root: Path) -> str:
-    import tomllib
-
     manifest = repo_root / "Cargo.toml"
     try:
         data = tomllib.loads(manifest.read_text(encoding="utf-8"))
@@ -166,8 +165,6 @@ def bench_graph(repo_root: Path) -> list:
     sibling workspace member is excluded unless the root actually depends on
     it, so its dev-dependency churn cannot either.
     """
-    import tomllib
-
     lockfile = repo_root / "Cargo.lock"
     if not lockfile.is_file():
         die(f"{lockfile} is missing; a benchmark identity needs the locked graph")
