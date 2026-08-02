@@ -6,14 +6,14 @@
       "peak_live_bytes": 79509
     },
     "ledger/core_full": {
-      "allocated_bytes": 567089,
-      "allocations": 6714,
+      "allocated_bytes": 493020,
+      "allocations": 6053,
       "peak_live_bytes": 129396
     },
     "ledger/core_minimal": {
-      "allocated_bytes": 477143,
-      "allocations": 5435,
-      "peak_live_bytes": 114305
+      "allocated_bytes": 404666,
+      "allocations": 4779,
+      "peak_live_bytes": 114961
     },
     "ledger/official_parse_check": {
       "allocated_bytes": 51285,
@@ -256,166 +256,166 @@
   ],
   "criterion": {
     "artifact/ledger/canonicalize": {
-      "lower_ns": 141427.74922191098,
-      "median_ns": 141569.52483934752,
+      "lower_ns": 214159.13792401628,
+      "median_ns": 214436.9616500829,
       "throughput_bytes": null,
-      "upper_ns": 141656.43725490198
+      "upper_ns": 214791.07342750533
     },
     "artifact/ledger/parse_validate_canonicalize": {
-      "lower_ns": 164013.87197177822,
-      "median_ns": 164115.94105113635,
+      "lower_ns": 247000.61084770114,
+      "median_ns": 247120.9501178898,
       "throughput_bytes": null,
-      "upper_ns": 164232.59552556818
+      "upper_ns": 247591.63256704982
     },
     "artifact/ledger/serialize_compact": {
-      "lower_ns": 4785.575541181226,
-      "median_ns": 4789.0091787439615,
+      "lower_ns": 7644.758643071176,
+      "median_ns": 7649.679851476343,
       "throughput_bytes": null,
-      "upper_ns": 4797.968747286275
+      "upper_ns": 7653.188425072496
     },
     "artifact/ledger/serialize_validated_pretty": {
-      "lower_ns": 154839.6450038139,
-      "median_ns": 155016.23498964804,
+      "lower_ns": 230987.71280241935,
+      "median_ns": 231356.78049853374,
       "throughput_bytes": null,
-      "upper_ns": 155125.8336956522
+      "upper_ns": 231628.68985215054
     },
     "artifact/ledger/validate": {
-      "lower_ns": 141433.2952970297,
-      "median_ns": 141499.9711221122,
+      "lower_ns": 213549.85607052455,
+      "median_ns": 213884.90584577114,
       "throughput_bytes": null,
-      "upper_ns": 141586.41329132914
+      "upper_ns": 214179.65095478488
     },
     "compile/basic/core_full/98": {
-      "lower_ns": 36370.03110099002,
-      "median_ns": 36411.048218829514,
+      "lower_ns": 57883.19864586633,
+      "median_ns": 57996.12886178862,
       "throughput_bytes": 98,
-      "upper_ns": 36488.59455353556
+      "upper_ns": 58129.90311653117
     },
     "compile/basic/core_minimal/98": {
-      "lower_ns": 29807.35593802384,
-      "median_ns": 29874.55002354049,
+      "lower_ns": 48296.950671419094,
+      "median_ns": 49336.4408045977,
       "throughput_bytes": 98,
-      "upper_ns": 30221.765121822034
+      "upper_ns": 49437.316120689655
     },
     "compile/basic/official_parse_check/98": {
-      "lower_ns": 3104.9364811812393,
-      "median_ns": 3149.48650477707,
+      "lower_ns": 4893.269515415594,
+      "median_ns": 4899.572760341511,
       "throughput_bytes": 98,
-      "upper_ns": 3472.4128237791933
+      "upper_ns": 4902.690740740741
     },
     "compile/imported_bundle/core_compile_with_resolver": {
-      "lower_ns": 379423.3057017544,
-      "median_ns": 379856.6112155388,
+      "lower_ns": 663953.2246212121,
+      "median_ns": 664507.3224747474,
       "throughput_bytes": 1360,
-      "upper_ns": 380190.58815789473
+      "upper_ns": 666458.1946022727
     },
     "compile/imported_bundle/official_check_file": {
-      "lower_ns": 55031.76809156095,
-      "median_ns": 55144.80160380161,
+      "lower_ns": 95254.79083333333,
+      "median_ns": 95333.2112962963,
       "throughput_bytes": 1360,
-      "upper_ns": 55184.71365914787
+      "upper_ns": 95402.48811274511
     },
     "compile/ledger/core_full/1604": {
-      "lower_ns": 471699.43434535107,
-      "median_ns": 476150.079390681,
+      "lower_ns": 666930.8405205905,
+      "median_ns": 667397.4962121212,
       "throughput_bytes": 1604,
-      "upper_ns": 477678.4086021505
+      "upper_ns": 668684.8428030303
     },
     "compile/ledger/core_minimal/1604": {
-      "lower_ns": 314116.07274247496,
-      "median_ns": 314265.1959345003,
+      "lower_ns": 536705.823076923,
+      "median_ns": 537640.5084915084,
       "throughput_bytes": 1604,
-      "upper_ns": 314671.565089514
+      "upper_ns": 537932.9519970415
     },
     "compile/ledger/official_parse_check/1604": {
-      "lower_ns": 55307.24660979878,
-      "median_ns": 55413.470522067095,
+      "lower_ns": 87304.31837320575,
+      "median_ns": 87504.61741591741,
       "throughput_bytes": 1604,
-      "upper_ns": 55547.16980361007
+      "upper_ns": 87607.43846702317
     },
     "compile/recursive/core_full/89": {
-      "lower_ns": 38546.14382798574,
-      "median_ns": 38595.52793414016,
+      "lower_ns": 61721.61882183908,
+      "median_ns": 61823.878978779845,
       "throughput_bytes": 89,
-      "upper_ns": 38625.59391430369
+      "upper_ns": 61879.662852353584
     },
     "compile/recursive/core_minimal/89": {
-      "lower_ns": 30574.582392473116,
-      "median_ns": 30676.97129032258,
+      "lower_ns": 51984.07310469315,
+      "median_ns": 52176.981107099884,
       "throughput_bytes": 89,
-      "upper_ns": 30809.335887096775
+      "upper_ns": 52259.545216198116
     },
     "compile/recursive/official_parse_check/89": {
-      "lower_ns": 3721.0993791195856,
-      "median_ns": 3721.734656382415,
+      "lower_ns": 5861.554735697785,
+      "median_ns": 5866.55355955114,
       "throughput_bytes": 89,
-      "upper_ns": 3723.408632014114
+      "upper_ns": 5873.498415261869
     },
     "compile/recursive_chain_128/core_full/7157": {
-      "lower_ns": 48377609.0,
-      "median_ns": 48637962.0,
+      "lower_ns": 31794164.799999997,
+      "median_ns": 31931700.6,
       "throughput_bytes": 7157,
-      "upper_ns": 49855638.375
+      "upper_ns": 31979504.4
     },
     "compile/recursive_chain_128/core_minimal/7157": {
-      "lower_ns": 42363430.75,
-      "median_ns": 42395051.875,
+      "lower_ns": 30594248.6,
+      "median_ns": 30842206.8,
       "throughput_bytes": 7157,
-      "upper_ns": 42436173.75
+      "upper_ns": 30956285.6
     },
     "compile/recursive_chain_128/official_parse_check/7157": {
-      "lower_ns": 331511.4564698867,
-      "median_ns": 331686.1196501857,
+      "lower_ns": 568619.4468325792,
+      "median_ns": 568999.766025641,
       "throughput_bytes": 7157,
-      "upper_ns": 331881.3083231334
+      "upper_ns": 569278.6794871795
     },
     "compile/service_methods_128/core_full/5968": {
-      "lower_ns": 786228.1092592592,
-      "median_ns": 786551.5486111111,
+      "lower_ns": 1421547.6705882354,
+      "median_ns": 1422329.0475146198,
       "throughput_bytes": 5968,
-      "upper_ns": 787603.004419192
+      "upper_ns": 1423212.5408333333
     },
     "compile/service_methods_128/core_minimal/5968": {
-      "lower_ns": 578047.48,
-      "median_ns": 578258.8563157895,
+      "lower_ns": 1131189.143162393,
+      "median_ns": 1133596.6712278107,
       "throughput_bytes": 5968,
-      "upper_ns": 578639.8992760181
+      "upper_ns": 1137289.7403386086
     },
     "compile/service_methods_128/official_parse_check/5968": {
-      "lower_ns": 255302.42176870749,
-      "median_ns": 255467.75856782106,
+      "lower_ns": 423440.72391905484,
+      "median_ns": 423744.81862745096,
       "throughput_bytes": 5968,
-      "upper_ns": 255667.69111394556
+      "upper_ns": 424102.57518382353
     },
     "compile/wide_record_256/core_full/4580": {
-      "lower_ns": 808516.9868421053,
-      "median_ns": 822907.9039264829,
+      "lower_ns": 1230080.802777778,
+      "median_ns": 1232660.2395833335,
       "throughput_bytes": 4580,
-      "upper_ns": 831085.5131578947
+      "upper_ns": 1235234.087428775
     },
     "compile/wide_record_256/core_minimal/4580": {
-      "lower_ns": 522467.03382034635,
-      "median_ns": 522825.6395308123,
+      "lower_ns": 940656.4729166667,
+      "median_ns": 941828.303030303,
       "throughput_bytes": 4580,
-      "upper_ns": 523370.53853383457
+      "upper_ns": 942989.2625
     },
     "compile/wide_record_256/official_parse_check/4580": {
-      "lower_ns": 144664.6641337386,
-      "median_ns": 144773.24875886523,
+      "lower_ns": 233019.30702764977,
+      "median_ns": 233149.5791429475,
       "throughput_bytes": 4580,
-      "upper_ns": 144832.92266775778
+      "upper_ns": 233256.00534274193
     },
     "host_value/validate/vec_variant/256": {
-      "lower_ns": 327687.4221763086,
-      "median_ns": 328280.94141414145,
+      "lower_ns": 570073.9914835165,
+      "median_ns": 570238.4989944696,
       "throughput_bytes": null,
-      "upper_ns": 328703.78409090906
+      "upper_ns": 570886.8259368837
     },
     "host_value/validate/wide_record/256": {
-      "lower_ns": 799296.7245614035,
-      "median_ns": 802955.9911184211,
+      "lower_ns": 1220558.6,
+      "median_ns": 1221432.9592592593,
       "throughput_bytes": null,
-      "upper_ns": 814993.9339574899
+      "upper_ns": 1221845.1145833335
     }
   },
   "environment": {
@@ -424,7 +424,7 @@
     "host": "Linux x86_64",
     "machine": {
       "cpu_count": 4,
-      "cpu_model": "Intel(R) Xeon(R) 6973P-C",
+      "cpu_model": "AMD EPYC 9V74 80-Core Processor",
       "runner_image": "ubuntu24 20260720.247.2"
     },
     "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14)",
@@ -500,5 +500,5 @@
     },
     "schema_version": 1
   },
-  "note": "captured by Verify run 30736234081 on 731ffe86c6c5efe70f7223eeaf5d8821b1c8d373"
+  "note": "captured by Verify run 30747452722 on fa1e3dee072c29f1d306fad5d32addaa6339b57d"
 }
