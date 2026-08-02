@@ -134,12 +134,13 @@ All three allocation metrics are compared — `allocations`, `allocated_bytes`, 
 
 The report leads with the **controls**: the `official_*` cases execute only upstream `candid_parser` code, which no change in this repository can alter. Their median shift is printed above the timing table and the control rows are marked in it, because a shift the controls share with the rest of the table measures the machinery, not the candidate — exactly the signature that once made drifted comparisons read as uniform +8–35% regressions ([issue #132]).
 
-`--fail-on-regression PCT` exits 1 when any median regresses by more than `PCT`. It is opt-in with no default threshold, because a calibrated threshold needs repeated controlled-runner data that does not exist yet ([issue #39]); and it is rejected outright on an environment-drifted comparison, where the deltas describe two machines as much as two revisions.
+`--fail-on-regression PCT` exits 1 when any non-control median regresses by more than `PCT`. It is opt-in with no default threshold, because a calibrated threshold needs repeated controlled-runner data that does not exist yet ([issue #39]); and it produces no verdict at all — exit 2, before any report is printed — when the comparison is environment-drifted or when a control benchmark moved by more than `PCT` in either direction ([issue #135]). A control past the threshold means the machinery shifted more than the gate tolerates: a slower machine fabricates regressions and a faster one masks them, so neither exit 0 nor exit 1 would be evidence.
 
 Baselines live in `benches/baselines/`, outside the `include` allowlist in `Cargo.toml`, so a baseline never ships to a consumer. Committing one is deliberate: updating a baseline should be a reviewed change that records why it moved.
 
 [issue #39]: https://github.com/b3hr4d/candid-core/issues/39
 [issue #132]: https://github.com/b3hr4d/candid-core/issues/132
+[issue #135]: https://github.com/b3hr4d/candid-core/issues/135
 
 ## CI policy
 

@@ -725,6 +725,30 @@ def main() -> int:
         )
 
     timing = delta_rows(baseline["criterion"], candidate["criterion"], "median_ns")
+
+    # A control moving more than the threshold — in either direction — means
+    # the machinery shifted more than the gate tolerates: a slower machine
+    # fabricates regressions, a faster one masks them. No verdict on the
+    # candidate is possible, so the gate refuses rather than passing or
+    # failing on machine noise (issue #135). Checked before rendering, like
+    # the drift refusal above.
+    if args.fail_on_regression is not None:
+        invalidated = [
+            (name, change)
+            for name, _before, _after, change in timing
+            if change is not None
+            and is_control(name)
+            and abs(change) > args.fail_on_regression
+        ]
+        if invalidated:
+            name, change = max(invalidated, key=lambda item: abs(item[1]))
+            die(
+                f"--fail-on-regression cannot gate this run: control benchmark "
+                f"{name} moved {change:+.1f}% against a "
+                f"{args.fail_on_regression:+.1f}% threshold, so the machinery "
+                "shifted more than the gate tolerates and the deltas are not "
+                "evidence"
+            )
     report = {
         "corpus_id": candidate["manifest"]["corpus_id"],
         "features": candidate["manifest"]["features"],
@@ -758,10 +782,16 @@ def main() -> int:
         Path(args.json_out).write_text(json.dumps(report, indent=2, default=str) + "\n")
 
     if args.fail_on_regression is not None:
+        # Controls are excluded from the verdict: they cannot regress by
+        # candidate code, and any control past the threshold already refused
+        # above — the exclusion here is self-documentation, not a filter that
+        # can change the outcome.
         worst = [
             (name, change)
             for name, _b, _a, change in report["timing"]
-            if change is not None and change > args.fail_on_regression
+            if change is not None
+            and not is_control(name)
+            and change > args.fail_on_regression
         ]
         if worst:
             print("", file=sys.stderr)
