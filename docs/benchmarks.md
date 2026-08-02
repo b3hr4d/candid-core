@@ -124,7 +124,7 @@ What it refuses, and why:
 | Baseline missing or unreadable | No comparison; exit 2 |
 | Corpus (including the imported bundle), generator sizes, feature set, or metric units differ | No comparison; exit 2. The two runs did not measure the same thing, so no delta between them is interpretable — recapture the baseline |
 | Toolchain, effective target, `RUSTFLAGS`, host, or the bench binary's resolved dependency graph differ | No comparison unless `--allow-environment-drift`, which renders the report marked **informational only** and refuses to gate on it. A graph drift is attributed by name — `serde: 1.0.150 → 1.0.152` — from the graphs stored on both sides |
-| Stored baseline has an older `baseline_schema_version` | No comparison; exit 2 — recapture the baseline with the current tool |
+| Stored baseline's `baseline_schema_version` differs from the one this tool writes | No comparison; exit 2 — recapture the baseline with the current tool |
 | No Criterion estimates newer than the manifest | No comparison; exit 2 — the suite was not run after the manifest was emitted |
 | Compatible | Renders Markdown and, with `--json`, machine-readable output |
 
@@ -132,7 +132,7 @@ Codegen flags are part of the identity because they change the binary without ch
 
 All three allocation metrics are compared — `allocations`, `allocated_bytes`, and `peak_live_bytes`. A change that holds the allocation count constant while growing cumulative or peak bytes is a real memory regression, and comparing only the count would render it as a reassuring 0%.
 
-The report leads with the **controls**: the `official_*` cases execute only upstream `candid_parser` code, which no change in this repository can alter. Their median shift is printed above the timing table and the control rows are marked in it, because a shift the controls share with the rest of the table measures the machinery, not the candidate — exactly the signature that once made every drifted comparison read as a uniform +8–35% regression ([issue #132]).
+The report leads with the **controls**: the `official_*` cases execute only upstream `candid_parser` code, which no change in this repository can alter. Their median shift is printed above the timing table and the control rows are marked in it, because a shift the controls share with the rest of the table measures the machinery, not the candidate — exactly the signature that once made drifted comparisons read as uniform +8–35% regressions ([issue #132]).
 
 `--fail-on-regression PCT` exits 1 when any median regresses by more than `PCT`. It is opt-in with no default threshold, because a calibrated threshold needs repeated controlled-runner data that does not exist yet ([issue #39]); and it is rejected outright on an environment-drifted comparison, where the deltas describe two machines as much as two revisions.
 

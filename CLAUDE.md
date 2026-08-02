@@ -90,8 +90,8 @@ No timing or allocation measurement ever fails a workflow — recorded on #39.
 A merged `Cargo.lock` change that alters the bench binary's resolved
 dependency graph makes comparisons drift-informational until the documented
 recapture (dispatch `Verify`, review the artifact's `baseline.json`, commit it
-to `benches/baselines/main.json`); version-only bumps and sibling members'
-dev-dependency changes deliberately do not (#132).
+to `benches/baselines/main.json`); the root package's own version bump and
+sibling members' dev-dependency changes deliberately do not (#132).
 
 Releases: `docs/releasing.md` is exact. The `Release` workflow is
 dispatch-only behind three protected environments; the next version needs

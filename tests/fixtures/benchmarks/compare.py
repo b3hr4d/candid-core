@@ -184,6 +184,8 @@ def bench_graph(repo_root: Path) -> list:
         # Lockfile dependency entries are `name`, `name version`, or
         # `name version (source)`; a bare name must be unambiguous.
         parts = spec.split()
+        if not parts:
+            die(f"empty dependency spec in the Cargo.lock stanza of {dependent!r}")
         candidates = by_name.get(parts[0], [])
         if len(parts) >= 2:
             candidates = [c for c in candidates if c.get("version") == parts[1]]
@@ -196,6 +198,11 @@ def bench_graph(repo_root: Path) -> list:
                 f"{len(candidates)} packages; the locked graph is not usable "
                 "as an identity"
             )
+        if "version" not in candidates[0]:
+            die(
+                f"Cargo.lock stanza for {parts[0]!r} has no version; the "
+                "locked graph is not usable as an identity"
+            )
         return candidates[0]
 
     root = root_package_name(repo_root)
@@ -207,7 +214,12 @@ def bench_graph(repo_root: Path) -> list:
     while queue:
         spec, dependent = queue.pop()
         package = resolve(spec, dependent)
-        key = (package["name"], package["version"])
+        # Keyed by (name, version, source): the lockfile can hold two
+        # packages sharing name and version that differ by source — the very
+        # case the three-part spec form exists for — and collapsing them
+        # would drop one entry (and its whole subtree) from the identity,
+        # with the survivor chosen by traversal order.
+        key = (package["name"], package["version"], package.get("source"))
         if key in seen or package["name"] == root:
             continue
         seen[key] = " ".join(
