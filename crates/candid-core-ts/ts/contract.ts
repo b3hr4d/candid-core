@@ -984,6 +984,22 @@ function buildFromContract(
       }
     }
   }
+  // The declaration half of the same rule (`class_not_actor_root`): a named
+  // declaration must never target a class node. The actor-root exemption
+  // above covers the node's existence, not names — candid-core refuses
+  // `X : class` even when that class is the actor root (issue #129).
+  // Reaching this point implies zero issues so far, so `parsedDeclarations`
+  // aligns index-for-index with `$.declarations`.
+  for (let index = 0; index < parsedDeclarations.length; index += 1) {
+    if (isClassRef(parsedDeclarations[index].type)) {
+      push(
+        "invalid_contract_document",
+        `$.declarations[${index}].type`,
+        "a named declaration must not target a class node",
+      );
+      return { ok: false, issues };
+    }
+  }
 
   // The actor interface, when the document carries one: a service schema,
   // with a class actor unwrapped to its running service. Fail closed on any
