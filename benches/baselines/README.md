@@ -16,4 +16,6 @@ nothing here ships to a consumer.
 
 Until a first baseline is committed, the comparison workflow reports "no
 comparison was made" on every pull request. That is the designed fail-closed
-behaviour, not an error.
+behaviour, not an error. The same refusal appears when the stored baseline's
+schema is older than the one `compare.py` writes — a schema bump deliberately
+stales every existing baseline, and the fix is the recapture procedure above.
