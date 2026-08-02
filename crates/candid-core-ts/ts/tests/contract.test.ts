@@ -665,6 +665,8 @@ test("reference structural constraints fail closed (issue #104 review)", () => {
 });
 
 test("a class actor denotes its running service; classes elsewhere are refused", () => {
+  // Declarations naming the service and func nodes of a class-actor document
+  // are legal on the Rust side; the class rules must not refuse them.
   const doc = document(
     [
       { kind: "class", init: [1], service: 2 },
@@ -672,13 +674,17 @@ test("a class actor denotes its running service; classes elsewhere are refused",
       { kind: "service", methods: [{ name: "ping", id: 1247277682, function: 3 }] },
       { kind: "func", args: [], results: [], mode: "update" },
     ],
-    [],
+    [
+      { name: "Running", type: 2 },
+      { name: "Ping", type: 3 },
+    ],
     { kind: "class", class: 0 },
   );
   const result = schemaFromContract(doc);
   assert(result.ok, "a canonical class-actor document loads");
   if (result.ok) {
     const principal = { toText: () => "aaaaa-aa" };
+    assert.deepStrictEqual(Object.keys(result.schemas), ["Running", "Ping"]);
     assert(result.actor !== undefined);
     if (result.actor !== undefined) {
       assert.deepStrictEqual(validate(result.actor, principal), { ok: true });
@@ -698,6 +704,62 @@ test("a class actor denotes its running service; classes elsewhere are refused",
     ),
     "invalid_contract_document",
     "$.types[0]",
+  );
+  // The declaration half of the rule has no actor-root exemption (issue
+  // #129): a declaration naming the class node that IS the actor root is
+  // refused at the declaration edge, as candid-core refuses it at
+  // $.declarations[0].type. Without the dedicated declaration walk this
+  // document loaded, because the exempted node itself is legal.
+  failsWith(
+    schemaFromContract(
+      document(
+        [
+          { kind: "class", init: [], service: 1 },
+          { kind: "service", methods: [] },
+        ],
+        [{ name: "X", type: 0 }],
+        { kind: "class", class: 0 },
+      ),
+    ),
+    "invalid_contract_document",
+    "$.declarations[0].type",
+  );
+  // The reported path carries the declaration's own index, not the first.
+  failsWith(
+    schemaFromContract(
+      document(
+        [
+          { kind: "class", init: [], service: 1 },
+          { kind: "service", methods: [] },
+        ],
+        [
+          { name: "Running", type: 1 },
+          { name: "X", type: 0 },
+        ],
+        { kind: "class", class: 0 },
+      ),
+    ),
+    "invalid_contract_document",
+    "$.declarations[1].type",
+  );
+  // The exemption is the actor root's index, not "some actor exists": a
+  // second class node in a class-actor document is refused even when no
+  // declaration or type edge reaches it, as candid-core refuses it at
+  // $.types[1].
+  failsWith(
+    schemaFromContract(
+      document(
+        [
+          { kind: "class", init: [], service: 2 },
+          { kind: "class", init: [], service: 2 },
+          { kind: "service", methods: [] },
+        ],
+        [{ name: "Running", type: 2 }],
+        { kind: "class", class: 0 },
+      ),
+    ),
+    "invalid_contract_document",
+    "$.types[1]",
   );
 });
 
