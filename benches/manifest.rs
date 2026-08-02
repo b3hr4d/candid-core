@@ -9,9 +9,9 @@
 //! This binary emits the half of that identity only the Rust side can know: the
 //! benchmark IDs, the corpus and its generator parameters, the feature set the
 //! benchmarks were built with, and the units each metric is reported in. The
-//! environment half — toolchain, target, host, lockfile digest — is recorded by
-//! `tests/fixtures/benchmarks/compare.py`, which can observe it reliably and
-//! this binary cannot.
+//! environment half — toolchain, target, host, the bench binary's resolved
+//! dependency graph — is recorded by `tests/fixtures/benchmarks/compare.py`,
+//! which can observe it reliably and this binary cannot.
 //!
 //! `harness = false` and it takes no measurements: emitting the manifest must
 //! not perturb the run it describes.

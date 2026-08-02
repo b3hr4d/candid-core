@@ -93,7 +93,7 @@ Merge only when all are true:
 
 After merge, refresh `main`, verify the merge commit and deployed repository state where relevant, re-run or inspect the evidence needed for closure, and verify automatic issue closure. Comment with the merged PR, concise fix, exact checks, review-thread disposition, and remaining limitations. Close manually only after this verification.
 
-Then check what standing evidence the merge invalidated — a lockfile change stales the reviewed benchmark baseline, any commit stales release digests — and perform or schedule the documented follow-through rather than leaving it implicit.
+Then check what standing evidence the merge invalidated — a Cargo.lock change that alters the bench binary's resolved dependency graph stales the reviewed benchmark baseline (the root package's own version bump and sibling members' dev-dependency changes do not; see docs/benchmarks.md), any commit stales release digests — and perform or schedule the documented follow-through rather than leaving it implicit.
 
 Keep issue state honest in both directions: if automation closed an issue whose work is incomplete (a closing-keyword accident, a partial slice), reopen it immediately with a comment stating what remains; if reality has moved past an issue's text, rescope and retitle it rather than leaving a description that no longer describes the work.
 

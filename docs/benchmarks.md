@@ -88,7 +88,11 @@ Treat one result as evidence to investigate, not proof of a regression. Hardware
 
 Criterion's named baselines above are convenient but say nothing about *what* was measured: they will happily compare two runs over different corpora, feature sets, or toolchains and report a confident percentage. `tests/fixtures/benchmarks/compare.py` exists to make that precondition checkable, and it is built to refuse rather than guess — a missing or incompatible baseline reports that no comparison was made and exits non-zero, never a delta it cannot stand behind.
 
-A run's identity has two halves. `cargo bench --bench manifest` emits what only the Rust side knows: the corpus fingerprints, generator sizes, feature set, and metric units. The script records what only it can observe: toolchain, target, host, and the lockfile digest.
+A run's identity has two halves. `cargo bench --bench manifest` emits what only the Rust side knows: the corpus fingerprints, generator sizes, feature set, and metric units. The script records what only it can observe: toolchain, target, host, and the resolved dependency graph of the bench binary.
+
+That last item is a projection, deliberately not a hash of the whole `Cargo.lock`: the root package's own version stanza and sibling workspace members' dev-dependency lists change the lockfile's bytes without changing the program `cargo bench` builds, so a whole-file digest would let a release version bump permanently invalidate every baseline ([issue #132]). The identity is instead the closure of packages reachable from the root package's lockfile stanza (normal, build, and dev dependencies — dev included because benches compile against them), excluding the root package itself. The graph is stored in the baseline alongside its digest, so when it *does* drift the report names the packages that moved rather than showing two opaque digests.
+
+The script also records advisory machine identity — CPU model, core count, and runner image — and renders both sides in the report. It is deliberately not a drift key: hosted-runner machinery varies run to run as the common case, so flagging it would mark essentially every comparison while changing nothing. It exists so a reader can *see* that a uniform shift came with a machine change instead of inferring it.
 
 Capture a baseline on `main`:
 
@@ -119,7 +123,8 @@ What it refuses, and why:
 | --- | --- |
 | Baseline missing or unreadable | No comparison; exit 2 |
 | Corpus (including the imported bundle), generator sizes, feature set, or metric units differ | No comparison; exit 2. The two runs did not measure the same thing, so no delta between them is interpretable — recapture the baseline |
-| Toolchain, effective target, `RUSTFLAGS`, host, or lockfile differ | No comparison unless `--allow-environment-drift`, which renders the report marked **informational only** and refuses to gate on it |
+| Toolchain, effective target, `RUSTFLAGS`, host, or the bench binary's resolved dependency graph differ | No comparison unless `--allow-environment-drift`, which renders the report marked **informational only** and refuses to gate on it. A graph drift is attributed by name — `serde: 1.0.150 → 1.0.152` — from the graphs stored on both sides |
+| Stored baseline's `baseline_schema_version` differs from the one this tool writes | No comparison; exit 2 — recapture the baseline with the current tool |
 | No Criterion estimates newer than the manifest | No comparison; exit 2 — the suite was not run after the manifest was emitted |
 | Compatible | Renders Markdown and, with `--json`, machine-readable output |
 
@@ -127,11 +132,14 @@ Codegen flags are part of the identity because they change the binary without ch
 
 All three allocation metrics are compared — `allocations`, `allocated_bytes`, and `peak_live_bytes`. A change that holds the allocation count constant while growing cumulative or peak bytes is a real memory regression, and comparing only the count would render it as a reassuring 0%.
 
+The report leads with the **controls**: the `official_*` cases execute only upstream `candid_parser` code, which no change in this repository can alter. Their median shift is printed above the timing table and the control rows are marked in it, because a shift the controls share with the rest of the table measures the machinery, not the candidate — exactly the signature that once made drifted comparisons read as uniform +8–35% regressions ([issue #132]).
+
 `--fail-on-regression PCT` exits 1 when any median regresses by more than `PCT`. It is opt-in with no default threshold, because a calibrated threshold needs repeated controlled-runner data that does not exist yet ([issue #39]); and it is rejected outright on an environment-drifted comparison, where the deltas describe two machines as much as two revisions.
 
 Baselines live in `benches/baselines/`, outside the `include` allowlist in `Cargo.toml`, so a baseline never ships to a consumer. Committing one is deliberate: updating a baseline should be a reviewed change that records why it moved.
 
 [issue #39]: https://github.com/b3hr4d/candid-core/issues/39
+[issue #132]: https://github.com/b3hr4d/candid-core/issues/132
 
 ## CI policy
 
