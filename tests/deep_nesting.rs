@@ -83,6 +83,95 @@ fn compile_imported_alias_chain() -> Result<(), candid_core::CompileError> {
     .map(|_| ())
 }
 
+/// `levels` chained records whose two fields both reference the next alias:
+/// the issue #125 shape, where a walk without state deduplication re-expands
+/// the shared subtree once per incoming edge and visits O(2^levels) nodes.
+fn shared_fanout(levels: usize) -> String {
+    let mut source = String::new();
+    for index in 1..=levels {
+        source.push_str(&format!(
+            "type T{index} = record {{ a: T{}; b: T{} }};\n",
+            index + 1,
+            index + 1
+        ));
+    }
+    source.push_str(&format!("type T{} = nat;\n", levels + 1));
+    source.push_str("service : { go: (T1) -> () };");
+    source
+}
+
+/// Issue #125: the two type-depth guard walks deduplicate shared subtrees
+/// and charge `type_preflight_work`, so this compiles at a pinned cost of
+/// 2 796 units — 1 398 per walk, pinned separately by the unit tests beside
+/// each walk — where the un-deduplicated walks needed O(2^24) visits. The
+/// exact one-under boundary is the linearity regression: any return to
+/// per-path re-expansion overshoots it by four orders of magnitude.
+#[test]
+fn shared_subtree_fanout_compiles_at_its_pinned_work_ceiling() {
+    let source = shared_fanout(24);
+    compile_with_limits(
+        &source,
+        Limits::default().with_max_type_preflight_work(2_796),
+    )
+    .unwrap();
+
+    let error = compile_with_limits(
+        &source,
+        Limits::default().with_max_type_preflight_work(2_795),
+    )
+    .unwrap_err();
+    assert_eq!(error.diagnostics[0].code, "resource_limit_exceeded");
+    let resource = error.diagnostics[0].resource_limit.as_ref().unwrap();
+    assert_eq!(resource.resource, "type_preflight_work");
+    assert_eq!(resource.limit, 2_795);
+    assert_eq!(resource.observed, 2_796);
+}
+
+/// Fan-out that genuinely exceeds the configured work budget fails closed
+/// with the structured triple, not by hanging: the walk charges one unit per
+/// step, so a budget of 100 is crossed at exactly 101.
+#[test]
+fn shared_subtree_fanout_exceeding_the_work_budget_fails_closed() {
+    let error = compile_with_limits(
+        &shared_fanout(24),
+        Limits::default().with_max_type_preflight_work(100),
+    )
+    .unwrap_err();
+    assert_eq!(error.diagnostics[0].code, "resource_limit_exceeded");
+    let resource = error.diagnostics[0].resource_limit.as_ref().unwrap();
+    assert_eq!(resource.resource, "type_preflight_work");
+    assert_eq!(resource.limit, 100);
+    assert_eq!(resource.observed, 101);
+}
+
+/// Recursive types keep compiling unchanged next to shared fan-out: only
+/// names on a reference cycle are tracked per path, and the walk still stops
+/// exactly where the un-deduplicated walk stopped.
+#[test]
+fn recursive_types_still_compile_beside_shared_fanout() {
+    let source = "type L = opt L;\n\
+                  type Tree = variant { leaf: nat; node: record { left: Tree; right: Tree } };\n\
+                  type T = record { a: L; b: L; t: Tree };\n\
+                  service : { f: (T) -> (L) };";
+    compile_with_limits(source, Limits::default()).unwrap();
+}
+
+/// The largest corpus fixture pins what a real contract consumes of the
+/// issue #125 counter: 806 units end to end, four orders of magnitude under
+/// the 10M default, exactly as `Limits::max_type_preflight_work` documents.
+#[test]
+fn ledger_corpus_compiles_at_its_pinned_work_ceiling() {
+    let ledger = std::fs::read_to_string("benches/corpus/ledger.did").unwrap();
+    compile_with_limits(&ledger, Limits::default().with_max_type_preflight_work(806)).unwrap();
+
+    let error = compile_with_limits(&ledger, Limits::default().with_max_type_preflight_work(805))
+        .unwrap_err();
+    let resource = error.diagnostics[0].resource_limit.as_ref().unwrap();
+    assert_eq!(resource.resource, "type_preflight_work");
+    assert_eq!(resource.limit, 805);
+    assert_eq!(resource.observed, 806);
+}
+
 #[test]
 fn source_nesting_accepts_exact_limit_and_rejects_one_over() {
     let limits = Limits::default()

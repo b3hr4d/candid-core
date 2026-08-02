@@ -257,6 +257,7 @@ fn interactive_v1_default_numbers_are_pinned_exactly() {
     assert_eq!(limits.max_canonicalization_work(), 10_000_000);
     assert_eq!(limits.max_provenance_work(), 10_000_000);
     assert_eq!(limits.max_source_identity_work(), 400_000_000);
+    assert_eq!(limits.max_type_preflight_work(), 10_000_000);
     assert_eq!(limits.max_value_depth(), 256);
     assert_eq!(limits.max_value_elements(), 1_000_000);
     assert_eq!(limits.max_value_bytes(), 16_777_216);
@@ -308,6 +309,25 @@ fn only_explicit_overrides_serialize_and_they_round_trip() {
         serde_json::to_string(&explicit_default).unwrap(),
         r#"{"version":1,"profile":"interactive_v1","overrides":{}}"#
     );
+}
+
+/// The issue #125 counter's override key is additive: absent at the default,
+/// present under exactly this wire name when overridden, and round-tripping —
+/// the same contract `max_artifact_identity_work` established.
+#[test]
+fn type_preflight_work_override_serializes_under_its_wire_key_and_round_trips() {
+    let limits = Limits::default().with_max_type_preflight_work(1_234);
+    let value = serde_json::to_value(&limits).unwrap();
+    assert_eq!(
+        value,
+        json!({
+            "version": 1,
+            "profile": "interactive_v1",
+            "overrides": { "max_type_preflight_work": 1_234 }
+        })
+    );
+    let round_tripped: Limits = serde_json::from_value(value).unwrap();
+    assert_eq!(round_tripped, limits);
 }
 
 #[test]

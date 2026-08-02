@@ -224,23 +224,106 @@ pub(super) fn lower_checked(
     })
 }
 
+/// Checked-environment names that participate in a reference cycle; the
+/// checked twin of the parse-side recursion map in `nesting`. Names outside
+/// every cycle never repeat on one expansion path, so the depth walk below
+/// leaves them out of its per-path active sets and identical states can
+/// deduplicate.
+///
+/// Each name is mapped to a dense index and the walk tracks only that index,
+/// never the name, exactly as the parse-side twin does. `type_preflight_work`
+/// charges one unit per tracked name, so the operations that unit pays for —
+/// set membership and the memo's ordering comparisons — must cost the same
+/// whatever the name is; comparing identifiers instead would walk their
+/// bytes, and a Candid identifier is bounded on this path only by
+/// `max_source_bytes`.
+fn recursive_environment_names<'a>(
+    environment: &'a TypeEnv,
+    max_work: usize,
+    budget: &mut crate::budget::Budget<'_>,
+) -> Result<BTreeMap<&'a str, usize>, CompileError> {
+    let names: Vec<&str> = environment.0.keys().map(String::as_str).collect();
+    let index_of: BTreeMap<&str, usize> = names
+        .iter()
+        .enumerate()
+        .map(|(index, name)| (*name, index))
+        .collect();
+    let mut edges = Vec::new();
+    for (name, ty) in &environment.0 {
+        let from = index_of[name.as_str()];
+        let mut stack: Vec<&Type> = vec![ty];
+        while let Some(ty) = stack.pop() {
+            nesting::charge_type_preflight(
+                budget,
+                max_work,
+                1,
+                DiagnosticPhase::Lower,
+                "checked type traversal",
+            )?;
+            match ty.as_ref() {
+                TypeInner::Var(target) => {
+                    if let Some(&to) = index_of.get(target.as_str()) {
+                        edges.push((from, to));
+                    }
+                }
+                TypeInner::Opt(inner) | TypeInner::Vec(inner) => stack.push(inner),
+                TypeInner::Record(fields) | TypeInner::Variant(fields) => {
+                    stack.extend(fields.iter().map(|field| &field.ty));
+                }
+                TypeInner::Func(function) => {
+                    stack.extend(function.args.iter().chain(&function.rets));
+                }
+                TypeInner::Service(methods) => {
+                    stack.extend(methods.iter().map(|(_, ty)| ty));
+                }
+                TypeInner::Class(init, service) => {
+                    stack.push(service);
+                    stack.extend(init.iter());
+                }
+                _ => {}
+            }
+        }
+    }
+    let cyclic = nesting::cyclic_nodes(names.len(), &edges);
+    Ok(names
+        .into_iter()
+        .zip(&cyclic)
+        .filter(|(_, &in_cycle)| in_cycle)
+        .enumerate()
+        .map(|(index, (name, _))| (name, index))
+        .collect())
+}
+
+/// The checked twin of `nesting::check_programs_type_depth`, with the same
+/// state deduplication and the same `type_preflight_work` charge: shared
+/// subtrees of the checked environment are visited once per distinct
+/// `(node, depth, active recursive names)` state instead of once per path,
+/// which is what keeps a shared-alias record DAG linear instead of O(2^n)
+/// here as well (issue #125).
 fn check_type_depth(
     environment: &TypeEnv,
     actor_type: Option<&Type>,
     budget: &mut crate::budget::Budget<'_>,
 ) -> Result<(), CompileError> {
     let limits = budget.limits().clone();
+    let max_work = limits.max_type_preflight_work;
+    let recursive = recursive_environment_names(environment, max_work, budget)?;
     let mut roots: Vec<Type> = environment.0.values().cloned().collect();
     roots.extend(actor_type.cloned());
     let mut pending: Vec<_> = roots
         .into_iter()
-        .map(|ty| (ty, 0usize, BTreeSet::<String>::new()))
+        .map(|ty| (ty, 0usize, nesting::ActiveNames::default()))
         .collect();
 
+    let mut visited = BTreeSet::new();
     while let Some((ty, depth, active_names)) = pending.pop() {
-        budget.checkpoint().map_err(|error| {
-            budget_error(error, DiagnosticPhase::Lower, "checked type traversal")
-        })?;
+        nesting::charge_type_preflight(
+            budget,
+            max_work,
+            1usize.saturating_add(active_names.len()),
+            DiagnosticPhase::Lower,
+            "checked type traversal",
+        )?;
         if depth > limits.max_type_depth {
             return Err(CompileError::resource_limit(
                 "type_depth",
@@ -252,16 +335,34 @@ fn check_type_depth(
                 ),
             ));
         }
+        // Every popped `Type` is an `Rc` clone of a node owned transitively
+        // by `environment` or `actor_type`, both alive for the whole walk, so
+        // the address identifies its node for as long as `visited` holds it.
+        if !visited.insert((
+            ty.as_ref() as *const TypeInner as usize,
+            depth,
+            active_names.clone(),
+        )) {
+            continue;
+        }
         let next_depth = depth.saturating_add(1);
         match ty.as_ref() {
             TypeInner::Var(name) => {
-                if !active_names.contains(name) {
-                    let mut next_names = active_names;
-                    next_names.insert(name.clone());
+                let recursive_index = recursive.get(name.as_str()).copied();
+                if !recursive_index.is_some_and(|index| active_names.contains(&index)) {
                     let resolved = environment
                         .find_type(name)
                         .map_err(|error| lower_error(error.to_string()))?
                         .clone();
+                    let next_names = match recursive_index {
+                        // The one transition that changes the set, so the one
+                        // place it is rebuilt; this state's charge covered it.
+                        Some(index) => active_names.with(index),
+                        // A name outside every cycle cannot repeat on this
+                        // path, so tracking it would only split
+                        // otherwise-identical states.
+                        None => active_names,
+                    };
                     pending.push((resolved, depth, next_names));
                 }
             }
@@ -979,4 +1080,41 @@ fn source_label_order(left: &SourceLabel, right: &SourceLabel) -> std::cmp::Orde
             }
             _ => std::cmp::Ordering::Equal,
         })
+}
+
+#[cfg(test)]
+mod checked_depth_tests {
+    use super::*;
+    use crate::budget::Budget;
+    use crate::Limits;
+
+    fn checked_work(source: &str) -> usize {
+        let limits = Limits::default();
+        let mut budget = Budget::from_limits(&limits);
+        let program: IDLProg = source.parse().unwrap();
+        let mut environment = TypeEnv::new();
+        let actor = check_prog(&mut environment, &program).unwrap();
+        check_type_depth(&environment, actor.as_ref(), &mut budget).unwrap();
+        budget.consumed("type_preflight_work")
+    }
+
+    /// The checked walk charges the same model as the parse-side preflight,
+    /// and on these inputs the same amounts: its unit tests pin 6 and 1 398
+    /// for the same two sources, so one compilation costs exactly double
+    /// what either walk pins here.
+    #[test]
+    fn checked_walk_charges_match_the_preflight_pins() {
+        assert_eq!(checked_work("type T = nat; service : { f: (T) -> () };"), 6);
+
+        let mut fanout = String::new();
+        for index in 1..=24 {
+            fanout.push_str(&format!(
+                "type T{index} = record {{ a: T{}; b: T{} }};\n",
+                index + 1,
+                index + 1
+            ));
+        }
+        fanout.push_str("type T25 = nat;\nservice : { go: (T1) -> () };");
+        assert_eq!(checked_work(&fanout), 1_398);
+    }
 }

@@ -398,6 +398,84 @@ limit_fields! {
     /// fields are private precisely so that adding one is never a breaking
     /// change, and no existing key, value, or default moved.
     max_artifact_identity_work / with_max_artifact_identity_work = 10_000_000;
+    /// Maximum work units charged while enforcing [`Limits::max_type_depth`].
+    ///
+    /// Two iterative traversals guard type depth before anything recursive
+    /// expands a parsed bundle: the parse-side preflight that follows
+    /// declaration references before the upstream checker runs, and the
+    /// checked-type walk that re-verifies the checker's environment before
+    /// lowering. Both walks — and the recursion map each builds first (the
+    /// declaration reference graph and its cycle members) — charge this
+    /// counter: one unit per visited syntax node or expansion state, plus one
+    /// unit per recursive name tracked on the state's path, which is the real
+    /// cost of cloning and comparing that path set.
+    ///
+    /// Shared subtrees are deduplicated: each node is expanded once per
+    /// distinct `(node, depth, active recursive names)` state rather than
+    /// once per referencing path, and only names that participate in a
+    /// reference cycle are ever tracked per path, so ordinary recursive
+    /// types add a small constant per state. The record DAG that motivated
+    /// this counter (issue #125: shared aliases re-expanded once per
+    /// incoming edge, O(2^n) visits from a 932-byte source) costs 2 796
+    /// units at n = 24 under deduplication — measured, and pinned together
+    /// with a minimal program's exact cost by `tests/deep_nesting.rs` and
+    /// the unit tests beside the walks. Shapes that still multiply states —
+    /// deep stacks of distinct-name diamonds, enormous mutual-recursion
+    /// groups, long structural alias chains re-walked from every
+    /// declaration root at shifted depths — exhaust this counter and fail
+    /// closed with `resource_limit_exceeded` naming `type_preflight_work`,
+    /// instead of hanging.
+    ///
+    /// Kept separate from [`Limits::max_canonicalization_work`] because both
+    /// counters accrue on one budget in a single compilation: metering the
+    /// depth guard on the graph counter would let a type-heavy bundle starve
+    /// the canonicalization that follows it on the same budget. The default
+    /// matches that counter's and covers realistic contracts by several
+    /// orders of magnitude: the largest corpus fixture (`ledger.did`)
+    /// consumes 806 units end to end, pinned by `tests/deep_nesting.rs`.
+    ///
+    /// # Choosing a value for a small heap
+    ///
+    /// Deduplication is what makes these walks cheap, and it is also what
+    /// makes them *retain*: each distinct state stays in a memo for the
+    /// duration of the walk, where the previous tree walks held only a stack.
+    /// So this counter bounds memory as well as time, and the exchange rate
+    /// is measured rather than assumed: **about 19 bytes of peak live heap
+    /// per unit**, near-constant across bundle sizes and pinned by
+    /// `tests/type_preflight_memory.rs`.
+    ///
+    /// At this default that authorizes roughly 190 MB of peak heap before
+    /// the counter refuses — ample headroom on an ordinary host, and more
+    /// than a small 32-bit `wasm32` heap can serve. A host whose allocator
+    /// fails before the counter does gets an allocation abort in place of
+    /// the clean, structured `resource_limit_exceeded` this is designed to
+    /// return, so a browser or other constrained host should lower this to
+    /// what its heap can actually hold: 1 000 000 keeps the walks under
+    /// ~19 MB and still clears every realistic contract by three orders of
+    /// magnitude. Rejecting costs no memory, so no input can drive an abort
+    /// by being *larger* than the configured bound — only by being accepted
+    /// under a bound the host cannot honor.
+    ///
+    /// The rate holds because a state's cost does not depend on anything an
+    /// attacker picks freely: recursive names are interned to dense indices
+    /// rather than compared or stored as text, and each path's set is shared
+    /// with the children that inherit it unchanged rather than copied into
+    /// every one of a wide record's fields.
+    ///
+    /// # Wire compatibility
+    ///
+    /// This override key is additive, exactly like
+    /// [`Limits::max_artifact_identity_work`]'s: [`Limits::default`] and
+    /// every configuration that leaves this limit at its profile value still
+    /// serialize with no `max_type_preflight_work` key at all, so existing
+    /// documents are unchanged in both directions, while a document that does
+    /// carry the key is readable by this build and newer ones but rejected by
+    /// a build that predates it — the intended failure, since silently
+    /// ignoring an unknown limit override would apply a policy the document
+    /// did not ask for. [`LIMITS_CONFIG_VERSION`] is unchanged: `Limits`
+    /// fields are private precisely so that adding one is never a breaking
+    /// change, and no existing key, value, or default moved.
+    max_type_preflight_work / with_max_type_preflight_work = 10_000_000;
     /// Maximum semantic HostValue nesting depth.
     max_value_depth / with_max_value_depth = 256;
     /// Maximum aggregate HostValue elements per document.

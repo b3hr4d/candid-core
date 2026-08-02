@@ -526,6 +526,7 @@ pub fn candid_core::Limits::max_sources(&self) -> usize
 pub fn candid_core::Limits::max_string_bytes(&self) -> usize
 pub fn candid_core::Limits::max_type_depth(&self) -> usize
 pub fn candid_core::Limits::max_type_nodes(&self) -> usize
+pub fn candid_core::Limits::max_type_preflight_work(&self) -> usize
 pub fn candid_core::Limits::max_value_bytes(&self) -> usize
 pub fn candid_core::Limits::max_value_depth(&self) -> usize
 pub fn candid_core::Limits::max_value_elements(&self) -> usize
@@ -552,6 +553,7 @@ pub fn candid_core::Limits::with_max_sources(self, usize) -> Self
 pub fn candid_core::Limits::with_max_string_bytes(self, usize) -> Self
 pub fn candid_core::Limits::with_max_type_depth(self, usize) -> Self
 pub fn candid_core::Limits::with_max_type_nodes(self, usize) -> Self
+pub fn candid_core::Limits::with_max_type_preflight_work(self, usize) -> Self
 pub fn candid_core::Limits::with_max_value_bytes(self, usize) -> Self
 pub fn candid_core::Limits::with_max_value_depth(self, usize) -> Self
 pub fn candid_core::Limits::with_max_value_elements(self, usize) -> Self
