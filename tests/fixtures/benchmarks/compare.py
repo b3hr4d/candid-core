@@ -62,6 +62,7 @@ Exit codes
 
 import argparse
 import json
+import math
 import os
 import platform
 import statistics
@@ -663,17 +664,21 @@ def render_markdown(report: dict) -> str:
 
 
 def gate_threshold(text: str) -> float:
-    """A regression-gate percentage: finite and non-negative.
+    """A regression-gate percentage: finite and non-negative, enforced.
 
-    `not value >= 0` rather than `value < 0`, so NaN — for which every
-    comparison is False — is rejected instead of slipping through and
-    silently disarming both the control refusal and the verdict.
+    Anything else disarms the gate silently instead of failing it closed:
+    NaN makes every comparison False, and an infinite threshold (`inf`, or
+    an overflowing literal like `1e309`) can never be exceeded, so the gate
+    would exit 0 regardless of the regression. `math.isfinite` rejects all
+    three non-finite spellings; the `>= 0` half rejects negatives, for which
+    `abs(change) > PCT` is vacuously true and the refusal message would
+    assert a machinery shift that never happened.
     """
     value = float(text)
-    if not value >= 0:
+    if not (math.isfinite(value) and value >= 0):
         raise argparse.ArgumentTypeError(
-            f"{text!r} is not a usable threshold: PCT must be a non-negative "
-            "percentage"
+            f"{text!r} is not a usable threshold: PCT must be a finite, "
+            "non-negative percentage"
         )
     return value
 
