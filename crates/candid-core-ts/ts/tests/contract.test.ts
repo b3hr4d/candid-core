@@ -742,6 +742,25 @@ test("a class actor denotes its running service; classes elsewhere are refused",
     "invalid_contract_document",
     "$.declarations[1].type",
   );
+  // The exemption is the actor root's index, not "some actor exists": a
+  // second class node in a class-actor document is refused even when no
+  // declaration or type edge reaches it, as candid-core refuses it at
+  // $.types[1].
+  failsWith(
+    schemaFromContract(
+      document(
+        [
+          { kind: "class", init: [], service: 2 },
+          { kind: "class", init: [], service: 2 },
+          { kind: "service", methods: [] },
+        ],
+        [{ name: "Running", type: 2 }],
+        { kind: "class", class: 0 },
+      ),
+    ),
+    "invalid_contract_document",
+    "$.types[1]",
+  );
 });
 
 test("core-validator parity: oneway results, empty methods, class edges (PR #121 review)", () => {
