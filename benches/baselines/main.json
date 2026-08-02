@@ -41,175 +41,392 @@
       "peak_live_bytes": 79509
     }
   },
-  "baseline_schema_version": 1,
+  "baseline_schema_version": 2,
+  "bench_graph": [
+    "aho-corasick 1.1.4 registry+https://github.com/rust-lang/crates.io-index ddd31a130427c27518df266943a5308ed92d4b226cc639f5a8f1002816174301",
+    "ambient-authority 0.0.2 registry+https://github.com/rust-lang/crates.io-index e9d4ee0d472d1cd2e28c97dfa124b3d8d992e10eb0a035f33f5d12e3a177ba3b",
+    "anes 0.1.6 registry+https://github.com/rust-lang/crates.io-index 4b46cbb362ab8752921c97e041f5e366ee6297bd428a31275b9fcf1e380f7299",
+    "anstyle 1.0.14 registry+https://github.com/rust-lang/crates.io-index 940b3a0ca603d1eade50a4846a2afffd5ef57a9feac2c0e2ec2e14f9ead76000",
+    "anyhow 1.0.103 registry+https://github.com/rust-lang/crates.io-index 2a4385e2e34eb35d6b3efe798b9eb88096925d87726c0798709bf56d9ed84af3",
+    "ar_archive_writer 0.2.0 registry+https://github.com/rust-lang/crates.io-index f0c269894b6fe5e9d7ada0cf69b5bf847ff35bc25fc271f08e1d080fce80339a",
+    "arbitrary 1.4.2 registry+https://github.com/rust-lang/crates.io-index c3d036a3c4ab069c7b410a2ce876bd74808d2d0888a82667669f8e783a898bf1",
+    "arrayvec 0.5.2 registry+https://github.com/rust-lang/crates.io-index 23b62fc65de8e4e7f52534fb52b0f3ed04746ae267519eef2a83941e8085068b",
+    "ascii-canvas 3.0.0 registry+https://github.com/rust-lang/crates.io-index 8824ecca2e851cec16968d54a01dd372ef8f95b244fb84b84e70128be347c3c6",
+    "async-trait 0.1.91 registry+https://github.com/rust-lang/crates.io-index ae36dc4177970ef04fde5178d3e2429882def40e57a451f919c098f72baa6cec",
+    "autocfg 1.5.1 registry+https://github.com/rust-lang/crates.io-index f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53",
+    "beef 0.5.2 registry+https://github.com/rust-lang/crates.io-index 3a8241f3ebb85c056b509d4327ad0358fbbba6ffb340bf388f26350aeda225b1",
+    "binread 2.2.0 registry+https://github.com/rust-lang/crates.io-index 16598dfc8e6578e9b597d9910ba2e73618385dc9f4b1d43dd92c349d6be6418f",
+    "binread_derive 2.1.0 registry+https://github.com/rust-lang/crates.io-index 1d9672209df1714ee804b1f4d4f68c8eb2a90b1f7a07acf472f88ce198ef1fed",
+    "bit-set 0.5.3 registry+https://github.com/rust-lang/crates.io-index 0700ddab506f33b20a03b13996eccd309a48e5ff77d0d95926aa0210fb4e95f1",
+    "bit-set 0.8.0 registry+https://github.com/rust-lang/crates.io-index 08807e080ed7f9d5433fa9b275196cfc35414f66a0c79d864dc51a0d825231a3",
+    "bit-vec 0.6.3 registry+https://github.com/rust-lang/crates.io-index 349f9b6a179ed607305526ca489b34ad0a41aed5f7980fa90eb03160b69598fb",
+    "bit-vec 0.8.0 registry+https://github.com/rust-lang/crates.io-index 5e764a1d40d510daf35e07be9eb06e75770908c27d411ee6c92109c9840eaaf7",
+    "bitflags 2.13.0 registry+https://github.com/rust-lang/crates.io-index b4388bee8683e3d04af747c73422af53102d2bd24d9eadb6cbc100baef4b43f8",
+    "block-buffer 0.10.4 registry+https://github.com/rust-lang/crates.io-index 3078c7629b62d3f0439517fa394996acacc5cbc91c5a20d8c658e77abd503a71",
+    "bumpalo 3.20.3 registry+https://github.com/rust-lang/crates.io-index 72f5acc6cb2ba439de613abc23857ec3d78374d8ed5ac84e9d11336e87da8649",
+    "byteorder 1.5.0 registry+https://github.com/rust-lang/crates.io-index 1fd0f2584146f6f2ef48085050886acf353beff7305ebd1ae69500e27c67f64b",
+    "candid 0.10.30 registry+https://github.com/rust-lang/crates.io-index 1cc4495aa7a596cad1570886668cd3cdb1f077ec2ad28e7e3938a76756c89d80",
+    "candid_derive 0.10.30 registry+https://github.com/rust-lang/crates.io-index c93f446781aa35d3b2ec5c36e3d67fce948308fe166833ccbb1b3ef8bbb899e0",
+    "candid_parser 0.4.0 registry+https://github.com/rust-lang/crates.io-index 2e35c12ed409a6c02c6e204db49926c75ceeb622a4a994b828cdd3dea7dfec59",
+    "cap-primitives 4.0.2 registry+https://github.com/rust-lang/crates.io-index cdadbd7c002d3a484b35243669abdae85a0ebaded5a61117169dc3400f9a7ff0",
+    "cap-std 4.0.2 registry+https://github.com/rust-lang/crates.io-index 7281235d6e96d3544ca18bba9049be92f4190f8d923e3caef1b5f66cfa752608",
+    "cast 0.3.0 registry+https://github.com/rust-lang/crates.io-index 37b2a672a2cb129a2e41c10b1224bb368f9f37a2b16b612598138befd7b37eb5",
+    "cc 1.2.66 registry+https://github.com/rust-lang/crates.io-index f5d6cac793997bd970000024b2934968efe83b382de4fdcf4fcb46b6ee4ad996",
+    "cfg-if 1.0.4 registry+https://github.com/rust-lang/crates.io-index 9330f8b2ff13f34540b44e946ef35111825727b38d33286ef986142615121801",
+    "ciborium 0.2.2 registry+https://github.com/rust-lang/crates.io-index 42e69ffd6f0917f5c029256a24d0161db17cea3997d185db0d35926308770f0e",
+    "ciborium-io 0.2.2 registry+https://github.com/rust-lang/crates.io-index 05afea1e0a06c9be33d539b876f1ce3692f4afea2cb41f740e7743225ed1c757",
+    "ciborium-ll 0.2.2 registry+https://github.com/rust-lang/crates.io-index 57663b653d948a338bfb3eeba9bb2fd5fcfaecb9e199e87e1eda4d9e8b240fd9",
+    "clap 4.5.50 registry+https://github.com/rust-lang/crates.io-index 0c2cfd7bf8a6017ddaa4e32ffe7403d547790db06bd171c1c53926faab501623",
+    "clap_builder 4.5.50 registry+https://github.com/rust-lang/crates.io-index 0a4c05b9e80c5ccd3a7ef080ad7b6ba7d6fc00a985b8b157197075677c82c7a0",
+    "clap_lex 0.7.7 registry+https://github.com/rust-lang/crates.io-index c3e64b0cc0439b12df2fa678eae89a1c56a529fd067a9115f7827f1fffd22b32",
+    "codespan-reporting 0.11.1 registry+https://github.com/rust-lang/crates.io-index 3538270d33cc669650c4b093848450d380def10c331d38c768e34cac80576e6e",
+    "convert_case 0.6.0 registry+https://github.com/rust-lang/crates.io-index ec182b0ca2f35d8fc196cf3404988fd8b8c739a4d270ff118a398feb0cbec1ca",
+    "cpufeatures 0.2.17 registry+https://github.com/rust-lang/crates.io-index 59ed5838eebb26a2bb2e58f6d5b5316989ae9d08bab10e0e6d103e656d1b0280",
+    "crc32fast 1.5.0 registry+https://github.com/rust-lang/crates.io-index 9481c1c90cbf2ac953f07c8d4a58aa3945c425b7185c9154d67a65e4230da511",
+    "criterion 0.5.1 registry+https://github.com/rust-lang/crates.io-index f2b12d017a929603d80db1831cd3a24082f8137ce19c69e6447f54f5fc8d692f",
+    "criterion-plot 0.5.0 registry+https://github.com/rust-lang/crates.io-index 6b50826342786a51a89e2da3a28f1c32b06e387201bc2d19791f622c673706b1",
+    "crunchy 0.2.4 registry+https://github.com/rust-lang/crates.io-index 460fbee9c2c2f33933d720630a6a0bac33ba7053db5344fac858d4b8952d77d5",
+    "crypto-common 0.1.7 registry+https://github.com/rust-lang/crates.io-index 78c8292055d1c1df0cce5d180393dc8cce0abec0a7102adb6c7b1eef6016d60a",
+    "data-encoding 2.11.0 registry+https://github.com/rust-lang/crates.io-index a4ae5f15dda3c708c0ade84bfee31ccab44a3da4f88015ed22f63732abe300c8",
+    "digest 0.10.7 registry+https://github.com/rust-lang/crates.io-index 9ed9a281f7bc9b7576e61468ba615a66a5c8cfdff42420a70aa82701a3b1e292",
+    "dirs-next 2.0.0 registry+https://github.com/rust-lang/crates.io-index b98cf8ebf19c3d1b223e151f99a4f9f0690dca41414773390fc824184ac833e1",
+    "dirs-sys-next 0.1.2 registry+https://github.com/rust-lang/crates.io-index 4ebda144c4fe02d1f7ea1a7d9641b6fc6b580adcfa024ae48797ecdeb6825b4d",
+    "either 1.16.0 registry+https://github.com/rust-lang/crates.io-index 91622ff5e7162018101f2fea40d6ebf4a78bbe5a49736a2020649edf9693679e",
+    "ena 0.14.4 registry+https://github.com/rust-lang/crates.io-index eabffdaee24bd1bf95c5ef7cec31260444317e72ea56c4c91750e8b7ee58d5f1",
+    "equivalent 1.0.2 registry+https://github.com/rust-lang/crates.io-index 877a4ace8713b0bcf2a4e7eec82529c029f1d0619886d18145fea96c3ffe5c0f",
+    "errno 0.3.14 registry+https://github.com/rust-lang/crates.io-index 39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb",
+    "fastrand 2.4.1 registry+https://github.com/rust-lang/crates.io-index 9f1f227452a390804cdb637b74a86990f2a7d7ba4b7d5693aac9b4dd6defd8d6",
+    "find-msvc-tools 0.1.9 registry+https://github.com/rust-lang/crates.io-index 5baebc0774151f905a1a2cc41989300b1e6fbb29aff0ceffa1064fdd3088d582",
+    "fixedbitset 0.4.2 registry+https://github.com/rust-lang/crates.io-index 0ce7134b9999ecaf8bcd65542e436736ef32ddca1b3e06094cb6ec5755203b80",
+    "fnv 1.0.7 registry+https://github.com/rust-lang/crates.io-index 3f9eec918d3f24069decb9af1554cad7c880e2da24a9afd88aca000531ab82c1",
+    "fs-set-times 0.20.3 registry+https://github.com/rust-lang/crates.io-index 94e7099f6313ecacbe1256e8ff9d617b75d1bcb16a6fddef94866d225a01a14a",
+    "futures-core 0.3.33 registry+https://github.com/rust-lang/crates.io-index 2cd50c473c80f6d7c3670a752354b8e569b1a7cbfdc0419ec88e5edad85e0dc7",
+    "futures-task 0.3.33 registry+https://github.com/rust-lang/crates.io-index b231ed28831efb4a61a08580c4bc233ec56bc009f4cd8f52da2c3cb97df0c109",
+    "futures-util 0.3.33 registry+https://github.com/rust-lang/crates.io-index a77a90a256fce34da66415271e30f94ee91c57b04b8a2c042d9cf3220179deaa",
+    "generic-array 0.14.7 registry+https://github.com/rust-lang/crates.io-index 85649ca51fd72272d7821adaf274ad91c288277713d9c18820d8499a7ff69e9a",
+    "getrandom 0.2.17 registry+https://github.com/rust-lang/crates.io-index ff2abc00be7fca6ebc474524697ae276ad847ad0a6b3faa4bcb027e9a4614ad0",
+    "half 2.4.1 registry+https://github.com/rust-lang/crates.io-index 6dd08c532ae367adf81c312a4580bc67f1d0fe8bc9c460520283f4c0ff277888",
+    "handlebars 6.0.0 registry+https://github.com/rust-lang/crates.io-index 5226a0e122dc74917f3a701484482bed3ee86d016c7356836abbaa033133a157",
+    "hashbrown 0.14.5 registry+https://github.com/rust-lang/crates.io-index e5274423e17b7c9fc20b6e7e208532f9b19825d82dfd615708b70edd83df41f1",
+    "hermit-abi 0.5.2 registry+https://github.com/rust-lang/crates.io-index fc0fef456e4baa96da950455cd02c081ca953b141298e41db3fc7e36b1da849c",
+    "hex 0.4.3 registry+https://github.com/rust-lang/crates.io-index 7f24254aa9a54b5c858eaee2f5bccdb46aaf0e486a595ed5fd8f86ba55232a70",
+    "ic_principal 0.1.5 registry+https://github.com/rust-lang/crates.io-index 0c2732829022822ec69021c336d23b32a053e07abdd08553c71407d6e2d1675d",
+    "indexmap 2.3.0 registry+https://github.com/rust-lang/crates.io-index de3fc2e30ba82dd1b3911c8de1ffc143c74a914a14e99514d7637e3099df5ea0",
+    "io-extras 0.19.0 registry+https://github.com/rust-lang/crates.io-index 20fd6de4ccfcc187e38bc21cfa543cb5a302cb86a8b114eb7f0bf0dc9f8ac00f",
+    "io-lifetimes 2.0.4 registry+https://github.com/rust-lang/crates.io-index 06432fb54d3be7964ecd3649233cddf80db2832f47fec34c01f65b3d9d774983",
+    "io-lifetimes 3.0.1 registry+https://github.com/rust-lang/crates.io-index 2f0fb0570afe1fed943c5c3d4102d5358592d8625fda6a0007fdbe65a92fba96",
+    "ipnet 2.12.0 registry+https://github.com/rust-lang/crates.io-index d98f6fed1fde3f8c21bc40a1abb88dd75e67924f9cffc3ef95607bad8017f8e2",
+    "is-terminal 0.4.17 registry+https://github.com/rust-lang/crates.io-index 3640c1c38b8e4e43584d8df18be5fc6b0aa314ce6ebf51b53313d4306cca8e46",
+    "itertools 0.10.5 registry+https://github.com/rust-lang/crates.io-index b0fd2260e829bddf4cb6ea802289de2f86d6a7a690192fbe91b3f46e0f2c8473",
+    "itertools 0.11.0 registry+https://github.com/rust-lang/crates.io-index b1c173a5686ce8bfa551b3563d0c2170bf24ca44da99c7ca4bfdab5418c3fe57",
+    "itoa 1.0.18 registry+https://github.com/rust-lang/crates.io-index 8f42a60cbdf9a97f5d2305f08a87dc4e09308d1276d28c869c684d7777685682",
+    "js-sys 0.3.85 registry+https://github.com/rust-lang/crates.io-index 8c942ebf8e95485ca0d52d97da7c5a2c387d0e7f0ba4c35e93bfcaee045955b3",
+    "lalrpop 0.20.2 registry+https://github.com/rust-lang/crates.io-index 55cb077ad656299f160924eb2912aa147d7339ea7d69e1b5517326fdcec3c1ca",
+    "lalrpop-util 0.20.2 registry+https://github.com/rust-lang/crates.io-index 507460a910eb7b32ee961886ff48539633b788a36b65692b95f225b844c82553",
+    "lazy_static 1.5.0 registry+https://github.com/rust-lang/crates.io-index bbd2bcb4c963f2ddae06a2efc7e9f3591312473c50c6685e1f298068316e66fe",
+    "leb128 0.2.7 registry+https://github.com/rust-lang/crates.io-index c83bff1d572d6b9aeef67ddfc8448e4a3737909cb28e81f97c791b9018703e52",
+    "libc 0.2.186 registry+https://github.com/rust-lang/crates.io-index 68ab91017fe16c622486840e4c83c9a37afeff978bd239b5293d61ece587de66",
+    "libm 0.2.16 registry+https://github.com/rust-lang/crates.io-index b6d2cec3eae94f9f509c767b45932f1ada8350c4bdb85af2fcab4a3c14807981",
+    "libredox 0.1.18 registry+https://github.com/rust-lang/crates.io-index c943259e342f1e06ff2da7a83eabdfe7f92ce10262688dbf1895ff0b3e6e4652",
+    "linux-raw-sys 0.12.1 registry+https://github.com/rust-lang/crates.io-index 32a66949e030da00e8c7d4434b251670a91556f4144941d37452769c25d58a53",
+    "linux-raw-sys 0.4.15 registry+https://github.com/rust-lang/crates.io-index d26c52dbd32dccf2d10cac7725f8eae5296885fb5703b261f7d0a0739ec807ab",
+    "lock_api 0.4.14 registry+https://github.com/rust-lang/crates.io-index 224399e74b87b5f3557511d98dff8b14089b3dadafcab6bb93eab67d3aace965",
+    "log 0.4.33 registry+https://github.com/rust-lang/crates.io-index 0ceec5bc11778974d1bcb055b18002eba7f4b3518b6a0081b3af5f21666da9ad",
+    "logos 0.14.4 registry+https://github.com/rust-lang/crates.io-index 7251356ef8cb7aec833ddf598c6cb24d17b689d20b993f9d11a3d764e34e6458",
+    "logos-codegen 0.14.4 registry+https://github.com/rust-lang/crates.io-index 59f80069600c0d66734f5ff52cc42f2dabd6b29d205f333d61fd7832e9e9963f",
+    "logos-derive 0.14.4 registry+https://github.com/rust-lang/crates.io-index 24fb722b06a9dc12adb0963ed585f19fc61dc5413e6a9be9422ef92c091e731d",
+    "maybe-owned 0.3.4 registry+https://github.com/rust-lang/crates.io-index 4facc753ae494aeb6e3c22f839b158aebd4f9270f55cd3c79906c45476c47ab4",
+    "memchr 2.8.3 registry+https://github.com/rust-lang/crates.io-index cf8baf1c55e62ffcace7a9f06f4bd9cd3f0c4beb022d3b367256b91b87513d98",
+    "minicov 0.3.8 registry+https://github.com/rust-lang/crates.io-index 4869b6a491569605d66d3952bcdf03df789e5b536e5f0cf7758a7f08a55ae24d",
+    "new_debug_unreachable 1.0.6 registry+https://github.com/rust-lang/crates.io-index 650eef8c711430f1a879fdd01d4745a7deea475becfb90269c06775983bbf086",
+    "nu-ansi-term 0.50.3 registry+https://github.com/rust-lang/crates.io-index 7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5",
+    "num-bigint 0.4.8 registry+https://github.com/rust-lang/crates.io-index c89e69e7e0f03bea5ef08013795c25018e101932225a656383bd384495ecc367",
+    "num-integer 0.1.46 registry+https://github.com/rust-lang/crates.io-index 7969661fd2958a5cb096e56c8e1ad0444ac2bbcd0061bd28660485a44879858f",
+    "num-traits 0.2.19 registry+https://github.com/rust-lang/crates.io-index 071dfc062690e90b734c0b2273ce72ad0ffa95f0c74596bc250dcfd960262841",
+    "object 0.32.2 registry+https://github.com/rust-lang/crates.io-index a6a622008b6e321afc04970976f62ee297fdbaa6f95318ca343e3eebb9648441",
+    "once_cell 1.21.4 registry+https://github.com/rust-lang/crates.io-index 9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50",
+    "oorandom 11.1.5 registry+https://github.com/rust-lang/crates.io-index d6790f58c7ff633d8771f42965289203411a5e5c68388703c06e14f24770b41e",
+    "parking_lot 0.12.5 registry+https://github.com/rust-lang/crates.io-index 93857453250e3077bd71ff98b6a65ea6621a19bb0f559a85248955ac12c45a1a",
+    "parking_lot_core 0.9.12 registry+https://github.com/rust-lang/crates.io-index 2621685985a2ebf1c516881c026032ac7deafcda1a2c9b7850dc81e3dfcb64c1",
+    "paste 1.0.15 registry+https://github.com/rust-lang/crates.io-index 57c0d7b74b563b49d38dae00a0c37d4d6de9b432382b2892f0574ddcae73fd0a",
+    "pest 2.7.15 registry+https://github.com/rust-lang/crates.io-index 8b7cafe60d6cf8e62e1b9b2ea516a089c008945bb5a275416789e7db0bc199dc",
+    "pest_derive 2.7.15 registry+https://github.com/rust-lang/crates.io-index 816518421cfc6887a0d62bf441b6ffb4536fcc926395a69e1a85852d4363f57e",
+    "pest_generator 2.7.15 registry+https://github.com/rust-lang/crates.io-index 7d1396fd3a870fc7838768d171b4616d5c91f6cc25e377b673d714567d99377b",
+    "pest_meta 2.7.15 registry+https://github.com/rust-lang/crates.io-index e1e58089ea25d717bfd31fb534e4f3afcc2cc569c70de3e239778991ea3b7dea",
+    "petgraph 0.6.5 registry+https://github.com/rust-lang/crates.io-index b4c5cc86750666a3ed20bdaf5ca2a0344f9c67674cae0515bec2da16fbaa47db",
+    "phf_shared 0.11.3 registry+https://github.com/rust-lang/crates.io-index 67eabc2ef2a60eb7faa00097bd1ffdb5bd28e62bf39990626a582201b7a754e5",
+    "pico-args 0.5.0 registry+https://github.com/rust-lang/crates.io-index 5be167a7af36ee22fe3115051bc51f6e6c7054c9348e28deb4f49bd6f705a315",
+    "pin-project-lite 0.2.17 registry+https://github.com/rust-lang/crates.io-index a89322df9ebe1c1578d689c92318e070967d1042b512afbe49518723f4e6d5cd",
+    "ppv-lite86 0.2.21 registry+https://github.com/rust-lang/crates.io-index 85eae3c4ed2f50dcfe72643da4befc30deadb458a9b590d720cde2f2b1e97da9",
+    "precomputed-hash 0.1.1 registry+https://github.com/rust-lang/crates.io-index 925383efa346730478fb4838dbe9137d2a47675ad789c546d150a6e1dd4ab31c",
+    "pretty 0.12.5 registry+https://github.com/rust-lang/crates.io-index 0d22152487193190344590e4f30e219cf3fe140d9e7a3fdb683d82aa2c5f4156",
+    "proc-macro2 1.0.106 registry+https://github.com/rust-lang/crates.io-index 8fd00f0bb2e90d81d1044c2b32617f68fcb9fa3bb7640c23e9c748e53fb30934",
+    "proptest 1.6.0 registry+https://github.com/rust-lang/crates.io-index 14cae93065090804185d3b75f0bf93b8eeda30c7a9b4a33d3bdb3988d6229e50",
+    "psm 0.1.28 registry+https://github.com/rust-lang/crates.io-index d11f2fedc3b7dafdc2851bc52f277377c5473d378859be234bc7ebb593144d01",
+    "quick-error 1.2.3 registry+https://github.com/rust-lang/crates.io-index a1d01941d82fa2ab50be1e79e6714289dd7cde78eba4c074bc5a4374f650dfe0",
+    "quote 1.0.46 registry+https://github.com/rust-lang/crates.io-index dfbc457d0c7a0759a614551b11a6409e5951f6c7537be1f1b7682b9ae9230368",
+    "rand 0.8.7 registry+https://github.com/rust-lang/crates.io-index 22f6172bdec972074665ed81ed53b71da00bfc44b65a753cfde883ec4c702a1a",
+    "rand_chacha 0.3.1 registry+https://github.com/rust-lang/crates.io-index e6c10a63a0fa32252be49d21e7709d4d4baf8d231c2dbce1eaa8141b9b127d88",
+    "rand_core 0.6.4 registry+https://github.com/rust-lang/crates.io-index ec0be4795e2f6a28069bec0b5ff3e2ac9bafc99e6a9a7dc3547996c5c816922c",
+    "rand_xorshift 0.3.0 registry+https://github.com/rust-lang/crates.io-index d25bf25ec5ae4a3f1b92f929810509a2f53d7dca2f50b794ff57e3face536c8f",
+    "redox_syscall 0.5.18 registry+https://github.com/rust-lang/crates.io-index ed2bf2547551a7053d6fdfafda3f938979645c44812fbfcda098faae3f1a362d",
+    "redox_users 0.4.6 registry+https://github.com/rust-lang/crates.io-index ba009ff324d1fc1b900bd1fdb31564febe58a8ccc8a6fdbb93b543d33b13ca43",
+    "regex 1.13.0 registry+https://github.com/rust-lang/crates.io-index 2a0e75113e14dc5acb068cd0786884f214f1312650a3d36d269f5c4f3cdee8a2",
+    "regex-automata 0.4.15 registry+https://github.com/rust-lang/crates.io-index 1f388202e4b80542a0921078cc23b6333bcf1409c1e3f86404cae4766a6131db",
+    "regex-syntax 0.8.11 registry+https://github.com/rust-lang/crates.io-index d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4",
+    "rustix 0.38.44 registry+https://github.com/rust-lang/crates.io-index fdb5bc1ae2baa591800df16c9ca78619bf65c0488b41b96ccec5d11220d8c154",
+    "rustix 1.1.4 registry+https://github.com/rust-lang/crates.io-index b6fe4565b9518b83ef4f91bb47ce29620ca828bd32cb7e408f0062e9930ba190",
+    "rustix-linux-procfs 0.1.1 registry+https://github.com/rust-lang/crates.io-index 2fc84bf7e9aa16c4f2c758f27412dc9841341e16aa682d9c7ac308fe3ee12056",
+    "rustversion 1.0.23 registry+https://github.com/rust-lang/crates.io-index cf54715a573b99ac80df0bc206da022bcd442c974952c7b9720069370852e21f",
+    "rusty-fork 0.3.1 registry+https://github.com/rust-lang/crates.io-index cc6bf79ff24e648f6da1f8d1f011e9cac26491b619e6b9280f2b47f1774e6ee2",
+    "same-file 1.0.6 registry+https://github.com/rust-lang/crates.io-index 93fc1dc3aaa9bfed95e02e6eadabb4baf7e3078b0bd1b4d7b6b0b68378900502",
+    "scopeguard 1.2.0 registry+https://github.com/rust-lang/crates.io-index 94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49",
+    "serde 1.0.228 registry+https://github.com/rust-lang/crates.io-index 9a8e94ea7f378bd32cbbd37198a4a91436180c5bb472411e48b5ec2e2124ae9e",
+    "serde_bytes 0.11.19 registry+https://github.com/rust-lang/crates.io-index a5d440709e79d88e51ac01c4b72fc6cb7314017bb7da9eeff678aa94c10e3ea8",
+    "serde_core 1.0.228 registry+https://github.com/rust-lang/crates.io-index 41d385c7d4ca58e59fc732af25c3983b67ac852c1a25000afe1175de458b67ad",
+    "serde_derive 1.0.228 registry+https://github.com/rust-lang/crates.io-index d540f220d3187173da220f885ab66608367b6574e925011a9353e4badda91d79",
+    "serde_json 1.0.150 registry+https://github.com/rust-lang/crates.io-index e8014e44b4736ed0538adeecded0fce2a272f22dc9578a7eb6b2d9993c74cfb9",
+    "serde_spanned 0.6.9 registry+https://github.com/rust-lang/crates.io-index bf41e0cfaf7226dca15e8197172c295a782857fcb97fad1808a166870dee75a3",
+    "sha2 0.10.9 registry+https://github.com/rust-lang/crates.io-index a7507d819769d01a365ab707794a4084392c824f54a7a6a7862f8c3d0892b283",
+    "shlex 2.0.1 registry+https://github.com/rust-lang/crates.io-index f8fadd59c855ef2080decdef8ff161eb6661b86933c9d82e5ba29dc602a55aba",
+    "siphasher 1.0.3 registry+https://github.com/rust-lang/crates.io-index 8ee5873ec9cce0195efcb7a4e9507a04cd49aec9c83d0389df45b1ef7ba2e649",
+    "slab 0.4.12 registry+https://github.com/rust-lang/crates.io-index 0c790de23124f9ab44544d7ac05d60440adc586479ce501c1d6d7da3cd8c9cf5",
+    "smallvec 1.15.2 registry+https://github.com/rust-lang/crates.io-index 8ed6a63f02c8539c91a8685a86f4099661ba3da017932f6ebbea6de3f0fa7c90",
+    "stacker 0.1.24 registry+https://github.com/rust-lang/crates.io-index 640c8cdd92b6b12f5bcb1803ca3bbf5ab96e5e6b6b96b9ab77dabe9e880b3190",
+    "string_cache 0.8.9 registry+https://github.com/rust-lang/crates.io-index bf776ba3fa74f83bf4b63c3dcbbf82173db2632ed8452cb2d891d33f459de70f",
+    "syn 1.0.109 registry+https://github.com/rust-lang/crates.io-index 72b64191b275b66ffe2469e8af2c1cfe3bafa67b529ead792a6d0160888b4237",
+    "syn 2.0.118 registry+https://github.com/rust-lang/crates.io-index 1b9ae57f904213ebb649ce6895b8a66c66f0203b9319718f69a5612a065b1422",
+    "syn 3.0.3 registry+https://github.com/rust-lang/crates.io-index 53e9bae58849f64dfa4f5d5ae372c8341f7305f82a3868709269343628b659a3",
+    "tempfile 3.10.1 registry+https://github.com/rust-lang/crates.io-index 85b77fafb263dd9d05cbeac119526425676db3784113aa9295c88498cbf8bff1",
+    "term 0.7.0 registry+https://github.com/rust-lang/crates.io-index c59df8ac95d96ff9bede18eb7300b0fda5e5d8d90960e76f8e14ae765eedbf1f",
+    "termcolor 1.4.1 registry+https://github.com/rust-lang/crates.io-index 06794f8f6c5c898b3275aebefa6b8a1cb24cd2c6c79397ab15774837a0bc5755",
+    "thiserror 1.0.69 registry+https://github.com/rust-lang/crates.io-index b6aaf5339b578ea85b50e080feb250a3e8ae8cfcdff9a461c9ec2904bc923f52",
+    "thiserror 2.0.18 registry+https://github.com/rust-lang/crates.io-index 4288b5bcbc7920c07a1149a35cf9590a2aa808e0bc1eafaade0b80947865fbc4",
+    "thiserror-impl 1.0.69 registry+https://github.com/rust-lang/crates.io-index 4fee6c4efc90059e10f81e6d42c60a18f76588c3d74cb83a0b242a2b6c7504c1",
+    "thiserror-impl 2.0.18 registry+https://github.com/rust-lang/crates.io-index ebc4ee7f67670e9b64d05fa4253e753e016c6c95ff35b89b7941d6b856dec1d5",
+    "tiny-keccak 2.0.2 registry+https://github.com/rust-lang/crates.io-index 2c9d3793400a45f954c52e73d068316d76b6f4e36977e3fcebb13a2721e80237",
+    "tinytemplate 1.2.1 registry+https://github.com/rust-lang/crates.io-index be4d6b5f19ff7664e8c98d03e2139cb510db9b0a60b55f8e8709b689d939b6bc",
+    "toml 0.8.23 registry+https://github.com/rust-lang/crates.io-index dc1beb996b9d83529a9e75c17a1686767d148d70663143c7854d8b4a09ced362",
+    "toml_datetime 0.6.11 registry+https://github.com/rust-lang/crates.io-index 22cddaf88f4fbc13c51aebbf5f8eceb5c7c5a9da2ac40a13519eb5b0a0e8f11c",
+    "toml_edit 0.22.27 registry+https://github.com/rust-lang/crates.io-index 41fe8c660ae4257887cf66394862d21dbca4a6ddd26f04a3560410406a2f819a",
+    "typed-arena 2.0.2 registry+https://github.com/rust-lang/crates.io-index 6af6ae20167a9ece4bcb41af5b80f8a1f1df981f6391189ce00fd257af04126a",
+    "typenum 1.20.1 registry+https://github.com/rust-lang/crates.io-index b6f5e870be6c3b371b77fe0ee0bafb859fa4964b4404c27de1d380043c4dda20",
+    "ucd-trie 0.1.7 registry+https://github.com/rust-lang/crates.io-index 2896d95c02a80c6d6a5d6e953d479f5ddf2dfdb6a244441010e373ac0fb88971",
+    "unarray 0.1.4 registry+https://github.com/rust-lang/crates.io-index eaea85b334db583fe3274d12b4cd1880032beab409c0d774be044d4480ab9a94",
+    "unicode-ident 1.0.24 registry+https://github.com/rust-lang/crates.io-index e6e4313cd5fcd3dad5cafa179702e2b244f760991f45397d14d4ebf38247da75",
+    "unicode-segmentation 1.12.0 registry+https://github.com/rust-lang/crates.io-index f6ccf251212114b54433ec949fd6a7841275f9ada20dddd2f29e9ceea4501493",
+    "unicode-width 0.1.14 registry+https://github.com/rust-lang/crates.io-index 7dd6e30e90baa6f72411720665d41d89b9a3d039dc45b8faea1ddd07f617f6af",
+    "unicode-width 0.2.2 registry+https://github.com/rust-lang/crates.io-index b4ac048d71ede7ee76d585517add45da530660ef4390e49b098733c6e897f254",
+    "unicode-xid 0.2.6 registry+https://github.com/rust-lang/crates.io-index ebc1c04c71510c7f702b52b7c350734c9ff1295c464a03335b00bb84fc54f853",
+    "version_check 0.9.5 registry+https://github.com/rust-lang/crates.io-index 0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a",
+    "wait-timeout 0.2.1 registry+https://github.com/rust-lang/crates.io-index 09ac3b126d3914f9849036f826e054cbabdc8519970b8998ddaf3b5bd3c65f11",
+    "walkdir 2.5.0 registry+https://github.com/rust-lang/crates.io-index 29790946404f91d9c5d06f9874efddea1dc06c5efe94541a7d6863108e3a5e4b",
+    "wasi 0.11.1+wasi-snapshot-preview1 registry+https://github.com/rust-lang/crates.io-index ccf3ec651a847eb01de73ccad15eb7d99f80485de043efb2f370cd654f4ea44b",
+    "wasm-bindgen 0.2.108 registry+https://github.com/rust-lang/crates.io-index 64024a30ec1e37399cf85a7ffefebdb72205ca1c972291c51512360d90bd8566",
+    "wasm-bindgen-futures 0.4.58 registry+https://github.com/rust-lang/crates.io-index 70a6e77fd0ae8029c9ea0063f87c46fde723e7d887703d74ad2616d792e51e6f",
+    "wasm-bindgen-macro 0.2.108 registry+https://github.com/rust-lang/crates.io-index 008b239d9c740232e71bd39e8ef6429d27097518b6b30bdf9086833bd5b6d608",
+    "wasm-bindgen-macro-support 0.2.108 registry+https://github.com/rust-lang/crates.io-index 5256bae2d58f54820e6490f9839c49780dff84c65aeab9e772f15d5f0e913a55",
+    "wasm-bindgen-shared 0.2.108 registry+https://github.com/rust-lang/crates.io-index 1f01b580c9ac74c8d8f0c0e4afb04eeef2acf145458e52c03845ee9cd23e3d12",
+    "wasm-bindgen-test 0.3.58 registry+https://github.com/rust-lang/crates.io-index 45649196a53b0b7a15101d845d44d2dda7374fc1b5b5e2bbf58b7577ff4b346d",
+    "wasm-bindgen-test-macro 0.3.58 registry+https://github.com/rust-lang/crates.io-index f579cdd0123ac74b94e1a4a72bd963cf30ebac343f2df347da0b8df24cdebed2",
+    "wasm-bindgen-test-shared 0.2.108 registry+https://github.com/rust-lang/crates.io-index a8145dd1593bf0fb137dbfa85b8be79ec560a447298955877804640e40c2d6ea",
+    "web-sys 0.3.85 registry+https://github.com/rust-lang/crates.io-index 312e32e551d92129218ea9a2452120f4aabc03529ef03e4d0d82fb2780608598",
+    "winapi 0.3.9 registry+https://github.com/rust-lang/crates.io-index 5c839a674fcd7a98952e593242ea400abe93992746761e38641405d28b00f419",
+    "winapi-i686-pc-windows-gnu 0.4.0 registry+https://github.com/rust-lang/crates.io-index ac3b87c63620426dd9b991e5ce0329eff545bccbbb34f3be09ff6fb6ab51b7b6",
+    "winapi-util 0.1.11 registry+https://github.com/rust-lang/crates.io-index c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22",
+    "winapi-x86_64-pc-windows-gnu 0.4.0 registry+https://github.com/rust-lang/crates.io-index 712e227841d057c1ee1cd2fb22fa7e5a5461ae8e48fa2ca79ec42cfc1931183f",
+    "windows-link 0.2.1 registry+https://github.com/rust-lang/crates.io-index f0805222e57f7521d6a62e36fa9163bc891acd422f971defe97d64e70d0a4fe5",
+    "windows-sys 0.52.0 registry+https://github.com/rust-lang/crates.io-index 282be5f36a8ce781fad8c8ae18fa3f9beff57ec1b52cb3de0789201425d9a33d",
+    "windows-sys 0.59.0 registry+https://github.com/rust-lang/crates.io-index 1e38bc4d79ed67fd075bcc251a1c39b32a1776bbe92e5bef1f0bf1f8c531853b",
+    "windows-sys 0.61.2 registry+https://github.com/rust-lang/crates.io-index ae137229bcbd6cdf0f7b80a31df61766145077ddf49416a728b02cb3921ff3fc",
+    "windows-targets 0.52.6 registry+https://github.com/rust-lang/crates.io-index 9b724f72796e036ab90c1021d4780d4d3d648aca59e491e6b98e725b84e99973",
+    "windows_aarch64_gnullvm 0.52.6 registry+https://github.com/rust-lang/crates.io-index 32a4622180e7a0ec044bb555404c800bc9fd9ec262ec147edd5989ccd0c02cd3",
+    "windows_aarch64_msvc 0.52.6 registry+https://github.com/rust-lang/crates.io-index 09ec2a7bb152e2252b53fa7803150007879548bc709c039df7627cabbd05d469",
+    "windows_i686_gnu 0.52.6 registry+https://github.com/rust-lang/crates.io-index 8e9b5ad5ab802e97eb8e295ac6720e509ee4c243f69d781394014ebfe8bbfa0b",
+    "windows_i686_gnullvm 0.52.6 registry+https://github.com/rust-lang/crates.io-index 0eee52d38c090b3caa76c563b86c3a4bd71ef1a819287c19d586d7334ae8ed66",
+    "windows_i686_msvc 0.52.6 registry+https://github.com/rust-lang/crates.io-index 240948bc05c5e7c6dabba28bf89d89ffce3e303022809e73deaefe4f6ec56c66",
+    "windows_x86_64_gnu 0.52.6 registry+https://github.com/rust-lang/crates.io-index 147a5c80aabfbf0c7d901cb5895d1de30ef2907eb21fbbab29ca94c5b08b1a78",
+    "windows_x86_64_gnullvm 0.52.6 registry+https://github.com/rust-lang/crates.io-index 24d5b23dc417412679681396f2b49f3de8c1473deb516bd34410872eff51ed0d",
+    "windows_x86_64_msvc 0.52.6 registry+https://github.com/rust-lang/crates.io-index 589f6da84c646204747d1270a2a5661ea66ed1cced2631d546fdfb155959f9ec",
+    "winnow 0.7.15 registry+https://github.com/rust-lang/crates.io-index df79d97927682d2fd8adb29682d1140b343be4ac0f08fd68b7765d9c059d3945",
+    "winx 0.36.4 registry+https://github.com/rust-lang/crates.io-index 3f3fd376f71958b862e7afb20cfe5a22830e1963462f3a17f49d82a6c1d1f42d",
+    "zerocopy 0.8.54 registry+https://github.com/rust-lang/crates.io-index b7cbbc0a705a0fd05cc3676525980d2bf5a9bc4adac6d6475209a7887cf59d19",
+    "zerocopy-derive 0.8.54 registry+https://github.com/rust-lang/crates.io-index e2e817b7b52d0c7358d3246da9d69935ebb18116b2b102b4230dac079b4862f5",
+    "zmij 1.0.21 registry+https://github.com/rust-lang/crates.io-index b8848ee67ecc8aedbaf3e4122217aff892639231befc6a1b58d29fff4c2cabaa"
+  ],
   "criterion": {
     "artifact/ledger/canonicalize": {
-      "lower_ns": 202629.2034428795,
-      "median_ns": 204286.77230046946,
+      "lower_ns": 141427.74922191098,
+      "median_ns": 141569.52483934752,
       "throughput_bytes": null,
-      "upper_ns": 205819.56520240323
+      "upper_ns": 141656.43725490198
     },
     "artifact/ledger/parse_validate_canonicalize": {
-      "lower_ns": 238079.51767676766,
-      "median_ns": 238712.17583333334,
+      "lower_ns": 164013.87197177822,
+      "median_ns": 164115.94105113635,
       "throughput_bytes": null,
-      "upper_ns": 240271.27455357142
+      "upper_ns": 164232.59552556818
     },
     "artifact/ledger/serialize_compact": {
-      "lower_ns": 6935.277703027391,
-      "median_ns": 6992.706550567405,
+      "lower_ns": 4785.575541181226,
+      "median_ns": 4789.0091787439615,
       "throughput_bytes": null,
-      "upper_ns": 7047.9581588522
+      "upper_ns": 4797.968747286275
     },
     "artifact/ledger/serialize_validated_pretty": {
-      "lower_ns": 222616.82705078126,
-      "median_ns": 224517.843349359,
+      "lower_ns": 154839.6450038139,
+      "median_ns": 155016.23498964804,
       "throughput_bytes": null,
-      "upper_ns": 226225.13763020834
+      "upper_ns": 155125.8336956522
     },
     "artifact/ledger/validate": {
-      "lower_ns": 203648.3158521303,
-      "median_ns": 204252.5257936508,
+      "lower_ns": 141433.2952970297,
+      "median_ns": 141499.9711221122,
       "throughput_bytes": null,
-      "upper_ns": 207936.4549107143
+      "upper_ns": 141586.41329132914
     },
     "compile/basic/core_full/98": {
-      "lower_ns": 51222.04963151927,
-      "median_ns": 51767.09955357143,
+      "lower_ns": 36370.03110099002,
+      "median_ns": 36411.048218829514,
       "throughput_bytes": 98,
-      "upper_ns": 52474.38216575092
+      "upper_ns": 36488.59455353556
     },
     "compile/basic/core_minimal/98": {
-      "lower_ns": 41246.14150047483,
-      "median_ns": 41607.10281065089,
+      "lower_ns": 29807.35593802384,
+      "median_ns": 29874.55002354049,
       "throughput_bytes": 98,
-      "upper_ns": 42554.336996337
+      "upper_ns": 30221.765121822034
     },
     "compile/basic/official_parse_check/98": {
-      "lower_ns": 3721.134695471109,
-      "median_ns": 3776.026734314236,
+      "lower_ns": 3104.9364811812393,
+      "median_ns": 3149.48650477707,
       "throughput_bytes": 98,
-      "upper_ns": 3817.748349884542
+      "upper_ns": 3472.4128237791933
     },
     "compile/imported_bundle/core_compile_with_resolver": {
-      "lower_ns": 551874.1586538461,
-      "median_ns": 557060.3215811966,
+      "lower_ns": 379423.3057017544,
+      "median_ns": 379856.6112155388,
       "throughput_bytes": 1360,
-      "upper_ns": 562071.3000622859
+      "upper_ns": 380190.58815789473
     },
     "compile/imported_bundle/official_check_file": {
-      "lower_ns": 77827.85800744878,
-      "median_ns": 78209.06665820214,
+      "lower_ns": 55031.76809156095,
+      "median_ns": 55144.80160380161,
       "throughput_bytes": 1360,
-      "upper_ns": 79211.10639593183
+      "upper_ns": 55184.71365914787
     },
     "compile/ledger/core_full/1604": {
-      "lower_ns": 578916.2505208333,
-      "median_ns": 584411.8554778555,
+      "lower_ns": 471699.43434535107,
+      "median_ns": 476150.079390681,
       "throughput_bytes": 1604,
-      "upper_ns": 588386.7383497807
+      "upper_ns": 477678.4086021505
     },
     "compile/ledger/core_minimal/1604": {
-      "lower_ns": 457251.3814940577,
-      "median_ns": 464183.4247311828,
+      "lower_ns": 314116.07274247496,
+      "median_ns": 314265.1959345003,
       "throughput_bytes": 1604,
-      "upper_ns": 483325.15437788016
+      "upper_ns": 314671.565089514
     },
     "compile/ledger/official_parse_check/1604": {
-      "lower_ns": 74106.56435216131,
-      "median_ns": 75238.02065972221,
+      "lower_ns": 55307.24660979878,
+      "median_ns": 55413.470522067095,
       "throughput_bytes": 1604,
-      "upper_ns": 76139.01897321429
+      "upper_ns": 55547.16980361007
     },
     "compile/recursive/core_full/89": {
-      "lower_ns": 54199.46133770076,
-      "median_ns": 54501.47841346154,
+      "lower_ns": 38546.14382798574,
+      "median_ns": 38595.52793414016,
       "throughput_bytes": 89,
-      "upper_ns": 54856.42954622132
+      "upper_ns": 38625.59391430369
     },
     "compile/recursive/core_minimal/89": {
-      "lower_ns": 43269.844696969696,
-      "median_ns": 43563.72021974127,
+      "lower_ns": 30574.582392473116,
+      "median_ns": 30676.97129032258,
       "throughput_bytes": 89,
-      "upper_ns": 43748.39280303031
+      "upper_ns": 30809.335887096775
     },
     "compile/recursive/official_parse_check/89": {
-      "lower_ns": 4605.732295521519,
-      "median_ns": 4633.906561053241,
+      "lower_ns": 3721.0993791195856,
+      "median_ns": 3721.734656382415,
       "throughput_bytes": 89,
-      "upper_ns": 4678.482295283565
+      "upper_ns": 3723.408632014114
     },
     "compile/recursive_chain_128/core_full/7157": {
-      "lower_ns": 58496453.166666664,
-      "median_ns": 58650006.66666667,
+      "lower_ns": 48377609.0,
+      "median_ns": 48637962.0,
       "throughput_bytes": 7157,
-      "upper_ns": 59038213.83333333
+      "upper_ns": 49855638.375
     },
     "compile/recursive_chain_128/core_minimal/7157": {
-      "lower_ns": 57409274.0,
-      "median_ns": 57775093.5,
+      "lower_ns": 42363430.75,
+      "median_ns": 42395051.875,
       "throughput_bytes": 7157,
-      "upper_ns": 57983388.5
+      "upper_ns": 42436173.75
     },
     "compile/recursive_chain_128/official_parse_check/7157": {
-      "lower_ns": 438419.5962962963,
-      "median_ns": 440745.0063360882,
+      "lower_ns": 331511.4564698867,
+      "median_ns": 331686.1196501857,
       "throughput_bytes": 7157,
-      "upper_ns": 446728.3426421074
+      "upper_ns": 331881.3083231334
     },
     "compile/service_methods_128/core_full/5968": {
-      "lower_ns": 1122334.9986263737,
-      "median_ns": 1127501.705802969,
+      "lower_ns": 786228.1092592592,
+      "median_ns": 786551.5486111111,
       "throughput_bytes": 5968,
-      "upper_ns": 1141707.8076923075
+      "upper_ns": 787603.004419192
     },
     "compile/service_methods_128/core_minimal/5968": {
-      "lower_ns": 792455.9570868947,
-      "median_ns": 803846.8891369049,
+      "lower_ns": 578047.48,
+      "median_ns": 578258.8563157895,
       "throughput_bytes": 5968,
-      "upper_ns": 811483.4707602339
+      "upper_ns": 578639.8992760181
     },
     "compile/service_methods_128/official_parse_check/5968": {
-      "lower_ns": 309786.8596661491,
-      "median_ns": 316341.875,
+      "lower_ns": 255302.42176870749,
+      "median_ns": 255467.75856782106,
       "throughput_bytes": 5968,
-      "upper_ns": 322096.6673913044
+      "upper_ns": 255667.69111394556
     },
     "compile/wide_record_256/core_full/4580": {
-      "lower_ns": 1008054.6965811965,
-      "median_ns": 1017314.2746296297,
+      "lower_ns": 808516.9868421053,
+      "median_ns": 822907.9039264829,
       "throughput_bytes": 4580,
-      "upper_ns": 1031439.4633333334
+      "upper_ns": 831085.5131578947
     },
     "compile/wide_record_256/core_minimal/4580": {
-      "lower_ns": 739654.9181286551,
-      "median_ns": 752642.7688596491,
+      "lower_ns": 522467.03382034635,
+      "median_ns": 522825.6395308123,
       "throughput_bytes": 4580,
-      "upper_ns": 759033.0958931419
+      "upper_ns": 523370.53853383457
     },
     "compile/wide_record_256/official_parse_check/4580": {
-      "lower_ns": 182065.88365800865,
-      "median_ns": 184507.47835497835,
+      "lower_ns": 144664.6641337386,
+      "median_ns": 144773.24875886523,
       "throughput_bytes": 4580,
-      "upper_ns": 186724.3957946815
+      "upper_ns": 144832.92266775778
     },
     "host_value/validate/vec_variant/256": {
-      "lower_ns": 443454.1040928768,
-      "median_ns": 446583.14795008913,
+      "lower_ns": 327687.4221763086,
+      "median_ns": 328280.94141414145,
       "throughput_bytes": null,
-      "upper_ns": 449544.26649831655
+      "upper_ns": 328703.78409090906
     },
     "host_value/validate/wide_record/256": {
-      "lower_ns": 950527.1555555556,
-      "median_ns": 960136.737037037,
+      "lower_ns": 799296.7245614035,
+      "median_ns": 802955.9911184211,
       "throughput_bytes": null,
-      "upper_ns": 966147.4333333333
+      "upper_ns": 814993.9339574899
     }
   },
   "environment": {
+    "bench_graph_digest": "9de63a3bfec2edf5",
     "cargo": "cargo 1.97.1 (c980f4866 2026-06-30)",
     "host": "Linux x86_64",
-    "lockfile_digest": "a58cb0d45d3d0490",
+    "machine": {
+      "cpu_count": 4,
+      "cpu_model": "Intel(R) Xeon(R) 6973P-C",
+      "runner_image": "ubuntu24 20260720.247.2"
+    },
     "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14)",
     "rustflags": "",
     "target": "x86_64-unknown-linux-gnu"
@@ -283,5 +500,5 @@
     },
     "schema_version": 1
   },
-  "note": "captured by Verify run 30364235529 on c5727e824a31d5e92b3aa706f6f62f0540621a38"
+  "note": "captured by Verify run 30736234081 on 731ffe86c6c5efe70f7223eeaf5d8821b1c8d373"
 }
