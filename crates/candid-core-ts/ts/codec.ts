@@ -2117,6 +2117,13 @@ class Decoder {
         this.mismatch("type_mismatch", path, "blob is vec nat8 on the wire");
       }
       const length = this.lebU32(path, "blob length");
+      // Every blob byte must exist in the input, so a declared length the
+      // remaining bytes cannot satisfy is truncation — detected before the
+      // budget loop, or a 13-byte header would burn min(length, maxElements)
+      // charges that the vec nat8 path never pays (issue #128).
+      if (this.offset + length > this.bytes.length) {
+        this.fail("truncated", path, "unexpected end of input");
+      }
       // One element charge per byte keeps blob and vec nat8 accounting equal.
       for (let i = 0; i < length; i += 1) {
         this.step(path, depth + 1);

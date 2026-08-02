@@ -414,6 +414,60 @@ test("resource budgets bound hostile wire input", () => {
   }
 });
 
+test("a blob length beyond the remaining input is truncation, never budget burn (issue #128)", () => {
+  // 13 hostile bytes: wire `vec nat8`, blob length LEB 268_435_455, zero
+  // payload. Both schema shapes diagnose the same defect — the input is
+  // truncated — and neither pays for the declared length.
+  const hostile = message([[0x6d, 0x7b]], [[0x00]], [0xff, 0xff, 0xff, 0x7f]);
+  failsDecode(c.blob(), hostile, "truncated");
+  failsDecode(c.vec(c.nat8), hostile, "truncated");
+  // The ordering pin: were the declared length charged before the bounds
+  // check, a 3-element budget would burn out first and report
+  // resource_limit_exceeded instead.
+  failsDecode(c.blob(), hostile, "truncated", { maxElements: 3 });
+  // One-step-over: a length of 4 over 3 payload bytes is truncated; the
+  // exact length decodes; an empty blob is legal.
+  failsDecode(c.blob(), message([[0x6d, 0x7b]], [[0x00]], [0x04, 0xaa, 0xbb, 0xcc]), "truncated");
+  const exact = decode(c.blob(), message([[0x6d, 0x7b]], [[0x00]], [0x03, 0xaa, 0xbb, 0xcc]));
+  assert.deepStrictEqual(exact, { ok: true, value: Uint8Array.from([0xaa, 0xbb, 0xcc]) });
+  assert.deepStrictEqual(
+    decode(c.blob(), message([[0x6d, 0x7b]], [[0x00]], [0x00])),
+    { ok: true, value: Uint8Array.from([]) },
+  );
+  // Element accounting stays equal byte for byte: one charge for the value
+  // node plus one per byte, on both the blob and the vec nat8 path — a
+  // 3-byte payload decodes at maxElements 4 and burns out at 3.
+  const legit = message([[0x6d, 0x7b]], [[0x00]], [0x03, 0xaa, 0xbb, 0xcc]);
+  for (const schema of [c.blob(), c.vec(c.nat8)] as const) {
+    assert(decode(schema as Schema<unknown>, legit, { maxElements: 4 }).ok);
+    failsDecode(schema, legit, "resource_limit_exceeded", { maxElements: 3 });
+  }
+  // A blob past the default element budget still decodes unchanged once
+  // maxElements is raised, and still pays exactly length + 1 charges.
+  const payloadLength = 2_000_000;
+  const payload = new Uint8Array(payloadLength);
+  for (let i = 0; i < payloadLength; i += 1) {
+    payload[i] = i & 0xff;
+  }
+  const head: number[] = [0x44, 0x49, 0x44, 0x4c, 0x01, 0x6d, 0x7b, 0x01, 0x00];
+  for (let v = payloadLength; ; v = Math.floor(v / 128)) {
+    if (v < 128) {
+      head.push(v);
+      break;
+    }
+    head.push((v & 0x7f) | 0x80);
+  }
+  const wire = new Uint8Array(head.length + payloadLength);
+  wire.set(Uint8Array.from(head), 0);
+  wire.set(payload, head.length);
+  const big = decode(c.blob(), wire, { maxElements: payloadLength + 1 });
+  assert(big.ok, "a legitimate large blob decodes under a raised budget");
+  if (big.ok) {
+    assert.deepStrictEqual(big.value, payload);
+  }
+  failsDecode(c.blob(), wire, "resource_limit_exceeded", { maxElements: payloadLength });
+});
+
 // ---------------------------------------------------------------------------
 // 3. Subtyping on decode
 // ---------------------------------------------------------------------------
