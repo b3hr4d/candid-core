@@ -52,8 +52,12 @@ Exit codes
 ----------
 
     0  compared; no gate was requested, or none was exceeded
-    1  compared; a requested --fail-on-regression gate was exceeded
-    2  no comparison was made (baseline missing, unreadable, or incompatible)
+    1  compared; a requested --fail-on-regression gate was exceeded by a
+       non-control benchmark
+    2  no comparison or no gate verdict was made (baseline missing,
+       unreadable, or incompatible; gate requested on an environment-drifted
+       comparison; a control benchmark moved past the threshold in either
+       direction; or no control was comparable on both sides)
 """
 
 import argparse
@@ -658,6 +662,22 @@ def render_markdown(report: dict) -> str:
     return "\n".join(out)
 
 
+def gate_threshold(text: str) -> float:
+    """A regression-gate percentage: finite and non-negative.
+
+    `not value >= 0` rather than `value < 0`, so NaN — for which every
+    comparison is False — is rejected instead of slipping through and
+    silently disarming both the control refusal and the verdict.
+    """
+    value = float(text)
+    if not value >= 0:
+        raise argparse.ArgumentTypeError(
+            f"{text!r} is not a usable threshold: PCT must be a non-negative "
+            "percentage"
+        )
+    return value
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     sub = parser.add_subparsers(dest="command", required=True)
@@ -677,9 +697,14 @@ def main() -> int:
             p.add_argument("--allow-environment-drift", action="store_true")
             p.add_argument(
                 "--fail-on-regression",
-                type=float,
+                type=gate_threshold,
                 metavar="PCT",
-                help="exit 1 if any median regresses by more than PCT percent",
+                help=(
+                    "exit 1 if any non-control median regresses by more than "
+                    "PCT percent; refuses with exit 2 (no verdict) when a "
+                    "control benchmark moved more than PCT in either "
+                    "direction, or when no control is comparable"
+                ),
             )
 
     args = parser.parse_args()
@@ -730,15 +755,27 @@ def main() -> int:
     # the machinery shifted more than the gate tolerates: a slower machine
     # fabricates regressions, a faster one masks them. No verdict on the
     # candidate is possible, so the gate refuses rather than passing or
-    # failing on machine noise (issue #135). Checked before rendering, like
-    # the drift refusal above.
+    # failing on machine noise (issue #135). And a run with no comparable
+    # control at all offers the gate nothing to vouch for the machinery with —
+    # passing it would be the fail-open case the recorded decision rejected.
+    # Both checked before rendering, like the drift refusal above.
     if args.fail_on_regression is not None:
-        invalidated = [
+        controls = [
             (name, change)
             for name, _before, _after, change in timing
-            if change is not None
-            and is_control(name)
-            and abs(change) > args.fail_on_regression
+            if change is not None and is_control(name)
+        ]
+        if not controls:
+            die(
+                "--fail-on-regression cannot gate this run: no control "
+                "benchmark has a comparable result on both sides, so the "
+                "machinery cannot be vouched for and a verdict would not be "
+                "evidence"
+            )
+        invalidated = [
+            (name, change)
+            for name, change in controls
+            if abs(change) > args.fail_on_regression
         ]
         if invalidated:
             name, change = max(invalidated, key=lambda item: abs(item[1]))
