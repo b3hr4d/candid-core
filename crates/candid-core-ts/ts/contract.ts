@@ -19,10 +19,12 @@
 //   just as surely;
 // - reference types build like everything else (issue #104): a func schema
 //   carries its signature and describes `{ principal, method }` values, a
-//   service schema carries its methods and describes principal values, and a
-//   `class` — declaration or actor — denotes its running service (init args
-//   are install-time metadata). The actor interface, when present, is built
-//   as a service schema and returned as `actor`.
+//   service schema carries its methods and describes principal values, and
+//   the class actor root denotes its running service (init args are
+//   install-time metadata). A class is legal *only* as the actor root: a
+//   named declaration targeting a class node is refused, mirroring
+//   candid-core's `class_not_actor_root` (issue #129). The actor interface,
+//   when present, is built as a service schema and returned as `actor`.
 //
 // One deliberate divergence: declaration names are not required to be
 // TypeScript identifiers. The generator emits source text and must refuse
@@ -126,7 +128,7 @@ export interface ContractSchemaOptions {
 export type SchemaFromContractResult =
   | {
       readonly ok: true;
-      /** One schema per declaration, in declaration order (issue #104: reference kinds included; classes denote their running service). */
+      /** One schema per declaration, in declaration order (issue #104: func and service kinds included; a class is never named — declarations targeting one are refused, issue #129). */
       readonly schemas: { readonly [name: string]: AnySchema };
       /** The actor interface as a service schema, when the document has one. */
       readonly actor?: AnySchema;
@@ -922,8 +924,9 @@ function buildFromContract(
   for (const declaration of parsedDeclarations) {
     // The same shape the generator emits: every declaration wrapped in
     // `c.rec`, so aliases of one node share the memoized structure beneath.
-    // Reference kinds build like everything else since issue #104; a class
-    // declaration denotes its running service.
+    // Reference kinds build like everything else since issue #104. A
+    // class-targeting declaration still builds here, but the placement walk
+    // below refuses the document before the map can be returned (#129).
     schemas[declaration.name] = c.rec(() => schemaAt(declaration.type));
   }
 
