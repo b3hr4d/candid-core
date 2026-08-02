@@ -52,12 +52,17 @@ Exit codes
 ----------
 
     0  compared; no gate was requested, or none was exceeded
-    1  compared; a requested --fail-on-regression gate was exceeded
-    2  no comparison was made (baseline missing, unreadable, or incompatible)
+    1  compared; a requested --fail-on-regression gate was exceeded by a
+       non-control benchmark
+    2  no comparison or no gate verdict was made (baseline missing,
+       unreadable, or incompatible; gate requested on an environment-drifted
+       comparison; a control benchmark moved past the threshold in either
+       direction; or no control was comparable on both sides)
 """
 
 import argparse
 import json
+import math
 import os
 import platform
 import statistics
@@ -658,6 +663,26 @@ def render_markdown(report: dict) -> str:
     return "\n".join(out)
 
 
+def gate_threshold(text: str) -> float:
+    """A regression-gate percentage: finite and non-negative, enforced.
+
+    Anything else disarms the gate silently instead of failing it closed:
+    NaN makes every comparison False, and an infinite threshold (`inf`, or
+    an overflowing literal like `1e309`) can never be exceeded, so the gate
+    would exit 0 regardless of the regression. `math.isfinite` rejects all
+    three non-finite spellings; the `>= 0` half rejects negatives, for which
+    `abs(change) > PCT` is vacuously true and the refusal message would
+    assert a machinery shift that never happened.
+    """
+    value = float(text)
+    if not (math.isfinite(value) and value >= 0):
+        raise argparse.ArgumentTypeError(
+            f"{text!r} is not a usable threshold: PCT must be a finite, "
+            "non-negative percentage"
+        )
+    return value
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     sub = parser.add_subparsers(dest="command", required=True)
@@ -677,9 +702,14 @@ def main() -> int:
             p.add_argument("--allow-environment-drift", action="store_true")
             p.add_argument(
                 "--fail-on-regression",
-                type=float,
+                type=gate_threshold,
                 metavar="PCT",
-                help="exit 1 if any median regresses by more than PCT percent",
+                help=(
+                    "exit 1 if any non-control median regresses by more than "
+                    "PCT percent; refuses with exit 2 (no verdict) when a "
+                    "control benchmark moved more than PCT in either "
+                    "direction, or when no control is comparable"
+                ),
             )
 
     args = parser.parse_args()
@@ -725,6 +755,42 @@ def main() -> int:
         )
 
     timing = delta_rows(baseline["criterion"], candidate["criterion"], "median_ns")
+
+    # A control moving more than the threshold — in either direction — means
+    # the machinery shifted more than the gate tolerates: a slower machine
+    # fabricates regressions, a faster one masks them. No verdict on the
+    # candidate is possible, so the gate refuses rather than passing or
+    # failing on machine noise (issue #135). And a run with no comparable
+    # control at all offers the gate nothing to vouch for the machinery with —
+    # passing it would be the fail-open case the recorded decision rejected.
+    # Both checked before rendering, like the drift refusal above.
+    if args.fail_on_regression is not None:
+        controls = [
+            (name, change)
+            for name, _before, _after, change in timing
+            if change is not None and is_control(name)
+        ]
+        if not controls:
+            die(
+                "--fail-on-regression cannot gate this run: no control "
+                "benchmark has a comparable result on both sides, so the "
+                "machinery cannot be vouched for and a verdict would not be "
+                "evidence"
+            )
+        invalidated = [
+            (name, change)
+            for name, change in controls
+            if abs(change) > args.fail_on_regression
+        ]
+        if invalidated:
+            name, change = max(invalidated, key=lambda item: abs(item[1]))
+            die(
+                f"--fail-on-regression cannot gate this run: control benchmark "
+                f"{name} moved {change:+.1f}% against a "
+                f"{args.fail_on_regression:+.1f}% threshold, so the machinery "
+                "shifted more than the gate tolerates and the deltas are not "
+                "evidence"
+            )
     report = {
         "corpus_id": candidate["manifest"]["corpus_id"],
         "features": candidate["manifest"]["features"],
@@ -758,10 +824,16 @@ def main() -> int:
         Path(args.json_out).write_text(json.dumps(report, indent=2, default=str) + "\n")
 
     if args.fail_on_regression is not None:
+        # Controls are excluded from the verdict: they cannot regress by
+        # candidate code, and any control past the threshold already refused
+        # above — the exclusion here is self-documentation, not a filter that
+        # can change the outcome.
         worst = [
             (name, change)
             for name, _b, _a, change in report["timing"]
-            if change is not None and change > args.fail_on_regression
+            if change is not None
+            and not is_control(name)
+            and change > args.fail_on_regression
         ]
         if worst:
             print("", file=sys.stderr)
