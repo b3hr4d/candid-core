@@ -338,7 +338,7 @@ function build(schema: AnyFieldSchema, site: Site): FormNode {
     case "primitive":
       return { ...common, ...primitiveControl(node.primitive) };
     case "opt": {
-      const inner = node.inner as AnySchema;
+      const inner = node.inner as AnyFieldSchema;
       // The domain shape is `T | null` with the property present, so the
       // presence toggle edits the same path.
       return {
@@ -348,7 +348,7 @@ function build(schema: AnyFieldSchema, site: Site): FormNode {
       };
     }
     case "vec": {
-      const inner = node.inner as AnySchema;
+      const inner = node.inner as AnyFieldSchema;
       return {
         ...common,
         control: "list",

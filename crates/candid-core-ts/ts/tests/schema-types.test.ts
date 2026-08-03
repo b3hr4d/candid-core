@@ -12,7 +12,7 @@ import assert from "node:assert/strict";
 
 import { c, type Schema } from "../schema.ts";
 import { validate, type ValidateResult } from "../validate.ts";
-import { encodeArgs, decodeArgs } from "../codec.ts";
+import { encode, encodeArgs, decodeArgs } from "../codec.ts";
 import { formModel } from "../forms.ts";
 
 // Every composite position admits the empty leaf (the #126 matrix: record
@@ -123,9 +123,11 @@ test("func schemas compose with the codec argument entries", () => {
     const decoded = decodeArgs(plain.args, encoded.bytes);
     assert.strictEqual(decoded.ok, true);
   }
-  // An empty arg admits no value, and the codec agrees at runtime.
+  // An empty arg admits no value, and the codec agrees at runtime — through
+  // the sequence entry and the one-argument wrapper alike.
   const refused = encodeArgs(emptyInFunc.args, [0]);
   assert.strictEqual(refused.ok, false);
+  assert.strictEqual(encode(c.empty, 0).ok, false);
 });
 
 // `formModel` admits the empty leaf (the compile probe) and renders it as

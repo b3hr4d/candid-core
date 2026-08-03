@@ -577,7 +577,7 @@ export function encode<T>(
   value: unknown,
   options: CodecOptions = {},
 ): EncodeResult {
-  const result = encodeArgs([schema as AnySchema], [value], options);
+  const result = encodeArgs([schema as AnyFieldSchema], [value], options);
   return result.ok ? result : { ok: false, issues: rerootIssues(result.issues) };
 }
 
@@ -1450,7 +1450,7 @@ export function decode<T>(
   bytes: Uint8Array,
   options: CodecOptions = {},
 ): { ok: true; value: unknown } | { ok: false; issues: readonly CodecIssue[] } {
-  const result = decodeArgs([schema as AnySchema], bytes, options);
+  const result = decodeArgs([schema as AnyFieldSchema], bytes, options);
   return result.ok
     ? { ok: true, value: result.values[0] }
     : { ok: false, issues: rerootIssues(result.issues) };
