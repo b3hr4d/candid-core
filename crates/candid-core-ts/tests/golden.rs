@@ -347,6 +347,10 @@ fn import_shadowing_declaration_names_are_refused() {
         // The actor lowering's ambient `Promise` is a binding too, and the
         // same unconditional rule applies without any actor (issue #130).
         "type Promise = nat8;",
+        // The actor surface's own emission names, reserved since #104 —
+        // exercised here rather than assumed, actor or not.
+        "type actor = nat8;",
+        "type Actor = nat8; service : { ping : () -> () };",
     ] {
         let compilation = compile_did(source).expect("compile");
         let error = generate_module(

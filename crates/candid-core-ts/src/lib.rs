@@ -154,9 +154,10 @@ pub enum TsGenError {
     /// `schemaFromContract` enforces on its name table (issues #103, #115).
     ReservedFieldName { declaration: String, name: String },
     /// A declaration named after a binding the generated module itself
-    /// references: an imported binding (`c`, `Schema`, `Principal`) or an
+    /// references: an imported binding (`c`, `Schema`, `Principal`), an
     /// ambient type its lowerings emit (`Array`, `Record`, `Uint8Array`,
-    /// `Promise`).
+    /// `Promise`), or the actor surface's own emission names (`actor`,
+    /// `Actor`).
     /// Emitting it would produce a module that cannot load or compile — a
     /// duplicate or shadowed module-scope binding — so generation refuses
     /// instead of emitting known-broken text. Unconditional by owner
