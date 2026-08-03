@@ -2117,6 +2117,13 @@ class Decoder {
         this.mismatch("type_mismatch", path, "blob is vec nat8 on the wire");
       }
       const length = this.lebU32(path, "blob length");
+      // Every blob byte must exist in the input, so a declared length the
+      // remaining bytes cannot satisfy is truncation — detected before the
+      // budget loop, or a 13-byte header would burn min(length, maxElements)
+      // charges that the vec nat8 path never pays (issue #128).
+      if (this.offset + length > this.bytes.length) {
+        this.fail("truncated", path, "unexpected end of input");
+      }
       // One element charge per byte keeps blob and vec nat8 accounting equal.
       for (let i = 0; i < length; i += 1) {
         this.step(path, depth + 1);
@@ -2127,6 +2134,15 @@ class Decoder {
       this.mismatch("type_mismatch", path, `wire vec at expected ${node.kind}`);
     }
     const length = this.lebU32(path, "vec length");
+    // A wire `vec nat8` is the blob alias: every element is exactly one
+    // byte, so a declared length beyond the remaining input is truncation
+    // here too, diagnosed before any charging — the two schema shapes must
+    // report the same public code for the same bytes (issue #128). Other
+    // inners have no static width floor (`vec null` legally carries zero
+    // bytes per element) and stay budget-guarded as before.
+    if (inner === OP.nat8 && this.offset + length > this.bytes.length) {
+      this.fail("truncated", path, "unexpected end of input");
+    }
     const out: unknown[] = [];
     for (let i = 0; i < length; i += 1) {
       path.push(i);
