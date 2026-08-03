@@ -1,0 +1,14 @@
+[
+  {
+    "name": "empty_variant_b",
+    "hex": "4449444c016b02616f627d01000105"
+  },
+  {
+    "name": "opt_empty_arm_none",
+    "hex": "4449444c026b026101627d6e6f01000000"
+  },
+  {
+    "name": "alias_arm_plain",
+    "hex": "4449444c016b02ecb49efd077f8af4b7a40c7f010001"
+  }
+]

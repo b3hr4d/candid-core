@@ -116,11 +116,20 @@ fn golden_proto() {
 /// Issue #126: `empty` in a record field, tuple element, and func arg — the
 /// positions the `AnyFieldSchema` bound admits — generates modules the tsc
 /// equality gate accepts, with `vec empty`/`opt empty` pinned as the
-/// unchanged controls. A variant with an `empty` arm stays out of the
-/// fixture until the classification divergence (#127) lands.
+/// unchanged controls. Variant arms live in the `arms` fixture (#127).
 #[test]
 fn golden_empties() {
     assert_golden("empties");
+}
+
+/// Issue #127: the variant-arm classification rows — `empty` keeps
+/// `value: never`, anonymous `opt empty` keeps `value: never | null`, and a
+/// declared alias of `null` is a bare tag through the reference — generate
+/// modules the tsc equality gate accepts, proving `VariantInfer` and the
+/// emitter classify identically for every emitted shape.
+#[test]
+fn golden_arms() {
+    assert_golden("arms");
 }
 
 /// The schema runtime (issue #102) consumes these same fixtures as data: each
@@ -148,6 +157,7 @@ fn golden_runtime_contract_documents() {
         "proto",
         "ledger",
         "empties",
+        "arms",
     ] {
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests");
         let source = std::fs::read_to_string(root.join("fixtures").join(format!("{name}.did")))
@@ -419,6 +429,54 @@ fn promise_shadowing_declaration_is_refused() {
         .expect("a case variant is not reserved");
     assert!(output.contains("export type promise"), "{output}");
     assert!(output.contains("Promise<void>"), "{output}");
+}
+
+/// Issue #127: a variant arm whose payload is a *declared* `opt` of a
+/// never-domain type renders as a bare reference statically identical to a
+/// declared alias of `null` — the one shape no type-level classification
+/// can carry — and is refused instead of emitting text the equality gate
+/// would reject. The anonymous form and the null alias stay generable; the
+/// `arms` golden pins them.
+#[test]
+fn declared_opt_empty_variant_arms_are_refused() {
+    for source in [
+        "type W = opt empty; type V = variant { a : W; b : nat };",
+        // The inner may be a declared alias of empty: same arena node.
+        "type E = empty; type W = opt E; type V = variant { a : W };",
+        // An empty variant is never-domain too.
+        "type Never = variant {}; type W = opt Never; type V = variant { a : W };",
+        // Dedup alone declares the arm: an anonymous arm and a same-shape
+        // declaration share one node, so the arm renders as the name.
+        "type V = variant { a : opt empty }; type W = opt empty;",
+    ] {
+        let compilation = compile_did(source).expect("compile");
+        let names = TsNames::from_source_info(compilation.source_info().expect("provenance"));
+        let error = generate_module(compilation.contract(), &names, &TsOptions::default())
+            .expect_err("a declared opt-empty arm must refuse generation");
+        assert!(
+            matches!(&error, TsGenError::AmbiguousVariantArm { arm, .. } if arm == "a"),
+            "unexpected error for {source}: {error}"
+        );
+        assert!(
+            !error.to_string().contains("  "),
+            "error message carries embedded space runs: {error}"
+        );
+    }
+    // Near-misses stay generable: an opt of an inhabited type through a
+    // declaration is an ordinary valued arm…
+    let compilation =
+        compile_did("type W = opt nat; type V = variant { a : W };").expect("compile");
+    let names = TsNames::from_source_info(compilation.source_info().expect("provenance"));
+    generate_module(compilation.contract(), &names, &TsOptions::default())
+        .expect("an opt of an inhabited type is not ambiguous");
+    // …and an opt of an uninhabited *record* keeps `value` on its own: the
+    // reference's static type is `{ f: never } | null`, not `null`, so the
+    // type level classifies it without help.
+    let compilation = compile_did("type W = opt record { f : empty }; type V = variant { a : W };")
+        .expect("compile");
+    let names = TsNames::from_source_info(compilation.source_info().expect("provenance"));
+    generate_module(compilation.contract(), &names, &TsOptions::default())
+        .expect("a non-never-alias inner is not ambiguous");
 }
 
 /// The actor surface's sharp edges (issue #104 review): a class actor

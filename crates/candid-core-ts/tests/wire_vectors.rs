@@ -256,6 +256,30 @@ const VECTORS: &[(&str, &[Case])] = &[
             textual: "(record { \"has space\" = 1; \"naïve\" = \"x\"; \"quote\\\"mark\" = true })",
         }],
     ),
+    (
+        // Issue #127: the wire agrees with the structural classification —
+        // the type table carries the empty-typed arm, the opt-empty arm's
+        // only inhabitant is its None payload, and the declared null alias
+        // stays a bare tag.
+        "arms",
+        &[
+            Case {
+                name: "empty_variant_b",
+                declaration: "EmptyVariant",
+                textual: "(variant { b = 5 })",
+            },
+            Case {
+                name: "opt_empty_arm_none",
+                declaration: "EmptyOptArm",
+                textual: "(variant { a = null })",
+            },
+            Case {
+                name: "alias_arm_plain",
+                declaration: "AliasArms",
+                textual: "(variant { plain })",
+            },
+        ],
+    ),
 ];
 
 fn goldens_dir() -> PathBuf {

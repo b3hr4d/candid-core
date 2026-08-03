@@ -1,7 +1,8 @@
 // Issue #126: `empty` in every composite position the AnyFieldSchema bound
-// admits. A variant with an `empty` arm is deliberately absent until the
-// classification divergence (#127) lands; vec/opt are the always-worked
-// controls the acceptance criteria pin.
+// admits. Variant arms live in arms.did (#127) — they cannot share this
+// fixture, because the declared `EmptyOpt` below would dedup into an
+// anonymous `opt empty` arm and trip AmbiguousVariantArm. vec/opt are the
+// always-worked controls the acceptance criteria pin.
 type EmptyField = record { f : empty; g : nat };
 type EmptyTuple = record { empty; nat };
 type EmptyFunc = func (empty) -> (empty);

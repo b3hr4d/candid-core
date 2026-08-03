@@ -1,0 +1,90 @@
+{
+  "canonicalization_profile": "candid-core-canon-1",
+  "declarations": [
+    {
+      "name": "AliasArms",
+      "type": 6
+    },
+    {
+      "name": "EmptyOptArm",
+      "type": 4
+    },
+    {
+      "name": "EmptyVariant",
+      "type": 1
+    },
+    {
+      "name": "NullAlias",
+      "type": 0
+    }
+  ],
+  "format": "candid-core",
+  "format_version": 1,
+  "identities": {
+    "contract": "candid-core:contract:v1:sha256:97bbb7c740294da2913d74937a18549c0a016ebddac9e119e60b820300fdf111"
+  },
+  "producer": {
+    "candid_parser_version": "0.0.0-golden",
+    "candid_version": "0.0.0-golden",
+    "name": "candid-core",
+    "version": "0.0.0-golden"
+  },
+  "semantics_profile": "candid-1",
+  "types": [
+    {
+      "kind": "primitive",
+      "primitive": "null"
+    },
+    {
+      "fields": [
+        {
+          "id": 97,
+          "type": 2
+        },
+        {
+          "id": 98,
+          "type": 3
+        }
+      ],
+      "kind": "variant"
+    },
+    {
+      "kind": "primitive",
+      "primitive": "empty"
+    },
+    {
+      "kind": "primitive",
+      "primitive": "nat"
+    },
+    {
+      "fields": [
+        {
+          "id": 97,
+          "type": 5
+        },
+        {
+          "id": 98,
+          "type": 3
+        }
+      ],
+      "kind": "variant"
+    },
+    {
+      "inner": 2,
+      "kind": "opt"
+    },
+    {
+      "fields": [
+        {
+          "id": 2141690476,
+          "type": 0
+        },
+        {
+          "id": 3297638922,
+          "type": 0
+        }
+      ],
+      "kind": "variant"
+    }
+  ]
+}

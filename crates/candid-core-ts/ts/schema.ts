@@ -88,12 +88,34 @@ export interface TupleSchema<S extends readonly AnyFieldSchema[]>
 
 // An arm with a `null` payload is a bare tag: Candid's `ok` and `ok : null`
 // are the same variant arm, and `value: null` on every tag-only arm would be
-// noise. The `[…] extends [null]` guard keeps union payloads out of the
-// tag-only branch.
+// noise. Classification matches the emitter, validator, and codec, which all
+// test the payload *node* (issue #127), in order:
+// - a payload whose domain is `never` (`empty`, an empty variant) carries
+//   `value` — its node is not `null`, so the runtime demands the field even
+//   though nothing can inhabit it;
+// - an `opt`-kind payload always carries `value` — `opt empty` infers
+//   `null` without being the null primitive;
+// - everything else is a bare tag exactly when its domain is `null`: the
+//   `null` primitive, and a declared alias of `null`, whose generated
+//   reference is annotated `Schema<null>` and whose node the runtime
+//   resolves back to the null primitive.
+// The one shape these rules cannot see through — a *declared* alias of
+// `opt empty`, statically identical to a declared alias of `null` — is
+// refused at generation (`TsGenError::AmbiguousVariantArm`); a hand-built
+// `c.rec` thunk over `opt empty` passed directly as an arm is likewise
+// statically invisible (rec erases structure) and stays a documented
+// limitation, classified correctly by the runtime either way.
 type VariantInfer<A extends FieldSchemas> = {
-  [K in keyof A & string]: [Infer<A[K]>] extends [null]
-    ? { tag: K }
-    : { tag: K; value: Infer<A[K]> };
+  [K in keyof A & string]: [Infer<A[K]>] extends [never]
+    ? { tag: K; value: Infer<A[K]> }
+    : // The kind literal, not `OptSchema<any>`: the invariant inner makes
+      // `OptSchema<never>` fail an `OptSchema<any>` test — the very #126
+      // variance corner — while the kind is what the runtime itself tests.
+      A[K] extends { kind: "opt" }
+      ? { tag: K; value: Infer<A[K]> }
+      : [Infer<A[K]>] extends [null]
+        ? { tag: K }
+        : { tag: K; value: Infer<A[K]> };
 }[keyof A & string];
 
 export interface VariantSchema<A extends FieldSchemas>
