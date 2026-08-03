@@ -74,7 +74,7 @@
 // issues — the type table is built in first-visit order over the schema
 // graph and nothing depends on time, environment, or map iteration order.
 
-import type { AnySchema, Schema } from "./schema.ts";
+import type { AnyFieldSchema, AnySchema, Schema } from "./schema.ts";
 import {
   candidLabelHash,
   fieldIdOfKey,
@@ -583,7 +583,7 @@ export function encode<T>(
 
 /** Encode an argument sequence to Candid wire bytes. */
 export function encodeArgs(
-  schemas: readonly AnySchema[],
+  schemas: readonly AnyFieldSchema[],
   values: readonly unknown[],
   options: CodecOptions = {},
 ): EncodeResult {
@@ -1458,7 +1458,7 @@ export function decode<T>(
 
 /** Decode a Candid message against an expected argument schema sequence. */
 export function decodeArgs(
-  schemas: readonly AnySchema[],
+  schemas: readonly AnyFieldSchema[],
   bytes: Uint8Array,
   options: CodecOptions = {},
 ): DecodeResult {

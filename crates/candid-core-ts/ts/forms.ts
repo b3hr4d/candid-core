@@ -293,7 +293,7 @@ function descendInto(node: FormNode, segment: string | number): FormNode | undef
 // The typed union the switch is exhaustive over. The `never`-typed default
 // turns a dropped case into a compile error; a combinator added to
 // schema.ts but not listed here surfaces as the runtime TypeError below,
-// since the erased `AnySchema` cannot carry the addition to the compiler.
+// since the erased `AnyFieldSchema` cannot carry the addition to the compiler.
 /* eslint-disable @typescript-eslint/no-explicit-any */
 type SchemaNode =
   | PrimitiveSchema<any>

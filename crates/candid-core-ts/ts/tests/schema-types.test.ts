@@ -12,6 +12,8 @@ import assert from "node:assert/strict";
 
 import { c, type Schema } from "../schema.ts";
 import { validate, type ValidateResult } from "../validate.ts";
+import { encodeArgs, decodeArgs } from "../codec.ts";
+import { formModel } from "../forms.ts";
 
 // Every composite position admits the empty leaf (the #126 matrix: record
 // field, variant arm, tuple element, func arg/result; vec and opt always
@@ -106,4 +108,35 @@ test("vec empty and opt empty keep their inhabited cases", () => {
     code: "uninhabited_type",
     path: "$[0]",
   });
+});
+
+// The package's own exports must keep composing: a func schema's stored
+// args/results feed the codec's argument-sequence entries directly. These
+// lines type-checking is the probe — a codec entry left at the narrower
+// `AnySchema[]` bound rejects `FuncSchema`'s `AnyFieldSchema[]` storage for
+// every func, empty-free ones included.
+test("func schemas compose with the codec argument entries", () => {
+  const plain = c.func([c.nat], [c.text], "update");
+  const encoded = encodeArgs(plain.args, [1n]);
+  assert.strictEqual(encoded.ok, true);
+  if (encoded.ok) {
+    const decoded = decodeArgs(plain.args, encoded.bytes);
+    assert.strictEqual(decoded.ok, true);
+  }
+  // An empty arg admits no value, and the codec agrees at runtime.
+  const refused = encodeArgs(emptyInFunc.args, [0]);
+  assert.strictEqual(refused.ok, false);
+});
+
+// `formModel` admits the empty leaf (the compile probe) and renders it as
+// the uninhabited control — a UI must not offer an input — including when
+// it arrives through a composite.
+test("formModel renders the empty leaf uninhabited", () => {
+  assert.strictEqual(formModel(c.empty).control, "uninhabited");
+  const record = formModel(emptyInRecord);
+  assert.strictEqual(record.control, "group");
+  if (record.control === "group") {
+    const f = record.fields[record.fieldLabels.indexOf("f")]();
+    assert.strictEqual(f.control, "uninhabited");
+  }
 });
