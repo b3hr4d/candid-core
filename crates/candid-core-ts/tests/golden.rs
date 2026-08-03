@@ -344,6 +344,13 @@ fn import_shadowing_declaration_names_are_refused() {
         "type Uint8Array = text; type B = blob;",
         // And unconditionally, without the lowering that references them.
         "type Array = nat8;",
+        // The actor lowering's ambient `Promise` is a binding too, and the
+        // same unconditional rule applies without any actor (issue #130).
+        "type Promise = nat8;",
+        // The actor surface's own emission names, reserved since #104 —
+        // exercised here rather than assumed, actor or not.
+        "type actor = nat8;",
+        "type Actor = nat8; service : { ping : () -> () };",
     ] {
         let compilation = compile_did(source).expect("compile");
         let error = generate_module(
@@ -372,6 +379,35 @@ fn import_shadowing_declaration_names_are_refused() {
     )
     .expect("a near-miss name is not reserved");
     assert!(output.contains("Principal2"));
+}
+
+/// The actor lowering references the ambient global `Promise` on every
+/// method signature, so a declaration by that name shadows it module-wide
+/// and the emitted `Promise<T>` stops compiling (TS2315) — the same
+/// cannot-compile class as `Array`/`Record`/`Uint8Array`, refused with the
+/// same unconditional rule (issue #130).
+#[test]
+fn promise_shadowing_declaration_is_refused() {
+    // The original repro: an actor plus a declaration literally named
+    // `Promise` passed both name guards and generated known-broken text.
+    let source = "type Promise = record { id : nat }; service : { ping : () -> () };";
+    let compilation = compile_did(source).expect("compile");
+    let names = TsNames::from_source_info(compilation.source_info().expect("provenance"));
+    let error = generate_module(compilation.contract(), &names, &TsOptions::default())
+        .expect_err("a Promise declaration must refuse generation");
+    assert!(
+        matches!(&error, TsGenError::ReservedDeclarationName { name } if name == "Promise"),
+        "the error must name the collision: {error}"
+    );
+    // The reservation is the exact name: a case variant is an ordinary
+    // declaration and coexists with the actor's `Promise<void>`.
+    let compilation =
+        compile_did("type promise = nat8; service : { ping : () -> () };").expect("compile");
+    let names = TsNames::from_source_info(compilation.source_info().expect("provenance"));
+    let output = generate_module(compilation.contract(), &names, &TsOptions::default())
+        .expect("a case variant is not reserved");
+    assert!(output.contains("export type promise"), "{output}");
+    assert!(output.contains("Promise<void>"), "{output}");
 }
 
 /// The actor surface's sharp edges (issue #104 review): a class actor
