@@ -155,7 +155,8 @@ pub enum TsGenError {
     ReservedFieldName { declaration: String, name: String },
     /// A declaration named after a binding the generated module itself
     /// references: an imported binding (`c`, `Schema`, `Principal`) or an
-    /// ambient type its lowerings emit (`Array`, `Record`, `Uint8Array`).
+    /// ambient type its lowerings emit (`Array`, `Record`, `Uint8Array`,
+    /// `Promise`).
     /// Emitting it would produce a module that cannot load or compile — a
     /// duplicate or shadowed module-scope binding — so generation refuses
     /// instead of emitting known-broken text. Unconditional by owner
@@ -775,9 +776,6 @@ fn is_reserved_numeric_name(name: &str) -> bool {
     }
     digits.parse::<u64>().is_ok_and(|value| value < 1 << 32)
 }
-/// Names the generated module itself references: the imported bindings
-/// (`import { c, type Schema }` always, `import type { Principal }` when the
-/// principal primitive is used) and the ambient types its lowerings emit
 /// The Candid method mode as the builder literal the schema core takes.
 fn mode_text(mode: candid_core::MethodMode) -> &'static str {
     match mode {
@@ -803,9 +801,13 @@ fn method_key(name: &str) -> String {
     }
 }
 
+/// Names the generated module itself references: the imported bindings
+/// (`import { c, type Schema }` always, `import type { Principal }` when the
+/// principal primitive is used) and the ambient types its lowerings emit
 /// (`Array<T>` for vecs, `Record<string, never>` for the empty record,
-/// `Uint8Array` for anonymous `vec nat8`). A declaration by any of these
-/// names shadows the referenced binding for the whole module.
+/// `Uint8Array` for anonymous `vec nat8`, `Promise<T>` on every actor method
+/// signature — issue #130). A declaration by any of these names shadows the
+/// referenced binding for the whole module.
 /// …plus the actor surface's own emission names (`actor`, `Actor`), reserved
 /// since issue #104 for the same reason.
 const RESERVED_MODULE_BINDINGS: &[&str] = &[
@@ -815,6 +817,7 @@ const RESERVED_MODULE_BINDINGS: &[&str] = &[
     "Array",
     "Record",
     "Uint8Array",
+    "Promise",
     "actor",
     "Actor",
 ];
