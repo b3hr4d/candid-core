@@ -173,6 +173,18 @@ pub enum TsGenError {
         declaration: String,
         inner: &'static str,
     },
+    /// A variant arm whose payload is a *declared* `opt` of a never-domain
+    /// type (`opt empty`, `opt` of an empty variant). The arm renders as a
+    /// bare reference whose static type is `Schema<null>` —
+    /// indistinguishable from a declared alias of `null`, which
+    /// `VariantInfer` must classify as a bare tag — while the emitter and
+    /// runtime classify the arm by its node and demand a `value`. No
+    /// type-level rule can satisfy both, so generation refuses rather than
+    /// emitting text the equality gate would reject (issue #127). The
+    /// anonymous form (`variant { a : opt empty }`) stays supported: it
+    /// renders as `c.opt(c.empty)`, whose `OptSchema<never>` type carries
+    /// the classification.
+    AmbiguousVariantArm { declaration: String, arm: String },
     /// A type reference points outside the Contract arena. A validated
     /// Contract cannot contain one; this guards the unvalidated path.
     DanglingTypeRef { reference: TypeRef },
@@ -209,6 +221,15 @@ impl fmt::Display for TsGenError {
                 "declaration `{declaration}` wraps `{inner}` in `opt`: `T | null` \
                  cannot distinguish `None` from `Some(None)` there, so generation \
                  refuses rather than collapsing the two"
+            ),
+            Self::AmbiguousVariantArm { declaration, arm } => write!(
+                f,
+                "declaration `{declaration}` gives variant arm `{arm}` a payload \
+                 that is a declared `opt` of an uninhabited type (`opt empty`, or \
+                 `opt` of an empty variant): the reference's static type is \
+                 identical to an alias of `null`, which marks a bare tag, but the \
+                 arm carries a value at runtime, so the emitted module could \
+                 never compile; generation refuses (issue #127)"
             ),
             Self::DanglingTypeRef { reference } => {
                 write!(
@@ -553,13 +574,19 @@ impl Generator<'_> {
                 // literal type, `value` carries the payload and is omitted for
                 // a `null` payload, because Candid's bare `ok` and `ok : null`
                 // are the same variant arm and an ever-present `value: null`
-                // would be noise on every tag-only arm. The builder emits the
-                // arm's payload schema either way — `VariantInfer` performs the
-                // same null-payload omission at the type level, which is what
-                // keeps the two representations provably aligned.
+                // would be noise on every tag-only arm. `VariantInfer` omits
+                // the same arms for the schema shapes this generator emits —
+                // never-domain payloads keep `value`, `opt` payloads keep
+                // `value`, and only a null-domain non-opt reference is a bare
+                // tag (issue #127) — with one shape the type level cannot
+                // classify: a declared alias of `opt empty` renders as a
+                // reference whose static type equals a null alias's, so
+                // `check_ambiguous_arm` refuses it instead of emitting text
+                // the equality gate would reject.
                 let mut arms = Vec::with_capacity(fields.len());
                 for field in &fields {
                     self.check_reserved_name(reference, field.id, declaration)?;
+                    self.check_ambiguous_arm(reference, field, declaration)?;
                     match target {
                         Target::Alias => {
                             let tag = self.tag_literal(reference, field.id);
@@ -726,6 +753,43 @@ impl Generator<'_> {
             }),
             _ => Ok(()),
         }
+    }
+
+    /// Refuse a variant arm whose payload is a *declared* `opt` of a
+    /// never-domain type (issue #127); see [`TsGenError::AmbiguousVariantArm`]
+    /// for why no type-level classification can carry it. The check is on the
+    /// arena nodes, so declared aliases of the inner type (`type E = empty;
+    /// type W = opt E`) resolve to the same refusal.
+    fn check_ambiguous_arm(
+        &self,
+        container: TypeRef,
+        field: &Field,
+        declaration: &str,
+    ) -> Result<(), TsGenError> {
+        if !self.declared.contains_key(&field.ty) {
+            return Ok(());
+        }
+        let TypeNode::Opt { inner } = self.node(field.ty)? else {
+            return Ok(());
+        };
+        let inner_is_never = match self.node(*inner)? {
+            TypeNode::Primitive {
+                primitive: PrimitiveType::Empty,
+            } => true,
+            TypeNode::Variant { fields } => fields.is_empty(),
+            _ => false,
+        };
+        if inner_is_never {
+            let arm = match self.names.get(container, field.id) {
+                Some(name) => name.to_string(),
+                None => format!("_{}_", field.id),
+            };
+            return Err(TsGenError::AmbiguousVariantArm {
+                declaration: declaration.to_string(),
+                arm,
+            });
+        }
+        Ok(())
     }
 
     /// A property key: the supplied name when one exists (quoted when it is

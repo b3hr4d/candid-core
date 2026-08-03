@@ -1,0 +1,11 @@
+// Issue #127: the variant-arm classification rows of the divergence table.
+// An `empty` payload keeps `value: never`; an anonymous `opt empty` payload
+// keeps `value: never | null` (it must stay anonymous here — a declared
+// `opt empty` would dedup into the arm and be refused as AmbiguousVariantArm,
+// which is pinned in golden.rs, not a golden); a declared alias of `null` is
+// a bare tag through the reference, on both the aliased and the deduped
+// plain arm.
+type EmptyVariant = variant { a : empty; b : nat };
+type EmptyOptArm = variant { a : opt empty; b : nat };
+type NullAlias = null;
+type AliasArms = variant { tagged : NullAlias; plain : null };

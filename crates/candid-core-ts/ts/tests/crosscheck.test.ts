@@ -29,6 +29,7 @@ import * as deferred from "../../tests/goldens/deferred.ts";
 import * as proto from "../../tests/goldens/proto.ts";
 import * as ledger from "../../tests/goldens/ledger.ts";
 import * as empties from "../../tests/goldens/empties.ts";
+import * as arms from "../../tests/goldens/arms.ts";
 
 interface Fixture {
   readonly name: string;
@@ -271,6 +272,30 @@ const FIXTURES: readonly Fixture[] = [
       EmptyFunc: [{ principal, method: "m" }, { principal }, "nope"],
       EmptyVec: [[], [0]],
       EmptyOpt: [null, 0],
+    },
+  },
+  {
+    // Issue #127: the variant-arm classification rows — both paths must
+    // give identical verdicts: `value` demanded (and uninhabited) for an
+    // empty payload, `value: null` accepted for an opt-empty payload, bare
+    // tags through the null alias on the aliased and deduped arm alike.
+    name: "arms",
+    module: arms,
+    samples: {
+      EmptyVariant: [
+        { tag: "a" },
+        { tag: "a", value: 0 },
+        { tag: "b", value: 5n },
+        { tag: "nope" },
+      ],
+      EmptyOptArm: [
+        { tag: "a" },
+        { tag: "a", value: null },
+        { tag: "a", value: 0 },
+        { tag: "b", value: 5n },
+      ],
+      NullAlias: [null, 0],
+      AliasArms: [{ tag: "tagged" }, { tag: "tagged", value: null }, { tag: "plain" }],
     },
   },
 ];

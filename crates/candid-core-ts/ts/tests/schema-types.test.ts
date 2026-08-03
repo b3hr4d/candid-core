@@ -27,9 +27,7 @@ export const emptyInVec = c.vec(c.empty);
 export const emptyInOpt = c.opt(c.empty);
 
 // The generated-module shape compiles for the admitted positions, under the
-// invariant annotation the equality gate rests on. (A variant arm with an
-// `empty` payload is deliberately absent: its alias/builder agreement is
-// issue #127's classification divergence, tracked there.)
+// invariant annotation the equality gate rests on.
 type EmptyField = { f: never; g: bigint };
 export const EmptyField: Schema<EmptyField> = c.rec(() =>
   c.record({ f: c.empty, g: c.nat }),
@@ -37,6 +35,48 @@ export const EmptyField: Schema<EmptyField> = c.rec(() =>
 type EmptyTuple = [never, bigint];
 export const EmptyTuple: Schema<EmptyTuple> = c.rec(() =>
   c.tuple([c.empty, c.nat]),
+);
+
+// Issue #127: `VariantInfer` classifies structurally, matching the emitter,
+// validator, and codec — every divergence-table row compiles under the
+// invariant annotation with the classification the runtime enforces.
+type EmptyArmV = { tag: "a"; value: never } | { tag: "b"; value: bigint };
+export const EmptyArmV: Schema<EmptyArmV> = c.rec(() =>
+  c.variant({ a: c.empty, b: c.nat }),
+);
+type OptEmptyArmV =
+  | { tag: "a"; value: never | null }
+  | { tag: "b"; value: bigint };
+export const OptEmptyArmV: Schema<OptEmptyArmV> = c.rec(() =>
+  c.variant({ a: c.opt(c.empty), b: c.nat }),
+);
+// `opt null` arms are unreachable from the generator (UnrepresentableOption)
+// but constructible by hand; the classification aligns for them too.
+type OptNullArmV = { tag: "a"; value: null };
+export const OptNullArmV: Schema<OptNullArmV> = c.rec(() =>
+  c.variant({ a: c.opt(c.null) }),
+);
+type NullArmV = { tag: "ok" } | { tag: "busy"; value: number };
+export const NullArmV: Schema<NullArmV> = c.rec(() =>
+  c.variant({ ok: c.null, busy: c.nat8 }),
+);
+
+// Wrong classifications must stay compile errors — each probe marks an
+// alias the gate must refuse.
+type TagOnlyEmpty = { tag: "a" } | { tag: "b"; value: bigint };
+// @ts-expect-error an empty payload carries value: never
+export const tagOnlyEmpty: Schema<TagOnlyEmpty> = c.rec(() =>
+  c.variant({ a: c.empty, b: c.nat }),
+);
+type TagOnlyOptEmpty = { tag: "a" } | { tag: "b"; value: bigint };
+// @ts-expect-error an opt payload always carries value
+export const tagOnlyOptEmpty: Schema<TagOnlyOptEmpty> = c.rec(() =>
+  c.variant({ a: c.opt(c.empty), b: c.nat }),
+);
+type ValuedNullArm = { tag: "ok"; value: null };
+// @ts-expect-error a null payload is a bare tag
+export const valuedNullArm: Schema<ValuedNullArm> = c.rec(() =>
+  c.variant({ ok: c.null }),
 );
 
 // The gate keeps full strength around the admitted leaf: every wrong alias
@@ -128,6 +168,46 @@ test("func schemas compose with the codec argument entries", () => {
   const refused = encodeArgs(emptyInFunc.args, [0]);
   assert.strictEqual(refused.ok, false);
   assert.strictEqual(encode(c.empty, 0).ok, false);
+});
+
+// Issue #127's acceptance criterion: `validate` accepts exactly the values
+// the generated static types admit, for every divergence-table row.
+test("variant classification aligns validate with the static types", () => {
+  // empty arm: the type says value: never — the field is demanded, and
+  // nothing inhabits it.
+  assert.deepStrictEqual(firstIssue(validate(EmptyArmV, { tag: "a" })), {
+    code: "missing_field",
+    path: "$.value",
+  });
+  assert.deepStrictEqual(firstIssue(validate(EmptyArmV, { tag: "a", value: 0 })), {
+    code: "uninhabited_type",
+    path: "$.value",
+  });
+  // opt empty arm: the type admits exactly { tag, value: null } — the
+  // pre-fix static type said bare tag, the inversion this issue fixed.
+  // A non-null value is rejected on the uninhabited inner, so "exactly"
+  // holds in both directions.
+  assert.strictEqual(validate(OptEmptyArmV, { tag: "a", value: null }).ok, true);
+  assert.deepStrictEqual(firstIssue(validate(OptEmptyArmV, { tag: "a" })), {
+    code: "missing_field",
+    path: "$.value",
+  });
+  assert.deepStrictEqual(firstIssue(validate(OptEmptyArmV, { tag: "a", value: 0 })), {
+    code: "uninhabited_type",
+    path: "$.value",
+  });
+  // opt null arm (hand-written): same alignment.
+  assert.strictEqual(validate(OptNullArmV, { tag: "a", value: null }).ok, true);
+  assert.deepStrictEqual(firstIssue(validate(OptNullArmV, { tag: "a" })), {
+    code: "missing_field",
+    path: "$.value",
+  });
+  // null arm: a bare tag; a present value stays rejected.
+  assert.strictEqual(validate(NullArmV, { tag: "ok" }).ok, true);
+  assert.deepStrictEqual(firstIssue(validate(NullArmV, { tag: "ok", value: null })), {
+    code: "unexpected_field",
+    path: "$.value",
+  });
 });
 
 // `formModel` admits the empty leaf (the compile probe) and renders it as

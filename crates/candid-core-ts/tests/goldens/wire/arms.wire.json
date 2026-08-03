@@ -1,0 +1,20 @@
+[
+  {
+    "declaration": "EmptyVariant",
+    "hex": "4449444c016b02616f627d01000105",
+    "name": "empty_variant_b",
+    "textual": "(variant { b = 5 })"
+  },
+  {
+    "declaration": "EmptyOptArm",
+    "hex": "4449444c026b026101627d6e6f01000000",
+    "name": "opt_empty_arm_none",
+    "textual": "(variant { a = null })"
+  },
+  {
+    "declaration": "AliasArms",
+    "hex": "4449444c016b02ecb49efd077f8af4b7a40c7f010001",
+    "name": "alias_arm_plain",
+    "textual": "(variant { plain })"
+  }
+]

@@ -41,6 +41,7 @@ import * as variants from "../../tests/goldens/variants.ts";
 import * as recursion from "../../tests/goldens/recursion.ts";
 import * as quoting from "../../tests/goldens/quoting.ts";
 import * as deferred from "../../tests/goldens/deferred.ts";
+import * as arms from "../../tests/goldens/arms.ts";
 
 const goldens = new URL("../../tests/goldens/", import.meta.url);
 
@@ -171,6 +172,14 @@ const EXPECTED: Record<string, Record<string, unknown>> = {
     callback_value: { principal: principal("aaaaa-aa"), method: "go" },
     registry_value: principal("aaaaa-aa"),
   },
+  arms: {
+    // Issue #127: the classification rows on the wire — the empty-typed
+    // arm rides along in the type table, the opt-empty arm carries its
+    // None payload as `value: null`, and the null alias is a bare tag.
+    empty_variant_b: { tag: "b", value: 5n },
+    opt_empty_arm_none: { tag: "a", value: null },
+    alias_arm_plain: { tag: "plain" },
+  },
 };
 
 const GENERATED: Record<string, Record<string, unknown>> = {
@@ -180,6 +189,7 @@ const GENERATED: Record<string, Record<string, unknown>> = {
   recursion,
   quoting,
   deferred,
+  arms,
 };
 
 for (const fixture of Object.keys(EXPECTED)) {
@@ -680,17 +690,33 @@ interface GenNode {
 
 const TEXT_POOL = ["", "a", "hé", "☃", "tail", "_0_", "line\nbreak"];
 
+/** An uninhabited payload (issue #127): no value can be generated for it. */
+function uninhabited(node: GenNode): boolean {
+  return (
+    node.kind === "primitive" &&
+    (node as { primitive?: unknown }).primitive === "empty"
+  );
+}
+
 function generate(schema: AnySchema, rand: () => number, depth: number): unknown {
   const node = resolveGen(schema);
   switch (node.kind) {
     case "primitive":
       return generatePrimitive(node.primitive as string, rand);
     case "opt":
-      if (depth <= 0 || rand() < 0.4) {
+      // An uninhabited inner leaves None as the only inhabitant.
+      if (
+        depth <= 0 ||
+        rand() < 0.4 ||
+        uninhabited(resolveGen(node.inner as AnySchema))
+      ) {
         return null;
       }
       return generate(node.inner as AnySchema, rand, depth - 1);
     case "vec": {
+      // No fuzzed fixture holds a `vec` of an uninhabited element; if one
+      // ever does, the element generation below throws loudly and the
+      // fixture author handles it then.
       const length = depth <= 0 ? 0 : Math.floor(rand() * 3);
       return Array.from({ length }, () => generate(node.inner as AnySchema, rand, depth - 1));
     }
@@ -720,7 +746,11 @@ function generate(schema: AnySchema, rand: () => number, depth: number): unknown
       return randomPrincipal(rand);
     case "variant": {
       const arms = node.arms as Record<string, AnySchema>;
-      const keys = Object.keys(arms);
+      // An uninhabited arm (an `empty` payload) can never carry a value;
+      // every fixture variant keeps at least one inhabited arm.
+      const keys = Object.keys(arms).filter(
+        (key) => !uninhabited(resolveGen(arms[key])),
+      );
       // At the depth floor prefer an arm that terminates: a primitive
       // payload (Tree's `leaf`) over a recursive one (`node`).
       const pick =
