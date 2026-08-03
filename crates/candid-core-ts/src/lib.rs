@@ -225,10 +225,11 @@ impl fmt::Display for TsGenError {
             Self::AmbiguousVariantArm { declaration, arm } => write!(
                 f,
                 "declaration `{declaration}` gives variant arm `{arm}` a payload \
-                 that is a declared alias of `opt empty`: the reference's static \
-                 type is identical to an alias of `null`, which marks a bare tag, \
-                 but the arm carries a value at runtime, so the emitted module \
-                 could never compile; generation refuses (issue #127)"
+                 that is a declared `opt` of an uninhabited type (`opt empty`, or \
+                 `opt` of an empty variant): the reference's static type is \
+                 identical to an alias of `null`, which marks a bare tag, but the \
+                 arm carries a value at runtime, so the emitted module could \
+                 never compile; generation refuses (issue #127)"
             ),
             Self::DanglingTypeRef { reference } => {
                 write!(

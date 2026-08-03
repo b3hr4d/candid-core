@@ -714,10 +714,10 @@ function generate(schema: AnySchema, rand: () => number, depth: number): unknown
       }
       return generate(node.inner as AnySchema, rand, depth - 1);
     case "vec": {
-      const length =
-        depth <= 0 || uninhabited(resolveGen(node.inner as AnySchema))
-          ? 0
-          : Math.floor(rand() * 3);
+      // No fuzzed fixture holds a `vec` of an uninhabited element; if one
+      // ever does, the element generation below throws loudly and the
+      // fixture author handles it then.
+      const length = depth <= 0 ? 0 : Math.floor(rand() * 3);
       return Array.from({ length }, () => generate(node.inner as AnySchema, rand, depth - 1));
     }
     case "blob": {

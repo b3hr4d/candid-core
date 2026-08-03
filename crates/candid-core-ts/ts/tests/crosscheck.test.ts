@@ -288,7 +288,12 @@ const FIXTURES: readonly Fixture[] = [
         { tag: "b", value: 5n },
         { tag: "nope" },
       ],
-      EmptyOptArm: [{ tag: "a" }, { tag: "a", value: null }, { tag: "b", value: 5n }],
+      EmptyOptArm: [
+        { tag: "a" },
+        { tag: "a", value: null },
+        { tag: "a", value: 0 },
+        { tag: "b", value: 5n },
+      ],
       NullAlias: [null, 0],
       AliasArms: [{ tag: "tagged" }, { tag: "tagged", value: null }, { tag: "plain" }],
     },

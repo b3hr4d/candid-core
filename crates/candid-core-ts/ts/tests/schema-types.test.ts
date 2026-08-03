@@ -185,9 +185,15 @@ test("variant classification aligns validate with the static types", () => {
   });
   // opt empty arm: the type admits exactly { tag, value: null } — the
   // pre-fix static type said bare tag, the inversion this issue fixed.
+  // A non-null value is rejected on the uninhabited inner, so "exactly"
+  // holds in both directions.
   assert.strictEqual(validate(OptEmptyArmV, { tag: "a", value: null }).ok, true);
   assert.deepStrictEqual(firstIssue(validate(OptEmptyArmV, { tag: "a" })), {
     code: "missing_field",
+    path: "$.value",
+  });
+  assert.deepStrictEqual(firstIssue(validate(OptEmptyArmV, { tag: "a", value: 0 })), {
+    code: "uninhabited_type",
     path: "$.value",
   });
   // opt null arm (hand-written): same alignment.

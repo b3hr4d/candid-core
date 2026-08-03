@@ -102,9 +102,10 @@ export interface TupleSchema<S extends readonly AnyFieldSchema[]>
 // The one shape these rules cannot see through — a *declared* alias of
 // `opt empty`, statically identical to a declared alias of `null` — is
 // refused at generation (`TsGenError::AmbiguousVariantArm`); a hand-built
-// `c.rec` thunk over `opt empty` passed directly as an arm is likewise
-// statically invisible (rec erases structure) and stays a documented
-// limitation, classified correctly by the runtime either way.
+// `c.rec` thunk over any null-domain opt (`opt empty`, `opt null`) passed
+// directly as an arm is likewise statically invisible (rec erases
+// structure) and stays a documented limitation, classified correctly by
+// the runtime either way.
 type VariantInfer<A extends FieldSchemas> = {
   [K in keyof A & string]: [Infer<A[K]>] extends [never]
     ? { tag: K; value: Infer<A[K]> }

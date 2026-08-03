@@ -454,7 +454,11 @@ fn declared_opt_empty_variant_arms_are_refused() {
         let error = generate_module(compilation.contract(), &names, &TsOptions::default())
             .expect_err("a declared opt-empty arm must refuse generation");
         assert!(
-            matches!(&error, TsGenError::AmbiguousVariantArm { arm, .. } if arm == "a"),
+            matches!(
+                &error,
+                TsGenError::AmbiguousVariantArm { declaration, arm }
+                    if declaration == "V" && arm == "a"
+            ),
             "unexpected error for {source}: {error}"
         );
         assert!(
@@ -463,12 +467,17 @@ fn declared_opt_empty_variant_arms_are_refused() {
         );
     }
     // Near-misses stay generable: an opt of an inhabited type through a
-    // declaration is an ordinary valued arm…
-    let compilation =
-        compile_did("type W = opt nat; type V = variant { a : W };").expect("compile");
-    let names = TsNames::from_source_info(compilation.source_info().expect("provenance"));
-    generate_module(compilation.contract(), &names, &TsOptions::default())
-        .expect("an opt of an inhabited type is not ambiguous");
+    // declaration is an ordinary valued arm — the inhabited *variant* case
+    // pins the `fields.is_empty()` discrimination in the refusal itself…
+    for source in [
+        "type W = opt nat; type V = variant { a : W };",
+        "type S = variant { x }; type W = opt S; type V = variant { a : W };",
+    ] {
+        let compilation = compile_did(source).expect("compile");
+        let names = TsNames::from_source_info(compilation.source_info().expect("provenance"));
+        generate_module(compilation.contract(), &names, &TsOptions::default())
+            .expect("an opt of an inhabited type is not ambiguous");
+    }
     // …and an opt of an uninhabited *record* keeps `value` on its own: the
     // reference's static type is `{ f: never } | null`, not `null`, so the
     // type level classifies it without help.
