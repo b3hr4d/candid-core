@@ -44,7 +44,7 @@
 // from the schema's *type* (by design: schemas carry values, not calls), so
 // the interface cannot be re-derived from `typeof` — it travels explicitly.
 
-import type { AnySchema, FuncValue, Schema } from "./schema.ts";
+import type { AnyFieldSchema, AnySchema, FuncValue, Schema } from "./schema.ts";
 import { encodeArgs, decodeArgs, type CodecIssue } from "./codec.ts";
 import { validate } from "./validate.ts";
 
@@ -78,13 +78,13 @@ export class ActorError extends Error {
 }
 
 interface ResolvedFunc {
-  readonly args: readonly AnySchema[];
-  readonly results: readonly AnySchema[];
+  readonly args: readonly AnyFieldSchema[];
+  readonly results: readonly AnyFieldSchema[];
   readonly mode: "update" | "query" | "composite_query" | "oneway";
 }
 
 /** Resolve rec chains structurally; throws on a non-schema (programmer error). */
-function resolveNode(schema: AnySchema): { kind: string } & Record<string, unknown> {
+function resolveNode(schema: AnyFieldSchema): { kind: string } & Record<string, unknown> {
   let node: unknown = schema;
   for (let hops = 0; hops < 256; hops += 1) {
     if (
@@ -102,7 +102,7 @@ function resolveNode(schema: AnySchema): { kind: string } & Record<string, unkno
   throw new TypeError("rec chain exceeds the depth limit");
 }
 
-function resolveFunc(schema: AnySchema, what: string): ResolvedFunc {
+function resolveFunc(schema: AnyFieldSchema, what: string): ResolvedFunc {
   const node = resolveNode(schema);
   if (node.kind !== "func") {
     throw new TypeError(`${what} is not a func schema`);
@@ -159,7 +159,7 @@ export interface ActorOptions {
  * programmer error, unlike the data errors that reject call promises.
  */
 export function createActor<A = Record<string, (...args: never[]) => Promise<unknown>>>(
-  service: AnySchema,
+  service: AnyFieldSchema,
   canisterId: string,
   transport: Transport,
   options: ActorOptions = {},
@@ -191,7 +191,7 @@ export function createActor<A = Record<string, (...args: never[]) => Promise<unk
  * reference it contains.
  */
 export function callFunc(
-  schema: AnySchema,
+  schema: AnyFieldSchema,
   value: FuncValue,
   args: readonly unknown[],
   transport: Transport,

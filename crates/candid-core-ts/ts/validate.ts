@@ -62,6 +62,7 @@
 
 import type {
   AnySchema,
+  AnyFieldSchema,
   FuncSchema,
   ServiceSchema,
   BlobSchema,
@@ -278,7 +279,7 @@ class Walk {
   }
 
   visit(
-    schema: AnySchema,
+    schema: AnyFieldSchema,
     value: unknown,
     path: PathSegment[],
     depth: number,
@@ -748,7 +749,7 @@ class Walk {
    * walk halted or the schema is unusable.
    */
   private resolve(
-    schema: AnySchema,
+    schema: AnyFieldSchema,
     path: PathSegment[],
     depth: number,
   ): { node: SchemaNode; depth: number } | undefined {

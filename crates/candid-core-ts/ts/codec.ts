@@ -74,7 +74,7 @@
 // issues — the type table is built in first-visit order over the schema
 // graph and nothing depends on time, environment, or map iteration order.
 
-import type { AnySchema, Schema } from "./schema.ts";
+import type { AnyFieldSchema, AnySchema, Schema } from "./schema.ts";
 import {
   candidLabelHash,
   fieldIdOfKey,
@@ -577,13 +577,13 @@ export function encode<T>(
   value: unknown,
   options: CodecOptions = {},
 ): EncodeResult {
-  const result = encodeArgs([schema as AnySchema], [value], options);
+  const result = encodeArgs([schema as AnyFieldSchema], [value], options);
   return result.ok ? result : { ok: false, issues: rerootIssues(result.issues) };
 }
 
 /** Encode an argument sequence to Candid wire bytes. */
 export function encodeArgs(
-  schemas: readonly AnySchema[],
+  schemas: readonly AnyFieldSchema[],
   values: readonly unknown[],
   options: CodecOptions = {},
 ): EncodeResult {
@@ -1450,7 +1450,7 @@ export function decode<T>(
   bytes: Uint8Array,
   options: CodecOptions = {},
 ): { ok: true; value: unknown } | { ok: false; issues: readonly CodecIssue[] } {
-  const result = decodeArgs([schema as AnySchema], bytes, options);
+  const result = decodeArgs([schema as AnyFieldSchema], bytes, options);
   return result.ok
     ? { ok: true, value: result.values[0] }
     : { ok: false, issues: rerootIssues(result.issues) };
@@ -1458,7 +1458,7 @@ export function decode<T>(
 
 /** Decode a Candid message against an expected argument schema sequence. */
 export function decodeArgs(
-  schemas: readonly AnySchema[],
+  schemas: readonly AnyFieldSchema[],
   bytes: Uint8Array,
   options: CodecOptions = {},
 ): DecodeResult {

@@ -113,6 +113,16 @@ fn golden_proto() {
     assert_golden("proto");
 }
 
+/// Issue #126: `empty` in a record field, tuple element, and func arg — the
+/// positions the `AnyFieldSchema` bound admits — generates modules the tsc
+/// equality gate accepts, with `vec empty`/`opt empty` pinned as the
+/// unchanged controls. A variant with an `empty` arm stays out of the
+/// fixture until the classification divergence (#127) lands.
+#[test]
+fn golden_empties() {
+    assert_golden("empties");
+}
+
 /// The schema runtime (issue #102) consumes these same fixtures as data: each
 /// fixture's Contract JSON document and field-name table are goldens too,
 /// read by `ts/tests/crosscheck.test.ts` to prove the dynamically built
@@ -137,6 +147,7 @@ fn golden_runtime_contract_documents() {
         "deferred",
         "proto",
         "ledger",
+        "empties",
     ] {
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests");
         let source = std::fs::read_to_string(root.join("fixtures").join(format!("{name}.did")))

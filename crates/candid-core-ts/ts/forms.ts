@@ -11,7 +11,7 @@
 // `never`-typed default, so dropping a case is a compile error; a schema
 // kind this union has never heard of fails closed at runtime with
 // `TypeError` (the compiler cannot see additions to `schema.ts` through the
-// erased `AnySchema`, so build-breakage covers exactly the listed kinds):
+// erased `AnyFieldSchema`, so build-breakage covers exactly the listed kinds):
 //
 // - fixed-width integers → `integer` with number-safe `min`/`max`;
 //   `nat`/`int`/`nat64`/`int64` → `bigint` with bigint bounds where they
@@ -50,6 +50,7 @@
 
 import type {
   AnySchema,
+  AnyFieldSchema,
   BlobSchema,
   FieldSchemas,
   FuncSchema,
@@ -149,7 +150,7 @@ function labeled(path: string, key: string): Site {
 }
 
 /** Build the form model for a schema. The root's path is `$`. */
-export function formModel(schema: AnySchema): FormNode {
+export function formModel(schema: AnyFieldSchema): FormNode {
   return build(schema, { path: "$" });
 }
 
@@ -292,7 +293,7 @@ function descendInto(node: FormNode, segment: string | number): FormNode | undef
 // The typed union the switch is exhaustive over. The `never`-typed default
 // turns a dropped case into a compile error; a combinator added to
 // schema.ts but not listed here surfaces as the runtime TypeError below,
-// since the erased `AnySchema` cannot carry the addition to the compiler.
+// since the erased `AnyFieldSchema` cannot carry the addition to the compiler.
 /* eslint-disable @typescript-eslint/no-explicit-any */
 type SchemaNode =
   | PrimitiveSchema<any>
@@ -308,7 +309,7 @@ type SchemaNode =
   | RecSchema<any>;
 /* eslint-enable @typescript-eslint/no-explicit-any */
 
-function erased(schema: AnySchema): SchemaNode {
+function erased(schema: AnyFieldSchema): SchemaNode {
   if (
     typeof schema !== "object" ||
     schema === null ||
@@ -319,7 +320,7 @@ function erased(schema: AnySchema): SchemaNode {
   return schema as unknown as SchemaNode;
 }
 
-function resolveArm(schema: AnySchema): SchemaNode {
+function resolveArm(schema: AnyFieldSchema): SchemaNode {
   let node = erased(schema);
   for (let hops = 0; hops < 256; hops += 1) {
     if (node.kind !== "rec") {
@@ -330,14 +331,14 @@ function resolveArm(schema: AnySchema): SchemaNode {
   throw new TypeError("rec chain exceeds the depth limit");
 }
 
-function build(schema: AnySchema, site: Site): FormNode {
+function build(schema: AnyFieldSchema, site: Site): FormNode {
   const node = erased(schema);
   const common: FormCommon = site;
   switch (node.kind) {
     case "primitive":
       return { ...common, ...primitiveControl(node.primitive) };
     case "opt": {
-      const inner = node.inner as AnySchema;
+      const inner = node.inner as AnyFieldSchema;
       // The domain shape is `T | null` with the property present, so the
       // presence toggle edits the same path.
       return {
@@ -347,7 +348,7 @@ function build(schema: AnySchema, site: Site): FormNode {
       };
     }
     case "vec": {
-      const inner = node.inner as AnySchema;
+      const inner = node.inner as AnyFieldSchema;
       return {
         ...common,
         control: "list",

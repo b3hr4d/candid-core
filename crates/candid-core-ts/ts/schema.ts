@@ -58,7 +58,16 @@ export interface UnitSchema extends Schema<Record<string, never>> {
 // constraint position and never leaks into inferred output types.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export type AnySchema = Schema<any>;
-export type FieldSchemas = Record<string, AnySchema>;
+// …except for `Schema<never>`: `any` is assignable to every type but
+// `never`, so the invariant phantom's parameter rejects exactly the `empty`
+// leaf (issue #126). The union re-admits it wherever a composite accepts
+// child schemas — `Infer` still distributes to the right member, and the
+// widening never touches `Schema<in out T>` itself, so the generated-alias
+// equality gate keeps its full strength (pinned by the `@ts-expect-error`
+// probes in `tests/schema-types.test.ts`). `AnySchema` stays the erased
+// currency of the dynamic loader, which is why both names exist.
+export type AnyFieldSchema = AnySchema | Schema<never>;
+export type FieldSchemas = Record<string, AnyFieldSchema>;
 
 type RecordInfer<F extends FieldSchemas> = { [K in keyof F]: Infer<F[K]> };
 
@@ -67,11 +76,11 @@ export interface RecordSchema<F extends FieldSchemas> extends Schema<RecordInfer
   readonly fields: F;
 }
 
-type TupleInfer<S extends readonly AnySchema[]> = {
+type TupleInfer<S extends readonly AnyFieldSchema[]> = {
   -readonly [I in keyof S]: Infer<S[I]>;
 };
 
-export interface TupleSchema<S extends readonly AnySchema[]>
+export interface TupleSchema<S extends readonly AnyFieldSchema[]>
   extends Schema<TupleInfer<S>> {
   readonly kind: "tuple";
   readonly elements: S;
@@ -122,8 +131,8 @@ export type MethodMode = "update" | "query" | "composite_query" | "oneway";
  */
 export interface FuncSchema extends Schema<FuncValue> {
   readonly kind: "func";
-  readonly args: readonly AnySchema[];
-  readonly results: readonly AnySchema[];
+  readonly args: readonly AnyFieldSchema[];
+  readonly results: readonly AnyFieldSchema[];
   readonly mode: MethodMode;
 }
 
@@ -187,7 +196,7 @@ export const c = {
     return { kind: "record", fields };
   },
 
-  tuple<const S extends readonly AnySchema[]>(
+  tuple<const S extends readonly AnyFieldSchema[]>(
     elements: S,
   ): TupleSchema<S> {
     return { kind: "tuple", elements };
@@ -198,8 +207,8 @@ export const c = {
   },
 
   func(
-    args: readonly AnySchema[],
-    results: readonly AnySchema[],
+    args: readonly AnyFieldSchema[],
+    results: readonly AnyFieldSchema[],
     mode: MethodMode,
   ): FuncSchema {
     return { kind: "func", args, results, mode };
