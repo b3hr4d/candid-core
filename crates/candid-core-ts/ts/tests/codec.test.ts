@@ -428,6 +428,22 @@ test("a blob length beyond the remaining input is truncation, never budget burn 
   // One-step-over: a length of 4 over 3 payload bytes is truncated; the
   // exact length decodes; an empty blob is legal.
   failsDecode(c.blob(), message([[0x6d, 0x7b]], [[0x00]], [0x04, 0xaa, 0xbb, 0xcc]), "truncated");
+  // The same one step over under a budget of exactly length: an
+  // offset-blind bounds check (length > bytes.length) would pass the
+  // 13-byte message and burn the budget instead of reporting truncation.
+  failsDecode(
+    c.blob(),
+    message([[0x6d, 0x7b]], [[0x00]], [0x04, 0xaa, 0xbb, 0xcc]),
+    "truncated",
+    { maxElements: 4 },
+  );
+  // The joint case — truncated AND over a tight budget, with partial
+  // payload — diagnoses truncation through both schema shapes: the wire
+  // `vec nat8` alias preflights the declared length exactly like blob, so
+  // the public code never depends on which shape decoded the bytes.
+  const partial = message([[0x6d, 0x7b]], [[0x00]], [0x05, 0xaa, 0xbb, 0xcc]);
+  failsDecode(c.blob(), partial, "truncated", { maxElements: 4 });
+  failsDecode(c.vec(c.nat8), partial, "truncated", { maxElements: 4 });
   const exact = decode(c.blob(), message([[0x6d, 0x7b]], [[0x00]], [0x03, 0xaa, 0xbb, 0xcc]));
   assert.deepStrictEqual(exact, { ok: true, value: Uint8Array.from([0xaa, 0xbb, 0xcc]) });
   assert.deepStrictEqual(
