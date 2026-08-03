@@ -1,0 +1,91 @@
+{
+  "canonicalization_profile": "candid-core-canon-1",
+  "declarations": [
+    {
+      "name": "EmptyField",
+      "type": 5
+    },
+    {
+      "name": "EmptyFunc",
+      "type": 6
+    },
+    {
+      "name": "EmptyOpt",
+      "type": 0
+    },
+    {
+      "name": "EmptyTuple",
+      "type": 3
+    },
+    {
+      "name": "EmptyVec",
+      "type": 2
+    }
+  ],
+  "format": "candid-core",
+  "format_version": 1,
+  "identities": {
+    "contract": "candid-core:contract:v1:sha256:68a6425dfc8619f43794ebbbf27ea4979c55569cb86988efec0f6c06f0a2c1f9"
+  },
+  "producer": {
+    "candid_parser_version": "0.0.0-golden",
+    "candid_version": "0.0.0-golden",
+    "name": "candid-core",
+    "version": "0.0.0-golden"
+  },
+  "semantics_profile": "candid-1",
+  "types": [
+    {
+      "inner": 1,
+      "kind": "opt"
+    },
+    {
+      "kind": "primitive",
+      "primitive": "empty"
+    },
+    {
+      "inner": 1,
+      "kind": "vec"
+    },
+    {
+      "fields": [
+        {
+          "id": 0,
+          "type": 1
+        },
+        {
+          "id": 1,
+          "type": 4
+        }
+      ],
+      "kind": "record"
+    },
+    {
+      "kind": "primitive",
+      "primitive": "nat"
+    },
+    {
+      "fields": [
+        {
+          "id": 102,
+          "type": 1
+        },
+        {
+          "id": 103,
+          "type": 4
+        }
+      ],
+      "kind": "record"
+    },
+    {
+      "args": [
+        1
+      ],
+      "kind": "func",
+      "mode": "update",
+      "results": [
+        1
+      ]
+    }
+  ]
+}

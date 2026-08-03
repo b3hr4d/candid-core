@@ -28,6 +28,7 @@ import * as quoting from "../../tests/goldens/quoting.ts";
 import * as deferred from "../../tests/goldens/deferred.ts";
 import * as proto from "../../tests/goldens/proto.ts";
 import * as ledger from "../../tests/goldens/ledger.ts";
+import * as empties from "../../tests/goldens/empties.ts";
 
 interface Fixture {
   readonly name: string;
@@ -255,6 +256,21 @@ const FIXTURES: readonly Fixture[] = [
         { tag: "err", value: { tag: "too_old" } },
         { tag: "ok" },
       ],
+    },
+  },
+  {
+    // Issue #126: `empty` in the composite positions the AnyFieldSchema
+    // bound admits. No value inhabits the record or tuple — both paths must
+    // refuse every sample identically — while the func value stays an inert
+    // reference and vec/opt keep their inhabited cases.
+    name: "empties",
+    module: empties,
+    samples: {
+      EmptyField: [{ g: 5n }, { f: 0, g: 5n }, {}, null],
+      EmptyTuple: [[0, 5n], [], null],
+      EmptyFunc: [{ principal, method: "m" }, { principal }, "nope"],
+      EmptyVec: [[], [0]],
+      EmptyOpt: [null, 0],
     },
   },
 ];
