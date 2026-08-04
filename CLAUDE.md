@@ -69,6 +69,7 @@ Generator crate (both feature configurations are load-bearing):
     cargo test  -p candid-core-ts --features compiler --locked
     (cd crates/candid-core-ts/ts && npm ci && npx tsc --noEmit)   # the equality gate
     (cd crates/candid-core-ts/ts && npm test)                     # the runtime cross-check
+    (cd crates/candid-core-ts/ts && npm run format:check)         # the formatting gate
 
 The tsc run is a proof, not a lint: `Schema<in out T>` is invariant, so every
 generated `export const X: Schema<X> = c.rec(() => …)` compiles only if the
@@ -83,6 +84,26 @@ the owner-reviewed mapping decisions live (modern domain shapes: `T | null`
 opts with `opt opt`/`opt null`/`opt reserved` failing closed, `{ tag, value }`
 variants, `Uint8Array`, `bigint`; agent-js wire compatibility is an explicit
 non-goal, recorded on #38).
+
+TypeScript formatting is Prettier, exact-pinned in `ts/package-lock.json` and
+configured *only* by `/.prettierrc.json` at the repository root — stating every
+option, because Prettier resolves upward and will otherwise reach a
+contributor's personal `~/.prettierrc`. Run `npm run format` to fix, and enable
+the commit-time half once per clone:
+
+    git config core.hooksPath .githooks
+
+Four surfaces share that one config and one binary, all invoked from the
+repository root so they cannot disagree: the agent hook
+(`.claude/hooks/format-typescript.sh`, on every Edit/Write), the pre-commit
+hook, `npm run format:check` in CI, and Format Document in the editor.
+Format-on-save is deliberately off (`.vscode/settings.json`) — saving must
+never change a file. Each surface asks `prettier --file-info` whether a path is
+in scope rather than re-deriving the ignore list. That is what keeps the
+generated goldens out: Prettier rewrites 6 of the 10, so formatting them fails
+the golden suite and moves reviewed mapping decisions. Their layout belongs to
+the emitter; `tests/fixtures/` is ignored for the same reason, its vectors
+being digests of exact octets.
 
 Benchmarks: emit the manifest *before* the suite (its mtime is the run epoch);
 comparisons and the reviewed-baseline procedure are in `docs/benchmarks.md`.
