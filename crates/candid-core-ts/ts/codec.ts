@@ -75,7 +75,7 @@
 // graph and nothing depends on time, environment, or map iteration order.
 
 import type { AnyFieldSchema, AnySchema, Schema } from "./schema.ts";
-import { candidLabelHash, fieldIdOfKey, utf8BytesStrict, utf8Decode } from "./labels.ts";
+import { fieldIdOfKey, utf8BytesStrict, utf8Decode } from "./labels.ts";
 
 /** Stable machine-readable failure codes. Closed: additions are API changes. */
 export type CodecCode =
