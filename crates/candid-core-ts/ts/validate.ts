@@ -120,8 +120,7 @@ export interface ValidateOptions {
 }
 
 export type ValidateResult =
-  | { readonly ok: true }
-  | { readonly ok: false; readonly issues: readonly ValidationIssue[] };
+  { readonly ok: true } | { readonly ok: false; readonly issues: readonly ValidationIssue[] };
 
 export const DEFAULT_MAX_DEPTH = 256;
 export const DEFAULT_MAX_ELEMENTS = 1_000_000;
@@ -153,9 +152,7 @@ export function validate<T>(
       message: "the value threw while being inspected",
     });
   }
-  return walk.issues.length === 0
-    ? { ok: true }
-    : { ok: false, issues: walk.issues };
+  return walk.issues.length === 0 ? { ok: true } : { ok: false, issues: walk.issues };
 }
 
 // The erased view a walker narrows on. `Schema<T>` is invariant, so `any` is
@@ -241,17 +238,11 @@ function isUint8Array(value: unknown): value is Uint8Array {
 /** A non-null object that is not one of the array-like domain shapes. */
 function isPlainCandidate(value: unknown): value is Record<string, unknown> {
   return (
-    typeof value === "object" &&
-    value !== null &&
-    !Array.isArray(value) &&
-    !isUint8Array(value)
+    typeof value === "object" && value !== null && !Array.isArray(value) && !isUint8Array(value)
   );
 }
 
-const FIXED_WIDTH_RANGES: Record<
-  string,
-  readonly [min: number, max: number]
-> = {
+const FIXED_WIDTH_RANGES: Record<string, readonly [min: number, max: number]> = {
   nat8: [0, 255],
   nat16: [0, 65_535],
   nat32: [0, 4_294_967_295],
@@ -278,12 +269,7 @@ class Walk {
     this.maxIssues = options.maxIssues ?? DEFAULT_MAX_ISSUES;
   }
 
-  visit(
-    schema: AnyFieldSchema,
-    value: unknown,
-    path: PathSegment[],
-    depth: number,
-  ): void {
+  visit(schema: AnyFieldSchema, value: unknown, path: PathSegment[], depth: number): void {
     if (this.halted || !this.step(path, depth)) {
       return;
     }
@@ -302,11 +288,7 @@ class Walk {
         return;
       case "blob":
         if (!isUint8Array(value)) {
-          this.issue(
-            "invalid_type",
-            path,
-            `expected a Uint8Array, got ${describe(value)}`,
-          );
+          this.issue("invalid_type", path, `expected a Uint8Array, got ${describe(value)}`);
         }
         return;
       case "unit":
@@ -336,11 +318,7 @@ class Walk {
           body === null ||
           typeof (body as { kind?: unknown }).kind !== "string"
         ) {
-          this.issue(
-            "unsupported_schema",
-            path,
-            "a rec thunk did not produce a schema",
-          );
+          this.issue("unsupported_schema", path, "a rec thunk did not produce a schema");
           return;
         }
         this.visit(body as AnySchema, value, path, depth + 1);
@@ -400,11 +378,7 @@ class Walk {
   }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  private primitive(
-    node: PrimitiveSchema<any>,
-    value: unknown,
-    path: PathSegment[],
-  ): void {
+  private primitive(node: PrimitiveSchema<any>, value: unknown, path: PathSegment[]): void {
     const name = node.primitive;
     switch (name) {
       case "null":
@@ -429,11 +403,7 @@ class Walk {
         if (typeof value !== "bigint") {
           // `number` is deliberately rejected rather than coerced: these
           // types exceed 2^53 on the wire and a lossy bridge would corrupt.
-          this.issue(
-            "invalid_type",
-            path,
-            `expected a bigint for ${name}, got ${describe(value)}`,
-          );
+          this.issue("invalid_type", path, `expected a bigint for ${name}, got ${describe(value)}`);
           return;
         }
         if (name === "nat" && value < 0n) {
@@ -452,11 +422,7 @@ class Walk {
       case "int16":
       case "int32": {
         if (typeof value !== "number") {
-          this.issue(
-            "invalid_type",
-            path,
-            `expected a number for ${name}, got ${describe(value)}`,
-          );
+          this.issue("invalid_type", path, `expected a number for ${name}, got ${describe(value)}`);
           return;
         }
         if (!Number.isInteger(value)) {
@@ -465,22 +431,14 @@ class Walk {
         }
         const [min, max] = FIXED_WIDTH_RANGES[name];
         if (value < min || value > max) {
-          this.issue(
-            "out_of_range",
-            path,
-            `${name} must be in [${min}, ${max}], got ${value}`,
-          );
+          this.issue("out_of_range", path, `${name} must be in [${min}, ${max}], got ${value}`);
         }
         return;
       }
       case "float32":
       case "float64":
         if (typeof value !== "number") {
-          this.issue(
-            "invalid_type",
-            path,
-            `expected a number for ${name}, got ${describe(value)}`,
-          );
+          this.issue("invalid_type", path, `expected a number for ${name}, got ${describe(value)}`);
         }
         return;
       case "reserved":
@@ -497,21 +455,12 @@ class Walk {
         );
         return;
       default:
-        this.issue(
-          "unsupported_schema",
-          path,
-          `unknown primitive ${JSON.stringify(name)}`,
-        );
+        this.issue("unsupported_schema", path, `unknown primitive ${JSON.stringify(name)}`);
     }
   }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  private vec(
-    node: VecSchema<any>,
-    value: unknown,
-    path: PathSegment[],
-    depth: number,
-  ): void {
+  private vec(node: VecSchema<any>, value: unknown, path: PathSegment[], depth: number): void {
     if (!Array.isArray(value)) {
       this.issue("invalid_type", path, `expected an array, got ${describe(value)}`);
       return;
@@ -525,11 +474,7 @@ class Walk {
 
   private unit(value: unknown, path: PathSegment[], depth: number): void {
     if (!isPlainCandidate(value)) {
-      this.issue(
-        "invalid_type",
-        path,
-        `expected an empty record, got ${describe(value)}`,
-      );
+      this.issue("invalid_type", path, `expected an empty record, got ${describe(value)}`);
       return;
     }
     for (const key of Object.keys(value)) {
@@ -645,8 +590,7 @@ class Walk {
     if (arm === undefined) {
       return;
     }
-    const tagOnly =
-      arm.node.kind === "primitive" && arm.node.primitive === "null";
+    const tagOnly = arm.node.kind === "primitive" && arm.node.primitive === "null";
     if (tagOnly) {
       for (const key of Object.keys(value)) {
         if (this.halted || !this.step(path, depth)) {
@@ -654,11 +598,7 @@ class Walk {
         }
         if (key !== "tag") {
           path.push(key);
-          this.issue(
-            "unexpected_field",
-            path,
-            "a null-payload arm is a bare { tag }",
-          );
+          this.issue("unexpected_field", path, "a null-payload arm is a bare { tag }");
           path.pop();
         }
       }
@@ -684,11 +624,7 @@ class Walk {
     }
   }
 
-  private principalShaped(
-    value: unknown,
-    path: PathSegment[],
-    message: string,
-  ): void {
+  private principalShaped(value: unknown, path: PathSegment[], message: string): void {
     if (
       (typeof value !== "object" && typeof value !== "function") ||
       value === null ||

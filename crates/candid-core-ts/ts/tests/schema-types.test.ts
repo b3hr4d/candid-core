@@ -29,45 +29,31 @@ export const emptyInOpt = c.opt(c.empty);
 // The generated-module shape compiles for the admitted positions, under the
 // invariant annotation the equality gate rests on.
 type EmptyField = { f: never; g: bigint };
-export const EmptyField: Schema<EmptyField> = c.rec(() =>
-  c.record({ f: c.empty, g: c.nat }),
-);
+export const EmptyField: Schema<EmptyField> = c.rec(() => c.record({ f: c.empty, g: c.nat }));
 type EmptyTuple = [never, bigint];
-export const EmptyTuple: Schema<EmptyTuple> = c.rec(() =>
-  c.tuple([c.empty, c.nat]),
-);
+export const EmptyTuple: Schema<EmptyTuple> = c.rec(() => c.tuple([c.empty, c.nat]));
 
 // Issue #127: `VariantInfer` classifies structurally, matching the emitter,
 // validator, and codec — every divergence-table row compiles under the
 // invariant annotation with the classification the runtime enforces.
 type EmptyArmV = { tag: "a"; value: never } | { tag: "b"; value: bigint };
-export const EmptyArmV: Schema<EmptyArmV> = c.rec(() =>
-  c.variant({ a: c.empty, b: c.nat }),
-);
-type OptEmptyArmV =
-  | { tag: "a"; value: never | null }
-  | { tag: "b"; value: bigint };
+export const EmptyArmV: Schema<EmptyArmV> = c.rec(() => c.variant({ a: c.empty, b: c.nat }));
+type OptEmptyArmV = { tag: "a"; value: never | null } | { tag: "b"; value: bigint };
 export const OptEmptyArmV: Schema<OptEmptyArmV> = c.rec(() =>
   c.variant({ a: c.opt(c.empty), b: c.nat }),
 );
 // `opt null` arms are unreachable from the generator (UnrepresentableOption)
 // but constructible by hand; the classification aligns for them too.
 type OptNullArmV = { tag: "a"; value: null };
-export const OptNullArmV: Schema<OptNullArmV> = c.rec(() =>
-  c.variant({ a: c.opt(c.null) }),
-);
+export const OptNullArmV: Schema<OptNullArmV> = c.rec(() => c.variant({ a: c.opt(c.null) }));
 type NullArmV = { tag: "ok" } | { tag: "busy"; value: number };
-export const NullArmV: Schema<NullArmV> = c.rec(() =>
-  c.variant({ ok: c.null, busy: c.nat8 }),
-);
+export const NullArmV: Schema<NullArmV> = c.rec(() => c.variant({ ok: c.null, busy: c.nat8 }));
 
 // Wrong classifications must stay compile errors — each probe marks an
 // alias the gate must refuse.
 type TagOnlyEmpty = { tag: "a" } | { tag: "b"; value: bigint };
 // @ts-expect-error an empty payload carries value: never
-export const tagOnlyEmpty: Schema<TagOnlyEmpty> = c.rec(() =>
-  c.variant({ a: c.empty, b: c.nat }),
-);
+export const tagOnlyEmpty: Schema<TagOnlyEmpty> = c.rec(() => c.variant({ a: c.empty, b: c.nat }));
 type TagOnlyOptEmpty = { tag: "a" } | { tag: "b"; value: bigint };
 // @ts-expect-error an opt payload always carries value
 export const tagOnlyOptEmpty: Schema<TagOnlyOptEmpty> = c.rec(() =>
@@ -75,9 +61,7 @@ export const tagOnlyOptEmpty: Schema<TagOnlyOptEmpty> = c.rec(() =>
 );
 type ValuedNullArm = { tag: "ok"; value: null };
 // @ts-expect-error a null payload is a bare tag
-export const valuedNullArm: Schema<ValuedNullArm> = c.rec(() =>
-  c.variant({ ok: c.null }),
-);
+export const valuedNullArm: Schema<ValuedNullArm> = c.rec(() => c.variant({ ok: c.null }));
 
 // The gate keeps full strength around the admitted leaf: every wrong alias
 // below must stay a compile error.
@@ -88,19 +72,13 @@ export const wrongFieldType: Schema<WrongFieldType> = c.rec(() =>
 );
 type MissingField = { f: never };
 // @ts-expect-error the alias omits a field the builder infers
-export const missingField: Schema<MissingField> = c.rec(() =>
-  c.record({ f: c.empty, g: c.nat }),
-);
+export const missingField: Schema<MissingField> = c.rec(() => c.record({ f: c.empty, g: c.nat }));
 type ExtraField = { f: never; g: bigint; h: string };
 // @ts-expect-error the alias adds a field the builder does not infer
-export const extraField: Schema<ExtraField> = c.rec(() =>
-  c.record({ f: c.empty, g: c.nat }),
-);
+export const extraField: Schema<ExtraField> = c.rec(() => c.record({ f: c.empty, g: c.nat }));
 type WidenedField = { f: unknown; g: bigint };
 // @ts-expect-error the alias widens never to unknown
-export const widenedField: Schema<WidenedField> = c.rec(() =>
-  c.record({ f: c.empty, g: c.nat }),
-);
+export const widenedField: Schema<WidenedField> = c.rec(() => c.record({ f: c.empty, g: c.nat }));
 
 function firstIssue(result: ValidateResult): { code: string; path: string } {
   assert.strictEqual(result.ok, false);

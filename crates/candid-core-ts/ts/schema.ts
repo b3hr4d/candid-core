@@ -80,8 +80,7 @@ type TupleInfer<S extends readonly AnyFieldSchema[]> = {
   -readonly [I in keyof S]: Infer<S[I]>;
 };
 
-export interface TupleSchema<S extends readonly AnyFieldSchema[]>
-  extends Schema<TupleInfer<S>> {
+export interface TupleSchema<S extends readonly AnyFieldSchema[]> extends Schema<TupleInfer<S>> {
   readonly kind: "tuple";
   readonly elements: S;
 }
@@ -119,8 +118,7 @@ type VariantInfer<A extends FieldSchemas> = {
         : { tag: K; value: Infer<A[K]> };
 }[keyof A & string];
 
-export interface VariantSchema<A extends FieldSchemas>
-  extends Schema<VariantInfer<A>> {
+export interface VariantSchema<A extends FieldSchemas> extends Schema<VariantInfer<A>> {
   readonly kind: "variant";
   readonly arms: A;
 }
@@ -219,9 +217,7 @@ export const c = {
     return { kind: "record", fields };
   },
 
-  tuple<const S extends readonly AnyFieldSchema[]>(
-    elements: S,
-  ): TupleSchema<S> {
+  tuple<const S extends readonly AnyFieldSchema[]>(elements: S): TupleSchema<S> {
     return { kind: "tuple", elements };
   },
 

@@ -75,12 +75,7 @@
 // graph and nothing depends on time, environment, or map iteration order.
 
 import type { AnyFieldSchema, AnySchema, Schema } from "./schema.ts";
-import {
-  candidLabelHash,
-  fieldIdOfKey,
-  utf8BytesStrict,
-  utf8Decode,
-} from "./labels.ts";
+import { candidLabelHash, fieldIdOfKey, utf8BytesStrict, utf8Decode } from "./labels.ts";
 
 /** Stable machine-readable failure codes. Closed: additions are API changes. */
 export type CodecCode =
@@ -113,11 +108,7 @@ export type CodecCode =
 
 export interface CodecResourceLimitInfo {
   readonly resource:
-    | "bytes"
-    | "type_table_entries"
-    | "value_depth"
-    | "value_elements"
-    | "numeric_bytes";
+    "bytes" | "type_table_entries" | "value_depth" | "value_elements" | "numeric_bytes";
   readonly limit: number;
   readonly observed: number;
 }
@@ -302,8 +293,7 @@ interface Limits {
 function limitsOf(options: CodecOptions): Limits {
   return {
     maxBytes: options.maxBytes ?? DEFAULT_MAX_BYTES,
-    maxTypeTableEntries:
-      options.maxTypeTableEntries ?? DEFAULT_MAX_TYPE_TABLE_ENTRIES,
+    maxTypeTableEntries: options.maxTypeTableEntries ?? DEFAULT_MAX_TYPE_TABLE_ENTRIES,
     maxDepth: options.maxDepth ?? DEFAULT_MAX_DEPTH,
     maxElements: options.maxElements ?? DEFAULT_MAX_ELEMENTS,
     maxNumericBytes: options.maxNumericBytes ?? DEFAULT_MAX_NUMERIC_BYTES,
@@ -591,11 +581,7 @@ export function encodeArgs(
   const path: PathSegment[] = [];
   try {
     if (schemas.length !== values.length) {
-      encoder.fail(
-        "invalid_length",
-        path,
-        `${schemas.length} schemas for ${values.length} values`,
-      );
+      encoder.fail("invalid_length", path, `${schemas.length} schemas for ${values.length} values`);
     }
     const typeRefs = schemas.map((schema, index) => {
       path.push(`args[${index}]` as string);
@@ -713,11 +699,7 @@ class Encoder {
         body === null ||
         typeof (body as { kind?: unknown }).kind !== "string"
       ) {
-        this.fail(
-          "unsupported_schema",
-          path,
-          "a rec thunk did not produce a schema",
-        );
+        this.fail("unsupported_schema", path, "a rec thunk did not produce a schema");
       }
       node = body as SchemaNode;
     }
@@ -757,11 +739,7 @@ class Encoder {
         body === null ||
         typeof (body as { kind?: unknown }).kind !== "string"
       ) {
-        this.fail(
-          "unsupported_schema",
-          path,
-          "a rec thunk did not produce a schema",
-        );
+        this.fail("unsupported_schema", path, "a rec thunk did not produce a schema");
       }
       node = body as SchemaNode;
     }
@@ -843,10 +821,7 @@ class Encoder {
         writeLebNumber(entry, node.elements.length);
         for (let i = 0; i < node.elements.length; i += 1) {
           writeLebNumber(entry, i);
-          writeSlebBig(
-            entry,
-            BigInt(this.typeRef(node.elements[i] as SchemaNode, path, at + 1)),
-          );
+          writeSlebBig(entry, BigInt(this.typeRef(node.elements[i] as SchemaNode, path, at + 1)));
         }
         break;
       }
@@ -858,10 +833,7 @@ class Encoder {
         writeLebNumber(entry, fields.length);
         for (const field of fields) {
           writeLebNumber(entry, field.id);
-          writeSlebBig(
-            entry,
-            BigInt(this.typeRef(field.schema as SchemaNode, path, at + 1)),
-          );
+          writeSlebBig(entry, BigInt(this.typeRef(field.schema as SchemaNode, path, at + 1)));
         }
         break;
       }
@@ -998,11 +970,7 @@ class Encoder {
       }
       case "blob": {
         if (!isUint8Array(value)) {
-          this.fail(
-            "invalid_type",
-            path,
-            `expected a Uint8Array, got ${describe(value)}`,
-          );
+          this.fail("invalid_type", path, `expected a Uint8Array, got ${describe(value)}`);
         }
         const length = value.length;
         writeLebNumber(out, length);
@@ -1013,11 +981,7 @@ class Encoder {
       }
       case "unit": {
         if (!this.isPlainCandidate(value)) {
-          this.fail(
-            "invalid_type",
-            path,
-            `expected an empty record, got ${describe(value)}`,
-          );
+          this.fail("invalid_type", path, `expected an empty record, got ${describe(value)}`);
         }
         for (const key of Object.keys(value)) {
           this.step(path, at);
@@ -1097,19 +1061,14 @@ class Encoder {
           this.fail("invalid_type", path, `expected a string tag, got ${describe(tag)}`);
         }
         if (!hasOwn(node.arms, tag)) {
-          this.fail(
-            "unknown_tag",
-            path,
-            `${JSON.stringify(tag)} is not an arm of this variant`,
-          );
+          this.fail("unknown_tag", path, `${JSON.stringify(tag)} is not an arm of this variant`);
         }
         path.pop();
         const arms = this.sortedFields(node.arms, path);
         const index = arms.findIndex((arm) => arm.key === tag);
         writeLebNumber(out, index);
         const resolved = this.resolve(arms[index].schema as SchemaNode, path, at);
-        const tagOnly =
-          resolved.node.kind === "primitive" && resolved.node.primitive === "null";
+        const tagOnly = resolved.node.kind === "primitive" && resolved.node.primitive === "null";
         if (tagOnly) {
           // Mirror validate's walk exactly: the first non-tag key in
           // enumeration order is the issue, whatever its name.
@@ -1117,11 +1076,7 @@ class Encoder {
             this.step(path, at);
             if (key !== "tag") {
               path.push(key);
-              this.fail(
-                "unexpected_field",
-                path,
-                "a null-payload arm is a bare { tag }",
-              );
+              this.fail("unexpected_field", path, "a null-payload arm is a bare { tag }");
             }
           }
           return;
@@ -1180,11 +1135,7 @@ class Encoder {
           this.step(path, at);
           if (key !== "principal" && key !== "method") {
             path.push(key);
-            this.fail(
-              "unexpected_field",
-              path,
-              "a func reference is { principal, method }",
-            );
+            this.fail("unexpected_field", path, "a func reference is { principal, method }");
           }
         }
         out.push(1);
@@ -1260,17 +1211,11 @@ class Encoder {
         },
       );
     }
-    const image =
-      value >= 0n ? value : value + (1n << BigInt(7 * groups));
+    const image = value >= 0n ? value : value + (1n << BigInt(7 * groups));
     writeLebGroups(out, image, groups);
   }
 
-  private primitive(
-    name: string,
-    value: unknown,
-    out: number[],
-    path: PathSegment[],
-  ): void {
+  private primitive(name: string, value: unknown, out: number[], path: PathSegment[]): void {
     switch (name) {
       case "null":
         if (value !== null) {
@@ -1308,8 +1253,7 @@ class Encoder {
         if (typeof value !== "bigint") {
           this.fail("invalid_type", path, `expected a bigint, got ${describe(value)}`);
         }
-        const [min, max] =
-          name === "nat64" ? [0n, NAT64_MAX] : [INT64_MIN, INT64_MAX];
+        const [min, max] = name === "nat64" ? [0n, NAT64_MAX] : [INT64_MIN, INT64_MAX];
         if (value < min || value > max) {
           this.fail("out_of_range", path, `${name} is ${min}..=${max}`);
         }
@@ -1408,11 +1352,7 @@ class Encoder {
         }
         const bytes = principalBytesFromText(text);
         if (bytes === undefined) {
-          this.fail(
-            "invalid_principal",
-            path,
-            "toText() is not canonical principal text",
-          );
+          this.fail("invalid_principal", path, "toText() is not canonical principal text");
         }
         out.push(1);
         writeLebNumber(out, bytes.length);
@@ -1422,20 +1362,13 @@ class Encoder {
         return;
       }
       default:
-        this.fail(
-          "unsupported_schema",
-          path,
-          `unknown primitive ${JSON.stringify(name)}`,
-        );
+        this.fail("unsupported_schema", path, `unknown primitive ${JSON.stringify(name)}`);
     }
   }
 
   private isPlainCandidate(value: unknown): value is Record<string, unknown> {
     return (
-      typeof value === "object" &&
-      value !== null &&
-      !Array.isArray(value) &&
-      !isUint8Array(value)
+      typeof value === "object" && value !== null && !Array.isArray(value) && !isUint8Array(value)
     );
   }
 }
@@ -1470,12 +1403,11 @@ export function decodeArgs(
       decoder.fail("invalid_type", path, `expected a Uint8Array, got ${describe(bytes)}`);
     }
     if (bytes.length > limits.maxBytes) {
-      decoder.fail(
-        "resource_limit_exceeded",
-        path,
-        `bytes limit ${limits.maxBytes} exceeded`,
-        { resource: "bytes", limit: limits.maxBytes, observed: bytes.length },
-      );
+      decoder.fail("resource_limit_exceeded", path, `bytes limit ${limits.maxBytes} exceeded`, {
+        resource: "bytes",
+        limit: limits.maxBytes,
+        observed: bytes.length,
+      });
     }
     decoder.header(path);
     const values: unknown[] = [];
@@ -1743,10 +1675,7 @@ class Decoder {
     const last = parts[parts.length - 1];
     if (parts.length > 1) {
       const prior = parts[parts.length - 2];
-      if (
-        (last === 0x00 && (prior & 0x40) === 0) ||
-        (last === 0x7f && (prior & 0x40) !== 0)
-      ) {
+      if ((last === 0x00 && (prior & 0x40) === 0) || (last === 0x7f && (prior & 0x40) !== 0)) {
         this.fail("overlong_leb128", path, "int uses a non-minimal encoding");
       }
     }
@@ -1819,11 +1748,7 @@ class Decoder {
           // A service method type must denote a function type — the one
           // structural constraint the spec states about reference types.
           if (method.type < 0 || this.entries[method.type].kind !== "func") {
-            this.fail(
-              "malformed_type_table",
-              path,
-              "a service method must denote a function type",
-            );
+            this.fail("malformed_type_table", path, "a service method must denote a function type");
           }
         }
       }
@@ -1849,11 +1774,7 @@ class Decoder {
   private tableEntry(path: readonly PathSegment[]): WireEntry {
     const opcode = this.slebBig(path);
     if (opcode >= 0n || opcode >= BigInt(OP.empty) || opcode === BigInt(OP.principal)) {
-      this.fail(
-        "malformed_type_table",
-        path,
-        "the type table may only contain composite types",
-      );
+      this.fail("malformed_type_table", path, "the type table may only contain composite types");
     }
     switch (Number(opcode)) {
       case OP.opt:
@@ -1870,11 +1791,7 @@ class Decoder {
           this.step(path, 0);
           const id = this.lebU32(path, "field id");
           if (id <= previous) {
-            this.fail(
-              "malformed_type_table",
-              path,
-              "field ids must be strictly increasing",
-            );
+            this.fail("malformed_type_table", path, "field ids must be strictly increasing");
           }
           previous = id;
           ids.push(id);
@@ -1901,11 +1818,7 @@ class Decoder {
         // The reference implementation refuses more than one annotation;
         // mirror it — fail-closed parity on headers, not just values.
         if (annotations > 1) {
-          this.fail(
-            "malformed_type_table",
-            path,
-            "a function type carries at most one annotation",
-          );
+          this.fail("malformed_type_table", path, "a function type carries at most one annotation");
         }
         let annotation = 0;
         for (let i = 0; i < annotations; i += 1) {
@@ -1965,8 +1878,7 @@ class Decoder {
     const { node } = this.resolveSchema(schema, path, depth);
     if (
       node.kind === "opt" ||
-      (node.kind === "primitive" &&
-        (node.primitive === "null" || node.primitive === "reserved"))
+      (node.kind === "primitive" && (node.primitive === "null" || node.primitive === "reserved"))
     ) {
       return null;
     }
@@ -2001,12 +1913,7 @@ class Decoder {
   }
 
   /** Decode one wire value at the expected schema, coercing per the spec. */
-  valueAt(
-    wire: number,
-    schema: SchemaNode,
-    path: PathSegment[],
-    depth: number,
-  ): unknown {
+  valueAt(wire: number, schema: SchemaNode, path: PathSegment[], depth: number): unknown {
     const { node, depth: at } = this.resolveSchema(schema, path, depth);
     this.step(path, at);
 
@@ -2046,11 +1953,7 @@ class Decoder {
           );
           break;
         case "future":
-          this.mismatch(
-            "type_mismatch",
-            path,
-            "a wire future value has no expected counterpart",
-          );
+          this.mismatch("type_mismatch", path, "a wire future value has no expected counterpart");
       }
     }
 
@@ -2083,12 +1986,7 @@ class Decoder {
    * bytes are consumed either way (rewind, then skip). Malformed input and
    * resource failures stay hard — absorption never hides a broken message.
    */
-  private absorbing(
-    wire: number,
-    schema: SchemaNode,
-    path: PathSegment[],
-    depth: number,
-  ): unknown {
+  private absorbing(wire: number, schema: SchemaNode, path: PathSegment[], depth: number): unknown {
     const rewind = this.offset;
     try {
       return this.valueAt(wire, schema, path, depth);
@@ -2198,12 +2096,7 @@ class Decoder {
       if (cursor < expected.length && expected[cursor].id === entry.ids[w]) {
         const field = expected[cursor];
         path.push(field.key);
-        out[field.key] = this.valueAt(
-          entry.types[w],
-          field.schema as SchemaNode,
-          path,
-          depth + 1,
-        );
+        out[field.key] = this.valueAt(entry.types[w], field.schema as SchemaNode, path, depth + 1);
         path.pop();
         cursor += 1;
       } else {
@@ -2287,8 +2180,7 @@ class Decoder {
       );
     }
     const resolved = this.resolveSchema(match.schema as SchemaNode, path, depth);
-    const tagOnly =
-      resolved.node.kind === "primitive" && resolved.node.primitive === "null";
+    const tagOnly = resolved.node.kind === "primitive" && resolved.node.primitive === "null";
     if (tagOnly) {
       // The payload still coerces at expected null — a wire arm carrying a
       // non-null payload here is a mismatch, not something to skip over.
@@ -2311,11 +2203,7 @@ class Decoder {
    * bytes stay hard errors. Opaque reference forms (tag 0) are refused, as
    * recorded for this codec slice.
    */
-  private referenceAt(
-    wire: number,
-    node: FuncNode | ServiceNode,
-    path: PathSegment[],
-  ): unknown {
+  private referenceAt(wire: number, node: FuncNode | ServiceNode, path: PathSegment[]): unknown {
     if (wire < 0) {
       this.mismatch("type_mismatch", path, `wire type ${wire} at an expected ${node.kind}`);
     }
@@ -2332,11 +2220,7 @@ class Decoder {
     }
     const tag = this.byte(path);
     if (tag === 0) {
-      this.fail(
-        "invalid_principal",
-        path,
-        "opaque references are unsupported in this slice",
-      );
+      this.fail("invalid_principal", path, "opaque references are unsupported in this slice");
     }
     if (tag !== 1) {
       this.fail("invalid_tag_byte", path, `a ${node.kind} value starts with 0 or 1`);
@@ -2344,11 +2228,7 @@ class Decoder {
     if (node.kind === "func") {
       const inner = this.byte(path);
       if (inner === 0) {
-        this.fail(
-          "invalid_principal",
-          path,
-          "opaque references are unsupported in this slice",
-        );
+        this.fail("invalid_principal", path, "opaque references are unsupported in this slice");
       }
       if (inner !== 1) {
         this.fail("invalid_tag_byte", path, "a service value starts with 0 or 1");
@@ -2427,9 +2307,7 @@ class Decoder {
     seen.set(key, true);
     const node = this.resolveTypeNode(schema as SchemaNode);
     const result =
-      node === undefined
-        ? false
-        : this.refSubtypeUncached(wire, node, wireOnLeft, seen, depth);
+      node === undefined ? false : this.refSubtypeUncached(wire, node, wireOnLeft, seen, depth);
     seen.set(key, result);
     return result;
   }
@@ -2707,8 +2585,7 @@ class Decoder {
     return (
       node !== undefined &&
       (node.kind === "opt" ||
-        (node.kind === "primitive" &&
-          (node.primitive === "null" || node.primitive === "reserved")))
+        (node.kind === "primitive" && (node.primitive === "null" || node.primitive === "reserved")))
     );
   }
 
@@ -2725,11 +2602,7 @@ class Decoder {
     path: PathSegment[],
   ): unknown {
     if (node.kind !== "primitive") {
-      this.mismatch(
-        "type_mismatch",
-        path,
-        `wire type ${wire} at expected ${node.kind}`,
-      );
+      this.mismatch("type_mismatch", path, `wire type ${wire} at expected ${node.kind}`);
     }
     const name = node.primitive;
     if (name === "empty") {
@@ -2744,11 +2617,7 @@ class Decoder {
     // The one primitive coercion: a wire nat is accepted at expected int.
     const natAtInt = name === "int" && wire === OP.nat;
     if (wire !== expectedOpcode && !natAtInt) {
-      this.mismatch(
-        "type_mismatch",
-        path,
-        `wire type ${wire} at expected ${name}`,
-      );
+      this.mismatch("type_mismatch", path, `wire type ${wire} at expected ${name}`);
     }
     switch (name) {
       case "null":
@@ -2886,11 +2755,7 @@ class Decoder {
         case "func": {
           const tag = this.byte(path);
           if (tag === 0) {
-            this.fail(
-              "invalid_principal",
-              path,
-              "opaque references are unsupported in this slice",
-            );
+            this.fail("invalid_principal", path, "opaque references are unsupported in this slice");
           }
           if (tag !== 1) {
             this.fail("invalid_tag_byte", path, "a func value starts with 0 or 1");
@@ -2912,11 +2777,7 @@ class Decoder {
           const refCount = this.lebU32(path, "future value reference count");
           this.raw(byteCount, path);
           if (refCount > 0) {
-            this.fail(
-              "invalid_principal",
-              path,
-              "opaque references are unsupported in this slice",
-            );
+            this.fail("invalid_principal", path, "opaque references are unsupported in this slice");
           }
           return;
         }
@@ -2996,11 +2857,7 @@ class Decoder {
   private skipServiceValue(path: readonly PathSegment[]): void {
     const tag = this.byte(path);
     if (tag === 0) {
-      this.fail(
-        "invalid_principal",
-        path,
-        "opaque references are unsupported in this slice",
-      );
+      this.fail("invalid_principal", path, "opaque references are unsupported in this slice");
     }
     if (tag !== 1) {
       this.fail("invalid_tag_byte", path, "a service value starts with 0 or 1");

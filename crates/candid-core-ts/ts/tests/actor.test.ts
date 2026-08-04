@@ -22,11 +22,8 @@ import * as ledger from "../../tests/goldens/ledger.ts";
 // The acceptance proof: emitted Actor type === hand-written interface.
 // ---------------------------------------------------------------------------
 
-type Equals<A, B> = (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B
-  ? 1
-  : 2
-  ? true
-  : false;
+type Equals<A, B> =
+  (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2 ? true : false;
 
 interface ExpectedLedgerActor {
   fee: () => Promise<ledger.Tokens>;
@@ -181,7 +178,10 @@ test("oneway dispatches on the call path and resolves to undefined", async () =>
   const service = c.service({ fire: c.func([], [], "oneway") });
   const actor = createActor<{ fire: () => Promise<void> }>(service, "aaaaa-aa", transport);
   assert.strictEqual(await actor.fire(), undefined);
-  assert.deepStrictEqual(log.map((entry) => entry.path), ["call"]);
+  assert.deepStrictEqual(
+    log.map((entry) => entry.path),
+    ["call"],
+  );
 });
 
 test("actor failures are typed: codec issues reject, misuse throws", async () => {

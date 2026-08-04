@@ -8,11 +8,7 @@ import assert from "node:assert/strict";
 import { runInNewContext } from "node:vm";
 
 import { c, type Schema } from "../schema.ts";
-import {
-  validate,
-  type ValidateResult,
-  type ValidationCode,
-} from "../validate.ts";
+import { validate, type ValidateResult, type ValidationCode } from "../validate.ts";
 
 function ok(schema: { readonly kind: string }, value: unknown): void {
   assert.deepStrictEqual(validate(schema as Schema<unknown>, value), { ok: true });
@@ -194,11 +190,7 @@ test("record requires every field and rejects unknown keys", () => {
 test("record issue order is schema fields first, then extras", () => {
   const schema = c.record({ a: c.bool, b: c.text });
   const result = validate(schema, { b: 5, z: 1 });
-  assert.deepStrictEqual(codesOf(result), [
-    "missing_field",
-    "invalid_type",
-    "unexpected_field",
-  ]);
+  assert.deepStrictEqual(codesOf(result), ["missing_field", "invalid_type", "unexpected_field"]);
 });
 
 test("a value key from Object.prototype does not satisfy a record field", () => {
@@ -250,9 +242,7 @@ test("a tag from Object.prototype is not an arm", () => {
 
 test("rec unwraps to its body", () => {
   type List = { head: bigint; tail: List } | null;
-  const List: Schema<List> = c.rec(() =>
-    c.opt(c.record({ head: c.nat, tail: List })),
-  );
+  const List: Schema<List> = c.rec(() => c.opt(c.record({ head: c.nat, tail: List })));
   ok(List, null);
   ok(List, { head: 1n, tail: { head: 2n, tail: null } });
   fails(List, { head: 1, tail: null }, "invalid_type", "$.head");
@@ -260,9 +250,7 @@ test("rec unwraps to its body", () => {
 
 test("deep recursion fails closed at the depth limit, without overflowing", () => {
   type List = { head: bigint; tail: List } | null;
-  const List: Schema<List> = c.rec(() =>
-    c.opt(c.record({ head: c.nat, tail: List })),
-  );
+  const List: Schema<List> = c.rec(() => c.opt(c.record({ head: c.nat, tail: List })));
   let list: List = null;
   for (let i = 0; i < 100_000; i += 1) {
     list = { head: BigInt(i), tail: list };
@@ -280,9 +268,7 @@ test("deep recursion fails closed at the depth limit, without overflowing", () =
 
 test("a cyclic value terminates via the depth limit", () => {
   type List = { head: bigint; tail: List } | null;
-  const List: Schema<List> = c.rec(() =>
-    c.opt(c.record({ head: c.nat, tail: List })),
-  );
+  const List: Schema<List> = c.rec(() => c.opt(c.record({ head: c.nat, tail: List })));
   const cyclic: { head: bigint; tail: unknown } = { head: 0n, tail: null };
   cyclic.tail = cyclic;
   const result = validate(List, cyclic as List);
@@ -345,34 +331,100 @@ test("a malformed schema object fails closed", () => {
 test("values that throw while inspected fail closed with unreadable_value", () => {
   const cases: readonly [schema: { readonly kind: string }, value: unknown][] = [
     // An own accessor on a required record field.
-    [c.record({ a: c.bool }), { get a(): boolean { throw new Error("boom"); } }],
+    [
+      c.record({ a: c.bool }),
+      {
+        get a(): boolean {
+          throw new Error("boom");
+        },
+      },
+    ],
     // Accessors on the variant tag and payload.
-    [c.variant({ ok: c.null }), { get tag(): string { throw new Error("boom"); } }],
+    [
+      c.variant({ ok: c.null }),
+      {
+        get tag(): string {
+          throw new Error("boom");
+        },
+      },
+    ],
     [
       c.variant({ busy: c.nat32 }),
-      { tag: "busy", get value(): number { throw new Error("boom"); } },
+      {
+        tag: "busy",
+        get value(): number {
+          throw new Error("boom");
+        },
+      },
     ],
     // An accessor behind the principal duck check.
-    [c.principal, { get toText(): () => string { throw new Error("boom"); } }],
+    [
+      c.principal,
+      {
+        get toText(): () => string {
+          throw new Error("boom");
+        },
+      },
+    ],
     // Proxy traps: ownKeys, get, getOwnPropertyDescriptor, getPrototypeOf.
-    [c.record({ a: c.bool }), new Proxy({}, { ownKeys() { throw new Error("boom"); } })],
+    [
+      c.record({ a: c.bool }),
+      new Proxy(
+        {},
+        {
+          ownKeys() {
+            throw new Error("boom");
+          },
+        },
+      ),
+    ],
     // The target carries the property so presence passes; the read traps.
-    [c.record({ a: c.bool }), new Proxy({ a: true }, { get() { throw new Error("boom"); } })],
+    [
+      c.record({ a: c.bool }),
+      new Proxy(
+        { a: true },
+        {
+          get() {
+            throw new Error("boom");
+          },
+        },
+      ),
+    ],
     // The target needs a key for Object.keys to consult the trap at all.
     // (A getPrototypeOf trap is no longer reachable anywhere: the typed-array
     // brand check reads internal slots, not the prototype chain.)
     [
       c.unit(),
-      new Proxy({ z: 1 }, { getOwnPropertyDescriptor() { throw new Error("boom"); } }),
+      new Proxy(
+        { z: 1 },
+        {
+          getOwnPropertyDescriptor() {
+            throw new Error("boom");
+          },
+        },
+      ),
     ],
     // An array whose element is an accessor, nested one level down.
     [
       c.vec(c.record({ a: c.bool })),
-      [{ get a(): boolean { throw new Error("boom"); } }],
+      [
+        {
+          get a(): boolean {
+            throw new Error("boom");
+          },
+        },
+      ],
     ],
     [
       c.tuple([c.nat]),
-      new Proxy([1n], { get(_t, key) { if (key === "length") { throw new Error("boom"); } return undefined; } }),
+      new Proxy([1n], {
+        get(_t, key) {
+          if (key === "length") {
+            throw new Error("boom");
+          }
+          return undefined;
+        },
+      }),
     ],
   ];
   for (const [schema, value] of cases) {
@@ -397,7 +449,13 @@ test("values that throw while inspected fail closed with unreadable_value", () =
 
 test("unreadable_value points at the value that threw", () => {
   const schema = c.record({ a: c.record({ b: c.bool }) });
-  const value = { a: { get b(): boolean { throw new Error("boom"); } } };
+  const value = {
+    a: {
+      get b(): boolean {
+        throw new Error("boom");
+      },
+    },
+  };
   const result = validate(schema, value as unknown as { a: { b: boolean } });
   assert(!result.ok);
   if (!result.ok) {

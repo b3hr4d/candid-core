@@ -375,8 +375,7 @@ function build(schema: AnyFieldSchema, site: Site): FormNode {
         ...common,
         control: "tuple",
         length: elements.length,
-        element: (index: number) =>
-          build(elements[index], { path: extendPath(site.path, index) }),
+        element: (index: number) => build(elements[index], { path: extendPath(site.path, index) }),
       };
     }
     case "variant": {
