@@ -58,5 +58,36 @@
 
   // ~/.editorconfig is another config this repository does not control.
   // .prettierrc.json is the single source of truth.
-  "prettier.useEditorConfig": false
+  "prettier.useEditorConfig": false,
+
+  // rust-analyzer settings below. One symptom they deliberately do *not* fix,
+  // because it is not repository state: if the editor shows a flood of errors
+  // that `cargo check` does not — `unresolved-macro-call` on `format!` and
+  // `write!`, then knock-on `expected String, found str` — the sysroot is
+  // behind the extension's bundled server, which tracks recent stable. This
+  // repository pins no toolchain on purpose (CI channels are rolling), so the
+  // fix is `rustup update stable`, not a setting. Measured here: 523 phantom
+  // errors on Rust 1.91.1 and 1.93.1, zero from 1.94.0 on.
+
+  // Analyse with every feature on. That is an editor setting, not a relaxation
+  // of the boundary claim: `candid-core-ts` has no default features on purpose,
+  // so rust-analyzer at Cargo's defaults greys out `TsNames::from_source_info`
+  // and the whole of tests/golden.rs and tests/wire_vectors.rs — about a
+  // thousand lines with no completion, no go-to-definition and no diagnostics.
+  // The featureless build stays enforced where enforcement belongs, by
+  // `cargo check -p candid-core-ts --locked` in CI.
+  //
+  // `"all"` rather than `["candid-core-ts/compiler"]` because one value is
+  // applied to every linked project below, and a package-qualified feature is a
+  // hard error in a workspace that does not contain that package — it would
+  // stop `fuzz/` loading at all.
+  "rust-analyzer.cargo.features": "all",
+
+  // Name the workspaces rather than let discovery guess. `fuzz/` is its own
+  // workspace root and is invisible to rust-analyzer unless it is listed, so
+  // every fuzz target otherwise reads "file not included in any crate".
+  // Listing both also fences the set: no untracked sibling checkout under this
+  // directory can become a third project and fill the Problems panel with
+  // errors from code this repository does not own.
+  "rust-analyzer.linkedProjects": ["Cargo.toml", "fuzz/Cargo.toml"]
 }
