@@ -1,0 +1,96 @@
+#!/bin/bash
+# Format staged TypeScript at commit time — never at save time.
+#
+# This is the surface that catches a human's own edits. The editor is
+# deliberately not configured to format on save (.vscode/settings.json pins
+# editor.formatOnSave to false), because a file that changes under the cursor
+# on every Cmd+S is its own kind of bug. Commit time is the honest moment: the
+# change is finished, and the reformat lands in the same commit as the code it
+# belongs to.
+#
+# Enable once per clone (see CLAUDE.md):
+#
+#     git config core.hooksPath .githooks
+#
+# Same binary, same repo-root .prettierrc.json, same .prettierignore as the
+# agent hook and CI, so no two surfaces can disagree about what "formatted"
+# means.
+#
+# Written for bash 3.2: that is what /bin/bash is on macOS, so `mapfile` and
+# empty-array expansion under `set -u` are both off the table.
+set -o pipefail
+
+root="$(git rev-parse --show-toplevel)" || exit 0
+prettier="${root}/crates/candid-core-ts/ts/node_modules/.bin/prettier"
+
+# A clone that has not run `npm ci` can still commit; CI is the backstop.
+[ -x "${prettier}" ] || exit 0
+cd "${root}" || exit 0
+
+is_ignored() {
+  # Ask Prettier rather than re-deriving .prettierignore here. A second copy of
+  # that logic is a second thing to drift, and it is what keeps the generated
+  # goldens out of every one of these surfaces.
+  [ "$("${prettier}" --file-info "$1" 2>/dev/null |
+    python3 -c 'import json,sys; print(json.load(sys.stdin).get("ignored", True))' 2>/dev/null)" != "False" ]
+}
+
+# A file staged in part and modified further in the working tree cannot be
+# safely rewritten: `git add` after formatting would sweep the unstaged edits
+# into a commit the author never asked for. Collect those first so they can be
+# checked instead of fixed.
+dirty=""
+while IFS= read -r -d '' path; do
+  dirty="${dirty}${path}"$'\n'
+done < <(git diff --name-only -z -- '*.ts' '*.tsx' '*.mts' '*.cts')
+
+formattable=()
+partial=()
+# ACMR, not D: a staged deletion has no content to format. NUL-delimited
+# because a path may contain anything a filesystem allows.
+while IFS= read -r -d '' path; do
+  [ -f "${path}" ] || continue
+  is_ignored "${path}" && continue
+  case $'\n'"${dirty}" in
+    *$'\n'"${path}"$'\n'*) partial[${#partial[@]}]="${path}" ;;
+    *) formattable[${#formattable[@]}]="${path}" ;;
+  esac
+done < <(git diff --cached --name-only --diff-filter=ACMR -z -- '*.ts' '*.tsx' '*.mts' '*.cts')
+
+status=0
+
+# Fully staged files: format and re-stage, so the bytes committed are exactly
+# the bytes that were checked.
+if [ ${#formattable[@]} -gt 0 ]; then
+  if ! error="$("${prettier}" --write --log-level warn "${formattable[@]}" 2>&1)"; then
+    printf 'pre-commit: Prettier failed:\n%s\n' "${error}" >&2
+    exit 1
+  fi
+  changed=()
+  for path in "${formattable[@]}"; do
+    git diff --quiet -- "${path}" || changed[${#changed[@]}]="${path}"
+  done
+  if [ ${#changed[@]} -gt 0 ]; then
+    git add -- "${changed[@]}"
+    printf 'pre-commit: formatted and re-staged %d file(s):\n' "${#changed[@]}" >&2
+    printf '  %s\n' "${changed[@]}" >&2
+  fi
+fi
+
+# Partially staged files: report, never touch.
+if [ ${#partial[@]} -gt 0 ]; then
+  unformatted=()
+  for path in "${partial[@]}"; do
+    "${prettier}" --check "${path}" >/dev/null 2>&1 || unformatted[${#unformatted[@]}]="${path}"
+  done
+  if [ ${#unformatted[@]} -gt 0 ]; then
+    printf 'pre-commit: these files are staged only in part and are not formatted:\n' >&2
+    printf '  %s\n' "${unformatted[@]}" >&2
+    printf 'Formatting them here would stage your unstaged edits too. Run:\n' >&2
+    printf '  npm --prefix crates/candid-core-ts/ts run format\n' >&2
+    printf 'then stage what you want and commit again.\n' >&2
+    status=1
+  fi
+fi
+
+exit "${status}"

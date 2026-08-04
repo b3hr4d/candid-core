@@ -1,0 +1,62 @@
+{
+  // Saving a file must never change it.
+  //
+  // The user profile on this machine sets "editor.formatOnSave": true globally
+  // *and* inside a dozen per-language blocks. A workspace-level global-only
+  // override would lose to the user's own [typescript] block, so the override
+  // is written per language, at the same specificity.
+  //
+  // Scoped to the languages Prettier is wired for. Every other language —
+  // Rust in particular, where format-on-save keeps `cargo fmt --check` green —
+  // keeps whatever the user profile already does. Set "editor.formatOnSave" to
+  // false at the top level of this file to make the rule workspace-wide.
+  //
+  // Formatting still happens automatically, just at moments where a rewrite is
+  // expected rather than surprising: when an agent finishes an edit
+  // (.claude/hooks/format-typescript.sh) and when a commit is made
+  // (.githooks/pre-commit). Shift+Alt+F stays available on demand.
+  "[typescript]": {
+    "editor.defaultFormatter": "esbenp.prettier-vscode",
+    "editor.formatOnSave": false,
+    "editor.formatOnPaste": false,
+    "editor.formatOnType": false
+  },
+  "[typescriptreact]": {
+    "editor.defaultFormatter": "esbenp.prettier-vscode",
+    "editor.formatOnSave": false,
+    "editor.formatOnPaste": false,
+    "editor.formatOnType": false
+  },
+  "[javascript]": {
+    "editor.defaultFormatter": "esbenp.prettier-vscode",
+    "editor.formatOnSave": false,
+    "editor.formatOnPaste": false,
+    "editor.formatOnType": false
+  },
+  "[json]": {
+    "editor.defaultFormatter": "esbenp.prettier-vscode",
+    "editor.formatOnSave": false,
+    "editor.formatOnPaste": false
+  },
+  "[jsonc]": {
+    "editor.defaultFormatter": "esbenp.prettier-vscode",
+    "editor.formatOnSave": false,
+    "editor.formatOnPaste": false
+  },
+
+  // Use the version pinned in ts/package-lock.json, not whatever the extension
+  // happens to bundle. The extension's Prettier moves on its own release
+  // schedule, and a formatter that disagrees with CI by a minor version is
+  // exactly the churn this setup exists to remove.
+  "prettier.prettierPath": "crates/candid-core-ts/ts/node_modules/prettier",
+
+  // Fail closed: with no resolvable config, format nothing at all. Without
+  // this, a file outside the config's reach would be formatted with the user's
+  // global ~/.prettierrc ("semi": false) — which would strip the semicolons
+  // from every TypeScript file in this repository.
+  "prettier.requireConfig": true,
+
+  // ~/.editorconfig is another config this repository does not control.
+  // .prettierrc.json is the single source of truth.
+  "prettier.useEditorConfig": false
+}

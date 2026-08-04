@@ -50,9 +50,12 @@
   },
   "scripts": {
     "build": "rm -rf dist && tsc -p tsconfig.build.json",
-    "test": "node --test --import ./tests/register.ts tests/*.test.ts"
+    "test": "node --test --import ./tests/register.ts tests/*.test.ts",
+    "format": "cd ../../.. && prettier --write \"**/*.ts\"",
+    "format:check": "cd ../../.. && prettier --check \"**/*.ts\""
   },
   "devDependencies": {
+    "prettier": "3.9.6",
     "typescript": "7.0.2"
   },
   "peerDependenciesMeta": {
