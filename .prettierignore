@@ -1,0 +1,39 @@
+# What Prettier must never rewrite in this repository.
+#
+# Prettier's job here is narrow: the hand-written TypeScript under
+# crates/candid-core-ts/ts/. Everything below is either generated, compared
+# byte for byte by a test, or not ours — and every entry is a file Prettier
+# *would* have changed, not a precaution against a hypothetical.
+#
+# Prettier also honours .gitignore by default, so /target/, node_modules/, and
+# /candid-scope/ are already out. They are repeated here so that an invocation
+# passing --ignore-path (which replaces the default list rather than adding to
+# it) still fails closed.
+
+# Generator output, compared byte for byte by `cargo test -p candid-core-ts
+# --features compiler`. Prettier reformats 6 of the 10 goldens (152 lines), so
+# formatting them turns the golden suite red and, worse, would silently move
+# the reviewed mapping decisions these files record. The emitter owns their
+# layout; regenerate with UPDATE_GOLDENS=1, never with a formatter.
+/crates/candid-core-ts/tests/goldens/
+
+# Conformance and artifact-identity vectors are digests of exact octets
+# (docs/artifact-identity-v1.md). .gitattributes already pins their line
+# endings across platforms for this reason; reformatting the JSON would move
+# every pinned artifact ID.
+/tests/fixtures/
+
+# Reviewed measurement records, not source: reformatting them would make a
+# baseline diff unreadable at exactly the moment it matters (docs/benchmarks.md).
+/benches/baselines/
+
+# Build output of `npm run build`, and the packaged-consumer fixture's tree.
+/crates/candid-core-ts/ts/dist/
+
+# Restated from .gitignore so --ignore-path invocations stay safe.
+node_modules/
+/target/
+/fuzz/target/
+/fuzz/corpus/
+/fuzz/artifacts/
+/candid-scope/

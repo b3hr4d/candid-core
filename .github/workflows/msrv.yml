@@ -235,6 +235,22 @@ jobs:
           set -euxo pipefail
           npm ci
           npx tsc --noEmit
+      # Formatting is enforced here rather than trusted to editors and agent
+      # hooks, which are per-machine and per-tool and cannot be verified from a
+      # pull request. Prettier is exact-pinned in ts/package-lock.json for the
+      # same reason `cargo fmt --check` runs on a single job above: two
+      # contributors on different formatter versions produce a diff neither of
+      # them wrote.
+      #
+      # The script runs from the repository root, against the root
+      # .prettierrc.json and .prettierignore, so this check, `npm run format`,
+      # the pre-commit hook, and the agent hook are the same invocation. The
+      # generated goldens under tests/goldens/ are ignored: their layout
+      # belongs to the emitter, and formatting them would turn the golden suite
+      # red (verified — Prettier rewrites 6 of the 10).
+      - name: Check TypeScript formatting
+        working-directory: crates/candid-core-ts/ts
+        run: npm run format:check
       # The schema runtime (issue #102) runs on Node's built-in test runner
       # with native type stripping: no test framework enters the supply chain,
       # and the exact-pinned Node above is the entire runtime. The suite

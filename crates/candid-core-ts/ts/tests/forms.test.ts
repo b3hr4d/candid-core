@@ -228,10 +228,7 @@ test("validation issues address form nodes through the shared path grammar", () 
 test("a self-referential rec chain throws instead of hanging", () => {
   const evil = c.rec(() => evil as unknown as Schema<unknown>) as AnySchema;
   assert.throws(() => formNodeAt(formModel(evil), "$"), TypeError);
-  assert.throws(
-    () => formNodeAt(formModel(c.record({ x: evil })), "$.x.y"),
-    TypeError,
-  );
+  assert.throws(() => formNodeAt(formModel(c.record({ x: evil })), "$.x.y"), TypeError);
 });
 
 test("variant and func issue paths map onto form nodes", () => {
@@ -391,10 +388,10 @@ test("PR #122 review: value-named fields and malformed escapes", () => {
   // A single-arm variant whose payload has a field literally named "value":
   // $.value is the payload, $.value.value is that field.
   const single = formModel(c.variant({ a: c.record({ value: c.nat8 }) }));
-  const singleResult = validate(
-    c.variant({ a: c.record({ value: c.nat8 }) }),
-    { tag: "a", value: { value: 999 } } as never,
-  );
+  const singleResult = validate(c.variant({ a: c.record({ value: c.nat8 }) }), {
+    tag: "a",
+    value: { value: 999 },
+  } as never);
   assert(!singleResult.ok);
   if (!singleResult.ok) {
     assert.strictEqual(singleResult.issues[0].path, "$.value.value");

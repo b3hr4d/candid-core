@@ -1,0 +1,7 @@
+{
+  // Prettier is pinned in crates/candid-core-ts/ts/package-lock.json and is
+  // what CI runs; this extension is only the editor's way of reaching it, via
+  // "prettier.prettierPath" in settings.json. Without the extension nothing
+  // breaks — the agent hook, the pre-commit hook, and CI all still format.
+  "recommendations": ["esbenp.prettier-vscode"]
+}

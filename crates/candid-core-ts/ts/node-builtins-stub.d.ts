@@ -5,10 +5,7 @@
 // declared; widening these is a deliberate act, not a convenience.
 
 declare module "node:test" {
-  export function test(
-    name: string,
-    fn: () => void | Promise<void>,
-  ): void;
+  export function test(name: string, fn: () => void | Promise<void>): void;
 }
 
 declare module "node:assert/strict" {
@@ -17,10 +14,7 @@ declare module "node:assert/strict" {
     strictEqual(actual: unknown, expected: unknown, message?: string): void;
     // Widened for the actor integration suite (issue #104): promise
     // rejection and synchronous-throw assertions.
-    rejects(
-      block: () => Promise<unknown>,
-      check?: (error: unknown) => boolean,
-    ): Promise<void>;
+    rejects(block: () => Promise<unknown>, check?: (error: unknown) => boolean): Promise<void>;
     throws(block: () => unknown, expected?: unknown): void;
     deepStrictEqual(actual: unknown, expected: unknown, message?: string): void;
   }

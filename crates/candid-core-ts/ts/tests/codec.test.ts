@@ -163,7 +163,7 @@ const EXPECTED: Record<string, Record<string, unknown>> = {
     even_two_hops: { next: { next: null } },
   },
   quoting: {
-    weird: { "has space": 1n, "naïve": "x", 'quote"mark': true },
+    weird: { "has space": 1n, naïve: "x", 'quote"mark': true },
   },
   deferred: {
     kept: { value: 1n },
@@ -413,11 +413,9 @@ test("resource budgets bound hostile wire input", () => {
     assert.strictEqual(big.issues[0].resource_limit?.resource, "bytes");
   }
   // A type table claiming more entries than the cap fails at the claim.
-  const wideTable = decode(
-    c.bool,
-    Uint8Array.from([0x44, 0x49, 0x44, 0x4c, 0xff, 0xff, 0x03]),
-    { maxTypeTableEntries: 1000 },
-  );
+  const wideTable = decode(c.bool, Uint8Array.from([0x44, 0x49, 0x44, 0x4c, 0xff, 0xff, 0x03]), {
+    maxTypeTableEntries: 1000,
+  });
   assert(!wideTable.ok);
   if (!wideTable.ok) {
     assert.strictEqual(wideTable.issues[0].resource_limit?.resource, "type_table_entries");
@@ -441,12 +439,9 @@ test("a blob length beyond the remaining input is truncation, never budget burn 
   // The same one step over under a budget of exactly length: an
   // offset-blind bounds check (length > bytes.length) would pass the
   // 13-byte message and burn the budget instead of reporting truncation.
-  failsDecode(
-    c.blob(),
-    message([[0x6d, 0x7b]], [[0x00]], [0x04, 0xaa, 0xbb, 0xcc]),
-    "truncated",
-    { maxElements: 4 },
-  );
+  failsDecode(c.blob(), message([[0x6d, 0x7b]], [[0x00]], [0x04, 0xaa, 0xbb, 0xcc]), "truncated", {
+    maxElements: 4,
+  });
   // The joint case — truncated AND over a tight budget, with partial
   // payload — diagnoses truncation through both schema shapes: the wire
   // `vec nat8` alias preflights the declared length exactly like blob, so
@@ -456,10 +451,10 @@ test("a blob length beyond the remaining input is truncation, never budget burn 
   failsDecode(c.vec(c.nat8), partial, "truncated", { maxElements: 4 });
   const exact = decode(c.blob(), message([[0x6d, 0x7b]], [[0x00]], [0x03, 0xaa, 0xbb, 0xcc]));
   assert.deepStrictEqual(exact, { ok: true, value: Uint8Array.from([0xaa, 0xbb, 0xcc]) });
-  assert.deepStrictEqual(
-    decode(c.blob(), message([[0x6d, 0x7b]], [[0x00]], [0x00])),
-    { ok: true, value: Uint8Array.from([]) },
-  );
+  assert.deepStrictEqual(decode(c.blob(), message([[0x6d, 0x7b]], [[0x00]], [0x00])), {
+    ok: true,
+    value: Uint8Array.from([]),
+  });
   // Element accounting stays equal byte for byte: one charge for the value
   // node plus one per byte, on both the blob and the vec nat8 path — a
   // 3-byte payload decodes at maxElements 4 and burns out at 3.
@@ -522,10 +517,10 @@ test("subtyping on decode: the coercion matrix", () => {
   const narrow = encode(c.record({ a: c.bool }), { a: true });
   assert(narrow.ok);
   if (narrow.ok) {
-    assert.deepStrictEqual(
-      decode(c.record({ a: c.bool, b: c.opt(c.text) }), narrow.bytes),
-      { ok: true, value: { a: true, b: null } },
-    );
+    assert.deepStrictEqual(decode(c.record({ a: c.bool, b: c.opt(c.text) }), narrow.bytes), {
+      ok: true,
+      value: { a: true, b: null },
+    });
     failsDecode(c.record({ a: c.bool, b: c.text }), narrow.bytes, "missing_field");
   }
   // Expected opt absorbs: constituent mismatch, absurd pairs, reserved.
@@ -539,10 +534,13 @@ test("subtyping on decode: the coercion matrix", () => {
   if (someText.ok) {
     assert.deepStrictEqual(decode(c.opt(c.nat), someText.bytes), { ok: true, value: null });
     // And the auto-wrap: a bare wire value at an expected opt of its type.
-    assert.deepStrictEqual(decode(c.opt(c.text), textBytes.ok ? textBytes.bytes : new Uint8Array(0)), {
-      ok: true,
-      value: "hi",
-    });
+    assert.deepStrictEqual(
+      decode(c.opt(c.text), textBytes.ok ? textBytes.bytes : new Uint8Array(0)),
+      {
+        ok: true,
+        value: "hi",
+      },
+    );
   }
   const reservedBytes = encode(c.reserved, null);
   assert(reservedBytes.ok);
@@ -618,7 +616,11 @@ test("encode-side strictness decisions", () => {
   // A hostile getter cannot out-run validation: encode reads once.
   failsEncode(
     c.record({ a: c.bool }),
-    { get a(): boolean { throw new Error("boom"); } },
+    {
+      get a(): boolean {
+        throw new Error("boom");
+      },
+    },
     "unreadable_value",
   );
   // Arity mismatch at the args level.
@@ -692,10 +694,7 @@ const TEXT_POOL = ["", "a", "hé", "☃", "tail", "_0_", "line\nbreak"];
 
 /** An uninhabited payload (issue #127): no value can be generated for it. */
 function uninhabited(node: GenNode): boolean {
-  return (
-    node.kind === "primitive" &&
-    (node as { primitive?: unknown }).primitive === "empty"
-  );
+  return node.kind === "primitive" && (node as { primitive?: unknown }).primitive === "empty";
 }
 
 function generate(schema: AnySchema, rand: () => number, depth: number): unknown {
@@ -705,11 +704,7 @@ function generate(schema: AnySchema, rand: () => number, depth: number): unknown
       return generatePrimitive(node.primitive as string, rand);
     case "opt":
       // An uninhabited inner leaves None as the only inhabitant.
-      if (
-        depth <= 0 ||
-        rand() < 0.4 ||
-        uninhabited(resolveGen(node.inner as AnySchema))
-      ) {
+      if (depth <= 0 || rand() < 0.4 || uninhabited(resolveGen(node.inner as AnySchema))) {
         return null;
       }
       return generate(node.inner as AnySchema, rand, depth - 1);
@@ -748,9 +743,7 @@ function generate(schema: AnySchema, rand: () => number, depth: number): unknown
       const arms = node.arms as Record<string, AnySchema>;
       // An uninhabited arm (an `empty` payload) can never carry a value;
       // every fixture variant keeps at least one inhabited arm.
-      const keys = Object.keys(arms).filter(
-        (key) => !uninhabited(resolveGen(arms[key])),
-      );
+      const keys = Object.keys(arms).filter((key) => !uninhabited(resolveGen(arms[key])));
       // At the depth floor prefer an arm that terminates: a primitive
       // payload (Tree's `leaf`) over a recursive one (`node`).
       const pick =
@@ -888,7 +881,13 @@ test("arbitrary and mutated bytes never throw and always answer", () => {
   // Single-byte mutations of valid encodings: still a result, never a throw.
   const seedValues: [AnySchema, unknown][] = [
     [c.record({ a: c.bool, b: c.opt(c.text) }), { a: true, b: "hi" }],
-    [variants.Tree as AnySchema, { tag: "node", value: { left: { tag: "leaf", value: 1n }, right: { tag: "leaf", value: 2n } } }],
+    [
+      variants.Tree as AnySchema,
+      {
+        tag: "node",
+        value: { left: { tag: "leaf", value: 1n }, right: { tag: "leaf", value: 2n } },
+      },
+    ],
     [recursion.List as AnySchema, { head: 1n, tail: { head: 2n, tail: null } }],
   ];
   for (const [schema, value] of seedValues) {
@@ -1074,11 +1073,7 @@ test("duplicate derived ids fail closed on the decode side too", () => {
   const emptyRecord = encode(c.unit(), {});
   assert(emptyRecord.ok);
   if (emptyRecord.ok) {
-    failsDecode(
-      c.record({ a: c.nat8, _97_: c.nat8 }),
-      emptyRecord.bytes,
-      "duplicate_field_id",
-    );
+    failsDecode(c.record({ a: c.nat8, _97_: c.nat8 }), emptyRecord.bytes, "duplicate_field_id");
   }
   failsDecode(
     c.variant({ a: c.null, _97_: c.null }),
@@ -1141,33 +1136,60 @@ test("encode enforces the numeric byte cap on unbounded nat and int", () => {
 
 test("a function type with more than one annotation fails closed", () => {
   // Reference: REJECTED (two annotations), ACCEPTED (one).
-  const two = decodeArgs([], Uint8Array.from([0x44, 0x49, 0x44, 0x4c, 0x01, 0x6a, 0x00, 0x00, 0x02, 0x01, 0x02, 0x00]));
+  const two = decodeArgs(
+    [],
+    Uint8Array.from([0x44, 0x49, 0x44, 0x4c, 0x01, 0x6a, 0x00, 0x00, 0x02, 0x01, 0x02, 0x00]),
+  );
   assert(!two.ok);
   if (!two.ok) {
     assert.strictEqual(two.issues[0].code, "malformed_type_table");
   }
-  const one = decodeArgs([], Uint8Array.from([0x44, 0x49, 0x44, 0x4c, 0x01, 0x6a, 0x00, 0x00, 0x01, 0x01, 0x00]));
+  const one = decodeArgs(
+    [],
+    Uint8Array.from([0x44, 0x49, 0x44, 0x4c, 0x01, 0x6a, 0x00, 0x00, 0x01, 0x01, 0x00]),
+  );
   assert(one.ok, "one annotation is the accepted form");
 });
 
 test("service type-table entries are validated even when only skipped", () => {
   // Duplicate method names — reference: REJECTED.
-  const duplicate = decodeArgs([], Uint8Array.from([0x44, 0x49, 0x44, 0x4c, 0x02, 0x6a, 0x00, 0x00, 0x00, 0x69, 0x02, 0x01, 0x61, 0x00, 0x01, 0x61, 0x00, 0x00]));
+  const duplicate = decodeArgs(
+    [],
+    Uint8Array.from([
+      0x44, 0x49, 0x44, 0x4c, 0x02, 0x6a, 0x00, 0x00, 0x00, 0x69, 0x02, 0x01, 0x61, 0x00, 0x01,
+      0x61, 0x00, 0x00,
+    ]),
+  );
   assert(!duplicate.ok);
   if (!duplicate.ok) {
     assert.strictEqual(duplicate.issues[0].code, "malformed_type_table");
   }
   // Unsorted method names — reference: REJECTED.
-  const unsorted = decodeArgs([], Uint8Array.from([0x44, 0x49, 0x44, 0x4c, 0x02, 0x6a, 0x00, 0x00, 0x00, 0x69, 0x02, 0x01, 0x62, 0x00, 0x01, 0x61, 0x00, 0x00]));
+  const unsorted = decodeArgs(
+    [],
+    Uint8Array.from([
+      0x44, 0x49, 0x44, 0x4c, 0x02, 0x6a, 0x00, 0x00, 0x00, 0x69, 0x02, 0x01, 0x62, 0x00, 0x01,
+      0x61, 0x00, 0x00,
+    ]),
+  );
   assert(!unsorted.ok);
   // A method type that is not a function — reference: REJECTED.
-  const nonFunc = decodeArgs([], Uint8Array.from([0x44, 0x49, 0x44, 0x4c, 0x02, 0x6c, 0x00, 0x69, 0x01, 0x01, 0x61, 0x00, 0x00]));
+  const nonFunc = decodeArgs(
+    [],
+    Uint8Array.from([0x44, 0x49, 0x44, 0x4c, 0x02, 0x6c, 0x00, 0x69, 0x01, 0x01, 0x61, 0x00, 0x00]),
+  );
   assert(!nonFunc.ok);
   if (!nonFunc.ok) {
     assert.strictEqual(nonFunc.issues[0].code, "malformed_type_table");
   }
   // Control: sorted unique methods on a func — reference: ACCEPTED.
-  const wellFormed = decodeArgs([], Uint8Array.from([0x44, 0x49, 0x44, 0x4c, 0x02, 0x6a, 0x00, 0x00, 0x00, 0x69, 0x02, 0x01, 0x61, 0x00, 0x01, 0x62, 0x00, 0x00]));
+  const wellFormed = decodeArgs(
+    [],
+    Uint8Array.from([
+      0x44, 0x49, 0x44, 0x4c, 0x02, 0x6a, 0x00, 0x00, 0x00, 0x69, 0x02, 0x01, 0x61, 0x00, 0x01,
+      0x62, 0x00, 0x00,
+    ]),
+  );
   assert(wellFormed.ok);
 });
 
@@ -1189,7 +1211,9 @@ test("the 29-byte principal bound holds on skip paths too", () => {
   }
   assert(decodeArgs([], Uint8Array.from(ok)).ok);
   // The same bound inside a skipped service value's id form.
-  const service = [0x44, 0x49, 0x44, 0x4c, 0x02, 0x6a, 0x00, 0x00, 0x00, 0x69, 0x00, 0x01, 0x01, 0x01, 30];
+  const service = [
+    0x44, 0x49, 0x44, 0x4c, 0x02, 0x6a, 0x00, 0x00, 0x00, 0x69, 0x00, 0x01, 0x01, 0x01, 30,
+  ];
   for (let i = 0; i < 30; i += 1) {
     service.push(0);
   }
@@ -1229,10 +1253,10 @@ test("reference subtyping is checked on decode: mismatches trap, opt absorbs", (
       failsDecode(c.func([], [c.nat8], "query"), natResult.bytes, "type_mismatch");
     }
     // The enclosing-opt absorption the coercion relation mandates.
-    assert.deepStrictEqual(
-      decode(c.opt(c.func([c.nat], [c.text], "update")), asQuery.bytes),
-      { ok: true, value: null },
-    );
+    assert.deepStrictEqual(decode(c.opt(c.func([c.nat], [c.text], "update")), asQuery.bytes), {
+      ok: true,
+      value: null,
+    });
   }
   // Service width: an expected method the wire type lacks is a mismatch.
   const narrow = c.service({ ping: c.func([], [], "update") });
@@ -1290,10 +1314,7 @@ test("unit and blob follow the width and depth rules in both directions", () => 
   const funcValue = { principal: principal("aaaaa-aa"), method: "m" };
   // unit in a contravariant position accepts a wire record whose extra
   // fields are all opt-like (the spec's field-removal rule) …
-  const widened = encode(
-    c.func([c.record({ a: c.opt(c.nat) })], [], "update"),
-    funcValue,
-  );
+  const widened = encode(c.func([c.record({ a: c.opt(c.nat) })], [], "update"), funcValue);
   assert(widened.ok);
   if (widened.ok) {
     assert(
@@ -1371,10 +1392,7 @@ test("double contravariance exercises the mirrored variance directions", () => {
 });
 
 test("the encoder refuses a service whose method is not a func schema", () => {
-  const result = encode(
-    c.service({ ping: c.nat as AnySchema }),
-    principal("aaaaa-aa"),
-  );
+  const result = encode(c.service({ ping: c.nat as AnySchema }), principal("aaaaa-aa"));
   assert(!result.ok);
   if (!result.ok) {
     assert.strictEqual(result.issues[0].code, "unsupported_schema");
@@ -1385,8 +1403,7 @@ test("a wire func value with an empty method name fails closed on decode", () =>
   // Bytes: DIDL, table [func () -> ()], arg [0], value tag1 tag1 len0 (the
   // management principal) then method length 0.
   const bytes = Uint8Array.from([
-    0x44, 0x49, 0x44, 0x4c, 0x01, 0x6a, 0x00, 0x00, 0x00, 0x01, 0x00,
-    0x01, 0x01, 0x00, 0x00,
+    0x44, 0x49, 0x44, 0x4c, 0x01, 0x6a, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01, 0x01, 0x00, 0x00,
   ]);
   failsDecode(c.func([], [], "update"), bytes, "invalid_length");
 });

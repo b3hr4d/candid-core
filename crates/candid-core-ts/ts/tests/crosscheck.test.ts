@@ -41,9 +41,7 @@ interface Fixture {
 function load(name: string): { contract: unknown; names: FieldNameEntry[] } {
   const goldens = new URL("../../tests/goldens/", import.meta.url);
   return {
-    contract: JSON.parse(
-      readFileSync(new URL(`${name}.contract.json`, goldens), "utf8"),
-    ),
+    contract: JSON.parse(readFileSync(new URL(`${name}.contract.json`, goldens), "utf8")),
     names: JSON.parse(
       readFileSync(new URL(`${name}.names.json`, goldens), "utf8"),
     ) as FieldNameEntry[],
@@ -365,12 +363,6 @@ test("a generated __proto__ field is an own key, not a prototype write", () => {
       [["missing_field", "$.__proto__"]],
     );
   }
-  assert.deepStrictEqual(
-    validate(proto.Holder, JSON.parse('{"__proto__": 5}')),
-    { ok: true },
-  );
-  assert.deepStrictEqual(
-    validate(proto.Event, { tag: "__proto__", value: 5 }),
-    { ok: true },
-  );
+  assert.deepStrictEqual(validate(proto.Holder, JSON.parse('{"__proto__": 5}')), { ok: true });
+  assert.deepStrictEqual(validate(proto.Event, { tag: "__proto__", value: 5 }), { ok: true });
 });

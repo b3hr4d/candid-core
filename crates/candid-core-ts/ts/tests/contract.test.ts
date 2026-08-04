@@ -34,11 +34,7 @@ function codesOf(result: SchemaFromContractResult): ContractIssueCode[] {
   return result.ok ? [] : result.issues.map((issue) => issue.code);
 }
 
-function failsWith(
-  result: SchemaFromContractResult,
-  code: ContractIssueCode,
-  path: string,
-): void {
+function failsWith(result: SchemaFromContractResult, code: ContractIssueCode, path: string): void {
   assert(!result.ok, "expected schema construction to fail");
   if (result.ok) {
     throw new Error("unreachable");
@@ -60,10 +56,7 @@ test("collapsing opts are rejected at construction: opt opt", () => {
 
 test("collapsing opts are rejected at construction: opt null", () => {
   const result = schemaFromContract(
-    document(
-      [{ kind: "opt", inner: 1 }, primitive("null")],
-      [{ name: "OptNull", type: 0 }],
-    ),
+    document([{ kind: "opt", inner: 1 }, primitive("null")], [{ name: "OptNull", type: 0 }]),
   );
   failsWith(result, "unrepresentable_option", "$.types[0].inner");
 });
@@ -141,10 +134,9 @@ test("reference declarations build and the actor is a service schema", () => {
     // A func value is { principal, method }; a service value is a principal.
     const funcValue = { principal: { toText: () => "aaaaa-aa" }, method: "go" };
     assert.deepStrictEqual(validate(result.schemas.Callback, funcValue), { ok: true });
-    assert.deepStrictEqual(
-      validate(result.schemas.Registry, { toText: () => "aaaaa-aa" }),
-      { ok: true },
-    );
+    assert.deepStrictEqual(validate(result.schemas.Registry, { toText: () => "aaaaa-aa" }), {
+      ok: true,
+    });
     assert.deepStrictEqual(validate(result.schemas.Kept, {}), { ok: true });
     assert(!validate(result.schemas.Callback, { method: "go" }).ok);
   }
@@ -201,11 +193,7 @@ test("non-object documents and malformed nodes fail closed", () => {
     "invalid_contract_document",
     "$.types[0].primitive",
   );
-  failsWith(
-    schemaFromContract(document([42], [])),
-    "invalid_contract_document",
-    "$.types[0]",
-  );
+  failsWith(schemaFromContract(document([42], [])), "invalid_contract_document", "$.types[0]");
 });
 
 test("declaration defects reuse candid-core's codes", () => {
@@ -216,10 +204,13 @@ test("declaration defects reuse candid-core's codes", () => {
   );
   failsWith(
     schemaFromContract(
-      document([primitive("nat")], [
-        { name: "A", type: 0 },
-        { name: "A", type: 0 },
-      ]),
+      document(
+        [primitive("nat")],
+        [
+          { name: "A", type: 0 },
+          { name: "A", type: 0 },
+        ],
+      ),
     ),
     "duplicate_declaration_name",
     "$.declarations[1].name",
@@ -305,10 +296,9 @@ test("a malformed name table entry fails closed", () => {
 });
 
 test("the arena size cap fails closed with the resource triple", () => {
-  const result = schemaFromContract(
-    document([primitive("nat"), primitive("nat")], []),
-    { maxTypeNodes: 1 },
-  );
+  const result = schemaFromContract(document([primitive("nat"), primitive("nat")], []), {
+    maxTypeNodes: 1,
+  });
   assert(!result.ok);
   if (!result.ok) {
     assert.strictEqual(result.issues[0].code, "resource_limit_exceeded");
@@ -399,10 +389,9 @@ test("a field, arm, or declaration named __proto__ is an ordinary key", () => {
     }
     // JSON.parse creates an own enumerable "__proto__" data property — the
     // exact domain value this schema describes.
-    assert.deepStrictEqual(
-      validate(record.schemas.R, JSON.parse('{"__proto__": 5}')),
-      { ok: true },
-    );
+    assert.deepStrictEqual(validate(record.schemas.R, JSON.parse('{"__proto__": 5}')), {
+      ok: true,
+    });
   }
 
   const variantDoc = document(
@@ -412,24 +401,17 @@ test("a field, arm, or declaration named __proto__ is an ordinary key", () => {
   const variant = schemaFromContract(variantDoc, { names: [[1, protoId, "__proto__"]] });
   assert(variant.ok);
   if (variant.ok) {
-    assert.deepStrictEqual(
-      validate(variant.schemas.V, { tag: "__proto__", value: 5 }),
-      { ok: true },
-    );
+    assert.deepStrictEqual(validate(variant.schemas.V, { tag: "__proto__", value: 5 }), {
+      ok: true,
+    });
   }
 
-  const declarationDoc = document(
-    [primitive("nat")],
-    [{ name: "__proto__", type: 0 }],
-  );
+  const declarationDoc = document([primitive("nat")], [{ name: "__proto__", type: 0 }]);
   const declaration = schemaFromContract(declarationDoc);
   assert(declaration.ok);
   if (declaration.ok) {
     assert.deepStrictEqual(Object.keys(declaration.schemas), ["__proto__"]);
-    assert.deepStrictEqual(
-      validate(declaration.schemas["__proto__"], 1n),
-      { ok: true },
-    );
+    assert.deepStrictEqual(validate(declaration.schemas["__proto__"], 1n), { ok: true });
   }
 });
 
@@ -454,10 +436,9 @@ test("the declaration count cap fails closed with the resource triple", () => {
 
 test("an oversized name table fails closed instead of amplifying issues", () => {
   const names = new Array(500_001).fill([0, 0, "x"]) as [number, number, string][];
-  const result = schemaFromContract(
-    document([primitive("nat")], [{ name: "A", type: 0 }]),
-    { names },
-  );
+  const result = schemaFromContract(document([primitive("nat")], [{ name: "A", type: 0 }]), {
+    names,
+  });
   assert(!result.ok);
   if (!result.ok) {
     assert.strictEqual(result.issues.length, 1);
@@ -481,11 +462,14 @@ test("a document that throws while inspected fails closed", () => {
     );
   }
   const proxied = schemaFromContract(
-    new Proxy({}, {
-      get() {
-        throw new Error("boom");
+    new Proxy(
+      {},
+      {
+        get() {
+          throw new Error("boom");
+        },
       },
-    }),
+    ),
   );
   assert(!proxied.ok);
 });
@@ -580,10 +564,7 @@ test("numeric ids starting at 0 but not contiguous build a record, not a tuple",
   const result = schemaFromContract(doc);
   assert(result.ok);
   if (result.ok) {
-    assert.deepStrictEqual(
-      validate(result.schemas.Sparse, { _0_: 1n, _5_: "x" }),
-      { ok: true },
-    );
+    assert.deepStrictEqual(validate(result.schemas.Sparse, { _0_: 1n, _5_: "x" }), { ok: true });
     const asTuple = validate(result.schemas.Sparse, [1n, "x"]);
     assert(!asTuple.ok, "a sparse-id record is not a tuple");
   }
@@ -592,9 +573,7 @@ test("numeric ids starting at 0 but not contiguous build a record, not a tuple",
 test("declaration names need not be TypeScript identifiers", () => {
   // A deliberate divergence from the generator, which emits source text and
   // must refuse `type delete`; a map key has no such constraint.
-  const result = schemaFromContract(
-    document([primitive("nat")], [{ name: "delete", type: 0 }]),
-  );
+  const result = schemaFromContract(document([primitive("nat")], [{ name: "delete", type: 0 }]));
   assert(result.ok);
   if (result.ok) {
     assert.deepStrictEqual(validate(result.schemas.delete, 1n), { ok: true });

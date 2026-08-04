@@ -93,11 +93,7 @@ function utf8Bytes(text: string): Uint8Array {
     } else if (point < 0x800) {
       out.push(0xc0 | (point >> 6), 0x80 | (point & 0x3f));
     } else if (point < 0x10000) {
-      out.push(
-        0xe0 | (point >> 12),
-        0x80 | ((point >> 6) & 0x3f),
-        0x80 | (point & 0x3f),
-      );
+      out.push(0xe0 | (point >> 12), 0x80 | ((point >> 6) & 0x3f), 0x80 | (point & 0x3f));
     } else {
       out.push(
         0xf0 | (point >> 18),

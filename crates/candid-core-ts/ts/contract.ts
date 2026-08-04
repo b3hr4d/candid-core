@@ -109,11 +109,7 @@ export interface ContractResourceLimitInfo {
  * numeric-id rendering, and the codec derives wire ids from keys. A table
  * from real provenance always satisfies both; a lying one fails closed.
  */
-export type FieldNameEntry = readonly [
-  container: number,
-  id: number,
-  name: string,
-];
+export type FieldNameEntry = readonly [container: number, id: number, name: string];
 
 export interface ContractSchemaOptions {
   readonly names?: readonly FieldNameEntry[];
@@ -314,10 +310,7 @@ function buildFromContract(
   }
 
   const validRef = (value: unknown): value is number =>
-    typeof value === "number" &&
-    Number.isInteger(value) &&
-    value >= 0 &&
-    value < types.length;
+    typeof value === "number" && Number.isInteger(value) && value >= 0 && value < types.length;
 
   // Pass one: parse every arena node structurally. Nothing recursive — each
   // node is examined alone, and edges are checked as bare indices.
@@ -343,11 +336,7 @@ function buildFromContract(
         return undefined;
       }
       if (!validRef(value[i])) {
-        push(
-          "dangling_type_ref",
-          `${base}[${i}]`,
-          "type reference is outside the Contract arena",
-        );
+        push("dangling_type_ref", `${base}[${i}]`, "type reference is outside the Contract arena");
         sound = false;
         continue;
       }
@@ -366,11 +355,7 @@ function buildFromContract(
       case "primitive": {
         const primitive = node.primitive;
         if (typeof primitive !== "string" || !hasOwn(PRIMITIVES, primitive)) {
-          push(
-            "invalid_contract_document",
-            `${base}.primitive`,
-            "unknown primitive type",
-          );
+          push("invalid_contract_document", `${base}.primitive`, "unknown primitive type");
           continue;
         }
         parsed[index] = { kind: "primitive", primitive };
@@ -475,11 +460,7 @@ function buildFromContract(
         // carry results — an actor built from one would await a reply the
         // call never provides.
         if (mode === "oneway" && Array.isArray(node.results) && node.results.length > 0) {
-          push(
-            "invalid_contract_document",
-            `${base}.results`,
-            "a oneway function has no results",
-          );
+          push("invalid_contract_document", `${base}.results`, "a oneway function has no results");
           break;
         }
         if (args !== undefined && results !== undefined) {
@@ -685,11 +666,7 @@ function buildFromContract(
     }
     seenNames.add(declaration.name);
     if (!validRef(declaration.type)) {
-      push(
-        "dangling_type_ref",
-        `${base}.type`,
-        "type reference is outside the Contract arena",
-      );
+      push("dangling_type_ref", `${base}.type`, "type reference is outside the Contract arena");
       continue;
     }
     parsedDeclarations.push({ name: declaration.name, type: declaration.type });
@@ -808,10 +785,7 @@ function buildFromContract(
     if (node === undefined || (node.kind !== "record" && node.kind !== "variant")) {
       continue;
     }
-    if (
-      node.kind === "record" &&
-      node.fields.every((field, position) => field.id === position)
-    ) {
+    if (node.kind === "record" && node.fields.every((field, position) => field.id === position)) {
       continue;
     }
     const seenKeys = new Set<string>();
@@ -867,11 +841,7 @@ function buildFromContract(
         return c.opt(lazy(node.inner));
       case "vec": {
         const inner = sound[node.inner];
-        if (
-          !declared.has(node.inner) &&
-          inner.kind === "primitive" &&
-          inner.primitive === "nat8"
-        ) {
+        if (!declared.has(node.inner) && inner.kind === "primitive" && inner.primitive === "nat8") {
           return c.blob();
         }
         return c.vec(lazy(node.inner));
@@ -961,9 +931,7 @@ function buildFromContract(
       node.kind === "func"
         ? [
             ...node.args.map((ref, i) => [ref, `$.types[${index}].args[${i}]`] as const),
-            ...node.results.map(
-              (ref, i) => [ref, `$.types[${index}].results[${i}]`] as const,
-            ),
+            ...node.results.map((ref, i) => [ref, `$.types[${index}].results[${i}]`] as const),
           ]
         : node.kind === "class"
           ? [
@@ -972,8 +940,7 @@ function buildFromContract(
             ]
           : node.kind === "service"
             ? node.methods.map(
-                (method, i) =>
-                  [method.func, `$.types[${index}].methods[${i}].function`] as const,
+                (method, i) => [method.func, `$.types[${index}].methods[${i}].function`] as const,
               )
             : [];
     for (const [ref, path] of edges) {
