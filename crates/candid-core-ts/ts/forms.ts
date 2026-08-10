@@ -76,6 +76,7 @@ export interface FormCommon {
   readonly numericId?: number;
 }
 
+/** One arm of a `choice` control: the tag to offer, and how to edit it. */
 export interface FormArm {
   readonly tag: string;
   readonly numericId?: number;
@@ -85,6 +86,7 @@ export interface FormArm {
   payload(): FormNode | undefined;
 }
 
+/** The editor a node calls for, one member per schema kind a form can show. */
 export type FormControl =
   | { readonly control: "text" }
   | { readonly control: "checkbox" }
@@ -110,6 +112,7 @@ export type FormControl =
   | { readonly control: "serviceReference" }
   | { readonly control: "lazy"; expand(): FormNode };
 
+/** A node of the form model: where it sits, plus how to edit what is there. */
 export type FormNode = FormCommon & FormControl;
 
 const FIXED: { readonly [name: string]: readonly [number, number] } = {

@@ -10,6 +10,12 @@ failure here rather than a permanent mistake on npm — and a real
 encode/validate round-trip executes under node. Consumption goes through the
 extracted tarball only, never the repository sources.
 
+The shipped declarations are also read as documentation, because that is what
+they are: JSDoc flows into `dist/*.d.ts` at build time and becomes the editor
+hover a consumer meets first. An internal issue number there means nothing to
+that reader, and a published version bakes it in permanently, so the gate
+below refuses one in the artifact rather than after the fact.
+
 The type-only `@icp-sdk/core` peer is installed as a minimal stub providing
 exactly the `Principal` surface the declarations reference. That keeps the
 gate honest in both directions: `Principal` stays a real nominal type (so a
@@ -19,6 +25,7 @@ case is asserted separately as a clear, actionable error.
 
 import json
 import pathlib
+import re
 import shutil
 import subprocess
 import sys
@@ -66,6 +73,24 @@ def main():
             raise SystemExit(
                 f"the packed file list is not the manifest's promise:\n"
                 f"  shipped:  {shipped}\n  expected: {expected}"
+            )
+
+        # Shipped doc comments must stand on their own. The pattern is broad
+        # on purpose — `#` followed by a digit, anywhere in a declaration
+        # file: one historical citation was line-wrapped ("issue\n * #104"),
+        # which a narrower "issue #N" pattern reads straight past, and no
+        # legitimate shipped text has that shape today.
+        cited = [
+            f"dist/{path.name}:{number}: {line.strip()}"
+            for path in sorted(extracted.glob("dist/*.d.ts"))
+            for number, line in enumerate(path.read_text().splitlines(), 1)
+            if re.search(r"#\d", line)
+        ]
+        if cited:
+            raise SystemExit(
+                "shipped declarations cite internal issue numbers; a consumer's "
+                "editor hover cannot follow them, so rewrite each as a "
+                "self-contained explanation:\n  " + "\n  ".join(cited)
             )
 
         # The type-only peer, as a minimal stub: `Principal` must stay a real
@@ -171,8 +196,9 @@ def main():
                 "expected a missing-peer type error naming @icp-sdk/core/principal, got:\n"
                 f"{missing.stdout}{missing.stderr}"
             )
-    print("npm package artifact verified: manifest file list, root + 6 subpaths, "
-          "strict compile without skipLibCheck, executed round-trip, peer requirement")
+    print("npm package artifact verified: manifest file list, self-contained doc "
+          "comments, root + 6 subpaths, strict compile without skipLibCheck, "
+          "executed round-trip, peer requirement")
 
 
 if __name__ == "__main__":

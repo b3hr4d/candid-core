@@ -99,6 +99,10 @@ export interface ResourceLimitInfo {
   readonly observed: number;
 }
 
+/**
+ * One failure. Deliberately the serialized shape of candid-core's own
+ * diagnostic, so a consumer that already reads those reads these.
+ */
 export interface ValidationIssue {
   readonly code: ValidationCode;
   /** `$`-rooted path to the offending value, candid-core style. */
@@ -107,6 +111,7 @@ export interface ValidationIssue {
   readonly resource_limit?: ResourceLimitInfo;
 }
 
+/** Bounds on one validation walk; each defaults to the `DEFAULT_MAX_*` below. */
 export interface ValidateOptions {
   /**
    * Maximum schema traversal depth, mirroring `Limits::max_value_depth`.
@@ -119,11 +124,18 @@ export interface ValidateOptions {
   readonly maxIssues?: number;
 }
 
+/**
+ * A result, never an exception: `ok` discriminates, and a failure always
+ * carries at least one issue.
+ */
 export type ValidateResult =
   { readonly ok: true } | { readonly ok: false; readonly issues: readonly ValidationIssue[] };
 
+/** Default `maxDepth`, mirroring candid-core's `max_value_depth`. */
 export const DEFAULT_MAX_DEPTH = 256;
+/** Default `maxElements`: the whole-value traversal budget. */
 export const DEFAULT_MAX_ELEMENTS = 1_000_000;
+/** Default `maxIssues`: how many failures one walk collects before stopping. */
 export const DEFAULT_MAX_ISSUES = 100;
 
 /**

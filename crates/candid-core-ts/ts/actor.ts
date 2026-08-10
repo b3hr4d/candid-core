@@ -145,6 +145,7 @@ async function dispatch(
   return collapseResults(decoded.values);
 }
 
+/** Per-actor call settings, applied to every method it dispatches. */
 export interface ActorOptions {
   readonly effectiveCanisterId?: string;
 }
