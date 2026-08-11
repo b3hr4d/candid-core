@@ -225,7 +225,7 @@ direct compiles, not inferred from the manifest.
 | TypeScript | **≥ 5.0** |
 | `moduleResolution` | `node16`, `nodenext`, `bundler` |
 | Module format | **ESM only** — no CommonJS build ships |
-| Node, from ESM | any release with ESM support |
+| Node, from ESM | **≥ 16** (16.20, 18.20, 20.19, 22.12, 25.9 exercised) |
 | Node, from CommonJS `require()` | **≥ 20.19 / ≥ 22.12**, else `await import()` |
 | TypeScript, from a CommonJS project | **≥ 5.8 with `"module": "nodenext"`** |
 
@@ -240,18 +240,27 @@ before it type-checks anything.
 `TS2307` — TypeScript's own message tells you to move to `node16`, `nodenext`,
 or `bundler`.
 
+**Supporting ESM is not by itself enough for Node.** The build targets ES2020
+and does not down-level, so optional chaining and nullish coalescing reach
+`dist/` verbatim — they appear in five of the seven modules — and those are
+V8 8.0 syntax, which no Node before 14 can parse. The floor above is the
+oldest release this package is actually run on rather than the oldest that
+might work: 16.20.2 is exercised and passes every subpath, and nothing older
+is claimed.
+
 **From CommonJS**, the two floors are independent. At runtime, `require()` of
 an ES module is what Node added in 20.19 and 22.12; below those it throws
-`ERR_REQUIRE_ESM`, and `await import("@candid-core/schema")` works on every
-version. At the type level, a `"type": "commonjs"` project needs TypeScript
-5.8 *and* `"module": "nodenext"` — `"module": "node16"` is pinned to Node 16
-semantics and still refuses with `TS1479` on every compiler tested, up to and
-including 7.0.
+`ERR_REQUIRE_ESM`, while `await import("@candid-core/schema")` succeeded on
+every version tested. At the type level, a `"type": "commonjs"` project needs
+TypeScript 5.8 *and* `"module": "nodenext"` — `"module": "node16"` is pinned
+to Node 16 semantics and still refuses with `TS1479` on every compiler tested,
+up to and including 7.0.
 
-There is deliberately **no `engines` field**. The only hard floor is the
-CommonJS-`require()` one above, and enforcing it in install metadata would
-warn — or, under `engine-strict`, fail — for the ESM consumers it does not
-apply to. It is documented here instead.
+There is deliberately **no `engines` field**. Both floors are narrow — an
+ES2020-capable Node for ESM, a `require(esm)`-capable one for CommonJS — and
+enforcing either in install metadata would warn, or fail under
+`engine-strict`, for consumers it does not apply to. They are documented here
+instead.
 
 ## The domain shapes (a deliberate decision)
 

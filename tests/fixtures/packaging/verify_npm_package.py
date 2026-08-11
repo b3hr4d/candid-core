@@ -133,16 +133,27 @@ def main():
         # The README tells a reader that the changelog records, for every
         # release, the candid-core version it pairs with. That is a claim
         # about this artifact, so the artifact's gate is where it is checked.
+        #
+        # Headings are parsed rather than substring-matched: `"## 0.1.2" in
+        # text` is also true of `## 0.1.20`, so a heading mistyped to a
+        # prefix-sharing version would pass this gate and then hand the *other*
+        # release's entry to the pairing check below — the gate failing exactly
+        # where it is needed.
         version = manifest["version"]
         changelog = (extracted / "CHANGELOG.md").read_text()
-        heading = f"## {version}"
-        if heading not in changelog:
-            raise SystemExit(
-                f"the shipped changelog documents no {heading!r} entry, so the "
-                f"packed version {version} arrives on npm undocumented"
+        entries = {
+            name: body
+            for name, body in re.findall(
+                r"^## (\S+)(.*?)(?=^## |\Z)", changelog, re.M | re.S
             )
-        entry = changelog.split(heading, 1)[1].split("\n## ", 1)[0]
-        if not re.search(r"[Pp]airs with `candid-core` \S+", entry):
+        }
+        if version not in entries:
+            raise SystemExit(
+                f"the shipped changelog documents no '## {version}' entry, so "
+                f"the packed version {version} arrives on npm undocumented. "
+                f"Headings found: {sorted(entries)}"
+            )
+        if not re.search(r"[Pp]airs with `candid-core` \S+", entries[version]):
             raise SystemExit(
                 f"the changelog entry for {version} names no `candid-core` "
                 "pairing, which is exactly what the README promises it does"

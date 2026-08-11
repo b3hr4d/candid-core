@@ -50,11 +50,11 @@ import dropped from `codec.js`.
 - **A support matrix**, measured rather than inferred: TypeScript ≥ 5.0 (a
   *parse* error below it — `c.tuple`'s `const` type parameter);
   `node16`/`nodenext`/`bundler` resolution only, `node10` cannot resolve the
-  package at all; ESM-only; and, from CommonJS, Node ≥ 20.19/22.12 for
-  `require()` and TypeScript ≥ 5.8 with `"module": "nodenext"` for the types.
-  No `engines` field: the only hard floor is the CommonJS-`require()` one, and
-  enforcing it in install metadata would punish the ESM consumers it does not
-  apply to.
+  package at all; ESM-only, on Node ≥ 16 (the build targets ES2020 and does not
+  down-level, so `?.` and `??` reach `dist/`); and, from CommonJS, Node ≥
+  20.19/22.12 for `require()` and TypeScript ≥ 5.8 with `"module": "nodenext"`
+  for the types. No `engines` field: both floors are narrow, and enforcing
+  either in install metadata would warn for the consumers it does not apply to.
 - **This changelog ships**, listed in the manifest's `files`. The packaged
   artifact gate refuses a tarball whose changelog does not document the version
   being packed together with its `candid-core` pairing, so the claim above is
