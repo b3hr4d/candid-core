@@ -40,7 +40,9 @@ Modules, each a subpath export:
   `resolveSchema` and `serviceMethods` for reading one back, since a schema
   reached by name is a `rec` indirection and a service's methods are a table.
 - **`./validate`** — bounded, fail-closed structural validation; never throws
-  on any value; issues carry stable codes and `$`-rooted paths.
+  on any value; issues carry stable codes and `$`-rooted paths — plus
+  `isResultSchema` and `unwrapResult`, the schema-directed read of the
+  `variant { ok; err }` convention [below](#unwrapping-okerr-results).
 - **`./contract`** — build the same schemas at runtime from a canonical
   Contract JSON document plus a hash-enforced field-name table.
 - **`./codec`** — the Candid binary wire format, schema-directed, with the
@@ -216,6 +218,54 @@ export const ledger = createActor<Ledger>(Ledger, "ryjl3-tyaaa-aaaaa-aaaba-cai",
 
 A codec failure rejects the call promise with an `ActorError` carrying the
 issues; transport failures propagate untouched.
+
+## Unwrapping ok/err results
+
+`variant { ok : T; err : E }` is the universal canister result convention, and
+the usual way to unwrap one generically is to probe the decoded *value* for
+`ok`/`err` keys — a guess that misfires on any record legitimately carrying
+those field names, and one that cannot type the error payload. Whether a reply
+*is* a result, and what each arm carries, is a schema fact:
+
+```ts
+import { c, type Infer } from "@candid-core/schema";
+import { isResultSchema, unwrapResult } from "@candid-core/schema/validate";
+
+const TransferError = c.variant({
+  bad_fee: c.record({ expected_fee: c.nat }),
+  too_old: c.null,
+});
+const TransferResult = c.variant({ ok: c.nat, err: TransferError });
+
+isResultSchema(TransferResult); // true
+isResultSchema(c.record({ ok: c.bool, err: c.opt(c.text) })); // false: a record is not a variant
+
+declare const reply: unknown; // whatever the call decoded to
+
+const outcome = unwrapResult(TransferResult, reply);
+if (outcome.issues) {
+  // Not a value of this schema at all: the issues `validate` would report.
+  throw new Error(outcome.issues[0].message);
+} else if (outcome.ok) {
+  const blockIndex: bigint = outcome.value;
+  void blockIndex;
+} else {
+  const failure: Infer<typeof TransferError> = outcome.error;
+  void failure;
+}
+```
+
+Both spellings are recognised, as *pairs*: `ok`/`err`, which Motoko's
+`Result.Result` produces, and `Ok`/`Err`, which Rust's candid derive produces
+— in either arm order, and with exactly those two arms. A variant that adds a
+third arm is not a result, because mapping it onto two states would drop one.
+A bare-tag arm (`variant { ok; err : text }`) unwraps to `null`, the single
+value of the Candid `null` it declares.
+
+An `err` arm is a value, not an exception: nothing throws for one, and a
+malformed value comes back as `{ ok: false, issues }` rather than as an
+exception either. A schema that is not a result variant *is* a programmer
+error, and throws `TypeError`.
 
 ## Support matrix
 

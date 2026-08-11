@@ -17,11 +17,43 @@ API, the inferred domain types, the codec's wire behaviour, and the codes and
 
 Pairs with `candid-core` 0.1.0-beta.2.
 
-Additive, and mostly documentation: the editor hover, the npm page, and a
-small introspection surface on the root export. Nothing that existed before
+Additive: the editor hover, the npm page, a small introspection surface on the
+root export, and result unwrapping on `./validate`. Nothing that existed before
 behaves differently — no inferred type, no wire encoding, and no issue code
-changed, and the only executable difference in the modules that shipped in
-0.1.1 is one unused import dropped from `codec.js`.
+changed, and every executable difference in the modules that shipped in 0.1.1
+is new API plus one unused import dropped from `codec.js`.
+
+### Unwrapping ok/err results
+
+- **`isResultSchema` and `unwrapResult` are exported from `./validate`.**
+  `variant { ok : T; err : E }` is the universal canister result convention,
+  and unwrapping one generically has meant probing a decoded value for
+  `ok`/`err` keys — which misfires on any record legitimately carrying those
+  field names and cannot type the error payload at all. These read the schema
+  instead: `isResultSchema` answers for a schema that resolves, through any
+  number of `rec` indirections, to a variant whose arms are exactly an ok arm
+  and an err arm; `unwrapResult` validates the value and returns
+  `{ ok: true, value }` or `{ ok: false, error }`, both typed from those arms
+  — `ResultOk<S>` and `ResultErr<S>` name the two payload types on their own.
+- **Both spellings, as pairs.** `ok`/`err` (Motoko's `Result.Result`) and
+  `Ok`/`Err` (Rust's candid derive), in either arm order, with exactly two
+  arms. A mixed pair, a third arm, and every other alias are refused: no
+  generator emits them, so admitting one would be unwrapping on coincidence.
+- **A bare-tag arm unwraps to `null`**, the single value of the Candid `null`
+  its arm declares, so a payload is always exactly the arm's own type and
+  never widens to `undefined` — which is not a Candid value anywhere in this
+  runtime.
+- **An err arm is a value, not an exception**, and neither is a malformed one:
+  a value that is not of the schema comes back as `{ ok: false, issues }`,
+  carrying exactly what `validate` reports for it, and a value that throws
+  while being read is an issue too. A schema that is not a result variant is a
+  programmer error and throws `TypeError`, as `resolveSchema` and
+  `serviceMethods` already do for theirs.
+- **On `./validate` rather than the root**, so that reading a result costs no
+  new dependency for anyone else: the root entry imports nothing at runtime,
+  and the actor factory, the form-model builder, and the Contract loader all
+  import *it* — so the validator would have arrived with `formModel` and
+  `schemaFromContract` for consumers who never asked for one.
 
 ### Reading a schema back
 

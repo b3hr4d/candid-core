@@ -59,6 +59,18 @@
 //   JavaScript hoists integer-like keys, which no `_id_`-conventional or
 //   identifier key is), then unexpected value keys in value enumeration
 //   order.
+//
+// # Result unwrapping
+//
+// `isResultSchema` and `unwrapResult` at the foot of the file are the second
+// surface here (issue #151): a validated read of the `variant { ok; err }`
+// convention, directed by the schema rather than by probing a decoded value
+// for `ok`/`err` keys. They live in this module because unwrapping *is*
+// validation plus one typed read, and because the root entry imports nothing
+// at runtime while the actor factory, the form-model builder, and the
+// Contract loader all import *it* — so a validator dependency there would
+// have arrived with `formModel` and `schemaFromContract` for consumers who
+// never asked for one.
 
 import type {
   AnySchema,
@@ -67,6 +79,7 @@ import type {
   ServiceSchema,
   BlobSchema,
   FieldSchemas,
+  Infer,
   OptSchema,
   PrimitiveSchema,
   RecordSchema,
@@ -77,6 +90,7 @@ import type {
   VariantSchema,
   VecSchema,
 } from "./schema.ts";
+import { resolveSchema } from "./schema.ts";
 
 /** Stable machine-readable failure codes. Closed: additions are API changes. */
 export type ValidationCode =
@@ -721,4 +735,221 @@ class Walk {
     }
     return { node, depth: hops };
   }
+}
+
+// Result unwrapping — issue #151. `variant { ok : T; err : E }` is the
+// universal canister result convention, and the ecosystem unwraps it by
+// probing a decoded *value* for `ok`/`err` keys: a guess that misfires on any
+// record legitimately carrying those fields, and that cannot type the error
+// payload because a value knows nothing about the arms it does not inhabit.
+// Whether a method's reply *is* a result, and what each arm carries, is a
+// schema fact — so it is read off the schema here.
+//
+// The recognised set is two conventions rather than four spellings: Motoko's
+// `Result.Result` emits `ok`/`err`, Rust's candid derive emits `Ok`/`Err`, and
+// each is matched as a *pair*, in either arm order, with no third arm. A mixed
+// pair is what no generator produces, so admitting one would be unwrapping on
+// coincidence — the failure this helper replaces. Decisions recorded on the
+// issue, alongside the bare-tag payload (`null`, the arm's own type) and this
+// module as the export home.
+const RESULT_PAIRS: readonly (readonly [ok: string, err: string])[] = [
+  ["ok", "err"],
+  ["Ok", "Err"],
+];
+
+/** The two arm names a result schema carries, in this schema's spelling. */
+interface ResultArms {
+  readonly okTag: string;
+  readonly errTag: string;
+}
+
+/**
+ * Classify a schema as a result variant, or `undefined` if it is not one.
+ * Own enumerable arm names, which is the projection every other walk in this
+ * package enumerates arms by; a name reached only through the arms object's
+ * prototype is not an arm, and neither is a third one.
+ */
+function resultArms(schema: AnyFieldSchema): ResultArms | undefined {
+  const node = resolveSchema(schema);
+  if (node.kind !== "variant") {
+    return undefined;
+  }
+  const names = Object.keys(node.arms);
+  if (names.length !== 2) {
+    return undefined;
+  }
+  for (const [okTag, errTag] of RESULT_PAIRS) {
+    if (names.includes(okTag) && names.includes(errTag)) {
+      return { okTag, errTag };
+    }
+  }
+  return undefined;
+}
+
+/**
+ * The static type a result schema's ok arm carries: the arm's own domain
+ * type, or `null` when the arm is a bare tag — a bare arm's payload is Candid
+ * `null`, whose one JavaScript value is `null`. `never` when the schema
+ * describes no such arm.
+ *
+ * @example
+ * const Transfer = c.variant({ ok: c.nat, err: c.text });
+ * type Balance = ResultOk<typeof Transfer>; // bigint
+ */
+export type ResultOk<S> = ArmPayload<Extract<Infer<S>, { tag: "ok" } | { tag: "Ok" }>>;
+
+/**
+ * The static type a result schema's err arm carries, on the same rule as
+ * [`ResultOk`] — which is the half a value-probing unwrapper cannot type at
+ * all.
+ *
+ * @example
+ * const Transfer = c.variant({ ok: c.nat, err: c.text });
+ * type Failure = ResultErr<typeof Transfer>; // string
+ */
+export type ResultErr<S> = ArmPayload<Extract<Infer<S>, { tag: "err" } | { tag: "Err" }>>;
+
+// A bare-tag arm is `{ tag }` with no `value` property, and its payload type
+// is the `null` its arm schema describes.
+type ArmPayload<A> = A extends { value: infer V } ? V : null;
+
+/**
+ * What [`unwrapResult`] returns: the ok arm, the err arm, or the value not
+ * being of this schema at all — that last one carrying exactly the `issues`
+ * a failed [`validate`] call carries.
+ *
+ * Every member declares all three keys, the ones it does not hold as optional
+ * `undefined`, so `ok`, `error`, and `issues` can each be read and narrowed on
+ * directly rather than through a type guard.
+ *
+ * @example
+ * const outcome: UnwrapResult<bigint, string> = { ok: true, value: 5n };
+ * outcome.issues === undefined; // readable on every member, no type guard
+ */
+export type UnwrapResult<T, E> =
+  | {
+      readonly ok: true;
+      readonly value: T;
+      readonly error?: undefined;
+      readonly issues?: undefined;
+    }
+  | {
+      readonly ok: false;
+      readonly value?: undefined;
+      readonly error: E;
+      readonly issues?: undefined;
+    }
+  | {
+      readonly ok: false;
+      readonly value?: undefined;
+      readonly error?: undefined;
+      readonly issues: readonly ValidationIssue[];
+    };
+
+/**
+ * Does this schema describe the `variant { ok; err }` result convention?
+ * True for a schema that resolves — through any number of `rec` indirections,
+ * which is how every generated declaration and every runtime-loaded edge
+ * arrives — to a variant whose arms are **exactly** an ok arm and an err arm,
+ * spelled either `ok`/`err` or `Ok`/`Err`, in either order. A record carrying
+ * those field names is not a result; neither is a variant that adds a third
+ * arm, nor one mixing the two spellings.
+ *
+ * Throws `TypeError` on something that is not a schema at all — including the
+ * mistake this helper exists to prevent, a decoded *value* passed where its
+ * schema belongs.
+ *
+ * @example
+ * isResultSchema(c.variant({ Ok: c.nat, Err: c.text })); // true
+ * isResultSchema(c.record({ ok: c.nat, err: c.text })); // false
+ */
+export function isResultSchema(schema: AnyFieldSchema): boolean {
+  return resultArms(schema) !== undefined;
+}
+
+/**
+ * Read a result value into `{ ok: true, value }` or `{ ok: false, error }`,
+ * both typed from the schema's own arms. An err arm is a value, not an
+ * exception: nothing here throws for one, and nothing throws for a malformed
+ * value either — that comes back as `{ ok: false, issues }`, the same issue
+ * list [`validate`] produces, which is what makes the typed payload above an
+ * honest claim rather than a cast.
+ *
+ * A bare-tag arm — `variant { ok; err : text }` — unwraps to `null`, the
+ * single value of the Candid `null` its arm describes.
+ *
+ * Throws `TypeError`, eagerly and before touching the value, on a schema that
+ * is not a result variant. That is a programmer error, and it is the same
+ * treatment `resolveSchema` and `serviceMethods` give theirs.
+ *
+ * @example
+ * const Transfer = c.variant({ ok: c.nat, err: c.text });
+ * const outcome = unwrapResult(Transfer, { tag: "ok", value: 5n });
+ * outcome.ok === true; // and outcome.value is 5n, typed bigint
+ */
+export function unwrapResult<S extends AnyFieldSchema>(
+  schema: S,
+  value: unknown,
+  options: ValidateOptions = {},
+): UnwrapResult<ResultOk<S>, ResultErr<S>> {
+  const arms = resultArms(schema);
+  if (arms === undefined) {
+    throw new TypeError("unwrapResult needs a result variant schema");
+  }
+  const checked = validate(schema as Schema<unknown>, value, options);
+  if (!checked.ok) {
+    return { ok: false, issues: checked.issues };
+  }
+  // The walk above passed, so the value is a plain object carrying one of
+  // this variant's tags, and the arm's own shape decided whether a `value`
+  // key is there: a bare-tag arm rejects one, every other arm demands it as
+  // an own enumerable property. Reading that presence is therefore reading
+  // the classification validation just made — and its absence yields `null`,
+  // the arm's payload type, rather than the `undefined` a blind `.value`
+  // read produces. It also keeps a non-enumerable `value` property, which
+  // the walk never saw, out of an unwrapped payload.
+  //
+  // These reads happen after the walk rather than inside it, so a value
+  // whose accessors answer differently on a second read is the one shape
+  // that can hand back a payload the walk did not examine. The tag is
+  // re-checked below for exactly that reason: such a value fails closed
+  // instead of being classified as an arm it no longer claims. Decoded
+  // values are inert data and cannot do this.
+  let tag: unknown;
+  let payload: unknown = null;
+  let reading = "$.tag";
+  try {
+    tag = (value as { tag: unknown }).tag;
+    reading = "$.value";
+    if (hasOwnEnumerable(value as object, "value")) {
+      payload = (value as { value: unknown }).value;
+    }
+  } catch {
+    return {
+      ok: false,
+      issues: [
+        {
+          code: "unreadable_value",
+          path: reading,
+          message: "the value threw while being inspected",
+        },
+      ],
+    };
+  }
+  if (tag === arms.okTag) {
+    return { ok: true, value: payload as ResultOk<S> };
+  }
+  if (tag === arms.errTag) {
+    return { ok: false, error: payload as ResultErr<S> };
+  }
+  return {
+    ok: false,
+    issues: [
+      {
+        code: "unknown_tag",
+        path: "$.tag",
+        message: `${typeof tag === "string" ? JSON.stringify(tag) : describe(tag)} is not this result's ok or err arm`,
+      },
+    ],
+  };
 }

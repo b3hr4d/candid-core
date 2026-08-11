@@ -42,6 +42,13 @@ import {
   type ServiceMethod,
 } from "../schema.ts";
 import { formModel } from "../forms.ts";
+import {
+  isResultSchema,
+  unwrapResult,
+  type ResultErr,
+  type ResultOk,
+  type UnwrapResult,
+} from "../validate.ts";
 
 // Every module whose JSDoc ships. schema.ts carries the examples today; the
 // others are listed so an example added to one of them is covered the same
@@ -215,6 +222,38 @@ test("every shipped @example is mirrored verbatim in this file", () => {
   table.get("fee")?.mode; // "query"
 }
 
+// --- Mirrors: result unwrapping -------------------------------------------
+
+{
+  const Transfer = c.variant({ ok: c.nat, err: c.text });
+  type Balance = ResultOk<typeof Transfer>; // bigint
+  const balance: Balance = 5n;
+  void balance;
+}
+
+{
+  const Transfer = c.variant({ ok: c.nat, err: c.text });
+  type Failure = ResultErr<typeof Transfer>; // string
+  const failure: Failure = "nope";
+  void failure;
+}
+
+{
+  const outcome: UnwrapResult<bigint, string> = { ok: true, value: 5n };
+  outcome.issues === undefined; // readable on every member, no type guard
+}
+
+{
+  isResultSchema(c.variant({ Ok: c.nat, Err: c.text })); // true
+  isResultSchema(c.record({ ok: c.nat, err: c.text })); // false
+}
+
+{
+  const Transfer = c.variant({ ok: c.nat, err: c.text });
+  const outcome = unwrapResult(Transfer, { tag: "ok", value: 5n });
+  outcome.ok === true; // and outcome.value is 5n, typed bigint
+}
+
 // --- Mirrors: the form model ----------------------------------------------
 
 {
@@ -247,6 +286,19 @@ test("the introspection examples read exactly what the comment claims", () => {
   assert.strictEqual(table.get("fee")?.mode, "query");
   const Account: Schema<{ balance: bigint }> = c.rec(() => c.record({ balance: c.nat }));
   assert.strictEqual(formModel(Account).control, "lazy");
+});
+
+test("the result examples read exactly what the comment claims", () => {
+  assert.strictEqual(isResultSchema(c.variant({ Ok: c.nat, Err: c.text })), true);
+  assert.strictEqual(isResultSchema(c.record({ ok: c.nat, err: c.text })), false);
+  const Transfer = c.variant({ ok: c.nat, err: c.text });
+  const outcome = unwrapResult(Transfer, { tag: "ok", value: 5n });
+  assert.strictEqual(outcome.ok, true);
+  assert.strictEqual(outcome.value, 5n);
+  // The union's own claim: every member declares all three keys, so this
+  // reads on the success member rather than needing a guard first.
+  const declared: UnwrapResult<bigint, string> = { ok: true, value: 5n };
+  assert.strictEqual(declared.issues, undefined);
 });
 
 test("the builder examples build the nodes their comments describe", () => {
