@@ -36,7 +36,9 @@ if (encoded.ok) {
 Modules, each a subpath export:
 
 - **`.`** — the schema core: the `c` builders, `Schema<in out T>` (deliberately
-  invariant), `Infer`, and the node interfaces walkers narrow on.
+  invariant), `Infer`, and the node interfaces walkers narrow on — plus
+  `resolveSchema` and `serviceMethods` for reading one back, since a schema
+  reached by name is a `rec` indirection and a service's methods are a table.
 - **`./validate`** — bounded, fail-closed structural validation; never throws
   on any value; issues carry stable codes and `$`-rooted paths.
 - **`./contract`** — build the same schemas at runtime from a canonical

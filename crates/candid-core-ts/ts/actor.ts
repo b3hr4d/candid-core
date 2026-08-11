@@ -39,7 +39,8 @@
 // from the schema's *type* (by design: schemas carry values, not calls), so
 // the interface cannot be re-derived from `typeof` — it travels explicitly.
 
-import type { AnyFieldSchema, AnySchema, FuncValue, Schema } from "./schema.ts";
+import type { AnyFieldSchema, FuncSchema, FuncValue, MethodMode, Schema } from "./schema.ts";
+import { resolveSchema, serviceMethods } from "./schema.ts";
 import { encodeArgs, decodeArgs, type CodecIssue } from "./codec.ts";
 import { validate } from "./validate.ts";
 
@@ -72,37 +73,23 @@ export class ActorError extends Error {
   }
 }
 
+/**
+ * All a dispatch needs of a func: the signature. Both ways of reaching one
+ * satisfy it — a `func` node resolved from a value's schema, and a
+ * `ServiceMethod` off the table `serviceMethods` builds.
+ */
 interface ResolvedFunc {
   readonly args: readonly AnyFieldSchema[];
   readonly results: readonly AnyFieldSchema[];
-  readonly mode: "update" | "query" | "composite_query" | "oneway";
+  readonly mode: MethodMode;
 }
 
-/** Resolve rec chains structurally; throws on a non-schema (programmer error). */
-function resolveNode(schema: AnyFieldSchema): { kind: string } & Record<string, unknown> {
-  let node: unknown = schema;
-  for (let hops = 0; hops < 256; hops += 1) {
-    if (
-      typeof node !== "object" ||
-      node === null ||
-      typeof (node as { kind?: unknown }).kind !== "string"
-    ) {
-      throw new TypeError("not a schema object");
-    }
-    if ((node as { kind: string }).kind !== "rec") {
-      return node as { kind: string } & Record<string, unknown>;
-    }
-    node = (node as { body(): unknown }).body();
-  }
-  throw new TypeError("rec chain exceeds the depth limit");
-}
-
-function resolveFunc(schema: AnyFieldSchema, what: string): ResolvedFunc {
-  const node = resolveNode(schema);
+function resolveFunc(schema: AnyFieldSchema, what: string): FuncSchema {
+  const node = resolveSchema(schema);
   if (node.kind !== "func") {
     throw new TypeError(`${what} is not a func schema`);
   }
-  return node as unknown as ResolvedFunc;
+  return node;
 }
 
 /**
@@ -151,6 +138,9 @@ export interface ActorOptions {
  * interface (or a hand-written one); the schema is the runtime truth the
  * methods are built from, and the golden gates are what keep the two equal.
  *
+ * The methods come from `serviceMethods` in `@candid-core/schema`, so the
+ * table a caller can introspect is exactly the table this dispatches on.
+ *
  * Throws `TypeError` immediately on a schema that is not a service — a
  * programmer error, unlike the data errors that reject call promises.
  */
@@ -160,22 +150,23 @@ export function createActor<A = Record<string, (...args: never[]) => Promise<unk
   transport: Transport,
   options: ActorOptions = {},
 ): A {
-  const node = resolveNode(service);
+  // Resolved here so the non-service case keeps this factory's own wording;
+  // `serviceMethods` then re-resolves nothing — a non-rec node is returned on
+  // the first hop — and the method walk stays the one shared implementation.
+  const node = resolveSchema(service);
   if (node.kind !== "service") {
     throw new TypeError("createActor needs a service schema");
   }
-  const methods = node.methods as { readonly [name: string]: AnySchema };
   const actor: Record<string, unknown> = Object.create(null);
-  for (const name of Object.keys(methods)) {
-    const func = resolveFunc(methods[name], `method ${JSON.stringify(name)}`);
+  for (const method of serviceMethods(node).values()) {
     const target: CallTarget = {
       canisterId,
-      methodName: name,
+      methodName: method.name,
       ...(options.effectiveCanisterId === undefined
         ? {}
         : { effectiveCanisterId: options.effectiveCanisterId }),
     };
-    actor[name] = (...args: unknown[]) => dispatch(func, target, transport, args);
+    actor[method.name] = (...args: unknown[]) => dispatch(method, target, transport, args);
   }
   return actor as A;
 }
