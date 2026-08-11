@@ -191,8 +191,8 @@ test("every shipped @example is mirrored verbatim in this file", () => {
 // --- Mirrors: reading a schema back ---------------------------------------
 
 {
-  const node: SchemaNode = c.vec(c.nat);
-  if (node.kind === "vec") node.inner; // narrowed to the element schema
+  const node: SchemaNode = c.record({ balance: c.nat });
+  if (node.kind === "record") node.fields; // narrowed to the field map
   void node;
 }
 

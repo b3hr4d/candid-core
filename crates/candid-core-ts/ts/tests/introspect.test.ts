@@ -126,6 +126,49 @@ test("resolveSchema rejects anything that is not a schema object", () => {
   );
 });
 
+test("resolveSchema rejects a kind this package does not define", () => {
+  // `Schema` requires only that `kind` be *a* string, so `{ kind: "bogus" }`
+  // is a schema to the compiler. Returning it would hand an exhaustive
+  // consumer a discriminator its `never` default says cannot exist, so the
+  // terminal kind is checked rather than asserted.
+  assert.throws(
+    () => resolveSchema({ kind: "bogus" }),
+    (error: unknown) =>
+      error instanceof TypeError && error.message === 'unknown schema kind "bogus"',
+  );
+  // Including one that a prototype would answer for: the check is a Set
+  // lookup, not `in`.
+  assert.throws(
+    () => resolveSchema({ kind: "toString" }),
+    (error: unknown) =>
+      error instanceof TypeError && error.message === 'unknown schema kind "toString"',
+  );
+  // At the end of a chain too, not only at the root.
+  assert.throws(
+    () => resolveSchema(c.rec(() => ({ kind: "bogus" }) as Schema<never>)),
+    (error: unknown) =>
+      error instanceof TypeError && error.message === 'unknown schema kind "bogus"',
+  );
+  // And every kind the package does define still resolves.
+  const defined: readonly AnyFieldSchema[] = [
+    c.nat,
+    c.opt(c.text),
+    c.vec(c.nat),
+    c.blob(),
+    c.unit(),
+    c.record({ a: c.nat }),
+    c.tuple([c.nat]),
+    c.variant({ a: c.nat }),
+    c.func([], [], "query"),
+    c.service({}),
+  ];
+  assert.deepStrictEqual(
+    defined.map((schema) => resolveSchema(schema).kind),
+    ["primitive", "opt", "vec", "blob", "unit", "record", "tuple", "variant", "func", "service"],
+    "every kind the union covers is admitted, so the check cannot over-refuse",
+  );
+});
+
 // ---------------------------------------------------------------------------
 // serviceMethods: the method table
 // ---------------------------------------------------------------------------

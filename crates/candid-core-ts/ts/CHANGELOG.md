@@ -31,8 +31,11 @@ changed, and the only executable difference in the modules that shipped in
   introspects a service — a wire debugger, a devtools panel, a hook generator
   — had to re-derive an undocumented discipline against the node interfaces.
   `resolveSchema` follows `rec` indirections to the node underneath, bounded
-  at 256 hops and throwing `TypeError` on a chain that never terminates or on
-  an object that is not a schema. `serviceMethods` returns the per-method
+  at 256 hops and throwing `TypeError` on a chain that never terminates, on an
+  object that is not a schema, and on a `kind` this package does not define —
+  `Schema` requires only that `kind` be *a* string, so the node handed back is
+  checked against the kinds the return type covers rather than asserted to be
+  one of them. `serviceMethods` returns the per-method
   table — `name`, `mode`, `args`, `results` — as a `ReadonlyMap` keyed in
   declaration order, resolving each method, since schemas built from a
   Contract document at runtime wrap every method in a lazy `rec` thunk.
@@ -45,7 +48,10 @@ changed, and the only executable difference in the modules that shipped in
 - **`SchemaNode`, `ResolvedNode`, and `ServiceMethod` are exported** as the
   types those two need: the discriminated union of every node kind, that
   union without the `rec` case that `resolveSchema` has already removed, and
-  one method's signature.
+  one method's signature. Every member of the union has its domain type
+  erased, composites included, because `Schema<in out T>` is invariant and a
+  record of *specific* fields is otherwise not assignable to a record of the
+  general field map.
 - **`formModel`'s laziness is documented.** A `rec` schema becomes a `lazy`
   node, and generated declarations are all `rec` — so the root of a model is
   `lazy`, and so is every reference to another named declaration inside it.

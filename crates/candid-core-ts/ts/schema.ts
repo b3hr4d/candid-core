@@ -314,9 +314,17 @@ export interface ServiceSchema extends Schema<Principal> {
  * construction, so a combinator added here turns every such walk red until it
  * is handled.
  *
+ * Every member's domain type is erased, composites included. [`Schema`] is
+ * invariant, so a `RecordSchema` of *specific* fields is not assignable to
+ * one of the general field map — the erasure is what lets a concrete builder
+ * result be handed to a walker at all. It leaves this union exactly where
+ * [`AnySchema`] sits: a `Schema<never>` — the `empty` leaf, an empty variant
+ * — is not one of these erased members, which is why [`resolveSchema`] takes
+ * the widened [`AnyFieldSchema`] and returns a node rather than demanding one.
+ *
  * @example
- * const node: SchemaNode = c.vec(c.nat);
- * if (node.kind === "vec") node.inner; // narrowed to the element schema
+ * const node: SchemaNode = c.record({ balance: c.nat });
+ * if (node.kind === "record") node.fields; // narrowed to the field map
  */
 export type SchemaNode =
   | PrimitiveSchema<any>
@@ -324,9 +332,9 @@ export type SchemaNode =
   | VecSchema<any>
   | BlobSchema
   | UnitSchema
-  | RecordSchema<FieldSchemas>
-  | TupleSchema<readonly AnyFieldSchema[]>
-  | VariantSchema<FieldSchemas>
+  | RecordSchema<any>
+  | TupleSchema<any>
+  | VariantSchema<any>
   | FuncSchema
   | ServiceSchema
   | RecSchema<any>;
@@ -701,6 +709,25 @@ export const c = {
 // both walkers call it.
 const REC_HOP_LIMIT = 256;
 
+// The kinds `ResolvedNode` claims to cover, as a record rather than a bare
+// list: a combinator added to the union and forgotten here is a compile
+// error, so the runtime check and the return type cannot drift apart. The
+// lookup goes through a Set because `"toString" in {}` answers true and a
+// method name is not a schema kind.
+const RESOLVED_KINDS: { readonly [K in ResolvedNode["kind"]]: true } = {
+  primitive: true,
+  opt: true,
+  vec: true,
+  blob: true,
+  unit: true,
+  record: true,
+  tuple: true,
+  variant: true,
+  func: true,
+  service: true,
+};
+const KNOWN_KINDS: ReadonlySet<string> = new Set(Object.keys(RESOLVED_KINDS));
+
 /**
  * Resolve a schema to the node underneath its `rec` indirections: follow
  * `body()` until a non-`rec` node appears, then return that node.
@@ -714,8 +741,11 @@ const REC_HOP_LIMIT = 256;
  *
  * Bounded and fail-closed, because a cycle is the shape recursion naturally
  * produces: a chain that never terminates throws `TypeError` after 256 hops
- * rather than hanging, and so does anything that is not a schema object.
- * Both are programmer errors — a malformed *value* is what `validate`
+ * rather than hanging. So does anything that is not a schema object, and so
+ * does a `kind` this package does not define — [`Schema`] requires only that
+ * `kind` be *a* string, so the returned node is checked against the kinds
+ * [`ResolvedNode`] actually covers rather than asserted to be one of them.
+ * All three are programmer errors; a malformed *value* is what `validate`
  * reports on, and it never throws.
  *
  * @example
@@ -731,7 +761,11 @@ export function resolveSchema(schema: AnyFieldSchema): ResolvedNode {
     ) {
       throw new TypeError("not a schema object");
     }
-    if ((node as { kind: string }).kind !== "rec") {
+    const kind = (node as { kind: string }).kind;
+    if (kind !== "rec") {
+      if (!KNOWN_KINDS.has(kind)) {
+        throw new TypeError(`unknown schema kind ${JSON.stringify(kind)}`);
+      }
       return node as ResolvedNode;
     }
     node = (node as { body(): unknown }).body();
