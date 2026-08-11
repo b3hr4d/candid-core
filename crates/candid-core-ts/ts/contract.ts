@@ -83,6 +83,7 @@ export type ContractIssueCode =
   | "invalid_name_table"
   | "resource_limit_exceeded";
 
+/** One reason a contract document was refused, in `validate`'s issue shape. */
 export interface ContractIssue {
   readonly code: ContractIssueCode;
   /** `$`-rooted path into the contract document (or `$.names[…]`). */
@@ -91,6 +92,7 @@ export interface ContractIssue {
   readonly resource_limit?: ResourceLimitInfo | ContractResourceLimitInfo;
 }
 
+/** The `{resource, limit, observed}` triple a document-size bound carries. */
 export interface ContractResourceLimitInfo {
   readonly resource: "type_nodes" | "fields" | "declarations" | "name_table_entries";
   readonly limit: number;
@@ -103,14 +105,18 @@ export interface ContractResourceLimitInfo {
  * semantic Contract stores only authoritative label ids. A field with no
  * entry renders by the ecosystem's `_id_` convention.
  *
- * Entries are hash-enforced (issue #103): a name must be the Candid preimage
- * of its id (`candidLabelHash(name) === id`), and `_N_`-shaped names are
- * refused — erased to a schema key they are indistinguishable from the
- * numeric-id rendering, and the codec derives wire ids from keys. A table
- * from real provenance always satisfies both; a lying one fails closed.
+ * Entries are hash-enforced: a name must be the Candid preimage of its id
+ * (`candidLabelHash(name) === id`), and `_N_`-shaped names are refused —
+ * erased to a schema key they are indistinguishable from the numeric-id
+ * rendering, and the codec derives wire ids from keys. A table from real
+ * provenance always satisfies both; a lying one fails closed.
  */
 export type FieldNameEntry = readonly [container: number, id: number, name: string];
 
+/**
+ * Field label text plus explicit bounds on the document, each cap defaulting
+ * to the `DEFAULT_MAX_*` below.
+ */
 export interface ContractSchemaOptions {
   readonly names?: readonly FieldNameEntry[];
   /** Arena size cap, mirroring `Limits::max_type_nodes`. */
@@ -121,18 +127,26 @@ export interface ContractSchemaOptions {
   readonly maxDeclarations?: number;
 }
 
+/** Schemas keyed by declaration name, or every reason the document failed. */
 export type SchemaFromContractResult =
   | {
       readonly ok: true;
-      /** One schema per declaration, in declaration order (issue #104: func and service kinds included; a class is never named — declarations targeting one are refused, issue #129). */
+      /**
+       * One schema per declaration, in declaration order, func and service
+       * kinds included. A class is never named: a declaration targeting one
+       * is refused, since a class is legal only as the actor root.
+       */
       readonly schemas: { readonly [name: string]: AnySchema };
       /** The actor interface as a service schema, when the document has one. */
       readonly actor?: AnySchema;
     }
   | { readonly ok: false; readonly issues: readonly ContractIssue[] };
 
+/** Default `maxTypeNodes`, mirroring candid-core's `max_type_nodes`. */
 export const DEFAULT_MAX_TYPE_NODES = 100_000;
+/** Default `maxFields`, mirroring candid-core's `max_fields`. */
 export const DEFAULT_MAX_FIELDS = 500_000;
+/** Default `maxDeclarations`, mirroring candid-core's `max_declarations`. */
 export const DEFAULT_MAX_DECLARATIONS = 100_000;
 /**
  * The name table is caller-side input with no candid-core counterpart; it

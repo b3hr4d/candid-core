@@ -488,6 +488,10 @@ test("presence means own enumerable: the serialized projection is what validates
   const unitExtra: Record<string, unknown> = {};
   Object.defineProperty(unitExtra, "z", { value: 1, enumerable: false });
   ok(c.unit(), unitExtra);
+  // Symbols are outside `Object.keys` altogether and outside the projection
+  // too, so a symbol-keyed extra is not an unknown field either.
+  ok(c.unit(), { [Symbol("hidden")]: 1 });
+  ok(c.record({ a: c.bool }), { a: true, [Symbol("hidden")]: 1 });
 });
 
 test("examined record keys are charged against the element budget", () => {

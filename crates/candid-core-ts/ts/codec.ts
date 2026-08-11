@@ -106,6 +106,7 @@ export type CodecCode =
   | "type_mismatch"
   | "unknown_variant_tag";
 
+/** The `{resource, limit, observed}` triple a bound failure carries. */
 export interface CodecResourceLimitInfo {
   readonly resource:
     "bytes" | "type_table_entries" | "value_depth" | "value_elements" | "numeric_bytes";
@@ -113,6 +114,7 @@ export interface CodecResourceLimitInfo {
   readonly observed: number;
 }
 
+/** One encode or decode failure, in `validate`'s issue shape. */
 export interface CodecIssue {
   readonly code: CodecCode;
   /** `$`-rooted path into the argument sequence, `$args[i]` per argument. */
@@ -121,14 +123,17 @@ export interface CodecIssue {
   readonly resource_limit?: CodecResourceLimitInfo;
 }
 
+/** Wire bytes, or the issues that stopped the encoder. Never an exception. */
 export type EncodeResult =
   | { readonly ok: true; readonly bytes: Uint8Array }
   | { readonly ok: false; readonly issues: readonly CodecIssue[] };
 
+/** One decoded value per expected argument, or the issues that refused them. */
 export type DecodeResult =
   | { readonly ok: true; readonly values: readonly unknown[] }
   | { readonly ok: false; readonly issues: readonly CodecIssue[] };
 
+/** Explicit budgets for one codec call; each defaults to a `DEFAULT_MAX_*`. */
 export interface CodecOptions {
   /** Input size ceiling for decode, in bytes. */
   readonly maxBytes?: number;
@@ -142,10 +147,15 @@ export interface CodecOptions {
   readonly maxNumericBytes?: number;
 }
 
+/** Default `maxBytes`: 10 MiB of input a decode will look at. */
 export const DEFAULT_MAX_BYTES = 10_485_760;
+/** Default `maxTypeTableEntries`. */
 export const DEFAULT_MAX_TYPE_TABLE_ENTRIES = 100_000;
+/** Default `maxDepth`, the same bound `validate` uses. */
 export const DEFAULT_MAX_DEPTH = 256;
+/** Default `maxElements`, the same bound `validate` uses. */
 export const DEFAULT_MAX_ELEMENTS = 1_000_000;
+/** Default `maxNumericBytes`: 1 MiB for one unbounded `nat`/`int`. */
 export const DEFAULT_MAX_NUMERIC_BYTES = 1_048_576;
 
 /** A decoded principal: the minimal structural carrier of canonical text. */
