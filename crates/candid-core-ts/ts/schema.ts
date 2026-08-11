@@ -244,8 +244,8 @@ export interface RecSchema<T> extends Schema<T> {
  * `{ principal, method }` pair candid-core's value domain uses. Invoking one
  * is the actor layer's job (`callFunc` in `@candid-core/schema/actor`) — the
  * value itself stays inert data, so it round-trips validation and the codec
- * symmetrically. Validation is strict: both fields required, nothing else
- * present, and the method name a non-empty string.
+ * symmetrically. Validation is strict: both fields required, no other own
+ * enumerable key, and the method name a non-empty string.
  *
  * @example
  * const nextPage: FuncValue = { principal: archive, method: "get_blocks" };
@@ -528,8 +528,10 @@ export const c = {
 
   /**
    * The empty Candid record — a unit value, not "any non-nullish thing":
-   * the domain is `Record<string, never>`, and any own key on the value is
-   * an `unexpected_field`.
+   * the domain is `Record<string, never>`, and an own enumerable string key
+   * on the value is an `unexpected_field`. A non-enumerable or symbol-keyed
+   * property is invisible to that scan, for the same reason it is to a
+   * record's — what `JSON.stringify` and spread see is what validates.
    *
    * @example
    * c.record({ ack: c.unit() }); // { ack: Record<string, never> }
