@@ -16,11 +16,26 @@ hover a consumer meets first. An internal issue number there means nothing to
 that reader, and a published version bakes it in permanently, so the gate
 below refuses one in the artifact rather than after the fact.
 
+The shipped *prose* is held to the same standard, because it is the first
+thing a consumer meets on npm: the README's TypeScript blocks are compiled
+against the packed artifact, exactly as a consumer's would be, so a documented
+example cannot drift away from the package it documents. A block that cannot
+be compiled here — the `@icp-sdk/core` agent adapter, whose SDK is a type-only
+peer this repository's lockfile deliberately does not carry — is opted out by
+an HTML comment naming the reason, so the exemption is visible in the README
+rather than implicit in this script.
+
+The changelog is treated as an artifact claim rather than a courtesy. It ships
+in the tarball, and the gate refuses one that does not document the version
+being packed together with the `candid-core` version it pairs with — the
+README promises exactly that, and a promise about an artifact belongs in the
+artifact's gate.
+
 The type-only `@icp-sdk/core` peer is installed as a minimal stub providing
-exactly the `Principal` surface the declarations reference. That keeps the
-gate honest in both directions: `Principal` stays a real nominal type (so a
-wrong value is a compile error, not silently `any`), and the missing-peer
-case is asserted separately as a clear, actionable error.
+exactly the `Principal` surface the declarations and the README reference.
+That keeps the gate honest in both directions: `Principal` stays a real
+nominal type (so a wrong value is a compile error, not silently `any`), and
+the missing-peer case is asserted separately as a clear, actionable error.
 """
 
 import json
@@ -34,9 +49,38 @@ import tempfile
 REPO = pathlib.Path(__file__).resolve().parents[3]
 PACKAGE = REPO / "crates" / "candid-core-ts" / "ts"
 
+# A README block preceded by this marker is documented as verified elsewhere
+# and is not compiled here. The marker is a full HTML comment in the README,
+# so the reason travels with the exemption instead of living in this script.
+UNCOMPILED_MARKER = "Not compiled by the packaged-consumer gate"
+
 
 def run(args, cwd):
     subprocess.run(args, cwd=cwd, check=True)
+
+
+def typescript_blocks(readme):
+    """Fenced ```ts blocks, minus those the preceding comment opts out."""
+    blocks = []
+    lines = readme.splitlines()
+    index = 0
+    exempt = False
+    while index < len(lines):
+        line = lines[index]
+        if UNCOMPILED_MARKER in line:
+            exempt = True
+        elif line.strip() == "```ts":
+            end = index + 1
+            while end < len(lines) and lines[end].strip() != "```":
+                end += 1
+            if end == len(lines):
+                raise SystemExit(f"unterminated ```ts block at README line {index + 1}")
+            if not exempt:
+                blocks.append("\n".join(lines[index + 1 : end]) + "\n")
+            exempt = False
+            index = end
+        index += 1
+    return blocks
 
 
 def main():
@@ -65,7 +109,7 @@ def main():
         )
         modules = ["actor", "codec", "contract", "forms", "labels", "schema", "validate"]
         expected = sorted(
-            ["LICENSE", "README.md", "package.json"]
+            ["CHANGELOG.md", "LICENSE", "README.md", "package.json"]
             + [f"dist/{name}.js" for name in modules]
             + [f"dist/{name}.d.ts" for name in modules]
         )
@@ -73,6 +117,35 @@ def main():
             raise SystemExit(
                 f"the packed file list is not the manifest's promise:\n"
                 f"  shipped:  {shipped}\n  expected: {expected}"
+            )
+
+        manifest = json.loads((extracted / "package.json").read_text())
+
+        # npm derives the homepage link from `repository` when the field is
+        # absent, which lands a consumer on the repository root README. That
+        # is a different package's material, so the field is required here.
+        if not manifest.get("homepage"):
+            raise SystemExit(
+                "package.json has no homepage; npm would derive one from "
+                "`repository` and send consumers to the repository root README"
+            )
+
+        # The README tells a reader that the changelog records, for every
+        # release, the candid-core version it pairs with. That is a claim
+        # about this artifact, so the artifact's gate is where it is checked.
+        version = manifest["version"]
+        changelog = (extracted / "CHANGELOG.md").read_text()
+        heading = f"## {version}"
+        if heading not in changelog:
+            raise SystemExit(
+                f"the shipped changelog documents no {heading!r} entry, so the "
+                f"packed version {version} arrives on npm undocumented"
+            )
+        entry = changelog.split(heading, 1)[1].split("\n## ", 1)[0]
+        if not re.search(r"[Pp]airs with `candid-core` \S+", entry):
+            raise SystemExit(
+                f"the changelog entry for {version} names no `candid-core` "
+                "pairing, which is exactly what the README promises it does"
             )
 
         # Shipped doc comments must stand on their own. The pattern is broad
@@ -115,6 +188,7 @@ def main():
         (peer / "principal" / "index.d.ts").write_text(
             "export declare class Principal {\n"
             "  private readonly _isPrincipal: true;\n"
+            "  static fromText(text: string): Principal;\n"
             "  toText(): string;\n"
             "}\n"
         )
@@ -181,6 +255,59 @@ def main():
         # Execute the emitted behavior under plain node, from the artifact.
         run(["node", "--experimental-strip-types", "--no-warnings", "main.ts"], consumer)
 
+        # The shipped README, compiled against the shipped package. Each block
+        # is its own file, so an example that silently leans on an earlier
+        # block's bindings fails here — which is the point: a reader copies one
+        # block, not the file. `node:fs` is stubbed rather than pulled from
+        # `@types/node`, in the same spirit as the peer above: this gate adds
+        # no supply-chain surface to compile four signatures.
+        readme = scratch / "readme"
+        readme.mkdir()
+        (readme / "package.json").write_text('{ "type": "module" }\n')
+        (readme / "node-stub.d.ts").write_text(
+            'declare module "node:fs" {\n'
+            "  export function readFileSync(path: URL | string, encoding: \"utf8\"): string;\n"
+            "}\n"
+        )
+        blocks = typescript_blocks((extracted / "README.md").read_text())
+        if not blocks:
+            raise SystemExit("no compilable ```ts blocks found in the shipped README")
+        for number, block in enumerate(blocks, 1):
+            (readme / f"block{number}.ts").write_text(block)
+        (readme / "tsconfig.json").write_text(
+            json.dumps(
+                {
+                    "compilerOptions": {
+                        "strict": True,
+                        "noEmit": True,
+                        "module": "nodenext",
+                        "moduleResolution": "nodenext",
+                        "target": "es2022",
+                        "skipLibCheck": False,
+                    },
+                    "include": ["*.ts"],
+                }
+            )
+        )
+        readme_check = subprocess.run(
+            [str(tsc), "-p", str(readme / "tsconfig.json")],
+            cwd=readme,
+            capture_output=True,
+            text=True,
+        )
+        if readme_check.returncode != 0:
+            numbered = "\n".join(
+                f"  block{number}.ts:\n"
+                + "\n".join(f"    {line}" for line in block.rstrip().splitlines())
+                for number, block in enumerate(blocks, 1)
+            )
+            raise SystemExit(
+                "the shipped README's TypeScript does not compile against the "
+                "packed artifact:\n"
+                f"{readme_check.stdout}{readme_check.stderr}\n"
+                f"blocks, in README order:\n{numbered}"
+            )
+
         # The peer really is required for types: without it the failure must
         # be the clear missing-module error the README documents, not a
         # silent `any`.
@@ -196,9 +323,10 @@ def main():
                 "expected a missing-peer type error naming @icp-sdk/core/principal, got:\n"
                 f"{missing.stdout}{missing.stderr}"
             )
-    print("npm package artifact verified: manifest file list, self-contained doc "
-          "comments, root + 6 subpaths, strict compile without skipLibCheck, "
-          "executed round-trip, peer requirement")
+    print("npm package artifact verified: manifest file list, homepage, changelog "
+          "entry and pairing, self-contained doc comments, root + 6 subpaths, "
+          "strict compile without skipLibCheck, executed round-trip, "
+          f"{len(blocks)} README block(s) compiled, peer requirement")
 
 
 if __name__ == "__main__":

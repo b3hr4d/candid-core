@@ -12,21 +12,16 @@
 // would invent semantics the platform does not offer). Everything an agent
 // does beyond moving bytes — identity, ingress expiry, retries, polling,
 // certificate verification, reject classification — stays on the agent's
-// side of the pipe. An `@icp-sdk/core` `HttpAgent` adapts in ~10 lines:
+// side of the pipe.
 //
-// ```ts
-// const transport: Transport = {
-//   async query({ canisterId, methodName }, arg) {
-//     const res = await agent.query(canisterId, { methodName, arg });
-//     if (res.status !== "replied") throw new Error(res.reject_message);
-//     return res.reply.arg;
-//   },
-//   async call({ canisterId, methodName }, arg) {
-//     const { reply } = await agent.update(canisterId, { methodName, arg });
-//     return reply;
-//   },
-// };
-// ```
+// The complete `@icp-sdk/core` v6 adapter lives in README.md, under "Calling
+// a canister" — issue #148. A sketch used to sit here instead, and being
+// here was its problem: a `//` comment never reaches declaration emit, so it
+// was invisible in `.d.ts` hover while shipping inside `dist/actor.js`, where
+// no consumer looks. It also destructured `{ canisterId, methodName }` and
+// dropped `effectiveCanisterId` on the floor, so the one call shape that
+// needs the field — management-canister routing, which is the only reason
+// `CallTarget` carries it — would have routed to the wrong effective target.
 //
 // # Errors
 //
