@@ -30,9 +30,11 @@ is new API plus one unused import dropped from `codec.js`.
   and unwrapping one generically has meant probing a decoded value for
   `ok`/`err` keys — which misfires on any record legitimately carrying those
   field names and cannot type the error payload at all. These read the schema
-  instead: `isResultSchema` answers for a schema that resolves, through any
-  number of `rec` indirections, to a variant whose arms are exactly an ok arm
-  and an err arm; `unwrapResult` validates the value and returns
+  instead: `isResultSchema` answers for a schema that resolves — through the
+  `rec` indirections generated declarations and runtime-loaded edges arrive
+  wrapped in, on the same bounded walk `resolveSchema` performs — to a variant
+  whose arms are exactly an ok arm and an err arm; `unwrapResult` validates
+  the value and returns
   `{ ok: true, value }` or `{ ok: false, error }`, both typed from those arms
   — `ResultOk<S>` and `ResultErr<S>` name the two payload types on their own.
 - **Both spellings, as pairs.** `ok`/`err` (Motoko's `Result.Result`) and

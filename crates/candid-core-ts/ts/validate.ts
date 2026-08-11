@@ -765,9 +765,16 @@ interface ResultArms {
 
 /**
  * Classify a schema as a result variant, or `undefined` if it is not one.
- * Own enumerable arm names, which is the projection every other walk in this
- * package enumerates arms by; a name reached only through the arms object's
- * prototype is not an arm, and neither is a third one.
+ * Own enumerable arm names, which is the projection every walk in this
+ * package that *enumerates* arms uses — the codec's type table and the form
+ * model; a name reached only through the arms object's prototype is not an
+ * arm, and neither is a third one. The two walks that test arm *membership*
+ * for a tag, this file's own and the codec's, use `hasOwn`, so a hand-built
+ * arms map carrying a non-enumerable arm is a schema the classifier and the
+ * validator would read differently. Nothing builds one — the builders take an
+ * object literal and the Contract loader assigns into a null-prototype map —
+ * and the unwrapper fails closed on the difference, reporting such a tag as
+ * an issue rather than as an arm.
  */
 function resultArms(schema: AnyFieldSchema): ResultArms | undefined {
   const node = resolveSchema(schema);
@@ -791,6 +798,11 @@ function resultArms(schema: AnyFieldSchema): ResultArms | undefined {
  * type, or `null` when the arm is a bare tag — a bare arm's payload is Candid
  * `null`, whose one JavaScript value is `null`. `never` when the schema
  * describes no such arm.
+ *
+ * It reads one arm and nothing else: whether a schema is a result *at all* is
+ * [`isResultSchema`]'s answer, and the exactly-two-arms rule lives there, so
+ * this alias still names a payload for a variant that has an ok arm among
+ * several.
  *
  * @example
  * const Transfer = c.variant({ ok: c.nat, err: c.text });
@@ -848,16 +860,19 @@ export type UnwrapResult<T, E> =
 
 /**
  * Does this schema describe the `variant { ok; err }` result convention?
- * True for a schema that resolves — through any number of `rec` indirections,
- * which is how every generated declaration and every runtime-loaded edge
- * arrives — to a variant whose arms are **exactly** an ok arm and an err arm,
- * spelled either `ok`/`err` or `Ok`/`Err`, in either order. A record carrying
- * those field names is not a result; neither is a variant that adds a third
- * arm, nor one mixing the two spellings.
+ * True for a schema that resolves — through the `rec` indirections every
+ * generated declaration and every runtime-loaded edge arrives wrapped in — to
+ * a variant whose arms are **exactly** an ok arm and an err arm, spelled
+ * either `ok`/`err` or `Ok`/`Err`, in either order. A record carrying those
+ * field names is not a result; neither is a variant that adds a third arm,
+ * nor one mixing the two spellings.
  *
- * Throws `TypeError` on something that is not a schema at all — including the
- * mistake this helper exists to prevent, a decoded *value* passed where its
- * schema belongs.
+ * Resolution is the shared one, so this raises the `TypeError`s it does: on
+ * something that is not a schema object — including the mistake this helper
+ * exists to prevent, a decoded *value* passed where its schema belongs — on a
+ * `kind` this package does not define, and on a `rec` chain that runs past the
+ * hop limit instead of terminating. All three are programmer errors; a schema
+ * this package can read is answered `true` or `false`, never by an exception.
  *
  * @example
  * isResultSchema(c.variant({ Ok: c.nat, Err: c.text })); // true
@@ -877,6 +892,13 @@ export function isResultSchema(schema: AnyFieldSchema): boolean {
  *
  * A bare-tag arm — `variant { ok; err : text }` — unwraps to `null`, the
  * single value of the Candid `null` its arm describes.
+ *
+ * The payload is read after that check rather than during it, so the value
+ * handed back is the checked one for every value that is inert data — which
+ * every decoded one is. A live object whose accessors answer differently on
+ * successive reads can hand back a payload the check never saw; the tag is
+ * re-read and re-checked, so such a value still cannot land outside this
+ * schema's own two arms.
  *
  * Throws `TypeError`, eagerly and before touching the value, on a schema that
  * is not a result variant. That is a programmer error, and it is the same
@@ -911,18 +933,30 @@ export function unwrapResult<S extends AnyFieldSchema>(
   //
   // These reads happen after the walk rather than inside it, so a value
   // whose accessors answer differently on a second read is the one shape
-  // that can hand back a payload the walk did not examine. The tag is
-  // re-checked below for exactly that reason: such a value fails closed
-  // instead of being classified as an arm it no longer claims. Decoded
-  // values are inert data and cannot do this.
+  // that can hand back a payload the walk did not examine — in either
+  // direction, since the arm the second read names is the arm the payload is
+  // reported under. The tag is re-checked below to bound that: a drifted tag
+  // outside the pair is an issue rather than a classification, so such a
+  // value can never leave this schema's own two arms. Decoded values are
+  // inert data and cannot do any of it; both directions are pinned in
+  // tests/result.test.ts as the limitation they are.
   let tag: unknown;
   let payload: unknown = null;
+  let shown = "";
   let reading = "$.tag";
   try {
     tag = (value as { tag: unknown }).tag;
     reading = "$.value";
     if (hasOwnEnumerable(value as object, "value")) {
       payload = (value as { value: unknown }).value;
+    }
+    if (tag !== arms.okTag && tag !== arms.errTag) {
+      // Describing the tag *reads* it: `describe` asks `Array.isArray`
+      // first, which a revoked Proxy answers by throwing. So the message for
+      // the drifted-tag return below is built here, inside the guard, rather
+      // than at the return itself.
+      reading = "$.tag";
+      shown = typeof tag === "string" ? JSON.stringify(tag) : describe(tag);
     }
   } catch {
     return {
@@ -948,7 +982,7 @@ export function unwrapResult<S extends AnyFieldSchema>(
       {
         code: "unknown_tag",
         path: "$.tag",
-        message: `${typeof tag === "string" ? JSON.stringify(tag) : describe(tag)} is not this result's ok or err arm`,
+        message: `${shown} is not this result's ok or err arm`,
       },
     ],
   };

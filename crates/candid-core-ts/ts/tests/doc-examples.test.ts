@@ -227,15 +227,13 @@ test("every shipped @example is mirrored verbatim in this file", () => {
 {
   const Transfer = c.variant({ ok: c.nat, err: c.text });
   type Balance = ResultOk<typeof Transfer>; // bigint
-  const balance: Balance = 5n;
-  void balance;
+  void Transfer;
 }
 
 {
   const Transfer = c.variant({ ok: c.nat, err: c.text });
   type Failure = ResultErr<typeof Transfer>; // string
-  const failure: Failure = "nope";
-  void failure;
+  void Transfer;
 }
 
 {

@@ -16,8 +16,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 
-import { c, type AnyFieldSchema, type Schema } from "../schema.ts";
-import { serviceMethods } from "../schema.ts";
+import { c, type AnySchema, type AnyFieldSchema, type Schema } from "../schema.ts";
+import { resolveSchema, serviceMethods } from "../schema.ts";
 import {
   isResultSchema,
   unwrapResult,
@@ -116,11 +116,25 @@ test("the pair is matched as a pair: mixed casing and near-misses are refused", 
 });
 
 test("an arm reached only through the prototype is not an arm", () => {
-  // `"err" in arms` would answer true here; own-key membership does not.
+  // The case that separates own-key membership from `in`: two real own arms,
+  // and an inherited ok/err pair on top of them. `c.variant` stores the arms
+  // object by reference, so the prototype survives into the classifier —
+  // under `in` this would answer true and then refuse every value of the two
+  // arms the variant actually has.
+  const shadowed: { [name: string]: AnyFieldSchema } = Object.create({
+    ok: c.nat,
+    err: c.text,
+  });
+  shadowed.alpha = c.nat;
+  shadowed.beta = c.text;
+  const Shadowed = c.variant(shadowed);
+  assert.strictEqual(isResultSchema(Shadowed), false);
+  assert.strictEqual(validate(Shadowed, { tag: "alpha", value: 1n }).ok, true, "alpha is an arm");
+  // And the same rule with one own arm, plus the prototype's own method
+  // names, which are not arms either.
   const inherited: { [name: string]: AnyFieldSchema } = Object.create({ err: c.text });
   inherited.ok = c.nat;
   assert.strictEqual(isResultSchema(c.variant(inherited)), false);
-  // The prototype's own method names are not arms either.
   const bare: { [name: string]: AnyFieldSchema } = { ok: c.nat, toString: c.text };
   assert.strictEqual(isResultSchema(c.variant(bare)), false);
 });
@@ -148,7 +162,13 @@ test("a service method's result schema classifies through the method table", () 
   }
   assert.strictEqual(isResultSchema(transfer.results[0]), true);
   const balance = serviceMethods(ledger.actor).get("balance_of");
-  assert.strictEqual(isResultSchema(balance?.results[0] ?? c.nat), false);
+  assert(balance !== undefined, "balance_of is a ledger method");
+  if (balance === undefined) {
+    return;
+  }
+  // Asserted on the real method rather than on a fallback: a `?? c.nat` here
+  // would keep answering false if the golden ever stopped declaring it.
+  assert.strictEqual(isResultSchema(balance.results[0]), false);
 });
 
 // ---------------------------------------------------------------------------
@@ -197,9 +217,39 @@ test("a bare-tag arm unwraps to null, on both sides", () => {
   // the generated golden for that shape.
   const Aliased = c.variant({ ok: arms.NullAlias, err: c.text });
   assert.deepStrictEqual(unwrapResult(Aliased, { tag: "ok" }), { ok: true, value: null });
+  // The neighbouring shape stays distinct: an `opt` arm is not a bare tag,
+  // even though it too surfaces `null`. The payload key is required, and an
+  // absent one is a missing field rather than a materialised `null` — which
+  // is what keeps "the arm carries nothing" and "the arm carries None"
+  // different answers.
+  const Maybe = c.variant({ ok: c.opt(c.nat), err: c.text });
+  assert.deepStrictEqual(firstIssue(unwrapResult(Maybe, { tag: "ok" })), {
+    code: "missing_field",
+    path: "$.value",
+  });
+  assert.deepStrictEqual(unwrapResult(Maybe, { tag: "ok", value: null }), {
+    ok: true,
+    value: null,
+  });
 });
 
 test("unwrapResult refuses a schema that is not a result, before touching the value", () => {
+  // The ordering half of the claim, observed rather than asserted in prose:
+  // a validating-first implementation would run this getter — and walk an
+  // arbitrarily large value — before deciding the schema is unusable. The
+  // schema is a *record* carrying a `tag` field precisely so that validating
+  // it would read the property this getter guards; a schema whose walk never
+  // touches `tag` would let the reordering pass unnoticed.
+  let reads = 0;
+  const watched = {
+    get tag(): string {
+      reads += 1;
+      return "ok";
+    },
+  };
+  assert.throws(() => unwrapResult(c.record({ tag: c.text }), watched));
+  assert.strictEqual(reads, 0, "the schema is refused before the value is read");
+
   const record = c.record({ ok: c.bool, err: c.opt(c.text) });
   assert.throws(
     () => unwrapResult(record, { ok: true, err: null }),
@@ -387,24 +437,78 @@ test("a tag that changes after validation fails closed instead of misclassifying
     unwrapResult(Transfer, toNumber).issues?.[0].message,
     "number is not this result's ok or err arm",
   );
-});
-
-test("a documented limitation: a value that flips between its own two arms", () => {
-  // The one shape a post-validation read cannot defend against: an accessor
-  // that answers `ok` to the validator and `err` to the reader, so the
-  // payload returned as `error` was validated against the ok arm. The
-  // classification still cannot leave the pair, and no decoded value — inert
-  // data — can do this. Pinned so the behaviour is recorded, not discovered.
-  const Transfer = c.variant({ ok: c.nat, err: c.text });
-  let reads = 0;
-  const flipping = {
+  // And describing a drifted tag is itself a read of the value: a revoked
+  // Proxy makes even `Array.isArray` throw, so the description happens
+  // behind the same guard the reads do. The validator fails closed on this
+  // value; so must the unwrapper.
+  const { proxy, revoke } = Proxy.revocable({}, {});
+  revoke();
+  let revoked = 0;
+  const toRevoked = {
     get tag(): string {
-      reads += 1;
-      return reads === 1 ? "ok" : "err";
+      revoked += 1;
+      return (revoked === 1 ? "ok" : proxy) as string;
     },
     value: 5n,
   };
-  assert.deepStrictEqual(unwrapResult(Transfer, flipping), { ok: false, error: 5n });
+  assert.deepStrictEqual(firstIssue(unwrapResult(Transfer, toRevoked)), {
+    code: "unreadable_value",
+    path: "$.tag",
+  });
+});
+
+test("a documented limitation: a value that drifts within its own two arms", () => {
+  // The one shape a post-validation read cannot defend against: an accessor
+  // that answers one arm to the validator and the other to the reader, so
+  // the payload is reported under an arm it was not validated against. The
+  // classification still cannot leave the pair, and no decoded value — inert
+  // data — can do this. Both directions are pinned, and the payload half
+  // too, so the limitation is recorded rather than discovered.
+  const Transfer = c.variant({ ok: c.nat, err: c.text });
+  const drifting = (first: string, second: string): { tag: string; value: bigint } => {
+    let reads = 0;
+    return {
+      get tag(): string {
+        reads += 1;
+        return reads === 1 ? first : second;
+      },
+      value: 5n,
+    };
+  };
+  // ok -> err: the nat payload arrives typed as the err arm's text.
+  assert.deepStrictEqual(unwrapResult(Transfer, drifting("ok", "err")), { ok: false, error: 5n });
+  // err -> ok is the same window in the direction that reports success. The
+  // validator refuses 5n for the text arm, so this one never reaches the
+  // read at all — the drift has to start from a value the walk accepts.
+  assert.deepStrictEqual(firstIssue(unwrapResult(Transfer, drifting("err", "ok"))), {
+    code: "invalid_type",
+    path: "$.value",
+  });
+  // With a bare `err` arm the walk does accept it, and then success is
+  // reported for a payload the ok arm never saw.
+  const Failed = c.variant({ ok: c.nat, err: c.null });
+  let reads = 0;
+  const bareFlip = {
+    get tag(): string {
+      reads += 1;
+      return reads === 1 ? "err" : "ok";
+    },
+  };
+  assert.deepStrictEqual(unwrapResult(Failed, bareFlip), { ok: true, value: null });
+  // And the payload half of the same window: the tag never drifts here, so
+  // the re-check cannot see it.
+  let payloadReads = 0;
+  const driftingPayload = {
+    tag: "ok",
+    get value(): bigint {
+      payloadReads += 1;
+      return (payloadReads === 1 ? 5n : "not a bigint") as bigint;
+    },
+  };
+  assert.deepStrictEqual(unwrapResult(Transfer, driftingPayload), {
+    ok: true,
+    value: "not a bigint",
+  });
 });
 
 test("a non-enumerable value property stays out of an unwrapped payload", () => {
@@ -449,6 +553,16 @@ test("a result loaded from a Contract document unwraps through its rec arms", ()
   // The shape this test exists for: the declaration is a rec, and so is every
   // arm underneath it, so a non-resolving classifier sees "rec" for both.
   assert.strictEqual((TransferResult as { kind: string }).kind, "rec");
+  const variant = resolveSchema(TransferResult);
+  assert.strictEqual(variant.kind, "variant");
+  if (variant.kind !== "variant") {
+    return;
+  }
+  assert.deepStrictEqual(
+    Object.values(variant.arms).map((arm) => (arm as { kind: string }).kind),
+    ["rec", "rec"],
+    "every arm is a lazy thunk, which is what the generated route does not exercise",
+  );
   assert.strictEqual(isResultSchema(TransferResult), true);
   assert.deepStrictEqual(unwrapResult(TransferResult, { tag: "ok", value: 7n }), {
     ok: true,
@@ -480,6 +594,24 @@ test("a reply that made the round trip through the codec unwraps", () => {
   assert.deepStrictEqual(outcome, { ok: false, error: { tag: "too_old" } });
 });
 
+test("the root entry still imports nothing at runtime, which is why these live here", () => {
+  // The measured reason these helpers ship from `./validate` rather than the
+  // root: `schema.ts` is the leaf of the package's runtime graph, and the
+  // actor factory, the form-model builder, and the Contract loader all import
+  // it. A convenience re-export placed there later would hand the validator
+  // to every `formModel` and `schemaFromContract` consumer, and the claim in
+  // the shipped changelog would quietly stop being true — so the claim is a
+  // test rather than prose.
+  const source = readFileSync(new URL("../schema.ts", import.meta.url), "utf8");
+  const runtimeImports = (source.match(/^import .*$/gm) ?? []).filter(
+    (line) => !line.startsWith("import type "),
+  );
+  assert.deepStrictEqual(runtimeImports, [], "the root entry must import only types");
+  // And the direction this module depends on it: walker to core, never back.
+  const walker = readFileSync(new URL("../validate.ts", import.meta.url), "utf8");
+  assert(walker.includes('import { resolveSchema } from "./schema.ts";'));
+});
+
 // ---------------------------------------------------------------------------
 // The type level: payloads come off the arms, and the union narrows
 // ---------------------------------------------------------------------------
@@ -490,6 +622,20 @@ export const okPayload: ResultOk<typeof ledger.TransferResult> = 5n;
 export const errPayload: ResultErr<typeof ledger.TransferResult> = { tag: "too_old" };
 export const bareOkPayload: ResultOk<Schema<{ tag: "ok" } | { tag: "err"; value: string }>> = null;
 export const capitalPayload: ResultOk<Schema<{ tag: "Ok"; value: bigint } | { tag: "Err" }>> = 7n;
+export const bareErrPayload: ResultErr<Schema<{ tag: "Ok"; value: bigint } | { tag: "Err" }>> =
+  null;
+
+// The erased route — what `schemaFromContract` and `serviceMethods` hand back
+// — resolves to `unknown` rather than `any`, so a consumer of a loaded schema
+// must narrow before use. A widening to `any` would make the annotation below
+// legal and turn its directive into an unused-directive error, which is the
+// only way to pin the difference: `unknown` and `any` accept the same
+// annotations in every other position.
+export function erasedPayloadProbe(payload: ResultOk<AnySchema>): void {
+  // @ts-expect-error an erased schema's payload is `unknown`, and must be narrowed
+  const narrowed: bigint = payload;
+  void narrowed;
+}
 
 // @ts-expect-error the ledger's ok arm carries a nat, which is a bigint
 export const wrongOkPayload: ResultOk<typeof ledger.TransferResult> = "5";
