@@ -21,6 +21,16 @@ Those three are not one family. `contract_id` and `interface_id` are **semantic 
 
 See [architecture](docs/architecture.md) and the [Contract graph](docs/contract-graph.md) for the v1 model, constraints, and the explicitly deferred host-value ↔ Candid binary bridge. The byte-level algorithm for the three canonicalized identities is specified normatively in [canonicalization v1](docs/canonicalization-v1.md), and the detached artifact identity in [artifact identity v1](docs/artifact-identity-v1.md). See [release verification gates](docs/verification.md) for the checks required before declaring the format stable across implementations. See [performance benchmarks](docs/benchmarks.md) for reproducible comparisons with the pinned official Candid checker and for allocation measurements. See the [changelog](CHANGELOG.md) for what this beta contains and what it does not, and [releasing](docs/releasing.md) for the exact release-candidate procedure and what is irreversible about publishing.
 
+## TypeScript: `@candid-core/schema`
+
+This repository also produces a TypeScript package, published on npm as [`@candid-core/schema`](https://www.npmjs.com/package/@candid-core/schema): a Zod-style schema runtime driven by the same canonical Contract model — builders with static inference, fail-closed structural validation, a TypeScript-native Candid binary codec, typed actors over a transport-only agent, and form metadata.
+
+```sh
+npm install @candid-core/schema @icp-sdk/core
+```
+
+Its source of truth, README, and changelog live in [crates/candid-core-ts/ts/](crates/candid-core-ts/ts/), and it versions independently of this crate (pre-1.0, like everything here). The `candid-core` binary above is what turns a `.did` file into the Contract JSON that package's `schemaFromContract` consumes; the generator crate around it, `candid-core-ts`, is unpublishable by design.
+
 ## What each identity claims
 
 Every ID below is a content address over a different projection. **No unkeyed content ID authenticates itself**: a signature or other external mechanism is what authenticates, and signing one of these commits to exactly what its second column lists and to nothing else.
