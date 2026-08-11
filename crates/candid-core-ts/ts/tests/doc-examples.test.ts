@@ -28,14 +28,20 @@ import { readFileSync } from "node:fs";
 
 import {
   c,
+  resolveSchema,
+  serviceMethods,
   type AnyFieldSchema,
   type AnySchema,
   type FieldSchemas,
   type FuncValue,
   type Infer,
   type MethodMode,
+  type ResolvedNode,
   type Schema,
+  type SchemaNode,
+  type ServiceMethod,
 } from "../schema.ts";
+import { formModel } from "../forms.ts";
 
 // Every module whose JSDoc ships. schema.ts carries the examples today; the
 // others are listed so an example added to one of them is covered the same
@@ -182,6 +188,43 @@ test("every shipped @example is mirrored verbatim in this file", () => {
   void List;
 }
 
+// --- Mirrors: reading a schema back ---------------------------------------
+
+{
+  const node: SchemaNode = c.record({ balance: c.nat });
+  if (node.kind === "record") node.fields; // narrowed to the field map
+  void node;
+}
+
+{
+  const node: ResolvedNode = resolveSchema(c.rec(() => c.text));
+  void node;
+}
+
+{
+  const method: ServiceMethod = { name: "fee", mode: "query", args: [], results: [c.nat] };
+  void method;
+}
+
+{
+  resolveSchema(c.rec(() => c.nat)).kind; // "primitive"
+}
+
+{
+  const table = serviceMethods(c.service({ fee: c.func([], [c.nat], "query") }));
+  table.get("fee")?.mode; // "query"
+}
+
+// --- Mirrors: the form model ----------------------------------------------
+
+{
+  type Account = { balance: bigint };
+  const Account: Schema<Account> = c.rec(() => c.record({ balance: c.nat }));
+  let node = formModel(Account); // a rec-wrapped declaration: control "lazy"
+  while (node.control === "lazy") node = node.expand();
+  void node;
+}
+
 // --- The claims those examples' trailing comments make --------------------
 
 test("the node-interface examples read exactly what the comment claims", () => {
@@ -196,6 +239,14 @@ test("the node-interface examples read exactly what the comment claims", () => {
   assert.strictEqual(c.rec(() => c.nat).body(), c.nat);
   assert.strictEqual(c.func([c.principal], [c.nat], "query").mode, "query");
   assert(c.service({ balance: c.func([], [c.nat], "query") }).methods.balance !== undefined);
+});
+
+test("the introspection examples read exactly what the comment claims", () => {
+  assert.strictEqual(resolveSchema(c.rec(() => c.nat)).kind, "primitive");
+  const table = serviceMethods(c.service({ fee: c.func([], [c.nat], "query") }));
+  assert.strictEqual(table.get("fee")?.mode, "query");
+  const Account: Schema<{ balance: bigint }> = c.rec(() => c.record({ balance: c.nat }));
+  assert.strictEqual(formModel(Account).control, "lazy");
 });
 
 test("the builder examples build the nodes their comments describe", () => {

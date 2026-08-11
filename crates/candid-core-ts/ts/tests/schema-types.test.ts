@@ -10,7 +10,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { c, type Schema } from "../schema.ts";
+import { c, resolveSchema, type Schema, type SchemaNode } from "../schema.ts";
 import { validate, type ValidateResult } from "../validate.ts";
 import { encode, encodeArgs, decodeArgs } from "../codec.ts";
 import { formModel } from "../forms.ts";
@@ -199,4 +199,43 @@ test("formModel renders the empty leaf uninhabited", () => {
     const f = record.fields[record.fieldLabels.indexOf("f")]();
     assert.strictEqual(f.control, "uninhabited");
   }
+});
+
+// Issue #149: every builder result assigns to `SchemaNode`, composites
+// included. `Schema<in out T>` is invariant, so a union member carrying a
+// *specific* domain type would refuse the ordinary builder result whose node
+// it is meant to describe — a record of specific fields is not a record of
+// the general field map. These are positive compile-time probes in the same
+// spirit as the ones above: the file failing to type-check is the signal.
+export const nodePrimitive: SchemaNode = c.nat;
+export const nodeOpt: SchemaNode = c.opt(c.text);
+export const nodeVec: SchemaNode = c.vec(c.nat);
+export const nodeBlob: SchemaNode = c.blob();
+export const nodeUnit: SchemaNode = c.unit();
+export const nodeRecord: SchemaNode = c.record({ owner: c.principal, balance: c.nat });
+export const nodeTuple: SchemaNode = c.tuple([c.text, c.nat]);
+export const nodeVariant: SchemaNode = c.variant({ ok: c.nat, err: c.text });
+export const nodeFunc: SchemaNode = c.func([c.principal], [c.nat], "query");
+export const nodeService: SchemaNode = c.service({ fee: c.func([], [c.nat], "query") });
+export const nodeRec: SchemaNode = c.rec(() => c.record({ head: c.nat }));
+// The empty leaf reaches the union inside a composite, whose own domain is
+// inhabited.
+export const nodeEmptyArm: SchemaNode = c.variant({ a: c.empty, b: c.nat });
+// Bare, it does not — `SchemaNode` is a union of erased members, so it sits
+// exactly where `AnySchema` does on the #126 corner: `any` is assignable to
+// every type but `never`. `AnyFieldSchema` is the bound that re-admits it,
+// which is why `resolveSchema` takes that and not this.
+// @ts-expect-error a Schema<never> is not an erased node
+export const nodeEmpty: SchemaNode = c.empty;
+
+// And `resolveSchema` narrows back out of it: the walk a consumer writes
+// over a resolved node needs no cast and no unreachable `rec` case.
+test("a resolved node narrows without casts", () => {
+  const node = resolveSchema(c.rec(() => c.record({ owner: c.principal })));
+  assert.strictEqual(node.kind, "record");
+  if (node.kind !== "record") {
+    return;
+  }
+  assert.deepStrictEqual(Object.keys(node.fields), ["owner"]);
+  assert.strictEqual(resolveSchema(node.fields.owner).kind, "primitive");
 });

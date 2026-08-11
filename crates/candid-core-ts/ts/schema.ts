@@ -4,6 +4,10 @@
 // static inference, and `validate.ts` (issue #102) is the first walker. The
 // node interfaces are exported for exactly that purpose: a walker narrows on
 // `kind` instead of casting blindly, and the compiler checks the narrowing.
+// `SchemaNode`, `resolveSchema`, and `serviceMethods` at the foot of the file
+// are the rest of that contract — the rec-chain discipline and the service
+// method table every walker needs, stated once instead of re-derived per
+// consumer (issue #149).
 //
 // `Schema<in out T>` is deliberately invariant. The generator annotates every
 // declaration as `export const X: Schema<X> = …`, so the TypeScript compiler
@@ -300,6 +304,66 @@ export interface ServiceSchema extends Schema<Principal> {
    * else. Generated builders still pass `c.func(...)` directly.
    */
   readonly methods: { readonly [name: string]: AnySchema };
+}
+
+/* eslint-disable @typescript-eslint/no-explicit-any */
+/**
+ * Every node a schema can be, as one discriminated union on `kind` — what a
+ * walker narrows over once it holds a schema whose domain type is erased.
+ * A `switch` over this union with a `never`-typed default is exhaustive by
+ * construction, so a combinator added here turns every such walk red until it
+ * is handled.
+ *
+ * Every member's domain type is erased, composites included. [`Schema`] is
+ * invariant, so a `RecordSchema` of *specific* fields is not assignable to
+ * one of the general field map — the erasure is what lets a concrete builder
+ * result be handed to a walker at all. It leaves this union exactly where
+ * [`AnySchema`] sits: a `Schema<never>` — the `empty` leaf, an empty variant
+ * — is not one of these erased members, which is why [`resolveSchema`] takes
+ * the widened [`AnyFieldSchema`] and returns a node rather than demanding one.
+ *
+ * @example
+ * const node: SchemaNode = c.record({ balance: c.nat });
+ * if (node.kind === "record") node.fields; // narrowed to the field map
+ */
+export type SchemaNode =
+  | PrimitiveSchema<any>
+  | OptSchema<any>
+  | VecSchema<any>
+  | BlobSchema
+  | UnitSchema
+  | RecordSchema<any>
+  | TupleSchema<any>
+  | VariantSchema<any>
+  | FuncSchema
+  | ServiceSchema
+  | RecSchema<any>;
+
+/**
+ * A [`SchemaNode`] that is not a `rec` — what [`resolveSchema`] returns. The
+ * `rec` case is gone from the union rather than left unreachable, so a walk
+ * over a resolved node stays exhaustive without a case that cannot happen.
+ *
+ * @example
+ * const node: ResolvedNode = resolveSchema(c.rec(() => c.text));
+ */
+export type ResolvedNode = Exclude<SchemaNode, RecSchema<any>>;
+/* eslint-enable @typescript-eslint/no-explicit-any */
+
+/**
+ * One method of a service: its name, its mode, and the schemas of its
+ * arguments and results. The signature lives in the node rather than in the
+ * type — `rec` erases it from the type — which is why introspection is how it
+ * is read back.
+ *
+ * @example
+ * const method: ServiceMethod = { name: "fee", mode: "query", args: [], results: [c.nat] };
+ */
+export interface ServiceMethod {
+  readonly name: string;
+  readonly mode: MethodMode;
+  readonly args: readonly AnyFieldSchema[];
+  readonly results: readonly AnyFieldSchema[];
 }
 
 function primitive<T>(name: string): PrimitiveSchema<T> {
@@ -636,3 +700,111 @@ export const c = {
     return { kind: "rec", body };
   },
 };
+
+// Reading a schema back — issue #149. Both walkers in this package (the actor
+// factory and the form-model builder) resolved rec chains privately before
+// this, in two copies carrying the same bound and the same two messages; a
+// consumer holding the exported node interfaces had to write a third against
+// a discipline nothing documented. One implementation lives here now, and
+// both walkers call it.
+const REC_HOP_LIMIT = 256;
+
+// The kinds `ResolvedNode` claims to cover, as a record rather than a bare
+// list: a combinator added to the union and forgotten here is a compile
+// error, so the runtime check and the return type cannot drift apart. The
+// lookup goes through a Set because `"toString" in {}` answers true and a
+// method name is not a schema kind.
+const RESOLVED_KINDS: { readonly [K in ResolvedNode["kind"]]: true } = {
+  primitive: true,
+  opt: true,
+  vec: true,
+  blob: true,
+  unit: true,
+  record: true,
+  tuple: true,
+  variant: true,
+  func: true,
+  service: true,
+};
+const KNOWN_KINDS: ReadonlySet<string> = new Set(Object.keys(RESOLVED_KINDS));
+
+/**
+ * Resolve a schema to the node underneath its `rec` indirections: follow
+ * `body()` until a non-`rec` node appears, then return that node.
+ *
+ * This is the walking discipline every schema consumer needs, and the reason
+ * the node interfaces above are exported at all. Generated modules wrap
+ * *every* declaration in `c.rec`, and building schemas from a Contract
+ * document at runtime adds a hop at each edge, so a schema reached by name is
+ * a `rec` far more often than not: reading `.kind` off one directly sees
+ * `"rec"` and learns nothing about the type.
+ *
+ * Bounded and fail-closed, because a cycle is the shape recursion naturally
+ * produces: a chain that never terminates throws `TypeError` after 256 hops
+ * rather than hanging. So does anything that is not a schema object, and so
+ * does a `kind` this package does not define — [`Schema`] requires only that
+ * `kind` be *a* string, so the returned node is checked against the kinds
+ * [`ResolvedNode`] actually covers rather than asserted to be one of them.
+ * All three are programmer errors; a malformed *value* is what `validate`
+ * reports on, and it never throws.
+ *
+ * @example
+ * resolveSchema(c.rec(() => c.nat)).kind; // "primitive"
+ */
+export function resolveSchema(schema: AnyFieldSchema): ResolvedNode {
+  let node: unknown = schema;
+  for (let hops = 0; hops < REC_HOP_LIMIT; hops += 1) {
+    if (
+      typeof node !== "object" ||
+      node === null ||
+      typeof (node as { kind?: unknown }).kind !== "string"
+    ) {
+      throw new TypeError("not a schema object");
+    }
+    const kind = (node as { kind: string }).kind;
+    if (kind !== "rec") {
+      if (!KNOWN_KINDS.has(kind)) {
+        throw new TypeError(`unknown schema kind ${JSON.stringify(kind)}`);
+      }
+      return node as ResolvedNode;
+    }
+    node = (node as { body(): unknown }).body();
+  }
+  throw new TypeError("rec chain exceeds the depth limit");
+}
+
+/**
+ * The method table of a service schema, keyed by method name in declaration
+ * order — the first step of a wire debugger, a devtools panel, or a hook
+ * generator. It is the same walk the actor factory performs to build its
+ * methods, so what a table says and what an actor dispatches cannot disagree.
+ *
+ * Every method is resolved through [`resolveSchema`], because a method is not
+ * reliably a `func` node directly: schemas built from a Contract document at
+ * runtime wrap each one in a lazy `rec` thunk, since cyclic services exist.
+ * A `ReadonlyMap` rather than an object, so a method named `__proto__` is an
+ * ordinary entry and iteration order is the service's own.
+ *
+ * Throws `TypeError` on a schema that is not a service, and on a method that
+ * does not resolve to a func — both programmer errors, both raised eagerly
+ * rather than at the call that would have used the method.
+ *
+ * @example
+ * const table = serviceMethods(c.service({ fee: c.func([], [c.nat], "query") }));
+ * table.get("fee")?.mode; // "query"
+ */
+export function serviceMethods(service: AnyFieldSchema): ReadonlyMap<string, ServiceMethod> {
+  const node = resolveSchema(service);
+  if (node.kind !== "service") {
+    throw new TypeError("serviceMethods needs a service schema");
+  }
+  const table = new Map<string, ServiceMethod>();
+  for (const name of Object.keys(node.methods)) {
+    const func = resolveSchema(node.methods[name]);
+    if (func.kind !== "func") {
+      throw new TypeError(`method ${JSON.stringify(name)} is not a func schema`);
+    }
+    table.set(name, { name, mode: func.mode, args: func.args, results: func.results });
+  }
+  return table;
+}

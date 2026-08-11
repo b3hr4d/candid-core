@@ -48,22 +48,8 @@
 // that never terminates, which no Contract builds — is a programmer error
 // and throws `TypeError`, the same stance `createActor` takes.
 
-import type {
-  AnySchema,
-  AnyFieldSchema,
-  BlobSchema,
-  FieldSchemas,
-  FuncSchema,
-  OptSchema,
-  PrimitiveSchema,
-  RecordSchema,
-  RecSchema,
-  ServiceSchema,
-  TupleSchema,
-  UnitSchema,
-  VariantSchema,
-  VecSchema,
-} from "./schema.ts";
+import type { AnyFieldSchema, SchemaNode } from "./schema.ts";
+import { resolveSchema } from "./schema.ts";
 import { numericKeyId } from "./labels.ts";
 
 /** What every form node carries, wherever it sits. */
@@ -152,7 +138,31 @@ function labeled(path: string, key: string): Site {
     : { path: extendPath(path, key), label: key, numericId };
 }
 
-/** Build the form model for a schema. The root's path is `$`. */
+/**
+ * Build the form model for a schema. The root's path is `$`.
+ *
+ * **Expect a `lazy` root.** A `rec` schema becomes a `lazy` node, and every
+ * generated declaration is a `c.rec` thunk — so `formModel(Account)` returns
+ * a `lazy` node, not the `group` the record describes. The same holds inside
+ * the model: wherever a field or arm refers to another *named* declaration,
+ * that child is `lazy` too, and schemas built from a Contract document at
+ * runtime are lazy at every edge. Expand to the control you can render — in
+ * a loop, not a single `expand()`, because chains of two or more hops are
+ * ordinary: a declaration whose body is another declaration.
+ *
+ * The laziness is load-bearing rather than an artifact. A form cannot eagerly
+ * expand `List`, whose model is infinite, so recursion has to surface as
+ * expandable-on-demand and expansion has to be the caller's move. Only
+ * [`formNodeAt`] expands on your behalf, since a path names a reachable node.
+ *
+ * Never throws on any schema a Contract can produce. A foreign object, or a
+ * `rec` chain that never terminates, is a programmer error and throws
+ * `TypeError`.
+ *
+ * @example
+ * let node = formModel(Account); // a rec-wrapped declaration: control "lazy"
+ * while (node.control === "lazy") node = node.expand();
+ */
 export function formModel(schema: AnyFieldSchema): FormNode {
   return build(schema, { path: "$" });
 }
@@ -293,25 +303,12 @@ function descendInto(node: FormNode, segment: string | number): FormNode | undef
   return descend(unwrapLazy(node), segment);
 }
 
-// The typed union the switch is exhaustive over. The `never`-typed default
-// turns a dropped case into a compile error; a combinator added to
-// schema.ts but not listed here surfaces as the runtime TypeError below,
-// since the erased `AnyFieldSchema` cannot carry the addition to the compiler.
-/* eslint-disable @typescript-eslint/no-explicit-any */
-type SchemaNode =
-  | PrimitiveSchema<any>
-  | OptSchema<any>
-  | VecSchema<any>
-  | BlobSchema
-  | UnitSchema
-  | RecordSchema<FieldSchemas>
-  | TupleSchema<readonly AnySchema[]>
-  | VariantSchema<FieldSchemas>
-  | FuncSchema
-  | ServiceSchema
-  | RecSchema<any>;
-/* eslint-enable @typescript-eslint/no-explicit-any */
-
+// The walk narrows over `schema.ts`'s node union rather than a copy of it
+// (issue #149): the `never`-typed default turns a dropped case into a compile
+// error, and since the union is the shared one, a combinator added to
+// schema.ts now breaks this build too instead of only surfacing as the
+// runtime TypeError below. That TypeError still covers what the compiler
+// cannot see — a foreign object arriving through the erased `AnyFieldSchema`.
 function erased(schema: AnyFieldSchema): SchemaNode {
   if (
     typeof schema !== "object" ||
@@ -321,17 +318,6 @@ function erased(schema: AnyFieldSchema): SchemaNode {
     throw new TypeError("not a schema object");
   }
   return schema as unknown as SchemaNode;
-}
-
-function resolveArm(schema: AnyFieldSchema): SchemaNode {
-  let node = erased(schema);
-  for (let hops = 0; hops < 256; hops += 1) {
-    if (node.kind !== "rec") {
-      return node;
-    }
-    node = erased(node.body());
-  }
-  throw new TypeError("rec chain exceeds the depth limit");
 }
 
 function build(schema: AnyFieldSchema, site: Site): FormNode {
@@ -387,7 +373,7 @@ function build(schema: AnyFieldSchema, site: Site): FormNode {
         ...common,
         control: "choice",
         arms: Object.keys(arms).map((tag): FormArm => {
-          const payload = resolveArm(arms[tag]);
+          const payload = resolveSchema(arms[tag]);
           const tagOnly = payload.kind === "primitive" && payload.primitive === "null";
           const numericId = numericKeyId(tag);
           return {

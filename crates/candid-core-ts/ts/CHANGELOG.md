@@ -17,10 +17,47 @@ API, the inferred domain types, the codec's wire behaviour, and the codes and
 
 Pairs with `candid-core` 0.1.0-beta.2.
 
-Documentation only, in both senses: the editor hover and the npm page. No
-runtime behaviour, no inferred type, no wire encoding, and no issue code
-changed — the only executable difference anywhere in `dist/` is one unused
-import dropped from `codec.js`.
+Additive, and mostly documentation: the editor hover, the npm page, and a
+small introspection surface on the root export. Nothing that existed before
+behaves differently — no inferred type, no wire encoding, and no issue code
+changed, and the only executable difference in the modules that shipped in
+0.1.1 is one unused import dropped from `codec.js`.
+
+### Reading a schema back
+
+- **`resolveSchema` and `serviceMethods` are exported from the root entry.**
+  Both were private walks before: the actor factory carried one copy of the
+  rec-chain resolution and the form-model builder another, so anything that
+  introspects a service — a wire debugger, a devtools panel, a hook generator
+  — had to re-derive an undocumented discipline against the node interfaces.
+  `resolveSchema` follows `rec` indirections to the node underneath, bounded
+  at 256 hops and throwing `TypeError` on a chain that never terminates, on an
+  object that is not a schema, and on a `kind` this package does not define —
+  `Schema` requires only that `kind` be *a* string, so the node handed back is
+  checked against the kinds the return type covers rather than asserted to be
+  one of them. `serviceMethods` returns the per-method
+  table — `name`, `mode`, `args`, `results` — as a `ReadonlyMap` keyed in
+  declaration order, resolving each method, since schemas built from a
+  Contract document at runtime wrap every method in a lazy `rec` thunk.
+  Both live on the root export rather than a new subpath, so reading a method
+  table costs a consumer no dependency on the codec.
+- **The actor factory and the form-model builder now call them**, which is
+  what makes the table a consumer reads and the table an actor dispatches on
+  the same table by construction. Every message either one throws is
+  unchanged.
+- **`SchemaNode`, `ResolvedNode`, and `ServiceMethod` are exported** as the
+  types those two need: the discriminated union of every node kind, that
+  union without the `rec` case that `resolveSchema` has already removed, and
+  one method's signature. Every member of the union has its domain type
+  erased, composites included, because `Schema<in out T>` is invariant and a
+  record of *specific* fields is otherwise not assignable to a record of the
+  general field map.
+- **`formModel`'s laziness is documented.** A `rec` schema becomes a `lazy`
+  node, and generated declarations are all `rec` — so the root of a model is
+  `lazy`, and so is every reference to another named declaration inside it.
+  The `while (node.control === "lazy") node = node.expand()` idiom is now in
+  the hover, with the reason the nodes are not expanded for you: a form
+  cannot eagerly expand a recursive type.
 
 ### Editor hover
 
