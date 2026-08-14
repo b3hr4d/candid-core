@@ -15,13 +15,22 @@
 // stdout and exits 1. Determinism is enforced, not assumed: every
 // generation runs twice and the run refuses on any byte mismatch.
 
-import { readFile, readdir, mkdir, writeFile } from "node:fs/promises";
+import { readFile, readdir, mkdir, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
 
 import { didToContract, didToModule, init } from "../lib/index.js";
 
 const USAGE = "usage: candid-core-cli gen <service.did> [-o <dir>]";
+
+// The compiler's own source bounds (`Limits::default()` — the values the
+// root README documents), enforced *while walking*: the entry's whole
+// directory tree is the bundle this CLI hands over, so an oversized tree
+// must fail with the structured resource diagnostic the compiler would
+// produce, never by exhausting the JS heap before the wasm side can check.
+const MAX_SOURCE_BYTES = 1_048_576; // max_source_bytes, per file
+const MAX_BUNDLE_BYTES = 8_388_608; // max_bundle_bytes, aggregate
+const MAX_SOURCES = 256; // max_sources, file count
 
 function usage() {
   console.error(USAGE);
@@ -56,9 +65,33 @@ function parseArguments(argv) {
   return { entry, outDir: outDir ?? "." };
 }
 
-/** Every `.did` under `root`, keyed by `/`-separated path relative to it. */
+/** Print a structured resource refusal on stdout and exit 1 — the same
+ * channel and item shape a compile failure uses. */
+function resourceFailure(resource, limit, observed, message) {
+  const document = {
+    ok: false,
+    diagnostics: [
+      {
+        code: "resource_limit_exceeded",
+        phase: "load",
+        severity: "error",
+        message,
+        resource_limit: { resource, limit, observed },
+      },
+    ],
+  };
+  console.log(JSON.stringify(document, null, 2));
+  process.exit(1);
+}
+
+/**
+ * Every `.did` under `root`, keyed by `/`-separated path relative to it —
+ * bounded before anything is read: file count, per-file bytes (by `stat`),
+ * and aggregate bytes are all checked against the compiler's limits first,
+ * so the refusal is a diagnostic, not an out-of-memory abort.
+ */
 async function didFiles(root) {
-  const files = {};
+  const candidates = [];
   const entries = await readdir(root, { recursive: true, withFileTypes: true });
   for (const item of entries) {
     if (!item.isFile() || !item.name.endsWith(".did")) {
@@ -66,7 +99,40 @@ async function didFiles(root) {
     }
     const absolute = path.join(item.parentPath ?? item.path, item.name);
     const relative = path.relative(root, absolute).split(path.sep).join("/");
-    files[relative] = await readFile(absolute, "utf8");
+    candidates.push({ absolute, relative });
+  }
+  if (candidates.length > MAX_SOURCES) {
+    resourceFailure(
+      "sources",
+      MAX_SOURCES,
+      candidates.length,
+      `the bundle directory holds ${candidates.length} .did files, over the ${MAX_SOURCES}-source limit`,
+    );
+  }
+  let bundleBytes = 0;
+  for (const candidate of candidates) {
+    const { size } = await stat(candidate.absolute);
+    if (size > MAX_SOURCE_BYTES) {
+      resourceFailure(
+        "source_bytes",
+        MAX_SOURCE_BYTES,
+        size,
+        `${candidate.relative} is ${size} bytes, over the ${MAX_SOURCE_BYTES}-byte source limit`,
+      );
+    }
+    bundleBytes += size;
+    if (bundleBytes > MAX_BUNDLE_BYTES) {
+      resourceFailure(
+        "bundle_bytes",
+        MAX_BUNDLE_BYTES,
+        bundleBytes,
+        `the bundle directory exceeds the ${MAX_BUNDLE_BYTES}-byte aggregate limit`,
+      );
+    }
+  }
+  const files = {};
+  for (const candidate of candidates) {
+    files[candidate.relative] = await readFile(candidate.absolute, "utf8");
   }
   return files;
 }

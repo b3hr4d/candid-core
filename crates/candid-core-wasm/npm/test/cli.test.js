@@ -9,7 +9,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -137,4 +137,62 @@ test("two runs produce byte-identical artifacts", () => {
       artifact,
     );
   }
+});
+
+// The bundle walk is bounded by the compiler's own limits *before* anything
+// is read (review finding on this PR): an oversized tree fails with the
+// structured resource diagnostic, never by exhausting the JS heap.
+test("the bundle walk fails closed on the compiler's source bounds", () => {
+  // One file over the per-file byte limit — never read, only statted.
+  const oversized = mkdtempSync(path.join(tmpdir(), "candid-cli-oversized-"));
+  writeFileSync(path.join(oversized, "entry.did"), "service : {};");
+  writeFileSync(path.join(oversized, "huge.did"), " ".repeat(1_048_577));
+  let run = gen(["gen", path.join(oversized, "entry.did")]);
+  assert.strictEqual(run.status, 1);
+  let response = JSON.parse(run.stdout);
+  assert.strictEqual(response.ok, false);
+  assert.strictEqual(response.diagnostics[0].code, "resource_limit_exceeded");
+  assert.deepStrictEqual(response.diagnostics[0].resource_limit, {
+    resource: "source_bytes",
+    limit: 1_048_576,
+    observed: 1_048_577,
+  });
+
+  // Nine one-MiB files: each under the per-file limit, the aggregate over
+  // the 8 MiB bundle limit.
+  const aggregate = mkdtempSync(path.join(tmpdir(), "candid-cli-aggregate-"));
+  writeFileSync(path.join(aggregate, "entry.did"), "service : {};");
+  for (let index = 0; index < 9; index += 1) {
+    writeFileSync(path.join(aggregate, `pad${index}.did`), " ".repeat(1_048_576));
+  }
+  run = gen(["gen", path.join(aggregate, "entry.did")]);
+  assert.strictEqual(run.status, 1);
+  response = JSON.parse(run.stdout);
+  assert.strictEqual(response.diagnostics[0].resource_limit.resource, "bundle_bytes");
+  assert.strictEqual(response.diagnostics[0].resource_limit.limit, 8_388_608);
+
+  // 257 files: one over the source-count limit…
+  const crowded = mkdtempSync(path.join(tmpdir(), "candid-cli-crowded-"));
+  writeFileSync(path.join(crowded, "entry.did"), "service : {};");
+  for (let index = 0; index < 256; index += 1) {
+    writeFileSync(path.join(crowded, `extra${index}.did`), "type T = nat;");
+  }
+  run = gen(["gen", path.join(crowded, "entry.did")]);
+  assert.strictEqual(run.status, 1);
+  response = JSON.parse(run.stdout);
+  assert.deepStrictEqual(response.diagnostics[0].resource_limit, {
+    resource: "sources",
+    limit: 256,
+    observed: 257,
+  });
+
+  // …and exactly at the limit the walk admits the bundle and the run
+  // succeeds — the bound fires one over, not at.
+  const outDir = path.join(crowded, "out");
+  writeFileSync(path.join(crowded, "extra0.did"), ""); // still a .did, still counted
+  const exact = gen(["gen", path.join(crowded, "entry.did"), "-o", outDir]);
+  assert.strictEqual(exact.status, 1, "257 files stay refused");
+  rmSync(path.join(crowded, "extra255.did"));
+  const atLimit = gen(["gen", path.join(crowded, "entry.did"), "-o", outDir]);
+  assert.strictEqual(atLimit.status, 0, `${atLimit.stdout}${atLimit.stderr}`);
 });

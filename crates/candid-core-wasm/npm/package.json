@@ -22,6 +22,7 @@
     "lib",
     "wasm/candid_core_wasm.js",
     "wasm/candid_core_wasm_bg.wasm",
+    "LICENSE",
     "README.md",
     "CHANGELOG.md"
   ],
