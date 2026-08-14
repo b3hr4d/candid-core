@@ -25,13 +25,15 @@
 //! - [`did_to_module`] success: `{"ok": true, "module": "<TypeScript>"}` —
 //!   the text `candid-core-ts` generates, byte-identical to the reviewed
 //!   goldens, pinned by test.
-//! - failure, either function: `{"ok": false, "diagnostics": […]}` with
-//!   candid-core's diagnostics passed through verbatim. Failures this crate
-//!   itself originates use the same item shape with its own stable codes:
-//!   `invalid_request` (the request document is not one of the two shapes)
-//!   and `ts_generation_refused` (the generator's fail-closed refusals,
-//!   message text verbatim), both under `"phase": "generate"` only for the
-//!   latter and `"load"` for the former.
+//! - failure, either function: `{"ok": false, "diagnostics": […]}` — the
+//!   one and only failure shape. Compiler diagnostics pass through verbatim;
+//!   envelope-validation refusals surface as their path-addressed violation
+//!   items under the same key (the native binary's channel, aligned in
+//!   review); and the two codes this crate itself originates are
+//!   `invalid_request` (`"phase": "load"` — the request document is not one
+//!   of the two shapes) and `ts_generation_refused`
+//!   (`"phase": "generate"` — the generator's fail-closed refusals, message
+//!   text verbatim).
 //!
 //! # Determinism
 //!
@@ -104,7 +106,7 @@ fn parse_request(request: &str) -> Result<(String, MemoryResolver), String> {
         .map_err(|error| invalid_request(&format!("the request is not JSON: {error}")))?;
     let object = document
         .as_object()
-        .ok_or_else(|| invalid_request("the request is a JSON object"))?;
+        .ok_or_else(|| invalid_request("the request must be a JSON object"))?;
     let unknown: Vec<&str> = object
         .keys()
         .map(String::as_str)
@@ -149,7 +151,7 @@ fn parse_request(request: &str) -> Result<(String, MemoryResolver), String> {
             Ok((scheme_qualified(entry), resolver))
         }
         _ => Err(invalid_request(
-            "the request is {\"source\": …} or {\"entry\": …, \"files\": {…}}",
+            "the request must be {\"source\": …} or {\"entry\": …, \"files\": {…}}",
         )),
     }
 }
@@ -178,29 +180,30 @@ fn envelope_document(compilation: Compilation) -> String {
         &Limits::default(),
     ) {
         Ok(()) => pretty(&serde_json::to_value(&envelope).expect("JSON values serialize")),
-        Err(error) => pretty(&json!({ "ok": false, "violations": error.violations })),
+        // One failure channel, same as the native binary since its review:
+        // `ContractViolation` is an alias of `Diagnostic`, so the validation
+        // items land under `diagnostics` unchanged rather than introducing a
+        // second failure shape.
+        Err(error) => pretty(&json!({ "ok": false, "diagnostics": error.violations })),
     }
 }
 
 /// Named field labels as `[container, id, name]` triples — the
 /// `org.candid-core.field-names/v1` value, derived exactly as the golden
-/// pipeline and the native binary derive it.
+/// pipeline and the native binary derive it: one name per `(container, id)`,
+/// retained with `TsNames::from_source_info`'s own overwrite order (later
+/// provenance wins), so a hash-colliding pair of spellings can never leave
+/// the loader a different key than the generated module renders.
 fn field_name_triples(source_info: &SourceInfo) -> Vec<Value> {
-    let mut triples: Vec<(u32, u32, &str)> = source_info
-        .field_labels()
+    let mut names: std::collections::BTreeMap<(u32, u32), &str> = std::collections::BTreeMap::new();
+    for provenance in source_info.field_labels() {
+        if let SourceLabel::Named { name } = &provenance.label {
+            names.insert((provenance.container, provenance.id), name.as_str());
+        }
+    }
+    names
         .iter()
-        .filter_map(|provenance| match &provenance.label {
-            SourceLabel::Named { name } => {
-                Some((provenance.container, provenance.id, name.as_str()))
-            }
-            _ => None,
-        })
-        .collect();
-    triples.sort();
-    triples.dedup();
-    triples
-        .iter()
-        .map(|(container, id, label)| json!([container, id, label]))
+        .map(|((container, id), label)| json!([container, id, label]))
         .collect()
 }
 

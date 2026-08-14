@@ -106,6 +106,36 @@ fn bundles_resolve_through_the_files_map() {
     }
 }
 
+/// Hash-colliding spellings collapse to the exact key the generated module
+/// renders — `cemxzwyk` and `amxawvks` share a Candid label hash, so their
+/// structurally identical records deduplicate to one semantic node with two
+/// provenance spellings, and the table must carry the one the generator
+/// keeps (PR #159 review, mirrored here).
+#[test]
+fn colliding_spellings_collapse_to_the_generated_key() {
+    let request =
+        single("type A = record { cemxzwyk : nat };\ntype B = record { amxawvks : nat };");
+    let module: Value = serde_json::from_str(&did_to_module(&request)).unwrap();
+    assert_eq!(module["ok"], Value::Bool(true), "{module}");
+    let envelope: Value = serde_json::from_str(&did_to_contract(&request)).unwrap();
+    let triples = envelope["extensions"][FIELD_NAMES_EXTENSION]
+        .as_array()
+        .unwrap();
+    assert_eq!(
+        triples.len(),
+        1,
+        "one entry per (container, id): {triples:?}"
+    );
+    let winner = triples[0][2].as_str().unwrap();
+    assert!(
+        module["module"]
+            .as_str()
+            .unwrap()
+            .contains(&format!("{winner}: c.nat")),
+        "the module must render the same spelling the table carries: {winner:?}",
+    );
+}
+
 /// Determinism: identical requests, byte-identical responses.
 #[test]
 fn responses_are_deterministic() {
