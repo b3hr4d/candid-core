@@ -461,13 +461,13 @@ The pinned Node (24.18.0) ships npm 11.16.0, above both floors that matter:
 publishing also requires a GitHub-hosted runner and, for automatic
 provenance, a public repository publishing a public package — all true here.
 
-`@icp-sdk/core` is a type-only peer: the shipped declarations reference its
-`Principal`, so TypeScript consumers must install it, while npm's install
-metadata marks it optional because nothing imports it at runtime (which is
-also what keeps this repository's own lockfile free of a dependency tree it
-never executes). The smoke asserts both directions — the package compiles
-with the peer present, and its absence is a clear missing-module error
-rather than a silent `any`.
+`@icp-sdk/core` is a peer only the `./transport-icp` subpath uses, at
+runtime, for whoever imports it (issues #154, #150): no other shipped
+declaration references the SDK, so every other subpath compiles and runs
+with no peer installed at all. The smoke asserts the contract in both
+directions — a peerless consumer of everything except the transport
+compiles and executes, and the transport-importing consumer without the
+peer fails with a clear missing-module error rather than a silent `any`.
 
 The package versions independently of the crate (pre-1.0). Bump
 `ts/package.json` in an ordinary reviewed PR; state in that PR's body which
