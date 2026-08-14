@@ -38,6 +38,10 @@
       "types": "./dist/actor.d.ts",
       "default": "./dist/actor.js"
     },
+    "./transport-icp": {
+      "types": "./dist/transport-icp.d.ts",
+      "default": "./dist/transport-icp.js"
+    },
     "./forms": {
       "types": "./dist/forms.d.ts",
       "default": "./dist/forms.js"
@@ -57,6 +61,8 @@
     "format:check": "cd ../../.. && prettier --check \"**/*.ts\""
   },
   "devDependencies": {
+    "@icp-sdk/core": "6.1.0",
+    "@noble/curves": "2.3.0",
     "prettier": "3.9.6",
     "typescript": "7.0.2"
   },

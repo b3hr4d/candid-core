@@ -18,12 +18,41 @@ API, the inferred domain types, the codec's wire behaviour, and the codes and
 Pairs with `candid-core` 0.1.0-beta.2.
 
 Additive: the editor hover, the npm page, a small introspection surface on the
-root export, result unwrapping on `./validate`, and one-document contract
-loading on `./contract`. Nothing that existed before behaves differently — no
-inferred type, no wire encoding, and no existing issue code changed
+root export, result unwrapping on `./validate`, one-document contract loading
+on `./contract`, and the `@icp-sdk/core` transport adapter as the new
+`./transport-icp` subpath. Nothing that existed before behaves differently —
+no inferred type, no wire encoding, and no existing issue code changed
 (`./contract` adds one code, `invalid_extension_name`), and every executable
 difference in the modules that shipped in 0.1.1 is new API plus one unused
 import dropped from `codec.js`.
+
+### The icp-sdk transport adapter
+
+- **`httpTransport` is exported from the new `./transport-icp` subpath**
+  (decision recorded on the tracker: a subpath, not a new package — no new
+  permanent npm name for ~60 lines, and the already-declared optional peer
+  carries it). It builds a `Transport` over `@icp-sdk/core`'s `HttpAgent`:
+  `query` throws a plain `Error` naming the reject code and message; `call`
+  returns the certificate-verified reply bytes v6's one-shot `agent.update`
+  resolves with. Options are exactly `host`, `rootKey`, and a pre-built
+  `agent` for everything beyond them (identity, retries, ingress options) —
+  the pre-built agent travels alone, and combining it with the other options
+  throws `TypeError`. No logging hook; wrap the returned `Transport`.
+- **Importing the subpath is what makes the peer a runtime requirement**, and
+  the range `>= 6` is load-bearing: older majors resolved `update` at
+  submission and need their own submit-and-poll adapter. Consumers who never
+  import `./transport-icp` keep the type-only peer situation unchanged, and
+  the package stays `sideEffects: false`.
+- **Tested against the real pinned `@icp-sdk/core@6.1.0` over a mock
+  `fetch`**, not against a stubbed agent: the replied and rejected query
+  paths, TypeError on the refused option combination, effective-canister-id
+  routing (the management-canister shape that needs it), and a certified
+  reply whose fabricated certificate is genuinely BLS-signed by a root key
+  generated in the test — plus the adversarial half, where the same reply
+  under a different root key must be refused, proving the transport's
+  root-key wiring is what verification consulted. The README's actor section
+  now shows `createActor(…, httpTransport(…))` as the primary example,
+  replacing the former inline adapter.
 
 ### One-document contract loading
 

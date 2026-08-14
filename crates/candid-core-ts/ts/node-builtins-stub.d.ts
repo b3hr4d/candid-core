@@ -17,6 +17,9 @@ declare module "node:assert/strict" {
     rejects(block: () => Promise<unknown>, check?: (error: unknown) => boolean): Promise<void>;
     throws(block: () => unknown, expected?: unknown): void;
     deepStrictEqual(actual: unknown, expected: unknown, message?: string): void;
+    // Widened for the transport adapter suite (issue #154): URL-routing
+    // assertions match against the request the mock fetch recorded.
+    match(value: string, pattern: RegExp, message?: string): void;
   }
   const assert: Assert;
   export default assert;
