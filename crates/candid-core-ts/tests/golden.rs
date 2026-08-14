@@ -268,7 +268,7 @@ fn nested_func_generates() {
     let output = generate_module(anonymous.contract(), &names, &TsOptions::default())
         .expect("anonymous nested func generates since #104");
     assert!(
-        output.contains("hook: { principal: Principal; method: string }"),
+        output.contains("hook: { principal: PrincipalValue; method: string }"),
         "{output}"
     );
     assert!(
@@ -284,7 +284,7 @@ fn nested_func_generates() {
     let output = generate_module(named.contract(), &names, &TsOptions::default())
         .expect("a reference to a func alias generates since #104");
     assert!(
-        output.contains("export type Callback = { principal: Principal; method: string };"),
+        output.contains("export type Callback = { principal: PrincipalValue; method: string };"),
         "{output}"
     );
     assert!(output.contains("hook: Callback"), "{output}");
@@ -370,16 +370,18 @@ fn numeric_shaped_source_names_are_refused() {
 
 /// A declaration named after one of the module's own imports would emit a
 /// module that can never load (`export const c` against `import { c }`) —
-/// refused instead, unconditionally: `Principal` is reserved even in a
-/// contract that never uses the principal primitive (issue #116).
+/// refused instead, unconditionally: `PrincipalValue` is reserved even in a
+/// contract that never uses the principal primitive (issue #116; the
+/// reserved name tracked the import when #150 replaced the SDK `Principal`
+/// with the structural type).
 #[test]
 fn import_shadowing_declaration_names_are_refused() {
     for source in [
         "type c = nat8;",
         "type Schema = nat8;",
-        "type Principal = record { p : principal };",
+        "type PrincipalValue = record { p : principal };",
         // No principal primitive anywhere: still refused by decision.
-        "type Principal = nat8;",
+        "type PrincipalValue = nat8;",
         // The ambient types the lowerings emit are bindings too: a
         // declaration by these names shadows them module-wide.
         "type Array = nat8; type V = vec text;",
@@ -413,15 +415,19 @@ fn import_shadowing_declaration_names_are_refused() {
             "error message carries embedded space runs: {error}"
         );
     }
-    // Near-misses are ordinary names.
-    let compilation = compile_did("type Principal2 = nat8;").expect("compile");
-    let output = generate_module(
-        compilation.contract(),
-        &TsNames::new(),
-        &TsOptions::default(),
-    )
-    .expect("a near-miss name is not reserved");
-    assert!(output.contains("Principal2"));
+    // Near-misses are ordinary names — including `Principal` itself, which
+    // stopped being a referenced binding when #150 switched the emitted
+    // import to `PrincipalValue`: a contract may now declare it freely.
+    for near_miss in ["type Principal2 = nat8;", "type Principal = nat8;"] {
+        let compilation = compile_did(near_miss).expect("compile");
+        let output = generate_module(
+            compilation.contract(),
+            &TsNames::new(),
+            &TsOptions::default(),
+        )
+        .expect("a non-referenced name is not reserved");
+        assert!(output.contains("export type Principal"));
+    }
 }
 
 /// The actor lowering references the ambient global `Promise` on every

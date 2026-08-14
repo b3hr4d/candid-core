@@ -6,25 +6,23 @@ a TypeScript-native Candid binary codec, typed actors over a transport-only
 agent, and UI-agnostic form metadata.
 
 ```sh
-npm install @candid-core/schema @icp-sdk/core
+npm install @candid-core/schema
 ```
 
-Install both. `@icp-sdk/core` is a **type-only peer dependency** — nothing
-imports it at runtime, but the shipped declarations reference its `Principal`,
-so a TypeScript consumer without it either fails to compile or silently loses
-the type. [What exactly goes wrong](#the-type-only-peer-dependency) is worth
-reading once.
+That is the whole install. The `@icp-sdk/core` peer is needed only by the
+[`./transport-icp`](#calling-a-canister) subpath, at runtime, for exactly
+whoever imports it — every other module is self-contained, principal typing
+included ([the decoded-value contract](#the-icp-sdk-peer) below).
 
 ```ts
 import { c, type Infer } from "@candid-core/schema";
 import { validate } from "@candid-core/schema/validate";
 import { encode, decode } from "@candid-core/schema/codec";
-import { Principal } from "@icp-sdk/core/principal";
 
 const Account = c.record({ owner: c.principal, balance: c.nat });
-type Account = Infer<typeof Account>; // { owner: Principal; balance: bigint }
+type Account = Infer<typeof Account>; // { owner: PrincipalValue; balance: bigint }
 
-const value: Account = { owner: Principal.fromText("aaaaa-aa"), balance: 5n };
+const value: Account = { owner: { toText: () => "aaaaa-aa" }, balance: 5n };
 
 validate(Account, value); // { ok: true } | { ok: false, issues }
 const encoded = encode(Account, value); // { ok: true, bytes } | { ok: false, issues }
@@ -58,36 +56,31 @@ Modules, each a subpath export:
   labels, lazy recursion, and validation-issue-to-form-node resolution.
 - **`./labels`** — the Candid label hash and the `_N_` rendering convention.
 
-## The type-only peer dependency
+## The icp-sdk peer
 
-The `principal` primitive types against `@icp-sdk/core`'s `Principal`, so the
-shipped declaration files import that type. npm's install metadata marks the
-peer `optional` because nothing imports it at *runtime* — plain JavaScript
-consumers need nothing, and no bytes from it are bundled — with one deliberate
-exception: the [`./transport-icp`](#calling-a-canister) subpath imports the
-peer's agent at runtime, for exactly whoever chose to import that subpath.
-Everywhere else, a TypeScript consumer merely needs the peer installed, and
-neither failure mode says so:
+`@icp-sdk/core` is a peer only the [`./transport-icp`](#calling-a-canister)
+subpath uses — at runtime, `>= 6`, for exactly whoever imports it. No other
+shipped module imports the SDK at all, at runtime or in its declarations, so
+every other subpath compiles and runs with no `@icp-sdk/core` installed —
+under strict TypeScript with `skipLibCheck` off included. (Earlier releases
+typed `c.principal` against the SDK's `Principal` class, which made the peer
+a silent type-level requirement everywhere; the structural `PrincipalValue`
+removed it.)
 
-- **Without it, and with `skipLibCheck` off**, compilation fails inside
-  `node_modules`, pointing at this package's own declarations rather than at
-  anything you wrote:
+### Decoded principal values
 
-  ```
-  node_modules/@candid-core/schema/dist/schema.d.ts(1,32): error TS2307:
-    Cannot find module '@icp-sdk/core/principal' or its corresponding type declarations.
-  ```
+`c.principal` types as `PrincipalValue` — `{ toText(): string }`, exported
+from the root — which is the truth in both directions:
 
-  The fix is `npm install @icp-sdk/core`. The error never says so.
-
-- **Without it, and with `skipLibCheck: true`** — the common application
-  setting — the build is *green* and `Principal` degrades to `any`. Nothing
-  warns. `Infer<typeof Account>["owner"]` becomes `any`, every principal-typed
-  field stops being checked, and inference downstream of one weakens with it.
-  This is the worse of the two outcomes, because it looks like success.
-
-Any package providing that subpath's types satisfies the requirement; it does
-not have to be `@icp-sdk/core` itself.
+- **What you get.** The codec is self-contained and never constructs an SDK
+  class: a decoded principal carries exactly `toText()`. It is *not* a
+  `Principal` instance — `instanceof` is `false`, and class methods like
+  `.toUint8Array()` do not exist on it. Code that wants the class re-wraps:
+  `Principal.fromText(value.toText())`.
+- **What you can give.** Validation and encoding are structural — any object
+  whose `toText()` returns canonical principal text — and the SDK class
+  satisfies that shape, so values built with `Principal.fromText(…)` encode
+  unchanged.
 
 ## From a `.did` file
 
@@ -190,8 +183,8 @@ requirement, and the peer range `>= 6` is load-bearing: on v6 `agent.update`
 submits, polls to completion, and verifies the certificate in one shot, which
 is exactly what the adapter's `call` relies on — older majors resolved at
 submission and need their own submit-and-poll adapter, deliberately not
-written here. Consumers who never import this subpath keep the type-only peer
-situation [above](#the-type-only-peer-dependency), unchanged.
+written here. Consumers who never import this subpath need no `@icp-sdk/core`
+at all — [the peer](#the-icp-sdk-peer) exists for exactly this module.
 
 `httpTransport` exposes the two knobs a plain consumer needs — `host`, and
 `rootKey` for local networks (omit it on mainnet). Everything beyond them —
@@ -312,8 +305,10 @@ instead.
 Types describe the modern domain, not the agent-js runtime shapes: `opt T` is
 `T | null` (collapsing opts fail closed at generation), variants are
 `{ tag, value }` discriminated unions, anonymous `vec nat8` is `Uint8Array`,
-`nat`/`int`/64-bit integers are `bigint`. Compatibility with agent-js value
-shapes is an explicit non-goal, recorded on the project's issue tracker.
+`nat`/`int`/64-bit integers are `bigint`, and principals are the structural
+[`PrincipalValue`](#decoded-principal-values) the codec actually delivers.
+Compatibility with agent-js value shapes is an explicit non-goal, recorded on
+the project's issue tracker.
 
 ## Verification
 

@@ -36,6 +36,7 @@ import {
   type FuncValue,
   type Infer,
   type MethodMode,
+  type PrincipalValue,
   type ResolvedNode,
   type Schema,
   type SchemaNode,
@@ -102,8 +103,13 @@ test("every shipped @example is mirrored verbatim in this file", () => {
 }
 
 {
+  const owner: PrincipalValue = { toText: () => "ryjl3-tyaaa-aaaaa-aaaba-cai" };
+  void owner;
+}
+
+{
   const Account = c.record({ owner: c.principal, balance: c.nat });
-  type Account = Infer<typeof Account>; // { owner: Principal; balance: bigint }
+  type Account = Infer<typeof Account>; // { owner: PrincipalValue; balance: bigint }
   void Account;
 }
 
@@ -158,7 +164,7 @@ test("every shipped @example is mirrored verbatim in this file", () => {
   c.variant({ ok: c.null }); // { tag: "ok" }
   c.record({ active: c.bool }); // { active: boolean }
   c.record({ memo: c.text }); // { memo: string }
-  c.record({ owner: c.principal }); // { owner: Principal }
+  c.record({ owner: c.principal }); // { owner: PrincipalValue }
   c.variant({ ok: c.text, never: c.empty });
   c.record({ memo: c.opt(c.text) }); // { memo: string | null }
   c.vec(c.nat32); // number[]

@@ -15,7 +15,6 @@
     "./actor.ts",
     "./transport-icp.ts",
     "./forms.ts",
-    "./labels.ts",
-    "./principal-stub.d.ts"
+    "./labels.ts"
   ]
 }

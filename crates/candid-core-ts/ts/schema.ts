@@ -21,9 +21,31 @@
 // package is its own future slice: npm names are as permanent as crates.io
 // names, and the name is not yet decided.
 
-import type { Principal } from "@icp-sdk/core/principal";
-
 declare const phantom: unique symbol;
+
+/**
+ * The principal value this runtime describes, delivers, and accepts — the
+ * decoded-value contract, stated once:
+ *
+ * - **Decoded values carry exactly this surface.** The codec is
+ *   self-contained by design (no runtime dependency on any Principal
+ *   implementation), so decoding produces a minimal structural carrier of
+ *   the canonical text — an object whose only member is `toText()`. It is
+ *   *not* an `@icp-sdk/core` `Principal` instance: `instanceof` is `false`
+ *   and class methods like `toUint8Array()` do not exist on it. Code that
+ *   needs the class re-wraps: `Principal.fromText(value.toText())`.
+ * - **SDK `Principal` instances are accepted on input.** Validation and
+ *   encoding are structural — any object with a `toText()` method whose
+ *   text is a canonical principal — and the SDK class satisfies that
+ *   shape, so values you built with `Principal.fromText(…)` encode
+ *   unchanged.
+ *
+ * @example
+ * const owner: PrincipalValue = { toText: () => "ryjl3-tyaaa-aaaaa-aaaba-cai" };
+ */
+export interface PrincipalValue {
+  toText(): string;
+}
 
 /**
  * The node every combinator produces: a `kind` tag a walker dispatches on,
@@ -50,7 +72,7 @@ export interface Schema<in out T> {
  *
  * @example
  * const Account = c.record({ owner: c.principal, balance: c.nat });
- * type Account = Infer<typeof Account>; // { owner: Principal; balance: bigint }
+ * type Account = Infer<typeof Account>; // { owner: PrincipalValue; balance: bigint }
  */
 export type Infer<S> = S extends Schema<infer T> ? T : never;
 
@@ -255,7 +277,7 @@ export interface RecSchema<T> extends Schema<T> {
  * const nextPage: FuncValue = { principal: archive, method: "get_blocks" };
  */
 export interface FuncValue {
-  readonly principal: Principal;
+  readonly principal: PrincipalValue;
   readonly method: string;
 }
 
@@ -295,7 +317,7 @@ export interface FuncSchema extends Schema<FuncValue> {
  * @example
  * c.service({ balance: c.func([], [c.nat], "query") }).methods.balance;
  */
-export interface ServiceSchema extends Schema<Principal> {
+export interface ServiceSchema extends Schema<PrincipalValue> {
   readonly kind: "service";
   /**
    * `AnySchema`, not `FuncSchema`: the runtime loader wraps every method in
@@ -539,16 +561,17 @@ export const c = {
   empty: primitive<never>("empty"),
 
   /**
-   * Candid `principal`, typed as `@icp-sdk/core`'s `Principal`. Validation
-   * is structural — an object carrying a `toText` method — because this
-   * runtime deliberately has no runtime dependency on any Principal
-   * implementation; encoding then parses `toText()` and refuses text that is
-   * not canonical.
+   * Candid `principal`, typed as the structural [`PrincipalValue`] — the
+   * type surface telling the truth about what the self-contained codec
+   * delivers. Validation is structural (an object carrying a `toText`
+   * method), encoding parses `toText()` and refuses non-canonical text, and
+   * an `@icp-sdk/core` `Principal` instance satisfies the shape, so SDK
+   * values encode unchanged. See [`PrincipalValue`] for the full contract.
    *
    * @example
-   * c.record({ owner: c.principal }); // { owner: Principal }
+   * c.record({ owner: c.principal }); // { owner: PrincipalValue }
    */
-  principal: primitive<Principal>("principal"),
+  principal: primitive<PrincipalValue>("principal"),
 
   /**
    * Candid `opt T`, rendered as `T | null`: absence is exactly `null`, and

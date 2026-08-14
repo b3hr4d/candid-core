@@ -26,10 +26,10 @@ See [architecture](docs/architecture.md) and the [Contract graph](docs/contract-
 This repository also produces a TypeScript package, published on npm as [`@candid-core/schema`](https://www.npmjs.com/package/@candid-core/schema): a Zod-style schema runtime driven by the same canonical Contract model — builders with static inference, fail-closed structural validation, a TypeScript-native Candid binary codec, typed actors over a transport-only agent, and form metadata.
 
 ```sh
-npm install @candid-core/schema @icp-sdk/core
+npm install @candid-core/schema
 ```
 
-Its source of truth, README, and changelog live in [crates/candid-core-ts/ts/](crates/candid-core-ts/ts/), and it versions independently of this crate (pre-1.0, like everything here). The `candid-core` binary above is what turns a `.did` file into the Contract JSON that package's `schemaFromContract` consumes; the generator crate around it, `candid-core-ts`, is unpublishable by design.
+Its source of truth, README, and changelog live in [crates/candid-core-ts/ts/](crates/candid-core-ts/ts/), and it versions independently of this crate (pre-1.0, like everything here). The `@icp-sdk/core` peer is needed only by its `./transport-icp` subpath, at runtime, for whoever imports it. The `candid-core` binary above is what turns a `.did` file into the Contract JSON that package's `schemaFromContract` consumes; the generator crate around it, `candid-core-ts`, is unpublishable by design.
 
 ## What each identity claims
 

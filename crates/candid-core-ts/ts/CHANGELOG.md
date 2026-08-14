@@ -17,14 +17,47 @@ API, the inferred domain types, the codec's wire behaviour, and the codes and
 
 Pairs with `candid-core` 0.1.0-beta.2.
 
-Additive: the editor hover, the npm page, a small introspection surface on the
-root export, result unwrapping on `./validate`, one-document contract loading
-on `./contract`, and the `@icp-sdk/core` transport adapter as the new
-`./transport-icp` subpath. Nothing that existed before behaves differently —
-no inferred type, no wire encoding, and no existing issue code changed
-(`./contract` adds one code, `invalid_extension_name`), and every executable
-difference in the modules that shipped in 0.1.1 is new API plus one unused
-import dropped from `codec.js`.
+The editor hover, the npm page, a small introspection surface on the root
+export, result unwrapping on `./validate`, one-document contract loading on
+`./contract`, the `@icp-sdk/core` transport adapter as the new
+`./transport-icp` subpath — and one deliberate **type-level breaking change**:
+decoded principal values now type as the structural `PrincipalValue` instead
+of the SDK `Principal` class (details below; the only code it breaks was
+already broken at runtime). Runtime behavior is unchanged throughout — no
+wire encoding and no validation verdict moved, and no existing issue code
+changed (`./contract` adds one code, `invalid_extension_name`).
+
+### Decoded principal values
+
+- **`c.principal` types as `PrincipalValue`** — `{ toText(): string }`,
+  exported from the root — and `FuncValue.principal` and service schemas
+  moved with it. This is the type surface telling the truth: the codec is
+  self-contained and never constructs an SDK class, so a decoded principal
+  has always carried exactly `toText()` — `instanceof Principal` was `false`
+  and `.toUint8Array()` threw. The compiler used to accept that crashing
+  code; now it refuses it. **Type-level breaking change** for consumers who
+  called class methods on *decoded* values — code that never worked at
+  runtime. Encode-side code is untouched: SDK `Principal` instances satisfy
+  the structural shape and encode unchanged, proven by suite against the
+  real pinned SDK.
+- **The shipped declarations no longer import `@icp-sdk/core` anywhere
+  outside `./transport-icp`.** The measured #148 complaint — a missing peer
+  failing as `TS2307` deep in `node_modules`, or silently degrading
+  `Principal` to `any` under `skipLibCheck` — is not mitigated but gone:
+  every subpath except the transport compiles and runs with no peer
+  installed, asserted by the packaged-consumer gate in both directions.
+  `npm install @candid-core/schema` is now the whole install for everything
+  but the transport.
+- **The generator emits the structural type**: `TsOptions::principal_import`
+  now defaults to `@candid-core/schema` and the emitted import is
+  `import type { PrincipalValue }`. The reserved-declaration-name set
+  tracked the referenced binding (issue #116's rule): `PrincipalValue` is
+  now refused as a declaration name, and `Principal` — no longer a binding
+  generated modules reference — is allowed. Goldens regenerated and
+  reviewed as a mapping change; the `tsc` invariance gate is untouched and
+  stays green.
+- **`DecodedPrincipal` in `./codec` is now an alias of `PrincipalValue`** —
+  the same shape it always was, stated in one place.
 
 ### The icp-sdk transport adapter
 

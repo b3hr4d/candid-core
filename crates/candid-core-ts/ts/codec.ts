@@ -74,7 +74,7 @@
 // issues — the type table is built in first-visit order over the schema
 // graph and nothing depends on time, environment, or map iteration order.
 
-import type { AnyFieldSchema, AnySchema, Schema } from "./schema.ts";
+import type { AnyFieldSchema, AnySchema, PrincipalValue, Schema } from "./schema.ts";
 import { fieldIdOfKey, utf8BytesStrict, utf8Decode } from "./labels.ts";
 
 /** Stable machine-readable failure codes. Closed: additions are API changes. */
@@ -158,10 +158,13 @@ export const DEFAULT_MAX_ELEMENTS = 1_000_000;
 /** Default `maxNumericBytes`: 1 MiB for one unbounded `nat`/`int`. */
 export const DEFAULT_MAX_NUMERIC_BYTES = 1_048_576;
 
-/** A decoded principal: the minimal structural carrier of canonical text. */
-export interface DecodedPrincipal {
-  toText(): string;
-}
+/**
+ * A decoded principal: the minimal structural carrier of canonical text —
+ * the same surface `PrincipalValue` in `@candid-core/schema` documents as
+ * the decoded-value contract. This name predates that one and remains as an
+ * alias.
+ */
+export type DecodedPrincipal = PrincipalValue;
 
 // ---------------------------------------------------------------------------
 // Shared internals

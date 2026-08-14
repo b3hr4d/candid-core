@@ -31,11 +31,15 @@ being packed together with the `candid-core` version it pairs with — the
 README promises exactly that, and a promise about an artifact belongs in the
 artifact's gate.
 
-The type-only `@icp-sdk/core` peer is installed as a minimal stub providing
-exactly the `Principal` surface the declarations and the README reference.
-That keeps the gate honest in both directions: `Principal` stays a real
-nominal type (so a wrong value is a compile error, not silently `any`), and
-the missing-peer case is asserted separately as a clear, actionable error.
+The `@icp-sdk/core` peer is installed as a minimal stub providing exactly
+the surfaces the artifact and this gate's consumers reference: the
+`Principal` class (the full consumer proves an SDK-class value is accepted
+where the schemas ask for the structural `PrincipalValue` — issue #150) and
+the `./agent` names the `./transport-icp` module uses (issue #154). The
+peer contract is then asserted in both directions with the peer removed: a
+consumer of every subpath except `./transport-icp` compiles and runs with
+no `@icp-sdk/core` at all, while the transport-importing consumer fails
+with the clear missing-module error rather than a silent `any`.
 """
 
 import json
@@ -362,25 +366,81 @@ def main():
                 f"blocks, in README order:\n{numbered}"
             )
 
-        # The peer really is required for types: without it the failure must
-        # be the clear missing-module error the README documents, not a
-        # silent `any`.
+        # The issue #150 peer contract, asserted in both directions with the
+        # peer removed entirely. A consumer of everything EXCEPT
+        # `./transport-icp` — principal fields included, as structural
+        # `PrincipalValue`s — must compile and run with no `@icp-sdk/core`
+        # installed at all: the shipped declarations no longer import the SDK
+        # anywhere else, and this is what keeps that claim honest. The full
+        # consumer, which imports the transport subpath (and the SDK class
+        # itself), must still fail with the clear missing-module error rather
+        # than a silent `any`.
         shutil.rmtree(scratch / "node_modules" / "@icp-sdk")
+        peerless = scratch / "peerless"
+        peerless.mkdir()
+        (peerless / "package.json").write_text('{ "type": "module" }\n')
+        (peerless / "main.ts").write_text(
+            'import { c, type Infer, type PrincipalValue } from "@candid-core/schema";\n'
+            'import { validate } from "@candid-core/schema/validate";\n'
+            'import { encode, decode } from "@candid-core/schema/codec";\n'
+            'import { schemaFromContract } from "@candid-core/schema/contract";\n'
+            'import { createActor, type Transport } from "@candid-core/schema/actor";\n'
+            'import { formModel } from "@candid-core/schema/forms";\n'
+            'import { candidLabelHash } from "@candid-core/schema/labels";\n'
+            "\n"
+            "const Account = c.record({ owner: c.principal, balance: c.nat });\n"
+            "type Account = Infer<typeof Account>;\n"
+            'const owner: PrincipalValue = { toText: () => "ryjl3-tyaaa-aaaaa-aaaba-cai" };\n'
+            "const value: Account = { owner, balance: 5n };\n"
+            "const checked = validate(Account, value);\n"
+            'if (!checked.ok) throw new Error("validate");\n'
+            "const bytes = encode(Account, value);\n"
+            'if (!bytes.ok) throw new Error("encode");\n'
+            "const back = decode(Account, bytes.bytes);\n"
+            'if (!back.ok) throw new Error("decode");\n'
+            'if ((back.value as Account).balance !== 5n) throw new Error("round trip");\n'
+            'if (formModel(Account).control !== "group") throw new Error("forms");\n'
+            'if (candidLabelHash("a") !== 97) throw new Error("labels");\n'
+            "void schemaFromContract;\n"
+            "void createActor;\n"
+            "const transportSlot: Transport | undefined = undefined;\n"
+            "void transportSlot;\n"
+            'console.log("npm package peerless smoke: ok");\n'
+        )
+        (peerless / "tsconfig.json").write_text(
+            json.dumps(
+                {
+                    "compilerOptions": {
+                        "strict": True,
+                        "noEmit": True,
+                        "module": "nodenext",
+                        "moduleResolution": "nodenext",
+                        "target": "es2022",
+                        "skipLibCheck": False,
+                    },
+                    "include": ["main.ts"],
+                }
+            )
+        )
+        run([str(tsc), "-p", str(peerless / "tsconfig.json")], peerless)
+        run(["node", "--experimental-strip-types", "--no-warnings", "main.ts"], peerless)
+
         missing = subprocess.run(
             [str(tsc), "-p", str(consumer / "tsconfig.json")],
             cwd=consumer,
             capture_output=True,
             text=True,
         )
-        if missing.returncode == 0 or "@icp-sdk/core/principal" not in missing.stdout:
+        if missing.returncode == 0 or "@icp-sdk/core" not in missing.stdout:
             raise SystemExit(
-                "expected a missing-peer type error naming @icp-sdk/core/principal, got:\n"
+                "expected a missing-peer type error naming @icp-sdk/core, got:\n"
                 f"{missing.stdout}{missing.stderr}"
             )
     print("npm package artifact verified: manifest file list, homepage, changelog "
           "entry and pairing, self-contained doc comments, root + 7 subpaths, "
           "strict compile without skipLibCheck, executed round-trip, "
-          f"{len(blocks)} README block(s) compiled, peer requirement")
+          f"{len(blocks)} README block(s) compiled, peer contract in both "
+          "directions")
 
 
 if __name__ == "__main__":

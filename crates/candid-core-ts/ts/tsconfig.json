@@ -7,9 +7,6 @@
     "moduleResolution": "bundler",
     "allowImportingTsExtensions": true,
     "paths": {
-      "@icp-sdk/core/principal": [
-        "./principal-stub.d.ts"
-      ],
       "@candid-core/schema": [
         "./schema.ts"
       ]
@@ -17,7 +14,6 @@
   },
   "include": [
     "../tests/goldens/**/*.ts",
-    "./principal-stub.d.ts",
     "./node-builtins-stub.d.ts",
     "./schema.ts",
     "./validate.ts",
