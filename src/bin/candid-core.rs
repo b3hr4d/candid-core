@@ -141,9 +141,14 @@ fn compile_envelope(path: &Path) -> ExitCode {
                 Ok(()) => {
                     write_json(&serde_json::to_value(&envelope).expect("JSON values serialize"))
                 }
+                // One failure channel for the whole compile family:
+                // `ContractViolation` is an alias of `Diagnostic`, so the
+                // validation items land under `diagnostics` unchanged —
+                // path-addressed, stable codes — instead of introducing a
+                // third output shape (found in review on the emitting PR).
                 Err(error) => write_error(json!({
                     "ok": false,
-                    "violations": error.violations,
+                    "diagnostics": error.violations,
                 })),
             }
         }
@@ -160,22 +165,23 @@ fn compile_envelope(path: &Path) -> ExitCode {
 /// `FieldNameEntry` describes, derived exactly as the generator's
 /// `*.names.json` goldens are. Numeric and positional labels carry no name
 /// and are skipped, so those fields keep the `_id_` rendering.
+///
+/// One name per `(container, id)`, retained with `TsNames`' own overwrite
+/// order: later provenance wins. Two spellings of one label id are reachable
+/// from ordinary Candid — hash-colliding names in structurally identical
+/// declarations deduplicate to one semantic node — and emitting both would
+/// let the loader's last-entry-wins table render a different key than the
+/// generated builder (found in review on the emitting PR).
 fn field_name_triples(source_info: &SourceInfo) -> Vec<serde_json::Value> {
-    let mut triples: Vec<(u32, u32, &str)> = source_info
-        .field_labels()
+    let mut names: std::collections::BTreeMap<(u32, u32), &str> = std::collections::BTreeMap::new();
+    for provenance in source_info.field_labels() {
+        if let SourceLabel::Named { name } = &provenance.label {
+            names.insert((provenance.container, provenance.id), name.as_str());
+        }
+    }
+    names
         .iter()
-        .filter_map(|provenance| match &provenance.label {
-            SourceLabel::Named { name } => {
-                Some((provenance.container, provenance.id, name.as_str()))
-            }
-            _ => None,
-        })
-        .collect();
-    triples.sort();
-    triples.dedup();
-    triples
-        .iter()
-        .map(|(container, id, label)| json!([container, id, label]))
+        .map(|((container, id), label)| json!([container, id, label]))
         .collect()
 }
 

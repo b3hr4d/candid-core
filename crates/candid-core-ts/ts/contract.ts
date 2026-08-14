@@ -338,7 +338,10 @@ function buildFromDocument(
     }
   }
   let extensions: Record<string, unknown> = {};
-  const rawExtensions = document.extensions;
+  // Own-key gated like the `contract` detection itself: an `extensions`
+  // inherited from a prototype is not envelope data, and consulting it would
+  // let a non-JSON document smuggle state past the shell checks.
+  const rawExtensions = hasOwn(document, "extensions") ? document.extensions : undefined;
   if (rawExtensions !== undefined) {
     if (!isObject(rawExtensions)) {
       issues.push({
