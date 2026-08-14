@@ -462,8 +462,16 @@ fn import_shadowing_declaration_names_are_refused() {
     }
     // Near-misses are ordinary names — including `Principal` itself, which
     // stopped being a referenced binding when #150 switched the emitted
-    // import to `PrincipalValue`: a contract may now declare it freely.
-    for near_miss in ["type Principal2 = nat8;", "type Principal = nat8;"] {
+    // import to `PrincipalValue`: a contract may now declare it freely. The
+    // expected export is asserted exactly per case (review finding: a bare
+    // `export type Principal` substring would also match `Principal2`).
+    for (near_miss, exported) in [
+        (
+            "type Principal2 = nat8;",
+            "export type Principal2 = number;",
+        ),
+        ("type Principal = nat8;", "export type Principal = number;"),
+    ] {
         let compilation = compile_did(near_miss).expect("compile");
         let output = generate_module(
             compilation.contract(),
@@ -471,7 +479,7 @@ fn import_shadowing_declaration_names_are_refused() {
             &TsOptions::default(),
         )
         .expect("a non-referenced name is not reserved");
-        assert!(output.contains("export type Principal"));
+        assert!(output.contains(exported), "{near_miss}: {output}");
     }
 }
 
