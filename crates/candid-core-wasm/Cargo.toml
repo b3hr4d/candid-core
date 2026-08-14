@@ -1,0 +1,43 @@
+# The wasm-bindgen artifact behind the `@candid-core/cli` npm package
+# (issue #153): the `compiler`-feature surface of `candid-core` plus the
+# `candid-core-ts` generator, compiled once and consumed by the Node CLI and
+# by browsers alike. Unpublishable on crates.io by design, exactly like the
+# generator it embeds — the npm package is the deliverable.
+#
+# This is its own workspace root, exactly like `fuzz/`: the main workspace's
+# lockfile and feature graph must not move when this artifact's dependencies
+# do, and `cargo metadata` over the published crate must never see
+# wasm-bindgen. The root manifest excludes this directory.
+
+[package]
+name = "candid-core-wasm"
+version = "0.1.0"
+edition = "2021"
+publish = false
+license = "Apache-2.0"
+description = "wasm-bindgen build of candid-core's compiler surface plus the TypeScript generator, for the @candid-core/cli npm package"
+
+[workspace]
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+# The documented browser-WASM surface: `compile_with_resolver` +
+# `MemoryResolver`, no `filesystem-compiler`, no cap-std.
+candid-core = { path = "../..", default-features = false, features = ["compiler"] }
+# Embedding the unpublishable generator in the npm artifact is an owner
+# decision recorded on issue #153; its crates.io `publish = false` stands.
+candid-core-ts = { path = "../candid-core-ts", features = ["compiler"] }
+serde_json = "=1.0.150"
+# The exact wasm-bindgen the repository already pins (wasm-bindgen-test
+# 0.3.58 pins =0.2.108 in the main workspace); wasm-pack 0.14.0 — the
+# browser job's pinned tool — drives the matching CLI.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = "=0.2.108"
+
+# wasm-opt is deliberately off: the artifact's bytes are then a pure function
+# of the pinned rustc and wasm-bindgen, with no binaryen download in the
+# build path — determinism and exact pinning outrank the size win.
+[package.metadata.wasm-pack.profile.release]
+wasm-opt = false
