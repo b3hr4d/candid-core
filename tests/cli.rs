@@ -253,6 +253,36 @@ fn compile_envelope_emits_the_pinned_document() {
     );
 }
 
+/// Hash-colliding spellings collapse to one entry per `(container, id)` —
+/// `cemxzwyk` and `amxawvks` share a Candid label hash, so the two
+/// structurally identical records deduplicate to one semantic node with two
+/// provenance spellings. The table must carry exactly the spelling
+/// `TsNames::from_source_info` retains (later provenance wins; the
+/// generator-side test `hash_colliding_spellings_collapse_to_the_generator_name`
+/// proves the winner below matches the generated module's rendered key), or
+/// the loader's last-entry-wins table could render a different field key
+/// than the generated builder.
+#[test]
+fn compile_envelope_collapses_hash_colliding_spellings() {
+    let fixture = Fixture::new();
+    let path = fixture.write(
+        "collide.did",
+        "type A = record { cemxzwyk : nat };\ntype B = record { amxawvks : nat };",
+    );
+    let response = json_stdout(
+        &run([
+            OsStr::new("compile"),
+            path.as_os_str(),
+            OsStr::new("--envelope"),
+        ]),
+        0,
+    );
+    assert_eq!(
+        response["extensions"][FIELD_NAMES_EXTENSION],
+        json!([[0, 2222238428u32, "amxawvks"]]),
+    );
+}
+
 /// A source with no named field labels still carries the extension, as an
 /// empty array: the emitted shape is stable, never conditionally absent.
 #[test]

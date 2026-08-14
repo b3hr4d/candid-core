@@ -984,6 +984,21 @@ test("contract-side issues inside an envelope are rooted at $.contract", () => {
   );
 });
 
+test("an inherited extensions property is not envelope data", () => {
+  // Own-key gating (review finding): `extensions` reached through the
+  // prototype chain must be ignored exactly as the unknown-key walk ignores
+  // it — the document behaves as a bare `{ contract }` envelope.
+  const hostile = Object.assign(Object.create({ extensions: [] }), {
+    contract: ownerDocument(),
+  });
+  const built = schemaFromContract(hostile);
+  assert(built.ok, "inherited junk must not reach the shell checks");
+  if (built.ok) {
+    const key = `_${candidLabelHash("owner")}_`;
+    assert.deepStrictEqual(validate(built.schemas.A, { [key]: 5n }), { ok: true });
+  }
+});
+
 test("an envelope that throws while inspected fails closed", () => {
   const hostile = {
     contract: ownerDocument(),
