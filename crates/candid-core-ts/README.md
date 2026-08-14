@@ -41,8 +41,10 @@ IDs — with a `compiler`-feature bridge from a compilation's provenance sidecar
 **The output is a clean domain model, by owner decision on issue #38.**
 `opt T` renders `T | null`; variants render as discriminated
 `{ tag, value }` unions with `value` omitted for `null` payloads; anonymous
-`vec nat8` renders `Uint8Array`; `Principal` imports from
-`@icp-sdk/core/principal` by default. This deliberately diverges from the
+`vec nat8` renders `Uint8Array`; principals type as the structural
+`PrincipalValue` the runtime actually delivers, imported from
+`@candid-core/schema` by default (`TsOptions::principal_import`; issue #150
+replaced the SDK-class import). This deliberately diverges from the
 shapes the agent-js runtime produces (`[] | [T]` opts, single-key variant
 objects — what `@icp-sdk/bindgen` emits, verified against its 0.4.0 output):
 compatibility is a non-goal for now, and consuming these types against a live
@@ -82,8 +84,10 @@ beyond the pinned TypeScript.
 in `tests/goldens/`; regenerate deliberately with `UPDATE_GOLDENS=1` and review
 the diff. The goldens are additionally compiled by the exact TypeScript pinned
 in `ts/package-lock.json` under `strict` (`npm ci && npx tsc --noEmit` in
-`ts/`), with the `Principal` import resolved to a local type stub so the check
-is hermetic.
+`ts/`). Generated modules import only `@candid-core/schema` — `PrincipalValue`
+included, since issue #150 — so the check needs no peer and no stub; the
+`@icp-sdk/core` in `ts/`'s devDependencies exists for the transport adapter's
+own suite, not for the goldens.
 
 **The codec speaks the wire format (issue #103).** `ts/codec.ts` encodes
 domain values to Candid binary and decodes Candid binary to domain values,

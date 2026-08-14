@@ -119,8 +119,11 @@ impl TsNames {
 /// Generation options.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TsOptions {
-    /// The module the `Principal` type is imported from when a Contract uses
-    /// the `principal` primitive. The import is emitted only when used, and as
+    /// The module the `PrincipalValue` type is imported from when a Contract
+    /// uses the `principal` primitive. Since issue #150 this is the schema
+    /// runtime's own structural type — `{ toText(): string }`, the honest
+    /// type of a decoded principal — not the SDK class, which the runtime
+    /// never constructs. The import is emitted only when used, and as
     /// `import type`, so it never implies a runtime dependency.
     pub principal_import: String,
 }
@@ -128,7 +131,7 @@ pub struct TsOptions {
 impl Default for TsOptions {
     fn default() -> Self {
         Self {
-            principal_import: "@icp-sdk/core/principal".to_string(),
+            principal_import: "@candid-core/schema".to_string(),
         }
     }
 }
@@ -154,7 +157,7 @@ pub enum TsGenError {
     /// `schemaFromContract` enforces on its name table (issues #103, #115).
     ReservedFieldName { declaration: String, name: String },
     /// A declaration named after a binding the generated module itself
-    /// references: an imported binding (`c`, `Schema`, `Principal`), an
+    /// references: an imported binding (`c`, `Schema`, `PrincipalValue`), an
     /// ambient type its lowerings emit (`Array`, `Record`, `Uint8Array`,
     /// `Promise`), or the actor surface's own emission names (`actor`,
     /// `Actor`).
@@ -383,7 +386,7 @@ impl Generator<'_> {
                 ));
             }
             actor_out.push_str(&format!(
-                "export const actor: Schema<Principal> = c.rec(() => {builder});\n"
+                "export const actor: Schema<PrincipalValue> = c.rec(() => {builder});\n"
             ));
             actor_out.push_str(&format!(
                 "export type Actor = {{\n{}\n}};\n",
@@ -405,7 +408,7 @@ impl Generator<'_> {
         }
         if self.uses_principal {
             out.push_str(&format!(
-                "import type {{ Principal }} from {};\n",
+                "import type {{ PrincipalValue }} from {};\n",
                 quote_string(&options.principal_import)
             ));
         }
@@ -626,7 +629,7 @@ impl Generator<'_> {
                 match target {
                     Target::Alias => {
                         self.uses_principal = true;
-                        Ok("{ principal: Principal; method: string }".to_string())
+                        Ok("{ principal: PrincipalValue; method: string }".to_string())
                     }
                     Target::Builder => {
                         let mut rendered_args = Vec::with_capacity(args.len());
@@ -651,7 +654,7 @@ impl Generator<'_> {
                 match target {
                     Target::Alias => {
                         self.uses_principal = true;
-                        Ok("Principal".to_string())
+                        Ok("PrincipalValue".to_string())
                     }
                     Target::Builder => {
                         let mut members = Vec::with_capacity(methods.len());
@@ -721,7 +724,7 @@ impl Generator<'_> {
             PrimitiveType::Empty => "never",
             PrimitiveType::Principal => {
                 self.uses_principal = true;
-                "Principal"
+                "PrincipalValue"
             }
         }
     }
@@ -867,18 +870,19 @@ fn method_key(name: &str) -> String {
 }
 
 /// Names the generated module itself references: the imported bindings
-/// (`import { c, type Schema }` always, `import type { Principal }` when the
-/// principal primitive is used) and the ambient types its lowerings emit
-/// (`Array<T>` for vecs, `Record<string, never>` for the empty record,
-/// `Uint8Array` for anonymous `vec nat8`, `Promise<T>` on every actor method
-/// signature — issue #130). A declaration by any of these names shadows the
-/// referenced binding for the whole module.
+/// (`import { c, type Schema }` always, `import type { PrincipalValue }`
+/// when the principal primitive is used — the structural type of issue
+/// #150, which replaced the SDK `Principal` import) and the ambient types
+/// its lowerings emit (`Array<T>` for vecs, `Record<string, never>` for the
+/// empty record, `Uint8Array` for anonymous `vec nat8`, `Promise<T>` on
+/// every actor method signature — issue #130). A declaration by any of
+/// these names shadows the referenced binding for the whole module.
 /// …plus the actor surface's own emission names (`actor`, `Actor`), reserved
 /// since issue #104 for the same reason.
 const RESERVED_MODULE_BINDINGS: &[&str] = &[
     "c",
     "Schema",
-    "Principal",
+    "PrincipalValue",
     "Array",
     "Record",
     "Uint8Array",
