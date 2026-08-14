@@ -431,10 +431,14 @@ def main():
             capture_output=True,
             text=True,
         )
-        if missing.returncode == 0 or "@icp-sdk/core" not in missing.stdout:
+        # Matched against both streams (review finding): the pinned tsc
+        # writes diagnostics to stdout today, but the assertion should not
+        # hinge on which stream a future compiler picks.
+        missing_output = missing.stdout + missing.stderr
+        if missing.returncode == 0 or "@icp-sdk/core" not in missing_output:
             raise SystemExit(
                 "expected a missing-peer type error naming @icp-sdk/core, got:\n"
-                f"{missing.stdout}{missing.stderr}"
+                f"{missing_output}"
             )
     print("npm package artifact verified: manifest file list, homepage, changelog "
           "entry and pairing, self-contained doc comments, root + 7 subpaths, "
