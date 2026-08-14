@@ -473,3 +473,37 @@ The package versions independently of the crate (pre-1.0). Bump
 `ts/package.json` in an ordinary reviewed PR; state in that PR's body which
 `candid-core` generator version the release pairs with, and record the pair
 in the npm release notes.
+
+## npm: `@candid-core/cli`
+
+The second package under the scope (name recorded with owner sign-off on
+issue #153, per the #106 precedent), publishing from
+`crates/candid-core-wasm/npm` through
+[`.github/workflows/npm-release-cli.yml`](../.github/workflows/npm-release-cli.yml)
+— a faithful mirror of `npm-release.yml`: dispatch-only `{commit, version}`,
+the same input shape checks, the same ancestor-of-main requirement, the same
+protected `npm-publish` environment whose reviewers the verify job confirms
+exist, and OIDC trusted publishing with `--provenance`. Everything in the
+schema package's section above applies unchanged — the once-per-name
+prerequisites, the manual bootstrap first publish (run from
+`crates/candid-core-wasm/npm`, with `npm run build` building the wasm), and
+the trusted-publisher configuration with **workflow filename
+`npm-release-cli.yml`**.
+
+Two differences, both because the artifact embeds a wasm build:
+
+1. The verify and publish jobs build with the exact-pinned release toolchain
+   (`RELEASE_TOOLCHAIN` from `tests/fixtures/packaging/release-tools.env`)
+   plus the pinned `wasm-pack` 0.14.0 — never the rolling `stable` of
+   ordinary CI — and `wasm-opt` is deliberately off, so the published bytes
+   are a pure function of those two pins.
+2. The version pairing is a **revision** pairing: the package embeds
+   `candid-core` and the unpublishable `candid-core-ts` generator from the
+   dispatched commit itself. `npm/CHANGELOG.md` names the embedded
+   `candid-core` version per release, and the release record names the exact
+   SHA; the `wasm CLI` workflow's parity gates are what make that pairing a
+   verified property rather than a claim.
+
+This workflow is prepared and has deliberately **not** been dispatched: the
+first publish of the name is the owner's explicit act, per the standing
+release discipline.

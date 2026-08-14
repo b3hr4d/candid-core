@@ -1,0 +1,125 @@
+# The @candid-core/cli gates (issue #153): the wasm artifact over
+# candid-core's compiler surface plus the candid-core-ts generator, asserted
+# — not assumed — to be the same code compiled twice.
+#
+# Unlike the ordinary CI jobs, whose `stable` toolchain is deliberately
+# rolling, the artifact jobs here build with the exact-pinned toolchain from
+# tests/fixtures/packaging/release-tools.env plus the pinned wasm-pack the
+# browser job already uses: the artifact this workflow proves is the artifact
+# a release would ship, so its toolchain is release tooling, not a canary.
+#
+# Three claims, three jobs:
+# - `host`: the crate's own battery — fmt, clippy warnings-denied, and the
+#   parity tests that compare the library's outputs byte-for-byte against
+#   the generator's golden `.ts` modules and the committed envelope fixture
+#   the native `candid-core compile --envelope` binary produced.
+# - `artifact`: the same parity through the real WebAssembly under Node (the
+#   npm test suite runs bin/cli.js, which loads the compiled wasm), plus
+#   artifact determinism: two clean wasm-pack builds must produce identical
+#   bytes. The tool itself additionally double-runs every generation.
+# - `browser`: didToContract inside headless Chrome — the pinned Chrome for
+#   Testing build the repository's browser job already uses — feeding
+#   schemaFromContract, envelope-carried field names included.
+
+name: wasm CLI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  host:
+    name: Host battery
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Read the pinned toolchain
+        run: grep -E '^[A-Z_]+=' tests/fixtures/packaging/release-tools.env >> "$GITHUB_ENV"
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RELEASE_TOOLCHAIN }}
+          components: clippy, rustfmt
+      - name: Format
+        working-directory: crates/candid-core-wasm
+        run: cargo fmt --check
+      - name: Lint with warnings denied
+        working-directory: crates/candid-core-wasm
+        run: cargo clippy --all-targets --locked -- -D warnings
+      - name: Parity and determinism tests
+        working-directory: crates/candid-core-wasm
+        run: cargo test --locked
+
+  artifact:
+    name: Wasm artifact parity (Node)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Read the pinned toolchain
+        run: grep -E '^[A-Z_]+=' tests/fixtures/packaging/release-tools.env >> "$GITHUB_ENV"
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RELEASE_TOOLCHAIN }}
+          targets: wasm32-unknown-unknown
+      - name: Install the pinned wasm-pack
+        run: cargo install wasm-pack --version 0.14.0 --locked
+      - name: Build the artifact
+        working-directory: crates/candid-core-wasm
+        run: wasm-pack build --target web --out-dir npm/wasm --no-pack --release -- --locked
+      - name: Artifact determinism — a second clean build produces identical bytes
+        working-directory: crates/candid-core-wasm
+        run: |
+          set -euxo pipefail
+          sha256sum npm/wasm/candid_core_wasm_bg.wasm npm/wasm/candid_core_wasm.js > first.sha256
+          cargo clean
+          rm -rf npm/wasm
+          wasm-pack build --target web --out-dir npm/wasm --no-pack --release -- --locked
+          sha256sum --check first.sha256
+      - name: Parity through the wasm under Node
+        working-directory: crates/candid-core-wasm/npm
+        run: |
+          set -euxo pipefail
+          npm ci
+          npm test
+
+  browser:
+    name: Browser smoke (headless Chrome)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Read the pinned toolchain
+        run: grep -E '^[A-Z_]+=' tests/fixtures/packaging/release-tools.env >> "$GITHUB_ENV"
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RELEASE_TOOLCHAIN }}
+          targets: wasm32-unknown-unknown
+      - name: Install the pinned wasm-pack
+        run: cargo install wasm-pack --version 0.14.0 --locked
+      # The exact Chrome for Testing build the repository's browser job pins.
+      - uses: browser-actions/setup-chrome@v2
+        id: chrome
+        with:
+          chrome-version: '150.0.7871.124'
+          install-dependencies: true
+      - name: Build the artifact
+        working-directory: crates/candid-core-wasm
+        run: wasm-pack build --target web --out-dir npm/wasm --no-pack --release -- --locked
+      - name: Build the schema runtime the page imports
+        working-directory: crates/candid-core-ts/ts
+        run: |
+          set -euxo pipefail
+          npm ci
+          npm run build
+      - name: didToContract feeds schemaFromContract in a headless page
+        working-directory: crates/candid-core-wasm/npm
+        env:
+          CHROMIUM_PATH: ${{ steps.chrome.outputs.chrome-path }}
+        run: |
+          set -euxo pipefail
+          npm ci
+          npm run test:browser

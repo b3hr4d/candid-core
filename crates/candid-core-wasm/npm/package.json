@@ -1,0 +1,37 @@
+{
+  "name": "@candid-core/cli",
+  "version": "0.1.0",
+  "description": "Candid .did to canonical Contract envelopes and @candid-core/schema modules, compiled to WebAssembly: a JavaScript-only on-ramp with no Rust toolchain, for Node CLIs and browsers alike.",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/b3hr4d/candid-core.git",
+    "directory": "crates/candid-core-wasm/npm"
+  },
+  "homepage": "https://github.com/b3hr4d/candid-core/tree/main/crates/candid-core-wasm/npm#readme",
+  "type": "module",
+  "sideEffects": false,
+  "bin": {
+    "candid-core-cli": "./bin/cli.js"
+  },
+  "exports": {
+    ".": "./lib/index.js"
+  },
+  "files": [
+    "bin",
+    "lib",
+    "wasm/candid_core_wasm.js",
+    "wasm/candid_core_wasm_bg.wasm",
+    "LICENSE",
+    "README.md",
+    "CHANGELOG.md"
+  ],
+  "scripts": {
+    "build": "cd .. && wasm-pack build --target web --out-dir npm/wasm --no-pack --release",
+    "test": "node --test test/*.test.js",
+    "test:browser": "node --test test/browser/*.test.js"
+  },
+  "devDependencies": {
+    "playwright-core": "1.62.1"
+  }
+}

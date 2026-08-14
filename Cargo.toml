@@ -72,7 +72,10 @@ include = [
 [workspace]
 resolver = "2"
 members = [".", "crates/candid-core-ts"]
-exclude = ["fuzz"]
+# `crates/candid-core-wasm` is excluded for the same reason `fuzz` is: each is
+# its own workspace root with its own lockfile, so wasm-bindgen and the fuzz
+# harness never enter this workspace's resolved graph or feature unification.
+exclude = ["fuzz", "crates/candid-core-wasm"]
 
 # One published package, three optional build surfaces. The implicit base — the
 # feature set left when `default-features = false` removes every feature — is
