@@ -4,6 +4,16 @@
 // the generated builders construct, so any contract can be validated at
 // runtime without generated code.
 //
+// Since issue #152 the same entry point also accepts a `ContractEnvelope`
+// document — `{ contract, extensions }`, as `candid-core compile --envelope`
+// emits — and consumes the field-name table its
+// `org.candid-core.field-names/v1` extension carries, so one self-describing
+// document replaces the contract-plus-table pair. Envelope-carried names are
+// validated exactly like caller-supplied ones, and an explicit `names` option
+// wins over the envelope's table. Extensions are non-semantic by the
+// envelope's design: they live outside `contract_id` and `interface_id`, so
+// carrying names never moves an identity.
+//
 // # The mapping is the generator's mapping
 //
 // Every owner-reviewed decision in `candid-core-ts`'s Rust emitter holds here,
@@ -81,16 +91,32 @@ export type ContractIssueCode =
   | "empty_declaration_name"
   | "duplicate_declaration_name"
   | "invalid_name_table"
+  | "invalid_extension_name"
   | "resource_limit_exceeded";
 
 /** One reason a contract document was refused, in `validate`'s issue shape. */
 export interface ContractIssue {
   readonly code: ContractIssueCode;
-  /** `$`-rooted path into the contract document (or `$.names[…]`). */
+  /**
+   * `$`-rooted path into the supplied document: for a bare Contract,
+   * `$.types[…]` and friends (or `$.names[…]` for the caller's table); for an
+   * envelope, contract-side paths are rooted at `$.contract` and
+   * envelope-carried names at `$.extensions[…]`.
+   */
   readonly path: string;
   readonly message: string;
   readonly resource_limit?: ResourceLimitInfo | ContractResourceLimitInfo;
 }
+
+/**
+ * The envelope extension carrying field-name triples: its value is exactly a
+ * `FieldNameEntry[]` — named labels only, sorted, deduplicated — as
+ * `candid-core compile --envelope` emits it. Extensions are non-semantic by
+ * the envelope's design: `contract_id` and `interface_id` are computed over
+ * the Contract alone, so carrying names (or any extension) never moves an
+ * identity.
+ */
+export const FIELD_NAMES_EXTENSION = "org.candid-core.field-names/v1";
 
 /** The `{resource, limit, observed}` triple a document-size bound carries. */
 export interface ContractResourceLimitInfo {
@@ -118,6 +144,11 @@ export type FieldNameEntry = readonly [container: number, id: number, name: stri
  * to the `DEFAULT_MAX_*` below.
  */
 export interface ContractSchemaOptions {
+  /**
+   * The field-name table. When the document is an envelope, an explicit table
+   * here wins over the envelope-carried `FIELD_NAMES_EXTENSION` table — the
+   * envelope's is then not consulted at all.
+   */
   readonly names?: readonly FieldNameEntry[];
   /** Arena size cap, mirroring `Limits::max_type_nodes`. */
   readonly maxTypeNodes?: number;
@@ -209,7 +240,20 @@ function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-/** Build `Schema` objects for every supported declaration of a Contract. */
+/**
+ * Build `Schema` objects for every supported declaration of a Contract.
+ *
+ * Accepts either document the `candid-core` binary emits: a bare canonical
+ * Contract, or a `ContractEnvelope` — recognised by its `contract` key, which
+ * no canonical Contract document carries — whose
+ * `extensions[FIELD_NAMES_EXTENSION]` table is consumed as the field names.
+ * Envelope-carried names are validated exactly like caller-supplied ones
+ * (shape, `_N_` reservation, hash enforcement, entry cap); an explicit
+ * `options.names` wins over the envelope's table, which is then not
+ * consulted. The envelope shell itself fails closed the way the Rust loader
+ * fails it: unknown envelope keys, a non-object `extensions`, and invalid
+ * extension names are all refused.
+ */
 export function schemaFromContract(
   contract: unknown,
   options: ContractSchemaOptions = {},
@@ -221,7 +265,7 @@ export function schemaFromContract(
   // the plain parsed structures, never the raw document, so they cannot
   // throw later.
   try {
-    return buildFromContract(contract, options);
+    return buildFromDocument(contract, options);
   } catch {
     return {
       ok: false,
@@ -236,9 +280,126 @@ export function schemaFromContract(
   }
 }
 
+/** Where a name table came from: the entries, and the `$`-rooted path base
+ * its validation issues are reported under. */
+interface NameTableSource {
+  readonly entries: unknown;
+  readonly base: string;
+}
+
+/**
+ * Mirrors the Rust loader's `valid_extension_name`: a reverse-domain
+ * namespace (dot-separated segments of lowercase letters, digits, and
+ * hyphens) followed by `/v<integer>` with no leading zero. The two loaders
+ * must refuse the same envelopes.
+ */
+function validExtensionName(name: string): boolean {
+  const split = name.lastIndexOf("/v");
+  if (split < 0) {
+    return false;
+  }
+  const namespace = name.slice(0, split);
+  const version = name.slice(split + 2);
+  return (
+    namespace.includes(".") &&
+    namespace.split(".").every((segment) => /^[a-z0-9-]+$/.test(segment)) &&
+    /^[1-9][0-9]*$/.test(version)
+  );
+}
+
+function buildFromDocument(
+  document: unknown,
+  options: ContractSchemaOptions,
+): SchemaFromContractResult {
+  // Envelope detection: a canonical Contract document has a fixed key set
+  // (`deny_unknown_fields` on the Rust side) that never includes `contract`,
+  // and an envelope always carries it, so one own key distinguishes the two
+  // shapes for every valid document. Malformed hybrids fall into the
+  // envelope arm and are refused by its unknown-key rule.
+  if (!isObject(document) || !hasOwn(document, "contract")) {
+    return buildFromContract(document, options, {
+      entries: options.names ?? [],
+      base: "$.names",
+    });
+  }
+
+  // The envelope shell, held to the Rust loader's strictness: exactly
+  // `contract` plus an optional object-shaped `extensions` whose every key is
+  // a valid extension name. Anything else fails closed before the nested
+  // Contract is read.
+  const issues: ContractIssue[] = [];
+  for (const key of Object.keys(document)) {
+    if (key !== "contract" && key !== "extensions") {
+      issues.push({
+        code: "invalid_contract_document",
+        path: "$",
+        message: `an envelope carries only contract and extensions, not ${JSON.stringify(key)}`,
+      });
+    }
+  }
+  let extensions: Record<string, unknown> = {};
+  const rawExtensions = document.extensions;
+  if (rawExtensions !== undefined) {
+    if (!isObject(rawExtensions)) {
+      issues.push({
+        code: "invalid_contract_document",
+        path: "$.extensions",
+        message: "extensions must be a JSON object",
+      });
+    } else {
+      extensions = rawExtensions;
+      for (const name of Object.keys(extensions)) {
+        if (!validExtensionName(name)) {
+          issues.push({
+            code: "invalid_extension_name",
+            path: "$.extensions",
+            message: `extension ${JSON.stringify(name)} must be a reverse-domain name followed by /v<integer>`,
+          });
+        }
+      }
+    }
+  }
+  if (issues.length > 0) {
+    return { ok: false, issues };
+  }
+
+  // Precedence, pinned: an explicit `options.names` wins, and the envelope's
+  // table is then not consulted at all — name validation happens at the point
+  // of use, on the table actually used.
+  const names: NameTableSource =
+    options.names !== undefined
+      ? { entries: options.names, base: "$.names" }
+      : hasOwn(extensions, FIELD_NAMES_EXTENSION)
+        ? {
+            entries: extensions[FIELD_NAMES_EXTENSION],
+            base: `$.extensions[${JSON.stringify(FIELD_NAMES_EXTENSION)}]`,
+          }
+        : { entries: [], base: "$.names" };
+
+  const result = buildFromContract(document.contract, options, names);
+  if (result.ok) {
+    return result;
+  }
+  // Contract-side paths are re-rooted under `$.contract`, where the data
+  // actually sits in the supplied document; name-table paths already carry
+  // their own base and pass through untouched.
+  return {
+    ok: false,
+    issues: result.issues.map((issue) =>
+      issue.path === names.base || issue.path.startsWith(`${names.base}[`)
+        ? issue
+        : {
+            ...issue,
+            path: issue.path === "$" ? "$.contract" : `$.contract${issue.path.slice(1)}`,
+          },
+    ),
+  };
+}
+
 function buildFromContract(
   contract: unknown,
   options: ContractSchemaOptions,
+  namesSource: NameTableSource,
 ): SchemaFromContractResult {
   const issues: ContractIssue[] = [];
   const push = (code: ContractIssueCode, path: string, message: string) => {
@@ -686,15 +847,24 @@ function buildFromContract(
     parsedDeclarations.push({ name: declaration.name, type: declaration.type });
   }
 
-  // The caller's name table, validated like any other input — its entry
-  // count included, so a corrupted table cannot amplify into an unbounded
-  // issue list or Map.
+  // The name table — caller-supplied or envelope-carried, validated
+  // identically either way: shape, reservation, hash, and its entry count
+  // included, so a corrupted table cannot amplify into an unbounded issue
+  // list or Map. Issue paths are rooted where the table actually came from.
   const nameTable = new Map<string, string>();
-  const rawNames = options.names ?? [];
+  if (!Array.isArray(namesSource.entries)) {
+    push(
+      "invalid_name_table",
+      namesSource.base,
+      "a name table is an array of [container, id, name] entries",
+    );
+    return { ok: false, issues };
+  }
+  const rawNames: readonly unknown[] = namesSource.entries;
   if (rawNames.length > DEFAULT_MAX_NAME_TABLE_ENTRIES) {
     issues.push({
       code: "resource_limit_exceeded",
-      path: "$.names",
+      path: namesSource.base,
       message: `name_table_entries limit ${DEFAULT_MAX_NAME_TABLE_ENTRIES} exceeded (observed ${rawNames.length})`,
       resource_limit: {
         resource: "name_table_entries",
@@ -719,7 +889,7 @@ function buildFromContract(
     ) {
       push(
         "invalid_name_table",
-        `$.names[${index}]`,
+        `${namesSource.base}[${index}]`,
         "a name table entry is [container, id, name]",
       );
       continue;
@@ -733,7 +903,7 @@ function buildFromContract(
     if (isNumericShapedName(name)) {
       push(
         "invalid_name_table",
-        `$.names[${index}]`,
+        `${namesSource.base}[${index}]`,
         "a name shaped like the _N_ id rendering is reserved",
       );
       continue;
@@ -741,7 +911,7 @@ function buildFromContract(
     if (candidLabelHash(name) !== entry[1]) {
       push(
         "invalid_name_table",
-        `$.names[${index}]`,
+        `${namesSource.base}[${index}]`,
         `${JSON.stringify(name)} hashes to ${candidLabelHash(name)}, not ${entry[1]}`,
       );
       continue;

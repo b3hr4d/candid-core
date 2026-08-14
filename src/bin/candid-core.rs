@@ -3,8 +3,8 @@ mod bounded;
 
 use bounded::{read_bounded_utf8, BoundedUtf8Error};
 use candid_core::{
-    compile_did_file_with_options, CompileOptions, Contract, ContractJsonError,
-    ContractValidationError, ContractViolation, Limits,
+    compile_did_file_with_options, CompileOptions, Contract, ContractEnvelope, ContractJsonError,
+    ContractValidationError, ContractViolation, Limits, SourceInfo, SourceLabel,
 };
 use serde_json::json;
 use std::env;
@@ -13,13 +13,19 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-const USAGE: &str =
-    "usage: candid-core compile <path> [--no-source-info]\n       candid-core validate <path>";
+const USAGE: &str = "usage: candid-core compile <path> [--no-source-info | --envelope]\n       candid-core validate <path>";
+
+/// The extension carrying field-name triples in an emitted envelope; see
+/// [`ContractEnvelope`]'s documentation for the recorded convention.
+const FIELD_NAMES_EXTENSION: &str = "org.candid-core.field-names/v1";
 
 enum Invocation {
     Compile {
         path: PathBuf,
         include_source_info: bool,
+    },
+    CompileEnvelope {
+        path: PathBuf,
     },
     Validate {
         path: PathBuf,
@@ -32,12 +38,16 @@ fn main() -> ExitCode {
             path,
             include_source_info,
         }) => compile(&path, include_source_info),
+        Some(Invocation::CompileEnvelope { path }) => compile_envelope(&path),
         Some(Invocation::Validate { path }) => validate(&path),
         None => usage(),
     }
 }
 
-/// Parses exactly `compile <path> [--no-source-info]` or `validate <path>`.
+/// Parses exactly `compile <path> [--no-source-info | --envelope]` or
+/// `validate <path>`. The two compile flags are mutually exclusive: the
+/// envelope exists to carry the field names that `--no-source-info`
+/// suppresses, so asking for both is a contradiction and a usage error.
 ///
 /// Arguments stay OS-native so a non-Unicode path is passed through to the
 /// library instead of aborting inside `env::args`.
@@ -46,11 +56,18 @@ fn parse_arguments(mut arguments: impl Iterator<Item = OsString>) -> Option<Invo
     if command == "compile" {
         let path = path_argument(arguments.next()?)?;
         let mut include_source_info = true;
+        let mut envelope = false;
         for argument in arguments {
-            if !include_source_info || argument != "--no-source-info" {
+            if argument == "--no-source-info" && include_source_info && !envelope {
+                include_source_info = false;
+            } else if argument == "--envelope" && !envelope && include_source_info {
+                envelope = true;
+            } else {
                 return None;
             }
-            include_source_info = false;
+        }
+        if envelope {
+            return Some(Invocation::CompileEnvelope { path });
         }
         return Some(Invocation::Compile {
             path,
@@ -97,6 +114,69 @@ fn compile(path: &Path, include_source_info: bool) -> ExitCode {
             "diagnostics": error.diagnostics,
         })),
     }
+}
+
+/// `compile <path> --envelope`: the one-document flow. Success prints the
+/// envelope document itself — `{"contract": …, "extensions": {…}}`, exactly
+/// what `ContractEnvelope` serializes and what the TypeScript runtime's
+/// `schemaFromContract` accepts whole — so the output can be saved and
+/// consumed without extracting anything. Failures use the same channels as
+/// `compile`.
+fn compile_envelope(path: &Path) -> ExitCode {
+    match compile_did_file_with_options(
+        path,
+        CompileOptions {
+            include_source_info: true,
+        },
+    ) {
+        Ok(compilation) => {
+            let (contract, source_info) = compilation.into_parts();
+            let source_info = source_info.expect("source info was requested");
+            let mut envelope = ContractEnvelope::new(contract);
+            match envelope.insert_extension(
+                FIELD_NAMES_EXTENSION,
+                serde_json::Value::Array(field_name_triples(&source_info)),
+                &Limits::default(),
+            ) {
+                Ok(()) => {
+                    write_json(&serde_json::to_value(&envelope).expect("JSON values serialize"))
+                }
+                Err(error) => write_error(json!({
+                    "ok": false,
+                    "violations": error.violations,
+                })),
+            }
+        }
+        Err(error) => write_error(json!({
+            "ok": false,
+            "diagnostics": error.diagnostics,
+        })),
+    }
+}
+
+/// The `org.candid-core.field-names/v1` extension value: named field labels
+/// as `[container, id, name]` triples, sorted and deduplicated — the table
+/// `TsNames::from_source_info` builds and the TypeScript runtime's
+/// `FieldNameEntry` describes, derived exactly as the generator's
+/// `*.names.json` goldens are. Numeric and positional labels carry no name
+/// and are skipped, so those fields keep the `_id_` rendering.
+fn field_name_triples(source_info: &SourceInfo) -> Vec<serde_json::Value> {
+    let mut triples: Vec<(u32, u32, &str)> = source_info
+        .field_labels()
+        .iter()
+        .filter_map(|provenance| match &provenance.label {
+            SourceLabel::Named { name } => {
+                Some((provenance.container, provenance.id, name.as_str()))
+            }
+            _ => None,
+        })
+        .collect();
+    triples.sort();
+    triples.dedup();
+    triples
+        .iter()
+        .map(|(container, id, label)| json!([container, id, label]))
+        .collect()
 }
 
 fn validate(path: &Path) -> ExitCode {

@@ -4,6 +4,34 @@ use serde_json::Value;
 use std::collections::BTreeMap;
 
 /// A strict semantic Contract plus namespaced, non-semantic ecosystem metadata.
+///
+/// # Extensions are outside the canonical identities
+///
+/// The extension map is side-band data by design: `contract_id` and
+/// `interface_id` are computed over the Contract alone, so adding, removing,
+/// or editing an extension never moves a semantic identity
+/// (`tests/artifact_identity.rs` pins this, and `docs/architecture.md`'s
+/// identity table records it). Only the artifact identity over the envelope
+/// *bytes* (`ArtifactKind::ContractEnvelopeJsonV1`) covers extensions,
+/// because they are in those bytes.
+///
+/// Extension names are validated fail-closed: a reverse-domain namespace
+/// (dot-separated segments of lowercase letters, digits, and hyphens)
+/// followed by `/v<integer>` with no leading zero, e.g.
+/// `org.candid-core.field-names/v1`. Values are arbitrary JSON, bounded in
+/// aggregate by `Limits::max_value_bytes`.
+///
+/// # The `org.candid-core.field-names/v1` extension (issue #152)
+///
+/// The one extension this repository itself emits, via
+/// `candid-core compile <path> --envelope`: the field-name table as an array
+/// of `[container, id, name]` triples — named labels only, sorted,
+/// deduplicated — exactly the table `TsNames::from_source_info` builds from
+/// the provenance sidecar and the TypeScript runtime's `schemaFromContract`
+/// consumes (hash-enforced, so a lying table fails closed there). The
+/// semantic Contract stores only authoritative label ids; this extension
+/// lets one self-describing document carry the names too, without touching
+/// the canonical format or its identities.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ContractEnvelope {

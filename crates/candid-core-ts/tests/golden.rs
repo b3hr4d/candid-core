@@ -203,10 +203,32 @@ fn golden_runtime_contract_documents() {
             .iter()
             .map(|(container, id, label)| serde_json::json!([container, id, label]))
             .collect();
-        let mut names_text = serde_json::to_string_pretty(&serde_json::Value::Array(entries))
-            .expect("name table must serialize");
+        let mut names_text =
+            serde_json::to_string_pretty(&serde_json::Value::Array(entries.clone()))
+                .expect("name table must serialize");
         names_text.push('\n');
         assert_golden_file(&format!("{name}.names.json"), &names_text);
+
+        // The one-document form (issue #152): the same contract and the same
+        // triples as one `ContractEnvelope` carrying the recorded
+        // `org.candid-core.field-names/v1` extension — built through the real
+        // envelope type so the extension name and value pass the envelope's
+        // own validation, exactly as the `candid-core compile --envelope`
+        // path builds it. `ts/tests/crosscheck.test.ts` proves this document
+        // yields verdict-for-verdict the same schemas as the two files above.
+        let mut envelope = candid_core::ContractEnvelope::new(reparsed);
+        envelope
+            .insert_extension(
+                "org.candid-core.field-names/v1",
+                serde_json::Value::Array(entries),
+                &candid_core::Limits::default(),
+            )
+            .expect("the field-names extension must validate");
+        let envelope_value = serde_json::to_value(&envelope).expect("envelope must serialize");
+        let mut envelope_text =
+            serde_json::to_string_pretty(&envelope_value).expect("envelope must pretty-print");
+        envelope_text.push('\n');
+        assert_golden_file(&format!("{name}.envelope.json"), &envelope_text);
     }
 }
 

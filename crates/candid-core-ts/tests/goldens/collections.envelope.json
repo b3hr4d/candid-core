@@ -1,0 +1,138 @@
+{
+  "contract": {
+    "canonicalization_profile": "candid-core-canon-1",
+    "declarations": [
+      {
+        "name": "Grid",
+        "type": 7
+      },
+      {
+        "name": "Item",
+        "type": 3
+      },
+      {
+        "name": "Items",
+        "type": 8
+      },
+      {
+        "name": "MaybeItem",
+        "type": 2
+      },
+      {
+        "name": "Note",
+        "type": 0
+      },
+      {
+        "name": "Pair",
+        "type": 10
+      },
+      {
+        "name": "Unit",
+        "type": 9
+      }
+    ],
+    "format": "candid-core",
+    "format_version": 1,
+    "identities": {
+      "contract": "candid-core:contract:v1:sha256:078542310d2a975b98163949493da7ba96ef2f722e01ed6235001b4fac4e5d01"
+    },
+    "producer": {
+      "candid_parser_version": "0.0.0-golden",
+      "candid_version": "0.0.0-golden",
+      "name": "candid-core",
+      "version": "0.0.0-golden"
+    },
+    "semantics_profile": "candid-1",
+    "types": [
+      {
+        "inner": 1,
+        "kind": "opt"
+      },
+      {
+        "kind": "primitive",
+        "primitive": "text"
+      },
+      {
+        "inner": 3,
+        "kind": "opt"
+      },
+      {
+        "fields": [
+          {
+            "id": 23515,
+            "type": 4
+          },
+          {
+            "id": 1873743348,
+            "type": 1
+          },
+          {
+            "id": 3979722638,
+            "type": 5
+          }
+        ],
+        "kind": "record"
+      },
+      {
+        "kind": "primitive",
+        "primitive": "nat32"
+      },
+      {
+        "inner": 6,
+        "kind": "vec"
+      },
+      {
+        "kind": "primitive",
+        "primitive": "nat8"
+      },
+      {
+        "inner": 5,
+        "kind": "vec"
+      },
+      {
+        "inner": 3,
+        "kind": "vec"
+      },
+      {
+        "fields": [],
+        "kind": "record"
+      },
+      {
+        "fields": [
+          {
+            "id": 0,
+            "type": 11
+          },
+          {
+            "id": 1,
+            "type": 1
+          }
+        ],
+        "kind": "record"
+      },
+      {
+        "kind": "primitive",
+        "primitive": "nat"
+      }
+    ]
+  },
+  "extensions": {
+    "org.candid-core.field-names/v1": [
+      [
+        3,
+        23515,
+        "id"
+      ],
+      [
+        3,
+        1873743348,
+        "label"
+      ],
+      [
+        3,
+        3979722638,
+        "payload"
+      ]
+    ]
+  }
+}

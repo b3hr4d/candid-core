@@ -44,7 +44,8 @@ Modules, each a subpath export:
   `isResultSchema` and `unwrapResult`, the schema-directed read of the
   `variant { ok; err }` convention [below](#unwrapping-okerr-results).
 - **`./contract`** — build the same schemas at runtime from a canonical
-  Contract JSON document plus a hash-enforced field-name table.
+  Contract JSON document — or from a one-document `ContractEnvelope` carrying
+  its hash-enforced field-name table.
 - **`./codec`** — the Candid binary wire format, schema-directed, with the
   spec's coercion relation on decode and explicit resource budgets. Verified
   bidirectionally against the reference implementation's vectors.
@@ -96,37 +97,22 @@ version *`.
 
 ```sh
 cargo install candid-core --version 0.1.0-beta.2 --locked
-candid-core compile ./service.did > ./service.json
+candid-core compile ./service.did --envelope > ./service.json
 ```
 
-`compile` prints one JSON document holding a canonical `contract` and a
-`source_info` provenance sidecar. Both matter: a semantic Contract stores
-authoritative field-label *ids*, not text, so the names travel separately in
-`source_info.field_labels`. Feed the two to `schemaFromContract`.
+`compile --envelope` prints one self-describing document: a `ContractEnvelope`
+holding the canonical `contract` plus an `extensions` map whose
+`org.candid-core.field-names/v1` entry carries the field-name table. A
+semantic Contract stores authoritative field-label *ids*, not text, so names
+travel side-band — and envelope extensions live outside the canonical
+identities by design, so carrying them never moves a `contract_id`.
+`schemaFromContract` consumes the document whole:
 
 ```ts
 import { readFileSync } from "node:fs";
-import { schemaFromContract, type FieldNameEntry } from "@candid-core/schema/contract";
+import { schemaFromContract } from "@candid-core/schema/contract";
 
-interface CompiledLabel {
-  container: number;
-  id: number;
-  label: { kind: "named"; name: string } | { kind: "positional" };
-}
-
-const compiled = JSON.parse(readFileSync("./service.json", "utf8")) as {
-  contract: unknown;
-  source_info?: { field_labels: CompiledLabel[] };
-};
-
-const names: FieldNameEntry[] = [];
-for (const entry of compiled.source_info?.field_labels ?? []) {
-  if (entry.label.kind === "named") {
-    names.push([entry.container, entry.id, entry.label.name]);
-  }
-}
-
-const built = schemaFromContract(compiled.contract, { names });
+const built = schemaFromContract(JSON.parse(readFileSync("./service.json", "utf8")));
 if (!built.ok) {
   throw new Error(JSON.stringify(built.issues));
 }
@@ -135,12 +121,31 @@ built.schemas.Account; // one Schema per declaration, in declaration order
 built.actor; // the service schema, when the document has one
 ```
 
-Positional labels — Candid's tuple syntax — carry no name and are skipped;
-those fields render by the ecosystem's `_id_` convention, exactly as the
-generator renders them. Every entry you do pass is hash-enforced: a name must
-be the Candid preimage of its id, so a table that lies fails closed instead of
-quietly renaming a field. Passing no table at all is legal and renders every
-field as `_id_`, which is also what `compile --no-source-info` leaves you with.
+The two-file flow also works: plain `compile` (no `--envelope`) prints
+`{ contract, source_info }`, and the named `[container, id, name]` triples in
+`source_info.field_labels` — entries whose `label.kind` is `"named"` — pass as
+the `names` option alongside the bare `contract`:
+
+```ts
+import { schemaFromContract, type FieldNameEntry } from "@candid-core/schema/contract";
+
+declare const compiled: { contract: unknown };
+declare const names: FieldNameEntry[];
+
+schemaFromContract(compiled.contract, { names });
+```
+
+Both routes yield verdict-for-verdict identical schemas, and an explicit
+`names` option always wins over envelope-carried names — the envelope's table
+is then not consulted at all.
+
+Positional and numeric labels carry no name and are skipped; those fields
+render by the ecosystem's `_id_` convention, exactly as the generator renders
+them. Every name — envelope-carried or caller-supplied alike — is
+hash-enforced: it must be the Candid preimage of its id, so a table that lies
+fails closed instead of quietly renaming a field. Passing no table at all is
+legal and renders every field as `_id_`, which is also what
+`compile --no-source-info` leaves you with.
 
 ## Calling a canister
 

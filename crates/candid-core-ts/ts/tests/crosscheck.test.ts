@@ -38,13 +38,14 @@ interface Fixture {
   readonly samples: Record<string, readonly unknown[]>;
 }
 
-function load(name: string): { contract: unknown; names: FieldNameEntry[] } {
+function load(name: string): { contract: unknown; names: FieldNameEntry[]; envelope: unknown } {
   const goldens = new URL("../../tests/goldens/", import.meta.url);
   return {
     contract: JSON.parse(readFileSync(new URL(`${name}.contract.json`, goldens), "utf8")),
     names: JSON.parse(
       readFileSync(new URL(`${name}.names.json`, goldens), "utf8"),
     ) as FieldNameEntry[],
+    envelope: JSON.parse(readFileSync(new URL(`${name}.envelope.json`, goldens), "utf8")),
   };
 }
 
@@ -342,6 +343,52 @@ for (const fixture of FIXTURES) {
         assert.deepStrictEqual(
           validate(dynamic, sample),
           validate(generated, sample),
+          `${fixture.name}.${declaration} diverged on ${String(sample)}`,
+        );
+      }
+    }
+  });
+}
+
+// The issue #152 round-trip acceptance criterion: the one-document envelope
+// path must produce schemas verdict-for-verdict identical to the two-file
+// path — same verdicts, same issue codes, same paths, same messages, on
+// every golden cross-check sample. The envelope goldens carry the same
+// contract and the same triples as the two files, wrapped the way
+// `candid-core compile --envelope` wraps them, so any divergence here is a
+// divergence in the envelope-reading path itself.
+for (const fixture of FIXTURES) {
+  test(`the envelope path matches the two-file path on ${fixture.name}`, () => {
+    const { contract, names, envelope } = load(fixture.name);
+    const twoFile = schemaFromContract(contract, { names });
+    const oneDocument = schemaFromContract(envelope);
+    assert(twoFile.ok, `the two-file path must accept the ${fixture.name} goldens`);
+    assert(oneDocument.ok, `the envelope path must accept the ${fixture.name} golden`);
+    if (!twoFile.ok || !oneDocument.ok) {
+      return;
+    }
+    assert.deepStrictEqual(
+      Object.keys(oneDocument.schemas).sort(),
+      Object.keys(twoFile.schemas).sort(),
+      "both paths build the same declaration set",
+    );
+    assert.strictEqual(
+      oneDocument.actor !== undefined,
+      twoFile.actor !== undefined,
+      "both paths agree on whether the contract carries an actor",
+    );
+    if (oneDocument.actor !== undefined && twoFile.actor !== undefined) {
+      const principalSample = { toText: () => "aaaaa-aa" };
+      assert.deepStrictEqual(
+        validate(oneDocument.actor, principalSample),
+        validate(twoFile.actor, principalSample),
+      );
+    }
+    for (const [declaration, samples] of Object.entries(fixture.samples)) {
+      for (const sample of samples) {
+        assert.deepStrictEqual(
+          validate(oneDocument.schemas[declaration], sample),
+          validate(twoFile.schemas[declaration], sample),
           `${fixture.name}.${declaration} diverged on ${String(sample)}`,
         );
       }

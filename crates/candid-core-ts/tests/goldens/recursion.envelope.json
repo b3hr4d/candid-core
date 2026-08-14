@@ -1,0 +1,90 @@
+{
+  "contract": {
+    "canonicalization_profile": "candid-core-canon-1",
+    "declarations": [
+      {
+        "name": "Even",
+        "type": 3
+      },
+      {
+        "name": "List",
+        "type": 0
+      },
+      {
+        "name": "ListAlias",
+        "type": 0
+      },
+      {
+        "name": "Odd",
+        "type": 3
+      }
+    ],
+    "format": "candid-core",
+    "format_version": 1,
+    "identities": {
+      "contract": "candid-core:contract:v1:sha256:3cf8ec8089294a16efa58c43942016a61f9c5f34661068cb5d99c69b125071b2"
+    },
+    "producer": {
+      "candid_parser_version": "0.0.0-golden",
+      "candid_version": "0.0.0-golden",
+      "name": "candid-core",
+      "version": "0.0.0-golden"
+    },
+    "semantics_profile": "candid-1",
+    "types": [
+      {
+        "inner": 1,
+        "kind": "opt"
+      },
+      {
+        "fields": [
+          {
+            "id": 1158359328,
+            "type": 2
+          },
+          {
+            "id": 1291237008,
+            "type": 0
+          }
+        ],
+        "kind": "record"
+      },
+      {
+        "kind": "primitive",
+        "primitive": "nat"
+      },
+      {
+        "fields": [
+          {
+            "id": 1224901875,
+            "type": 4
+          }
+        ],
+        "kind": "record"
+      },
+      {
+        "inner": 3,
+        "kind": "opt"
+      }
+    ]
+  },
+  "extensions": {
+    "org.candid-core.field-names/v1": [
+      [
+        1,
+        1158359328,
+        "head"
+      ],
+      [
+        1,
+        1291237008,
+        "tail"
+      ],
+      [
+        3,
+        1224901875,
+        "next"
+      ]
+    ]
+  }
+}

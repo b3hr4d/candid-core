@@ -8,10 +8,12 @@ import assert from "node:assert/strict";
 
 import {
   schemaFromContract,
+  FIELD_NAMES_EXTENSION,
   type ContractIssueCode,
   type SchemaFromContractResult,
 } from "../contract.ts";
 import { validate } from "../validate.ts";
+import { candidLabelHash } from "../labels.ts";
 
 type Json = ReturnType<typeof JSON.parse>;
 
@@ -804,4 +806,190 @@ test("core-validator parity: oneway results, empty methods, class edges (PR #121
     "invalid_contract_document",
     "$.types[2].results[0]",
   );
+});
+
+// --- ContractEnvelope documents (issue #152) -------------------------------
+
+/** The `$.extensions[…]` path base envelope-carried name issues report. */
+const NAMES_BASE = `$.extensions[${JSON.stringify(FIELD_NAMES_EXTENSION)}]`;
+
+/** A one-field record contract whose field id is the hash of `owner`. */
+function ownerDocument(): Json {
+  return document(
+    [{ kind: "record", fields: [{ id: candidLabelHash("owner"), type: 1 }] }, primitive("nat")],
+    [{ name: "A", type: 0 }],
+  );
+}
+
+test("an envelope document is detected and its field names are consumed", () => {
+  const built = schemaFromContract({
+    contract: ownerDocument(),
+    extensions: {
+      [FIELD_NAMES_EXTENSION]: [[0, candidLabelHash("owner"), "owner"]],
+    },
+  });
+  assert(built.ok, "the envelope must build");
+  if (!built.ok) {
+    return;
+  }
+  assert.deepStrictEqual(validate(built.schemas.A, { owner: 5n }), { ok: true });
+  const missing = validate(built.schemas.A, {});
+  assert(!missing.ok && missing.issues[0].path === "$.owner", "the envelope name must render");
+});
+
+test("an envelope without extensions builds with the _id_ rendering", () => {
+  const built = schemaFromContract({ contract: ownerDocument() });
+  assert(built.ok, "a bare envelope is legal");
+  if (!built.ok) {
+    return;
+  }
+  const key = `_${candidLabelHash("owner")}_`;
+  assert.deepStrictEqual(validate(built.schemas.A, { [key]: 5n }), { ok: true });
+});
+
+test("an explicit names option wins over envelope-carried names", () => {
+  const envelope: Json = {
+    contract: ownerDocument(),
+    extensions: {
+      [FIELD_NAMES_EXTENSION]: [[0, candidLabelHash("owner"), "owner"]],
+    },
+  };
+  // An explicit empty table: fields render by `_id_`, proving the envelope's
+  // table was not consulted.
+  const explicit = schemaFromContract(envelope, { names: [] });
+  assert(explicit.ok, "the explicit table must be used");
+  if (explicit.ok) {
+    const key = `_${candidLabelHash("owner")}_`;
+    assert.deepStrictEqual(validate(explicit.schemas.A, { [key]: 5n }), { ok: true });
+    const named = validate(explicit.schemas.A, { owner: 5n });
+    assert(!named.ok, "the envelope name must not render when an explicit table wins");
+  }
+  // Precedence means not consulted at all: a lying envelope table cannot
+  // fail a build that supplies its own valid names.
+  const lyingEnvelope: Json = {
+    contract: ownerDocument(),
+    extensions: { [FIELD_NAMES_EXTENSION]: [[0, 1, "lies"]] },
+  };
+  const overridden = schemaFromContract(lyingEnvelope, {
+    names: [[0, candidLabelHash("owner"), "owner"]],
+  });
+  assert(overridden.ok, "an unused envelope table is not consulted");
+});
+
+test("envelope-carried names are hash-enforced exactly like caller-supplied ones", () => {
+  // A name that does not hash back to its id fails closed at the extension.
+  failsWith(
+    schemaFromContract({
+      contract: ownerDocument(),
+      extensions: { [FIELD_NAMES_EXTENSION]: [[0, candidLabelHash("owner"), "lies"]] },
+    }),
+    "invalid_name_table",
+    `${NAMES_BASE}[0]`,
+  );
+  // `_N_`-shaped names are reserved, same rule as the options table.
+  failsWith(
+    schemaFromContract({
+      contract: ownerDocument(),
+      extensions: { [FIELD_NAMES_EXTENSION]: [[0, candidLabelHash("owner"), "_2_"]] },
+    }),
+    "invalid_name_table",
+    `${NAMES_BASE}[0]`,
+  );
+  // A malformed entry fails closed, path-addressed at the extension.
+  failsWith(
+    schemaFromContract({
+      contract: ownerDocument(),
+      extensions: { [FIELD_NAMES_EXTENSION]: [[0, 1]] },
+    }),
+    "invalid_name_table",
+    `${NAMES_BASE}[0]`,
+  );
+  // A non-array extension value is not a name table at all.
+  failsWith(
+    schemaFromContract({
+      contract: ownerDocument(),
+      extensions: { [FIELD_NAMES_EXTENSION]: { 0: "owner" } },
+    }),
+    "invalid_name_table",
+    NAMES_BASE,
+  );
+});
+
+test("the envelope shell fails closed on malformed shapes", () => {
+  // Unknown envelope keys are refused, mirroring the Rust loader's
+  // deny_unknown_fields — including the hybrid that carries contract markers
+  // beside a contract key.
+  failsWith(
+    schemaFromContract({ contract: ownerDocument(), format: "candid-core" }),
+    "invalid_contract_document",
+    "$",
+  );
+  // extensions must be a JSON object.
+  for (const extensions of [null, [], "names", 5]) {
+    failsWith(
+      schemaFromContract({ contract: ownerDocument(), extensions }),
+      "invalid_contract_document",
+      "$.extensions",
+    );
+  }
+  // A non-object contract value fails inside the contract, path re-rooted.
+  failsWith(schemaFromContract({ contract: "nope" }), "invalid_contract_document", "$.contract");
+});
+
+test("extension names are validated by the Rust loader's grammar", () => {
+  for (const name of [
+    "unversioned",
+    "nodot/v1",
+    "org.candid_core.field-names/v1",
+    "Org.Example/v1",
+    "org.example/v0",
+    "org.example/v01",
+    "org..example/v1",
+  ]) {
+    failsWith(
+      schemaFromContract({
+        contract: ownerDocument(),
+        extensions: { [name]: [] },
+      }),
+      "invalid_extension_name",
+      "$.extensions",
+    );
+  }
+  // Foreign extensions with valid names are tolerated and ignored: the map
+  // is namespaced ecosystem metadata, not a closed set.
+  const built = schemaFromContract({
+    contract: ownerDocument(),
+    extensions: {
+      [FIELD_NAMES_EXTENSION]: [[0, candidLabelHash("owner"), "owner"]],
+      "org.example.other/v2": { anything: true },
+    },
+  });
+  assert(built.ok, "a foreign extension must not fail the build");
+});
+
+test("contract-side issues inside an envelope are rooted at $.contract", () => {
+  failsWith(
+    schemaFromContract({
+      contract: { ...ownerDocument(), format: "not-candid-core" },
+    }),
+    "unsupported_contract_format",
+    "$.contract.format",
+  );
+  failsWith(
+    schemaFromContract({
+      contract: document([{ kind: "opt", inner: 1 }, primitive("null")], [{ name: "O", type: 0 }]),
+    }),
+    "unrepresentable_option",
+    "$.contract.types[0].inner",
+  );
+});
+
+test("an envelope that throws while inspected fails closed", () => {
+  const hostile = {
+    contract: ownerDocument(),
+    get extensions(): never {
+      throw new Error("gotcha");
+    },
+  };
+  failsWith(schemaFromContract(hostile), "invalid_contract_document", "$");
 });
