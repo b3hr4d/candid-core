@@ -50,8 +50,10 @@ Modules, each a subpath export:
   spec's coercion relation on decode and explicit resource budgets. Verified
   bidirectionally against the reference implementation's vectors.
 - **`./actor`** — `createActor`/`callFunc` over a two-method byte-pipe
-  `Transport`; an `@icp-sdk/core` agent adapts in the one short module
-  [below](#calling-a-canister), and the agent never sees a schema.
+  `Transport`; the agent never sees a schema.
+- **`./transport-icp`** — the compiled, tested `Transport` adapter over
+  `@icp-sdk/core`'s `HttpAgent` (peer `>= 6`; importing this subpath is what
+  makes the peer a runtime requirement).
 - **`./forms`** — form-generation metadata: per-kind controls, constraints,
   labels, lazy recursion, and validation-issue-to-form-node resolution.
 - **`./labels`** — the Candid label hash and the `_N_` rendering convention.
@@ -61,8 +63,11 @@ Modules, each a subpath export:
 The `principal` primitive types against `@icp-sdk/core`'s `Principal`, so the
 shipped declaration files import that type. npm's install metadata marks the
 peer `optional` because nothing imports it at *runtime* — plain JavaScript
-consumers need nothing, and no bytes from it are bundled — but a TypeScript
-consumer does need it installed, and neither failure mode says so:
+consumers need nothing, and no bytes from it are bundled — with one deliberate
+exception: the [`./transport-icp`](#calling-a-canister) subpath imports the
+peer's agent at runtime, for exactly whoever chose to import that subpath.
+Everywhere else, a TypeScript consumer merely needs the peer installed, and
+neither failure mode says so:
 
 - **Without it, and with `skipLibCheck` off**, compilation fails inside
   `node_modules`, pointing at this package's own declarations rather than at
@@ -152,58 +157,13 @@ legal and renders every field as `_id_`, which is also what
 `createActor` needs a `Transport`: two methods that move Candid bytes, nothing
 more. Identity, ingress expiry, polling, certificate verification, and reject
 classification all stay on the agent's side of that pipe, and the agent never
-sees a schema. Here is the whole adapter for `@icp-sdk/core` v6.
-
-<!-- Not compiled by the packaged-consumer gate: @icp-sdk/core is a type-only
-peer and this repository's lockfile deliberately carries no dependency tree it
-never executes. Verified out of tree against @icp-sdk/core 6.1.0 under strict
-TypeScript 5.9.3 and 7.0.2 with skipLibCheck off and exactOptionalPropertyTypes
-on. Re-verify it by hand when the SDK's agent surface moves. -->
-
-```ts
-import { HttpAgent } from "@icp-sdk/core/agent";
-import type { CallTarget, Transport } from "@candid-core/schema/actor";
-
-const agent = await HttpAgent.create({ host: "https://icp-api.io" });
-
-/** `effectiveCanisterId` only matters for management-canister routing. */
-function fields({ methodName, effectiveCanisterId }: CallTarget, arg: Uint8Array) {
-  return effectiveCanisterId === undefined
-    ? { methodName, arg }
-    : { methodName, arg, effectiveTarget: { canisterId: effectiveCanisterId } };
-}
-
-export const transport: Transport = {
-  async query(target, arg) {
-    const response = await agent.query(target.canisterId, fields(target, arg));
-    if (response.status === "rejected") {
-      throw new Error(
-        `${target.methodName} rejected (${response.reject_code}): ${response.reject_message}`,
-      );
-    }
-    return response.reply.arg;
-  },
-
-  async call(target, arg) {
-    // One shot: `update` submits, polls to completion, and verifies the
-    // certificate before returning the certified reply bytes.
-    const { reply } = await agent.update(target.canisterId, fields(target, arg));
-    return reply;
-  },
-};
-```
-
-Then hand that transport, a service schema, and the actor interface to
-`createActor`. The interface travels explicitly because `c.rec` erases method
-structure from a schema's *type* — schemas carry values, not calls — so it
-cannot be re-derived from `typeof`. Generated modules emit it as
-`export type Actor = { … }`; written by hand it looks like this:
+sees a schema. The `@icp-sdk/core` adapter ships compiled and tested as its
+own subpath, `./transport-icp`:
 
 ```ts
 import { c, type Infer } from "@candid-core/schema";
-import { createActor, type Transport } from "@candid-core/schema/actor";
-
-declare const transport: Transport;
+import { createActor } from "@candid-core/schema/actor";
+import { httpTransport } from "@candid-core/schema/transport-icp";
 
 const Tokens = c.record({ e8s: c.nat64 });
 const Account = c.record({ owner: c.principal, subaccount: c.opt(c.vec(c.nat8)) });
@@ -218,11 +178,39 @@ type Ledger = {
   transfer(to: Infer<typeof Account>, amount: Infer<typeof Tokens>): Promise<bigint>;
 };
 
-export const ledger = createActor<Ledger>(Ledger, "ryjl3-tyaaa-aaaaa-aaaba-cai", transport);
+export const ledger = createActor<Ledger>(
+  Ledger,
+  "ryjl3-tyaaa-aaaaa-aaaba-cai",
+  httpTransport({ host: "https://icp-api.io" }),
+);
 ```
 
+Importing `./transport-icp` is what makes `@icp-sdk/core` a **runtime**
+requirement, and the peer range `>= 6` is load-bearing: on v6 `agent.update`
+submits, polls to completion, and verifies the certificate in one shot, which
+is exactly what the adapter's `call` relies on — older majors resolved at
+submission and need their own submit-and-poll adapter, deliberately not
+written here. Consumers who never import this subpath keep the type-only peer
+situation [above](#the-type-only-peer-dependency), unchanged.
+
+`httpTransport` exposes the two knobs a plain consumer needs — `host`, and
+`rootKey` for local networks (omit it on mainnet). Everything beyond them —
+identity, retries, ingress options — belongs to an agent you build yourself
+and pass as `agent`, alone: configuring a supplied agent from the other
+options would silently discard what it was built with, so the combination
+throws `TypeError`. There is deliberately no logging hook; wrapping the
+returned `Transport` composes cleanly.
+
+The actor interface travels explicitly because `c.rec` erases method
+structure from a schema's *type* — schemas carry values, not calls — so it
+cannot be re-derived from `typeof`. Generated modules emit it as
+`export type Actor = { … }`; hand-written it looks like the `Ledger` type
+above.
+
 A codec failure rejects the call promise with an `ActorError` carrying the
-issues; transport failures propagate untouched.
+issues; transport failures propagate untouched, including the plain `Error`
+the adapter throws for a rejected query — `` `${methodName} rejected
+(${code}): ${message}` ``.
 
 ## Unwrapping ok/err results
 

@@ -107,7 +107,16 @@ def main():
             for path in extracted.rglob("*")
             if path.is_file()
         )
-        modules = ["actor", "codec", "contract", "forms", "labels", "schema", "validate"]
+        modules = [
+            "actor",
+            "codec",
+            "contract",
+            "forms",
+            "labels",
+            "schema",
+            "transport-icp",
+            "validate",
+        ]
         expected = sorted(
             ["CHANGELOG.md", "LICENSE", "README.md", "package.json"]
             + [f"dist/{name}.js" for name in modules]
@@ -178,9 +187,17 @@ def main():
             )
 
         # The type-only peer, as a minimal stub: `Principal` must stay a real
-        # nominal type in the consumer, or the compile proves nothing.
+        # nominal type in the consumer, or the compile proves nothing. The
+        # `./agent` subpath joined for the transport adapter (issue #154): its
+        # shipped declaration imports the `Agent` type and its shipped module
+        # imports the `HttpAgent` and `QueryResponseStatus` values, so both
+        # halves are stubbed with exactly those names. The *real* `@icp-sdk/
+        # core@6.1.0` surface is what the repository's own tsc gate and mock-
+        # fetch suite compile and execute against; this stub only keeps the
+        # packaged-artifact compile hermetic.
         peer = scratch / "node_modules" / "@icp-sdk" / "core"
         (peer / "principal").mkdir(parents=True)
+        (peer / "agent").mkdir(parents=True)
         (peer / "package.json").write_text(
             json.dumps(
                 {
@@ -191,10 +208,33 @@ def main():
                         "./principal": {
                             "types": "./principal/index.d.ts",
                             "default": "./principal/index.js",
-                        }
+                        },
+                        "./agent": {
+                            "types": "./agent/index.d.ts",
+                            "default": "./agent/index.js",
+                        },
                     },
                 }
             )
+        )
+        (peer / "agent" / "index.d.ts").write_text(
+            "export interface Agent {\n"
+            "  readonly rootKey: Uint8Array | null;\n"
+            "}\n"
+            "export declare class HttpAgent {\n"
+            "  private readonly _isHttpAgent: true;\n"
+            "  static create(options?: unknown): Promise<HttpAgent>;\n"
+            "}\n"
+            "export declare enum QueryResponseStatus {\n"
+            '  Replied = "replied",\n'
+            '  Rejected = "rejected",\n'
+            "}\n"
+        )
+        (peer / "agent" / "index.js").write_text(
+            "export class HttpAgent {\n"
+            "  static create() { return Promise.resolve(new HttpAgent()); }\n"
+            "}\n"
+            'export const QueryResponseStatus = { Replied: "replied", Rejected: "rejected" };\n'
         )
         (peer / "principal" / "index.d.ts").write_text(
             "export declare class Principal {\n"
@@ -220,6 +260,7 @@ def main():
             'import { encode, decode } from "@candid-core/schema/codec";\n'
             'import { schemaFromContract } from "@candid-core/schema/contract";\n'
             'import { createActor, type Transport } from "@candid-core/schema/actor";\n'
+            'import { httpTransport } from "@candid-core/schema/transport-icp";\n'
             'import { formModel } from "@candid-core/schema/forms";\n'
             'import { candidLabelHash } from "@candid-core/schema/labels";\n'
             'import { Principal } from "@icp-sdk/core/principal";\n'
@@ -241,6 +282,8 @@ def main():
             "void createActor;\n"
             "const transportSlot: Transport | undefined = undefined;\n"
             "void transportSlot;\n"
+            "const adapterSlot: (() => Transport) | undefined = httpTransport;\n"
+            "void adapterSlot;\n"
             'console.log("npm package smoke: ok");\n'
         )
         (consumer / "tsconfig.json").write_text(
@@ -335,7 +378,7 @@ def main():
                 f"{missing.stdout}{missing.stderr}"
             )
     print("npm package artifact verified: manifest file list, homepage, changelog "
-          "entry and pairing, self-contained doc comments, root + 6 subpaths, "
+          "entry and pairing, self-contained doc comments, root + 7 subpaths, "
           "strict compile without skipLibCheck, executed round-trip, "
           f"{len(blocks)} README block(s) compiled, peer requirement")
 
