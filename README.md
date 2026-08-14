@@ -61,20 +61,21 @@ Reformatting, whitespace, key order, a rewritten `producer`, an extension edit, 
 The `candid-core` binary requires the `filesystem-compiler` feature, which is on by default. It accepts exactly this grammar, and nothing else:
 
 ```text
-candid-core compile <path> [--no-source-info]
+candid-core compile <path> [--no-source-info | --envelope]
 candid-core validate <path>
 ```
 
 ```sh
 cargo run --bin candid-core -- compile ./service.did
 cargo run --bin candid-core -- compile ./service.did --no-source-info
+cargo run --bin candid-core -- compile ./service.did --envelope
 cargo run --bin candid-core -- validate ./contract.json
 ```
 
-Anything outside the grammar — an unknown command, an unknown option, a missing path, an option before the path, a flag on `validate`, a duplicate `--no-source-info`, or any trailing argument — is a usage error: the process writes nothing to stdout, exits with status 64, and prints exactly this usage text on stderr:
+Anything outside the grammar — an unknown command, an unknown option, a missing path, an option before the path, a flag on `validate`, a duplicate flag, `--no-source-info` combined with `--envelope` (the envelope exists to carry the field names that flag suppresses), or any trailing argument — is a usage error: the process writes nothing to stdout, exits with status 64, and prints exactly this usage text on stderr:
 
 ```text
-usage: candid-core compile <path> [--no-source-info]
+usage: candid-core compile <path> [--no-source-info | --envelope]
        candid-core validate <path>
 ```
 
@@ -88,7 +89,7 @@ Every non-usage outcome is one pretty-printed JSON document on stdout with an em
 | read, parse, validation, or resource-limit failure | 1 | JSON with `"ok": false` | empty |
 | usage error | 64 | empty | the usage text above |
 
-`compile <path>` emits `{"ok": true, "contract": …, "source_info": …}` on success and `{"ok": false, "diagnostics": […]}` on failure. `--no-source-info` suppresses the provenance sidecar; the key stays present as `"source_info": null`. `validate <path>` emits `{"ok": true, "contract": …}` on success, `{"ok": false, "diagnostics": […]}` when the document cannot be read or is not JSON, and `{"ok": false, "violations": […]}` when it parses but fails validation or when the read exceeds the input byte bound (a single `resource_limit_exceeded` violation at path `$`). Codes are stable identifiers such as `did_parse_error`, `did_file_read_error`, `contract_file_read_error`, `malformed_contract_json`, and `resource_limit_exceeded`.
+`compile <path>` emits `{"ok": true, "contract": …, "source_info": …}` on success and `{"ok": false, "diagnostics": […]}` on failure. `--no-source-info` suppresses the provenance sidecar; the key stays present as `"source_info": null`. `compile <path> --envelope` emits the `ContractEnvelope` document itself on success — `{"contract": …, "extensions": {"org.candid-core.field-names/v1": [[container, id, name], …]}}`, with the named field labels sorted and deduplicated — rather than an `ok`-wrapped response, so the output can be saved whole and handed directly to `@candid-core/schema`'s `schemaFromContract`; extensions live outside `contract_id` and `interface_id` by the envelope's design, and failures use the same `{"ok": false, "diagnostics": […]}` channel as plain `compile`. `validate <path>` emits `{"ok": true, "contract": …}` on success, `{"ok": false, "diagnostics": […]}` when the document cannot be read or is not JSON, and `{"ok": false, "violations": […]}` when it parses but fails validation or when the read exceeds the input byte bound (a single `resource_limit_exceeded` violation at path `$`). Codes are stable identifiers such as `did_parse_error`, `did_file_read_error`, `contract_file_read_error`, `malformed_contract_json`, and `resource_limit_exceeded`.
 
 Diagnostics and violations share one item schema (see the Diagnostics section of `docs/architecture.md`): codes, paths, and resource metadata are the stable machine surface, message text is not. Items may additionally carry an optional structured `path`, a `span` naming the logical source ID (with byte offsets only when they are exact for the original text), and ordered `related` locations; these keys are omitted when the data does not exist, so pre-existing output shapes are unchanged. Locations always name logical source IDs (`workspace:/…`) — never the temporary files the compiler materializes for import checking.
 

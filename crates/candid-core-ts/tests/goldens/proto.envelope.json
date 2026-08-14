@@ -1,0 +1,78 @@
+{
+  "contract": {
+    "canonicalization_profile": "candid-core-canon-1",
+    "declarations": [
+      {
+        "name": "Event",
+        "type": 2
+      },
+      {
+        "name": "Holder",
+        "type": 0
+      }
+    ],
+    "format": "candid-core",
+    "format_version": 1,
+    "identities": {
+      "contract": "candid-core:contract:v1:sha256:7a144cf673c15248f5690b62caf729cc318b7ab86d09fe7c0bf4548a5ab920f3"
+    },
+    "producer": {
+      "candid_parser_version": "0.0.0-golden",
+      "candid_version": "0.0.0-golden",
+      "name": "candid-core",
+      "version": "0.0.0-golden"
+    },
+    "semantics_profile": "candid-1",
+    "types": [
+      {
+        "fields": [
+          {
+            "id": 2111641832,
+            "type": 1
+          }
+        ],
+        "kind": "record"
+      },
+      {
+        "kind": "primitive",
+        "primitive": "nat8"
+      },
+      {
+        "fields": [
+          {
+            "id": 1169401620,
+            "type": 3
+          },
+          {
+            "id": 2111641832,
+            "type": 1
+          }
+        ],
+        "kind": "variant"
+      },
+      {
+        "kind": "primitive",
+        "primitive": "null"
+      }
+    ]
+  },
+  "extensions": {
+    "org.candid-core.field-names/v1": [
+      [
+        0,
+        2111641832,
+        "__proto__"
+      ],
+      [
+        2,
+        1169401620,
+        "idle"
+      ],
+      [
+        2,
+        2111641832,
+        "__proto__"
+      ]
+    ]
+  }
+}

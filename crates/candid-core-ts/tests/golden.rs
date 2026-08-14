@@ -50,6 +50,63 @@ fn assert_golden(name: &str) {
     assert_golden_file(&format!("{name}.ts"), &generate_fixture(name));
 }
 
+/// The `(container, id, name)` triples the goldens and the envelope carry:
+/// named labels only, one name per `(container, id)`, retained with
+/// `TsNames::from_source_info`'s own overwrite order (later provenance
+/// wins), emitted in key order. The collapse is load-bearing: two spellings
+/// of one label id are reachable from ordinary Candid — hash-colliding
+/// names in structurally identical declarations deduplicate to one semantic
+/// node — and emitting both would let the loader's last-entry-wins table
+/// render a different key than the generated builder. The native binary's
+/// `field_name_triples` mirrors this derivation exactly.
+fn name_triples(source_info: &candid_core::SourceInfo) -> Vec<(u32, u32, String)> {
+    let mut names: std::collections::BTreeMap<(u32, u32), &str> = std::collections::BTreeMap::new();
+    for provenance in source_info.field_labels() {
+        if let candid_core::SourceLabel::Named { name } = &provenance.label {
+            names.insert((provenance.container, provenance.id), name.as_str());
+        }
+    }
+    names
+        .into_iter()
+        .map(|((container, id), label)| (container, id, label.to_string()))
+        .collect()
+}
+
+/// Hash-colliding spellings collapse to the name the generator renders: the
+/// two record declarations below are structurally identical (their fields
+/// share one label id — `cemxzwyk` and `amxawvks` are a Candid hash
+/// collision), so canonicalization deduplicates them into one semantic node
+/// with two provenance spellings. The emitted table must carry exactly the
+/// spelling `TsNames` retains, or the envelope path would render a
+/// different field key than the generated module (PR #159 review).
+#[test]
+fn hash_colliding_spellings_collapse_to_the_generator_name() {
+    let source = "type A = record { cemxzwyk : nat };\ntype B = record { amxawvks : nat };";
+    let compilation = compile_did(source).expect("compile");
+    let source_info = compilation.source_info().expect("provenance");
+
+    let triples = name_triples(source_info);
+    assert_eq!(
+        triples.len(),
+        1,
+        "one entry per (container, id): {triples:?}"
+    );
+    let winner = triples[0].2.as_str();
+    assert!(
+        winner == "cemxzwyk" || winner == "amxawvks",
+        "{winner:?} must be one of the colliding spellings"
+    );
+
+    let names = TsNames::from_source_info(source_info);
+    let module = generate_module(compilation.contract(), &names, &TsOptions::default())
+        .expect("the colliding source generates");
+    assert!(
+        module.contains(&format!("{winner}: c.nat")),
+        "the generated module must render the same spelling the table carries: \
+         table={winner:?}, module:\n{module}"
+    );
+}
+
 #[test]
 fn golden_primitives() {
     assert_golden("primitives");
@@ -187,26 +244,36 @@ fn golden_runtime_contract_documents() {
         let source_info = compilation
             .source_info()
             .expect("compile_did retains provenance by default");
-        let mut triples: Vec<(u32, u32, &str)> = source_info
-            .field_labels()
-            .iter()
-            .filter_map(|provenance| match &provenance.label {
-                candid_core::SourceLabel::Named { name } => {
-                    Some((provenance.container, provenance.id, name.as_str()))
-                }
-                _ => None,
-            })
-            .collect();
-        triples.sort();
-        triples.dedup();
-        let entries: Vec<serde_json::Value> = triples
+        let entries: Vec<serde_json::Value> = name_triples(source_info)
             .iter()
             .map(|(container, id, label)| serde_json::json!([container, id, label]))
             .collect();
-        let mut names_text = serde_json::to_string_pretty(&serde_json::Value::Array(entries))
-            .expect("name table must serialize");
+        let mut names_text =
+            serde_json::to_string_pretty(&serde_json::Value::Array(entries.clone()))
+                .expect("name table must serialize");
         names_text.push('\n');
         assert_golden_file(&format!("{name}.names.json"), &names_text);
+
+        // The one-document form (issue #152): the same contract and the same
+        // triples as one `ContractEnvelope` carrying the recorded
+        // `org.candid-core.field-names/v1` extension — built through the real
+        // envelope type so the extension name and value pass the envelope's
+        // own validation, exactly as the `candid-core compile --envelope`
+        // path builds it. `ts/tests/crosscheck.test.ts` proves this document
+        // yields verdict-for-verdict the same schemas as the two files above.
+        let mut envelope = candid_core::ContractEnvelope::new(reparsed);
+        envelope
+            .insert_extension(
+                "org.candid-core.field-names/v1",
+                serde_json::Value::Array(entries),
+                &candid_core::Limits::default(),
+            )
+            .expect("the field-names extension must validate");
+        let envelope_value = serde_json::to_value(&envelope).expect("envelope must serialize");
+        let mut envelope_text =
+            serde_json::to_string_pretty(&envelope_value).expect("envelope must pretty-print");
+        envelope_text.push('\n');
+        assert_golden_file(&format!("{name}.envelope.json"), &envelope_text);
     }
 }
 

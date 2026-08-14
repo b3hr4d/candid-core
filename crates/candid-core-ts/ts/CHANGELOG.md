@@ -18,10 +18,41 @@ API, the inferred domain types, the codec's wire behaviour, and the codes and
 Pairs with `candid-core` 0.1.0-beta.2.
 
 Additive: the editor hover, the npm page, a small introspection surface on the
-root export, and result unwrapping on `./validate`. Nothing that existed before
-behaves differently — no inferred type, no wire encoding, and no issue code
-changed, and every executable difference in the modules that shipped in 0.1.1
-is new API plus one unused import dropped from `codec.js`.
+root export, result unwrapping on `./validate`, and one-document contract
+loading on `./contract`. Nothing that existed before behaves differently — no
+inferred type, no wire encoding, and no existing issue code changed
+(`./contract` adds one code, `invalid_extension_name`), and every executable
+difference in the modules that shipped in 0.1.1 is new API plus one unused
+import dropped from `codec.js`.
+
+### One-document contract loading
+
+- **`schemaFromContract` accepts a `ContractEnvelope` document** — the
+  `{ contract, extensions }` shape `candid-core compile --envelope` emits,
+  recognised by its `contract` key, which no canonical Contract document
+  carries — and consumes the field-name table its
+  `org.candid-core.field-names/v1` extension holds (the key is exported as
+  `FIELD_NAMES_EXTENSION`). One self-describing document now replaces the
+  contract-plus-table pair; the two routes build verdict-for-verdict
+  identical schemas, proven against the golden cross-check samples.
+- **Envelope-carried names are validated exactly like caller-supplied
+  ones** — same entry shape, same `_N_` reservation, same hash enforcement,
+  same entry cap — with issues path-addressed at
+  `$.extensions["org.candid-core.field-names/v1"][…]`. An explicit `names`
+  option wins over the envelope's table, which is then not consulted at all.
+- **The envelope shell fails closed the way the Rust loader fails it**:
+  unknown envelope keys, a non-object `extensions`, a non-array field-names
+  value, and an extension name outside the reverse-domain-`/vN` grammar are
+  all refused — the last with the new issue code `invalid_extension_name`,
+  mirroring candid-core's own code. Contract-side issues inside an envelope
+  are re-rooted at `$.contract…`, where the data actually sits. One
+  tightening rides along for bare contracts: a `names` option that is not an
+  array at runtime now fails closed as `invalid_name_table` instead of being
+  silently treated as empty.
+- **Extensions stay outside the canonical identities**: `contract_id` and
+  `interface_id` are computed over the Contract alone, so an envelope carries
+  names without moving any identity — the README's "From a `.did` file"
+  section now documents the one-document flow first.
 
 ### Unwrapping ok/err results
 

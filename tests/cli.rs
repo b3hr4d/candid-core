@@ -21,8 +21,9 @@ const CONTRACT_FIXTURE: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/tests/fixtures/conformance/empty_actor.contract.json"
 );
-const USAGE: &str =
-    "usage: candid-core compile <path> [--no-source-info]\n       candid-core validate <path>\n";
+const USAGE: &str = "usage: candid-core compile <path> [--no-source-info | --envelope]\n       candid-core validate <path>\n";
+
+const FIELD_NAMES_EXTENSION: &str = "org.candid-core.field-names/v1";
 
 static NEXT_FIXTURE: AtomicU64 = AtomicU64::new(0);
 
@@ -153,6 +154,7 @@ fn usage_errors_reject_every_invalid_argument_shape() {
         &["validate", CONTRACT_FIXTURE, "--typo"],
         // options `validate` does not accept
         &["validate", CONTRACT_FIXTURE, "--no-source-info"],
+        &["validate", CONTRACT_FIXTURE, "--envelope"],
         // duplicate flags
         &[
             "compile",
@@ -160,9 +162,18 @@ fn usage_errors_reject_every_invalid_argument_shape() {
             "--no-source-info",
             "--no-source-info",
         ],
+        &["compile", DID_FIXTURE, "--envelope", "--envelope"],
+        // `--envelope` misplaced before the path
+        &["compile", "--envelope"],
+        &["compile", "--envelope", DID_FIXTURE],
+        // mutually exclusive flags, in either order: the envelope exists to
+        // carry the names `--no-source-info` suppresses
+        &["compile", DID_FIXTURE, "--envelope", "--no-source-info"],
+        &["compile", DID_FIXTURE, "--no-source-info", "--envelope"],
         // trailing arguments
         &["compile", DID_FIXTURE, "extra"],
         &["compile", DID_FIXTURE, "--no-source-info", "extra"],
+        &["compile", DID_FIXTURE, "--envelope", "extra"],
         &["validate", CONTRACT_FIXTURE, "extra"],
     ];
     for arguments in matrix {
@@ -193,6 +204,145 @@ fn compile_suppresses_source_info_to_exactly_null() {
         Some(&Value::Null),
         "the key must stay present and be exactly null",
     );
+}
+
+/// Issue #152: `compile <path> --envelope` prints the envelope document
+/// itself — `{"contract": …, "extensions": {…}}` with the field-name triples
+/// under the recorded extension key — not an `ok`-wrapped response, so the
+/// output can be saved and handed whole to `schemaFromContract`. The fixture
+/// pins the emitted shape byte-for-byte (as JSON value equality plus the
+/// pretty-printing contract `json_stdout` asserts).
+#[test]
+fn compile_envelope_emits_the_pinned_document() {
+    let did = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/conformance/basic.did"
+    );
+    let response = json_stdout(&run(["compile", did, "--envelope"]), 0);
+    let fixture: Value = serde_json::from_str(
+        &fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/envelope/basic.envelope.json"
+        ))
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(response, fixture);
+    assert_eq!(
+        response.as_object().unwrap().keys().collect::<Vec<_>>(),
+        ["contract", "extensions"],
+        "the envelope document carries exactly the envelope keys",
+    );
+    assert_eq!(
+        response["extensions"]
+            .as_object()
+            .unwrap()
+            .keys()
+            .collect::<Vec<_>>(),
+        [FIELD_NAMES_EXTENSION],
+        "field names are the only emitted extension",
+    );
+    // The embedded contract is exactly what plain `compile` emits: the
+    // envelope adds side-band data without touching the canonical document.
+    let compiled = json_stdout(&run(["compile", did]), 0);
+    assert_eq!(response["contract"], compiled["contract"]);
+    // And the triples are `[container, id, name]`, sorted, named labels only.
+    assert_eq!(
+        response["extensions"][FIELD_NAMES_EXTENSION],
+        json!([[2, 947296307u32, "owner"], [2, 3573748184u32, "amount"]]),
+    );
+}
+
+/// Hash-colliding spellings collapse to one entry per `(container, id)` —
+/// `cemxzwyk` and `amxawvks` share a Candid label hash, so the two
+/// structurally identical records deduplicate to one semantic node with two
+/// provenance spellings. The table must carry exactly the spelling
+/// `TsNames::from_source_info` retains (later provenance wins; the
+/// generator-side test `hash_colliding_spellings_collapse_to_the_generator_name`
+/// proves the winner below matches the generated module's rendered key), or
+/// the loader's last-entry-wins table could render a different field key
+/// than the generated builder.
+#[test]
+fn compile_envelope_collapses_hash_colliding_spellings() {
+    let fixture = Fixture::new();
+    let path = fixture.write(
+        "collide.did",
+        "type A = record { cemxzwyk : nat };\ntype B = record { amxawvks : nat };",
+    );
+    let response = json_stdout(
+        &run([
+            OsStr::new("compile"),
+            path.as_os_str(),
+            OsStr::new("--envelope"),
+        ]),
+        0,
+    );
+    assert_eq!(
+        response["extensions"][FIELD_NAMES_EXTENSION],
+        json!([[0, 2222238428u32, "amxawvks"]]),
+    );
+}
+
+/// A source with no named field labels still carries the extension, as an
+/// empty array: the emitted shape is stable, never conditionally absent.
+#[test]
+fn compile_envelope_keeps_empty_field_names_present() {
+    let response = json_stdout(&run(["compile", DID_FIXTURE, "--envelope"]), 0);
+    assert_eq!(response["extensions"], json!({ FIELD_NAMES_EXTENSION: [] }));
+}
+
+/// Failures keep the compile diagnostics channel: exit 1 and the frozen
+/// `{"ok": false, "diagnostics": […]}` envelope, never a partial document.
+#[test]
+fn compile_envelope_reports_diagnostics_on_failure() {
+    let fixture = Fixture::new();
+    let missing = fixture.path.join("missing.did");
+    let response = json_stdout(
+        &run([
+            OsStr::new("compile"),
+            missing.as_os_str(),
+            OsStr::new("--envelope"),
+        ]),
+        1,
+    );
+    assert_eq!(
+        response.as_object().unwrap().keys().collect::<Vec<_>>(),
+        ["diagnostics", "ok"],
+        "the compile failure envelope keys are frozen"
+    );
+    assert_eq!(response["ok"], json!(false));
+    assert_eq!(
+        response["diagnostics"][0]["code"],
+        json!("did_file_read_error")
+    );
+}
+
+/// The emitted triples are exactly the generator's name table: for the golden
+/// fixtures the TypeScript cross-check consumes, the extension value must
+/// equal the reviewed `*.names.json` golden — the same data
+/// `TsNames::from_source_info` builds — so the one-document path and the
+/// two-file path can never carry different names.
+#[test]
+fn compile_envelope_field_names_match_the_generator_goldens() {
+    for name in ["collections", "variants", "quoting", "proto", "ledger"] {
+        let did = format!(
+            "{}/crates/candid-core-ts/tests/fixtures/{name}.did",
+            env!("CARGO_MANIFEST_DIR"),
+        );
+        let golden: Value = serde_json::from_str(
+            &fs::read_to_string(format!(
+                "{}/crates/candid-core-ts/tests/goldens/{name}.names.json",
+                env!("CARGO_MANIFEST_DIR"),
+            ))
+            .unwrap(),
+        )
+        .unwrap();
+        let response = json_stdout(&run(["compile", &did, "--envelope"]), 0);
+        assert_eq!(
+            response["extensions"][FIELD_NAMES_EXTENSION], golden,
+            "{name}: the envelope triples must equal the names.json golden",
+        );
+    }
 }
 
 #[test]

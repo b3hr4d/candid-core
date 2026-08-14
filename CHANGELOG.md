@@ -19,6 +19,24 @@ serialized documents) is the only observable change from the bump itself — no
 vector moved, and `tests/release_metadata.rs` asserts the change and the
 non-change together.
 
+### Command-line interface
+
+- **`compile <path> --envelope` emits a one-document `ContractEnvelope`**
+  ([issue #152]): `{"contract": …, "extensions":
+  {"org.candid-core.field-names/v1": [[container, id, name], …]}}` — the
+  canonical Contract plus its field-name table as an envelope extension, so
+  one self-describing document feeds `@candid-core/schema`'s
+  `schemaFromContract` without a separate provenance sidecar. The triples are
+  the named field labels only, sorted and deduplicated — exactly the table
+  the TypeScript generator builds from `SourceInfo`, pinned against its
+  goldens by test. Extensions live outside `contract_id` and `interface_id`
+  by the envelope's design, so the emitted document keeps the identities of
+  its plain-`compile` sibling. The flag is mutually exclusive with
+  `--no-source-info` (the envelope exists to carry the names that flag
+  suppresses); existing output shapes are untouched, and envelope-emission
+  failures use the standard `{"ok": false, "diagnostics": […]}` channel.
+  No library API changed.
+
 ### Release automation
 
 - **The tag, crates.io publish, and GitHub release are performed by a
@@ -235,3 +253,4 @@ have seen them:
 [issue #39]: https://github.com/b3hr4d/candid-core/issues/39
 [issue #88]: https://github.com/b3hr4d/candid-core/issues/88
 [issue #92]: https://github.com/b3hr4d/candid-core/issues/92
+[issue #152]: https://github.com/b3hr4d/candid-core/issues/152

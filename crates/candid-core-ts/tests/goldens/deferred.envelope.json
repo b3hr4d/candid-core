@@ -1,0 +1,110 @@
+{
+  "contract": {
+    "actor": {
+      "kind": "service",
+      "service": 0
+    },
+    "canonicalization_profile": "candid-core-canon-1",
+    "declarations": [
+      {
+        "name": "Callback",
+        "type": 4
+      },
+      {
+        "name": "Kept",
+        "type": 2
+      },
+      {
+        "name": "Registry",
+        "type": 6
+      }
+    ],
+    "format": "candid-core",
+    "format_version": 1,
+    "identities": {
+      "contract": "candid-core:contract:v1:sha256:63572a1640102e56d6c7297c49a89b2dce6bf9d2f298a408500fd9c5a6796ebe",
+      "interface": "candid-core:interface:v1:sha256:7c4fb1c9212d86346ea255ad6ff1a346819b720df79076b3a6de584759534f9e"
+    },
+    "producer": {
+      "candid_parser_version": "0.0.0-golden",
+      "candid_version": "0.0.0-golden",
+      "name": "candid-core",
+      "version": "0.0.0-golden"
+    },
+    "semantics_profile": "candid-1",
+    "types": [
+      {
+        "kind": "service",
+        "methods": [
+          {
+            "function": 1,
+            "id": 1247277682,
+            "name": "ping"
+          }
+        ]
+      },
+      {
+        "args": [],
+        "kind": "func",
+        "mode": "update",
+        "results": []
+      },
+      {
+        "fields": [
+          {
+            "id": 834174833,
+            "type": 3
+          }
+        ],
+        "kind": "record"
+      },
+      {
+        "kind": "primitive",
+        "primitive": "nat"
+      },
+      {
+        "args": [
+          3
+        ],
+        "kind": "func",
+        "mode": "query",
+        "results": [
+          5
+        ]
+      },
+      {
+        "kind": "primitive",
+        "primitive": "text"
+      },
+      {
+        "kind": "service",
+        "methods": [
+          {
+            "function": 7,
+            "id": 3500123747,
+            "name": "register"
+          }
+        ]
+      },
+      {
+        "args": [
+          5
+        ],
+        "kind": "func",
+        "mode": "update",
+        "results": [
+          3
+        ]
+      }
+    ]
+  },
+  "extensions": {
+    "org.candid-core.field-names/v1": [
+      [
+        2,
+        834174833,
+        "value"
+      ]
+    ]
+  }
+}
