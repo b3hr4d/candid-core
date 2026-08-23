@@ -340,9 +340,9 @@ What *is* available:
   is a "stop new adoption" signal, not a recall.
 - **Un-yanking** — `cargo yank --version <version> --undo` — reverses the mark.
 - **A follow-up version.** This is the actual fix for a bad release. Publish
-  `0.1.0-beta.2` (or `0.1.1`, once out of prerelease) with the correction,
-  record the reason in `CHANGELOG.md`, and yank the bad version so new consumers
-  do not find it. Never attempt to re-publish the same version number; crates.io
+  the next version with the correction — the prerelease after the bad one, or
+  the next patch once out of prerelease — record the reason in `CHANGELOG.md`,
+  and yank the bad version so new consumers do not find it. Never attempt to re-publish the same version number; crates.io
   rejects it, and if it did not, it would silently change what a pinned
   requirement means.
 

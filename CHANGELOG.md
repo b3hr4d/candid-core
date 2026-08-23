@@ -7,17 +7,90 @@ release procedure that produces an entry here is [docs/releasing.md](docs/releas
 API, the serialized Contract/Compilation/envelope shapes, the canonical bytes,
 and therefore the identities computed over them. Pin an exact version.
 
-## 0.1.0-beta.2 — prepared, not yet published
+## 0.1.0-beta.3 — prepared, not yet published
 
-The second prerelease. As with every release, the archive is built and
+The third prerelease, and the first that carries a fix for a defect in an
+already-published version. As with every release, the archive is built and
 digested before publication, so the copy of this file inside the published
-archive necessarily says "prepared"; the release record carries the
-publication evidence. This version follows the issue #81 bump protocol:
-`ProducerInfo::current().version` (and therefore the octets of newly
-serialized documents) is the only observable change from the bump itself — no
-`contract_id`, `interface_id`, `source_bundle_id`, or frozen exact-octet
-vector moved, and `tests/release_metadata.rs` asserts the change and the
-non-change together.
+archive necessarily says "prepared"; the release record carries the publication
+evidence. This version follows the issue #81 bump protocol:
+`ProducerInfo::current().version` (and therefore the octets of newly serialized
+documents) is the only observable change from the bump itself — no
+`contract_id`, `interface_id`, `source_bundle_id`, or frozen exact-octet vector
+moved, and `tests/release_metadata.rs` asserts the change and the non-change
+together.
+
+Two things make this release due rather than optional. Both published versions
+carry the unbounded type-depth walk described below, reachable from the public
+`compile_did` entry point under default `Limits`, and a published version cannot
+be corrected in place. And `compile --envelope` — the step `@candid-core/schema`
+tells a consumer to run immediately after `cargo install candid-core` — exists
+in no published version of this crate, so that on-ramp cannot ship honestly
+until this one does.
+
+### Resource bounds
+
+- **The type-depth guard walks no longer re-expand shared subtrees, and they
+  charge for the work they do** ([issue #125]). Both traversals that enforce
+  `max_type_depth` — the parse-side preflight over declaration references and
+  the checked-type walk before lowering — walked declaration DAGs as trees,
+  re-expanding a subtree reached through two sibling references once per
+  incoming edge: O(2^n) node visits from a sub-kilobyte source, with nothing
+  charged, because the loops observed only cancellation and deadlines and
+  `compile_did` configures neither. On the issue's reproduction a 781-byte
+  `.did` burned 5.097 s at n = 20, doubling per level, and no refusal ever came
+  — the walk returned `Ok`. Every consumer that compiles untrusted or
+  user-supplied `.did` source inherited this, in `0.1.0-beta.1` and
+  `0.1.0-beta.2` alike, so both should be left behind rather than pinned.
+
+  Each walk now builds a recursion map first — the declaration reference graph
+  and the members of its cycles, computed iteratively — tracks only cycle
+  members in the per-path active set, and skips any expansion state
+  `(node, depth, active recursive names)` it has already seen. Pruning exact
+  duplicate states cannot change what a walk refuses, which is the evidence that
+  this is a cost fix rather than a behaviour one: the alias-chain pins hold
+  unchanged at `type_depth` observed 257, recursive types compile as before, and
+  the n = 24 fan-out — O(2^24) visits under the old walks — compiles at a pinned
+  2 796 work units.
+
+- **`Limits::max_type_preflight_work` and `Limits::with_max_type_preflight_work`
+  are new public API** ([issue #125]), defaulting to **10 000 000**. Every
+  recursion-map node and expansion state is charged against this counter, plus
+  one unit per recursive name tracked on a state's path, so the shapes that
+  still multiply states fail closed with `resource_limit_exceeded` naming
+  `type_preflight_work` instead of hanging. It is deliberately separate from
+  `max_canonicalization_work`: both accrue on one budget in a single
+  compilation, and metering the depth guards on the graph counter would let a
+  type-heavy bundle starve the canonicalization that follows it. Realistic
+  contracts are nowhere near the ceiling — the largest corpus fixture,
+  `ledger.did`, consumes 806 units end to end, pinned by
+  `tests/deep_nesting.rs`.
+
+  Deduplication is also what makes these walks *retain*, where the tree walks
+  they replaced held only a stack, so this counter bounds memory as well as
+  time: about **19 bytes of peak live heap per unit**, measured across bundle
+  sizes and pinned inside a band by `tests/type_preflight_memory.rs`. At the
+  default that authorizes roughly 190 MB before the counter refuses — ample on
+  an ordinary host, and more than a small 32-bit `wasm32` heap can serve. A host
+  whose allocator fails before the counter does gets an allocation abort in
+  place of the structured refusal this is designed to return, so a browser or
+  other constrained host should lower the limit to what its heap can actually
+  hold: 1 000 000 keeps the walks under ~19 MB and still clears every realistic
+  contract by three orders of magnitude.
+
+  The addition is additive in both senses that matter. The public surface gains
+  two inherent methods and removes nothing, so the semver gate reports no break
+  against `0.1.0-beta.2` and this release acknowledges none. The serialized
+  override key is additive exactly like `max_artifact_identity_work`'s:
+  `Limits::default` and every configuration that leaves this limit at its
+  profile value still serialize with no `max_type_preflight_work` key at all, so
+  existing documents are unchanged in both directions, while a document that
+  does carry the key is readable by this build and newer ones and rejected by
+  one that predates it — the intended failure, since silently ignoring an
+  unknown limit override would apply a policy the document did not ask for.
+  `LIMITS_CONFIG_VERSION` is unchanged: `Limits` fields are private precisely so
+  that adding one is never a breaking change, and no existing key, value, or
+  default moved.
 
 ### Command-line interface
 
@@ -36,6 +109,42 @@ non-change together.
   suppresses); existing output shapes are untouched, and envelope-emission
   failures use the standard `{"ok": false, "diagnostics": […]}` channel.
   No library API changed.
+
+### Documentation
+
+- **The packaged `README.md` documents the TypeScript on-ramp and the full CLI
+  grammar** ([issue #148], [issue #152], [issue #153]). It names
+  `@candid-core/schema` — the Zod-style schema runtime this repository also
+  produces, versioned independently — records that the `candid-core` binary is
+  what turns a `.did` file into the document its `schemaFromContract` consumes,
+  notes the prepared `@candid-core/cli` wasm package, and states the `compile`
+  grammar, the usage-error contract, and the envelope output shape the flag
+  above adds.
+- **ADR 0005 records the type-preflight counter and what it trades**
+  ([issue #125]) — the recursion map, per-path cycle stopping, and state
+  deduplication, written down beside the other dedicated counters, including the
+  measured per-unit heap figure that makes the default a memory bound as well as
+  a time bound.
+
+## 0.1.0-beta.2 — published 2026-07-28
+
+The second prerelease, released from commit
+`13cc0284c3fe9059311a408d90da96a151a87d06`. The `.crate` SHA-256 crates.io
+recorded is
+`8ef93f40f5da95e4d0b6bdf34df0f9a41f1e2bf0a535564051cbfe8f36fa5095`, matching
+the digest the release gates measured and the one the `confirm` job read back
+from crates.io after publication. This was the first version released through
+the dispatch-only `Release` workflow described below.
+
+The archive published under this version was built and digested before
+publication, so the copy of this file inside it still describes the release as
+prepared rather than published — unavoidable, since editing it would change the
+commit and therefore the digest. This version follows the issue #81 bump
+protocol: `ProducerInfo::current().version` (and therefore the octets of newly
+serialized documents) is the only observable change from the bump itself — no
+`contract_id`, `interface_id`, `source_bundle_id`, or frozen exact-octet vector
+moved, and `tests/release_metadata.rs` asserts the change and the non-change
+together.
 
 ### Release automation
 
@@ -252,5 +361,9 @@ have seen them:
 [issue #38]: https://github.com/b3hr4d/candid-core/issues/38
 [issue #39]: https://github.com/b3hr4d/candid-core/issues/39
 [issue #88]: https://github.com/b3hr4d/candid-core/issues/88
+[issue #89]: https://github.com/b3hr4d/candid-core/issues/89
 [issue #92]: https://github.com/b3hr4d/candid-core/issues/92
+[issue #125]: https://github.com/b3hr4d/candid-core/issues/125
+[issue #148]: https://github.com/b3hr4d/candid-core/issues/148
 [issue #152]: https://github.com/b3hr4d/candid-core/issues/152
+[issue #153]: https://github.com/b3hr4d/candid-core/issues/153
