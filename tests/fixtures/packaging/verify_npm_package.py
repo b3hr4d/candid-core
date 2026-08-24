@@ -42,6 +42,7 @@ no `@icp-sdk/core` at all, while the transport-importing consumer fails
 with the clear missing-module error rather than a silent `any`.
 """
 
+import datetime
 import json
 import pathlib
 import re
@@ -155,9 +156,9 @@ def main():
         version = manifest["version"]
         changelog = (extracted / "CHANGELOG.md").read_text()
         entries = {
-            name: body
-            for name, body in re.findall(
-                r"^## (\S+)(.*?)(?=^## |\Z)", changelog, re.M | re.S
+            name: (status, body)
+            for name, status, body in re.findall(
+                r"^## (\S+)([^\n]*)\n(.*?)(?=^## |\Z)", changelog, re.M | re.S
             )
         }
         if version not in entries:
@@ -166,11 +167,75 @@ def main():
                 f"the packed version {version} arrives on npm undocumented. "
                 f"Headings found: {sorted(entries)}"
             )
-        if not re.search(r"[Pp]airs with `candid-core` \S+", entries[version]):
+        status, body = entries[version]
+
+        # The entry being released must not describe itself as unpublished.
+        # A tarball is immutable, so "prepared, not yet published" would sit on
+        # npm forever telling whoever installed it that it does not exist. The
+        # crate's archive has to say that — it is digested before publication —
+        # but `npm-release.yml` takes no digest input, so this one can and must
+        # carry the real date.
+        heading_date = re.fullmatch(r"\s*—\s*(\d{4}-\d{2}-\d{2})\s*", status)
+        if not heading_date:
+            raise SystemExit(
+                f"the changelog heading for the released version must read "
+                f"'## {version} — YYYY-MM-DD'; it reads "
+                f"'## {version}{status}'. A shipped tarball cannot describe "
+                "itself as unpublished."
+            )
+        try:
+            datetime.date.fromisoformat(heading_date.group(1))
+        except ValueError:
+            raise SystemExit(
+                f"the changelog heading for {version} carries "
+                f"'{heading_date.group(1)}', which is not a real date"
+            ) from None
+
+        pairing = re.search(r"[Pp]airs with `candid-core` (\S+)", body)
+        if not pairing:
             raise SystemExit(
                 f"the changelog entry for {version} names no `candid-core` "
                 "pairing, which is exactly what the README promises it does"
             )
+
+        # Every `cargo install candid-core --version X` the README tells a
+        # reader to run must name the version this release pairs with. The
+        # on-ramp once shipped pointing at a crate release that predated the
+        # `--envelope` flag the very next line invokes, and nothing caught it:
+        # only ```ts blocks are compiled, so ```sh is unverified prose.
+        paired = pairing.group(1).rstrip(".")
+        readme_text = (extracted / "README.md").read_text()
+        pinned = set(
+            re.findall(
+                r"cargo install candid-core --version (\S+)", readme_text
+            )
+        )
+        if pinned - {paired}:
+            raise SystemExit(
+                f"the shipped README tells the reader to install candid-core "
+                f"{sorted(pinned)}, but this release pairs with {paired}. The "
+                "on-ramp must install the version it was verified against."
+            )
+
+        # A declaration line count stated in the released entry has to match
+        # the declarations actually being packed. This is not a guard against
+        # some later release moving the file — a published entry describes its
+        # own version forever — but against the entry being authored early and
+        # the artifact drifting underneath it before the dispatch, which is
+        # exactly how the 0.1.1-era figure went stale.
+        for stated_from, stated_to in re.findall(
+            r"`schema\.d\.ts` grows from (\d+) lines to (\d+)", body
+        ):
+            actual = len(
+                (extracted / "dist" / "schema.d.ts").read_text().splitlines()
+            )
+            if int(stated_to) != actual:
+                raise SystemExit(
+                    f"the changelog entry for {version} says `schema.d.ts` "
+                    f"grows from {stated_from} lines to {stated_to}, but the "
+                    f"packed declarations are {actual} lines. A measured number "
+                    "in a shipped changelog must match the artifact it ships in."
+                )
 
         # Shipped doc comments must stand on their own. The pattern is broad
         # on purpose — `#` followed by a digit, anywhere in a declaration
