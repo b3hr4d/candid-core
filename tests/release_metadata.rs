@@ -1,4 +1,4 @@
-//! Issue #81's protocol, applied to the `0.1.0-beta.2` bump: what a version
+//! Issue #81's protocol, applied to the `0.1.0-beta.3` bump: what a version
 //! bump is allowed to move.
 //!
 //! Bumping the crate version changes exactly one observable thing in the data
@@ -31,7 +31,7 @@ use std::path::{Path, PathBuf};
 /// a literal here is that changing the crate version has to be a deliberate
 /// edit to a test that says why, not a silent consequence of editing
 /// `Cargo.toml`.
-const PRERELEASE_VERSION: &str = "0.1.0-beta.2";
+const PRERELEASE_VERSION: &str = "0.1.0-beta.3";
 
 /// The producer version frozen into `tests/fixtures/artifact-identity/`. Those
 /// vectors are exact-octet protocol evidence, not current build output, so this
@@ -88,13 +88,13 @@ fn producer_reports_the_prerelease_version_in_every_configuration() {
     assert_eq!(producer.version, env!("CARGO_PKG_VERSION"));
 
     // A prerelease, not a release. `"0.1"` does not select this version, which
-    // is why README and docs/releasing.md require `=0.1.0-beta.2` by name.
+    // is why README and docs/releasing.md require `=0.1.0-beta.3` by name.
     let (release, prerelease) = producer
         .version
         .split_once('-')
         .expect("the beta version must carry a prerelease suffix");
     assert_eq!(release, "0.1.0");
-    assert_eq!(prerelease, "beta.2");
+    assert_eq!(prerelease, "beta.3");
 
     // The engine pins are read from the manifest, not from a linked crate, so
     // they are identical here whether or not `compiler` is on. Neither moved.

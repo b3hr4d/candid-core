@@ -23,7 +23,7 @@ repository = "https://github.com/b3hr4d/candid-core"
 # the published `candid-core` — the two crates' release cycles are independent
 # by decision (issue #38). Cargo drops `path` at publish time and keeps the
 # version requirement, so this declaration is already the released shape.
-candid-core = { version = "=0.1.0-beta.2", path = "../..", default-features = false }
+candid-core = { version = "=0.1.0-beta.3", path = "../..", default-features = false }
 
 # Opt-in bridge from a compilation provenance sidecar to a TsNames table.
 # Mirrors the upstream feature name so `candid-core-ts/compiler` reads as what
