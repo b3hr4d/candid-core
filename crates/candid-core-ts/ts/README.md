@@ -94,7 +94,7 @@ candid-core` fails with `could not find candid-core in registry crates-io with
 version *`.
 
 ```sh
-cargo install candid-core --version 0.1.0-beta.2 --locked
+cargo install candid-core --version 0.1.0-beta.3 --locked
 candid-core compile ./service.did --envelope > ./service.json
 ```
 
@@ -120,7 +120,7 @@ built.actor; // the service schema, when the document has one
 ```
 
 The two-file flow also works: plain `compile` (no `--envelope`) prints
-`{ contract, source_info }`, and the named `[container, id, name]` triples in
+`{ ok, contract, source_info }`, and the named `[container, id, name]` triples in
 `source_info.field_labels` — entries whose `label.kind` is `"named"` — pass as
 the `names` option alongside the bare `contract`:
 
@@ -255,7 +255,8 @@ error, and throws `TypeError`.
 
 ## Support matrix
 
-Measured against the published artifact with `@arethetypeswrong/cli` and
+Measured against the packed tarball — the artifact `npm pack` produces,
+extracted and consumed as a dependency — with `@arethetypeswrong/cli` and
 direct compiles, not inferred from the manifest.
 
 | | |
@@ -263,14 +264,15 @@ direct compiles, not inferred from the manifest.
 | TypeScript | **≥ 5.0** |
 | `moduleResolution` | `node16`, `nodenext`, `bundler` |
 | Module format | **ESM only** — no CommonJS build ships |
-| Node, from ESM | **≥ 16** (16.20, 18.20, 20.19, 22.12, 25.9 exercised) |
+| Node, from ESM | **≥ 16** for the seven peer-free subpaths (16.20, 18.20, 20.19, 22.12, 25.9 exercised) |
+| Node, for `./transport-icp` | **≥ 20.19** — what the pinned `@icp-sdk/core` tree's own `engines` declare |
 | Node, from CommonJS `require()` | **≥ 20.19 / ≥ 22.12**, else `await import()` |
 | TypeScript, from a CommonJS project | **≥ 5.8 with `"module": "nodenext"`** |
 
 **TypeScript 5.0** is a hard floor, and it is a *parse* error below it, not a
 type error: `c.tuple` is declared with a `const` type parameter — the 5.0
 feature that keeps a tuple's element types from widening — so 4.9 stops at
-`dist/schema.d.ts(136,11): error TS1139: Type parameter declaration expected.`
+`error TS1139: Type parameter declaration expected.` in `dist/schema.d.ts`
 before it type-checks anything.
 
 **`node10` resolution cannot see this package at all.** There is no top-level
@@ -280,11 +282,14 @@ or `bundler`.
 
 **Supporting ESM is not by itself enough for Node.** The build targets ES2020
 and does not down-level, so optional chaining and nullish coalescing reach
-`dist/` verbatim — they appear in five of the seven modules — and those are
+`dist/` verbatim — they appear in six of the eight modules — and those are
 V8 8.0 syntax, which no Node before 14 can parse. The floor above is the
 oldest release this package is actually run on rather than the oldest that
-might work: 16.20.2 is exercised and passes every subpath, and nothing older
-is claimed.
+might work: 16.20.2 is exercised and passes every peer-free subpath, and
+nothing older is claimed. `./transport-icp` is the exception and has its own
+row: it is the one subpath that loads `@icp-sdk/core`, whose pinned dependency
+tree declares `node >= 20.19.0`, so the peer's floor governs there rather than
+this package's syntax.
 
 **From CommonJS**, the two floors are independent. At runtime, `require()` of
 an ES module is what Node added in 20.19 and 22.12; below those it throws
@@ -312,10 +317,12 @@ the project's issue tracker.
 
 ## Verification
 
-Every published artifact passes a packaged-consumer gate before release: the
-tarball `npm pack` produces is extracted into a clean project, compiled under
-strict TypeScript with `skipLibCheck` off, and executed — root and every
-subpath export, a real encode/validate round-trip. The TypeScript in this file
+Every release runs a packaged-consumer gate on the commit it publishes from,
+before anything is uploaded: the tarball `npm pack` produces at that commit is
+extracted into a clean project, compiled under strict TypeScript with
+`skipLibCheck` off, and executed — root and every subpath export, a real
+encode/validate round-trip. The publish step then builds and uploads from that
+same commit. The TypeScript in this file
 is compiled by that same gate, against the packed artifact, so an example here
 cannot drift away from the package it documents. The codec is additionally
 verified in both directions against the reference implementation's own wire

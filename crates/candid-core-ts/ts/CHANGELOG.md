@@ -13,9 +13,9 @@ entry here is [docs/releasing.md] in that repository.
 API, the inferred domain types, the codec's wire behaviour, and the codes and
 `$`-rooted paths validation reports. Pin an exact version.
 
-## 0.1.2 — prepared, not yet published
+## 0.2.0 — 2026-08-24
 
-Pairs with `candid-core` 0.1.0-beta.2.
+Pairs with `candid-core` 0.1.0-beta.3.
 
 The editor hover, the npm page, a small introspection surface on the root
 export, result unwrapping on `./validate`, one-document contract loading on
@@ -27,9 +27,14 @@ already broken at runtime). Runtime behavior is unchanged throughout — no
 wire encoding and no validation verdict moved, and no existing issue code
 changed (`./contract` adds one code, `invalid_extension_name`).
 
+The minor is what carries that break. Under npm's pre-1.0 caret rules a
+`^0.1.1` dependency accepts `0.1.2` and refuses `0.2.0`, so releasing the new
+principal typing as a patch would have upgraded every existing dependent into
+it unasked.
+
 ### Decoded principal values
 
-- **`c.principal` types as `PrincipalValue`** — `{ toText(): string }`,
+- **BREAKING**: `c.principal` types as `PrincipalValue` — `{ toText(): string }`,
   exported from the root — and `FuncValue.principal` and service schemas
   moved with it. This is the type surface telling the truth: the codec is
   self-contained and never constructs an SDK class, so a decoded principal
@@ -41,7 +46,7 @@ changed (`./contract` adds one code, `invalid_extension_name`).
   the structural shape and encode unchanged, proven by suite against the
   real pinned SDK.
 - **The shipped declarations no longer import `@icp-sdk/core` anywhere
-  outside `./transport-icp`.** The measured #148 complaint — a missing peer
+  outside `./transport-icp`.** The failure 0.1.1 could hand a consumer — a missing peer
   failing as `TS2307` deep in `node_modules`, or silently degrading
   `Principal` to `any` under `skipLibCheck` — is not mitigated but gone:
   every subpath except the transport compiles and runs with no peer
@@ -51,8 +56,8 @@ changed (`./contract` adds one code, `invalid_extension_name`).
 - **The generator emits the structural type**: `TsOptions::principal_import`
   now defaults to `@candid-core/schema` and the emitted import is
   `import type { PrincipalValue }`. The reserved-declaration-name set
-  tracked the referenced binding (issue #116's rule): `PrincipalValue` is
-  now refused as a declaration name, and `Principal` — no longer a binding
+  tracks whichever binding the generated modules actually import, so it moved
+  with the import: `PrincipalValue` is now refused as a declaration name, and `Principal` — no longer a binding
   generated modules reference — is allowed. Goldens regenerated and
   reviewed as a mapping change; the `tsc` invariance gate is untouched and
   stays green.
@@ -63,7 +68,7 @@ changed (`./contract` adds one code, `invalid_extension_name`).
 
 - **`httpTransport` is exported from the new `./transport-icp` subpath**
   (decision recorded on the tracker: a subpath, not a new package — no new
-  permanent npm name for ~60 lines, and the already-declared optional peer
+  permanent npm name for one small module, and the already-declared optional peer
   carries it). It builds a `Transport` over `@icp-sdk/core`'s `HttpAgent`:
   `query` throws a plain `Error` naming the reject code and message; `call`
   returns the certificate-verified reply bytes v6's one-shot `agent.update`
@@ -74,8 +79,8 @@ changed (`./contract` adds one code, `invalid_extension_name`).
 - **Importing the subpath is what makes the peer a runtime requirement**, and
   the range `>= 6` is load-bearing: older majors resolved `update` at
   submission and need their own submit-and-poll adapter. Consumers who never
-  import `./transport-icp` keep the type-only peer situation unchanged, and
-  the package stays `sideEffects: false`.
+  import `./transport-icp` need no `@icp-sdk/core` at all — not at runtime and
+  not in their types — and the package stays `sideEffects: false`.
 - **Tested against the real pinned `@icp-sdk/core@6.1.0` over a mock
   `fetch`**, not against a stubbed agent: the replied and rejected query
   paths, TypeError on the refused option combination, effective-canister-id
@@ -191,7 +196,7 @@ changed (`./contract` adds one code, `invalid_extension_name`).
 - **Every builder is documented.** 2 of the 28 members of the `c` object
   carried JSDoc in 0.1.1; all 28 do now, and the comments flow into
   `dist/*.d.ts` at build time, which is where a consumer's editor reads them.
-  `schema.d.ts` grows from 149 lines to 528 as a result.
+  `schema.d.ts` grows from 149 lines to 640 as a result.
 - **Shipped doc comments stand on their own.** 0.1.1's declarations cited
   three internal issue numbers across four comments — links a consumer's
   editor cannot follow. Those are gone, and the packaged-artifact gate now
@@ -199,23 +204,26 @@ changed (`./contract` adds one code, `invalid_extension_name`).
 - **The agent-adapter sketch is out of `dist/actor.js`.** It was a `//`
   comment, so declaration emit stripped it: it never reached hover, and it
   dropped `effectiveCanisterId`, which would have mis-routed the one call
-  shape that needs it. The README now carries a complete adapter instead.
+  shape that needs it. A compiled, tested adapter ships as `./transport-icp`
+  instead, and the README imports it rather than asking a reader to paste one.
 
 ### The npm page
 
 - **The README is an on-ramp rather than a summary.** It opens with the install
-  command; states the type-only peer dependency's two failure modes by name —
-  the `TS2307` that points into `node_modules` without naming the fix, and the
-  `skipLibCheck: true` build that goes green while `Principal` degrades to
-  `any`; carries the complete `@icp-sdk/core` v6 `Transport` adapter; and
-  documents the `.did` → schemas route that exists today
-  (`cargo install candid-core`, `candid-core compile`, then the contract and
-  its field-label table into `schemaFromContract`).
+  command — the whole install, since no subpath but `./transport-icp` needs the
+  peer; states the decoded-principal contract in both directions, what a decoded
+  value carries and what encoding accepts; reaches a canister through the
+  shipped `httpTransport` rather than an adapter the reader must paste; and
+  documents the `.did` → schemas route that exists today (`cargo install
+  candid-core`, then `candid-core compile --envelope` into
+  `schemaFromContract`).
 - **A support matrix**, measured rather than inferred: TypeScript ≥ 5.0 (a
   *parse* error below it — `c.tuple`'s `const` type parameter);
   `node16`/`nodenext`/`bundler` resolution only, `node10` cannot resolve the
-  package at all; ESM-only, on Node ≥ 16 (the build targets ES2020 and does not
-  down-level, so `?.` and `??` reach `dist/`); and, from CommonJS, Node ≥
+  package at all; ESM-only, on Node ≥ 16 for the seven peer-free subpaths and
+  ≥ 20.19 for `./transport-icp`, whose pinned SDK tree declares it (the build
+  targets ES2020 and does not down-level, so `?.` and `??` reach `dist/`); and,
+  from CommonJS, Node ≥
   20.19/22.12 for `require()` and TypeScript ≥ 5.8 with `"module": "nodenext"`
   for the types. No `engines` field: both floors are narrow, and enforcing
   either in install metadata would warn for the consumers it does not apply to.

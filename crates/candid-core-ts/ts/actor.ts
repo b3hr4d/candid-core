@@ -14,8 +14,8 @@
 // certificate verification, reject classification — stays on the agent's
 // side of the pipe.
 //
-// The complete `@icp-sdk/core` v6 adapter lives in README.md, under "Calling
-// a canister" — issue #148. A sketch used to sit here instead, and being
+// The compiled, tested `@icp-sdk/core` v6 adapter ships as the
+// `./transport-icp` subpath. A sketch used to sit here instead, and being
 // here was its problem: a `//` comment never reaches declaration emit, so it
 // was invisible in `.d.ts` hover while shipping inside `dist/actor.js`, where
 // no consumer looks. It also destructured `{ canisterId, methodName }` and
