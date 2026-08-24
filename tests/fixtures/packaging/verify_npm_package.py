@@ -217,6 +217,26 @@ def main():
                 "on-ramp must install the version it was verified against."
             )
 
+        # A declaration line count stated in the released entry has to match
+        # the declarations actually being packed. This is not a guard against
+        # some later release moving the file — a published entry describes its
+        # own version forever — but against the entry being authored early and
+        # the artifact drifting underneath it before the dispatch, which is
+        # exactly how the 0.1.1-era figure went stale.
+        for stated_from, stated_to in re.findall(
+            r"`schema\.d\.ts` grows from (\d+) lines to (\d+)", body
+        ):
+            actual = len(
+                (extracted / "dist" / "schema.d.ts").read_text().splitlines()
+            )
+            if int(stated_to) != actual:
+                raise SystemExit(
+                    f"the changelog entry for {version} says `schema.d.ts` "
+                    f"grows from {stated_from} lines to {stated_to}, but the "
+                    f"packed declarations are {actual} lines. A measured number "
+                    "in a shipped changelog must match the artifact it ships in."
+                )
+
         # Shipped doc comments must stand on their own. The pattern is broad
         # on purpose — `#` followed by a digit, anywhere in a declaration
         # file: one historical citation was line-wrapped ("issue\n * #104"),
