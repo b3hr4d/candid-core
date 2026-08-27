@@ -16,16 +16,15 @@ version.
 
 ## 0.1.0 — prepared, not yet published
 
-Embeds `candid-core` 0.1.0-beta.2 and the `candid-core-ts` generator from
+Embeds `candid-core` 0.1.0-beta.3 and the `candid-core-ts` generator from
 the same repository commit the release is dispatched from; the release
 record names the exact SHA.
 
-The first version (issue #153): the JavaScript-only on-ramp.
+The first version: the JavaScript-only on-ramp.
 
 - **`gen <service.did> [-o <dir>]`** emits the generated
   `@candid-core/schema` module, the one-document `ContractEnvelope` with the
-  `org.candid-core.field-names/v1` field-name table (the issue #152
-  convention), and prints the content-addressed identities. Imports resolve
+  `org.candid-core.field-names/v1` field-name table, and prints the content-addressed identities. Imports resolve
   from the entry's directory as an in-memory bundle; every generation
   double-runs and the tool refuses to write on any byte mismatch.
 - **`didToContract` / `didToModule`** — the same two operations as a

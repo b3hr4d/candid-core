@@ -490,6 +490,15 @@ prerequisites, the manual bootstrap first publish (run from
 the trusted-publisher configuration with **workflow filename
 `npm-release-cli.yml`**.
 
+The packaged-consumer verification is this package's own,
+[`verify_npm_cli_package.py`](../tests/fixtures/packaging/verify_npm_cli_package.py):
+what the tarball actually ships, that the wasm is in it and is a real
+artifact, and that a clean consumer can install it, run `gen` end to end, and
+compile against the `@candid-core/schema` peer it declares — with no DOM lib,
+which is the shape a Node consumer of a CLI actually uses. It runs in the
+release verify job *and* on every pull request through the `wasm CLI`
+workflow, so its first execution is never the dispatch itself.
+
 Two differences, both because the artifact embeds a wasm build:
 
 1. The verify and publish jobs build with the exact-pinned release toolchain

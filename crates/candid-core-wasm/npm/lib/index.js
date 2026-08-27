@@ -1,7 +1,8 @@
-// The library surface of @candid-core/cli (issue #153): data in, data out.
+// The library surface of @candid-core/cli: data in, data out.
 // Both functions hand one JSON-serializable request to the wasm compiler and
-// return its parsed JSON response verbatim — no eval, no dynamic import, no
-// filesystem access from the wasm side, and nothing thrown for data errors:
+// return its parsed JSON response verbatim — no eval and no network, nothing
+// thrown for data errors, and no filesystem access from the wasm side (this
+// module reads the embedded artifact itself on Node):
 // a failure is the same `{ ok: false, diagnostics }` document the native
 // `candid-core` CLI prints, passed through byte-for-byte.
 

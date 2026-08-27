@@ -87,6 +87,17 @@ jobs:
           npm ci
           npm test
 
+      # The packaged artifact, not the working tree. `npm pack` drops a `files`
+      # entry that does not exist without erroring, and `wasm/` is a build
+      # product excluded from git, so a tarball with no WebAssembly in it packs
+      # and publishes clean. This runs on every pull request precisely so that
+      # its first execution is never the irreversible release dispatch.
+      - name: The packaged consumer
+        run: |
+          set -euxo pipefail
+          (cd crates/candid-core-ts/ts && npm ci)
+          python3 tests/fixtures/packaging/verify_npm_cli_package.py
+
   browser:
     name: Browser smoke (headless Chrome)
     runs-on: ubuntu-latest
