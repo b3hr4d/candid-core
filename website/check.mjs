@@ -41,13 +41,45 @@ const slugs = new Set(site.sections.flatMap((section) => section.pages.map((page
  * selects nothing is exactly the right thing for a page to do. What must never
  * appear is a copyable line that does not work.
  */
-const FORBIDDEN_IN_CODE = [
+/* npm names this repository has prepared but not published.
+ *
+ * A list rather than a hardcoded pattern, for the same reason CRATE_VERSION is
+ * read out of Cargo.toml above: publishing a name should be one edit in one
+ * place, not a hunt for regexes. Emptying this list is what a first publish
+ * does here; adding to it is what preparing the next package does.
+ *
+ * Both spellings a reader can copy are refused: the install line and the bare
+ * import specifier. The import form matters as much — a `<pre data-lang="js">`
+ * block importing an unpublished name is exactly as broken as an `npm i` line
+ * for it, and is the form this page had while the earlier pattern only looked
+ * for installs.
+ */
+// Emptied when `@candid-core/cli` was first published. The rules above stay,
+// so the next prepared name is one array entry away from being enforced.
+const UNPUBLISHED_NPM = [];
+
+const escapeRe = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+const unpublishedRules = UNPUBLISHED_NPM.flatMap((name) => [
   {
-    // @candid-core/cli is not published; an install line would send a reader
-    // to a 404 in the registry.
-    pattern: /(npm\s+(i|install)|npx|pnpm\s+add|yarn\s+add)\s+(-\S+\s+)*@candid-core\/cli\b/,
-    message: "install/npx line for @candid-core/cli, which is not published on npm",
+    pattern: new RegExp(
+      `(npm\\s+(i|install|exec)|npx|bunx|pnpm\\s+(add|dlx)|yarn\\s+add)\\s+(-\\S+\\s+)*${escapeRe(name)}\\b`,
+    ),
+    message: `install/npx line for ${name}, which is not published on npm`,
   },
+  {
+    /* Both spellings that reach a module specifier: `import x from "n"` and
+     * the side-effect form `import "n"`, which carries no `from` at all. The
+     * optional parenthesis also catches a dynamic `import("n")`. */
+    pattern: new RegExp(
+      `(from|import)\\s*\\(?\\s*["']${escapeRe(name)}(/[^"']*)?["']`,
+    ),
+    message: `import of ${name}, which is not published on npm`,
+  },
+]);
+
+const FORBIDDEN_IN_CODE = [
+  ...unpublishedRules,
   {
     pattern: /^\s*cargo\s+add\s+candid-core\s*$/m,
     message: "bare `cargo add candid-core`, which cannot resolve a prerelease",

@@ -18,6 +18,7 @@ function's clothes.
 Run from anywhere; paths are resolved from this file.
 """
 
+import datetime
 import json
 import pathlib
 import re
@@ -107,7 +108,70 @@ def main():
         if wasm.read_bytes()[:4] != b"\0asm":
             raise SystemExit("the packed wasm does not carry the WebAssembly magic")
 
-        # 3. Nothing in the tarball's prose cites an internal issue number.
+        # 3. The entry being released must not describe itself as unpublished.
+        #    A tarball is immutable: "prepared, not yet published" would sit on
+        #    npm forever telling whoever installed it that it does not exist.
+        changelog = (root / "CHANGELOG.md").read_text()
+        entries = {
+            name: (status, entry_body)
+            for name, status, entry_body in re.findall(
+                r"^## (\S+)([^\n]*)\n(.*?)(?=^## |\Z)", changelog, re.M | re.S
+            )
+        }
+        version = manifest["version"]
+        if version not in entries:
+            raise SystemExit(
+                f"the shipped changelog documents no '## {version}' entry, so "
+                f"the packed version arrives on npm undocumented. Headings "
+                f"found: {sorted(entries)}"
+            )
+        status, entry_body = entries[version]
+        heading_date = re.fullmatch(r"\s*—\s*(\d{4}-\d{2}-\d{2})\s*", status)
+        if not heading_date:
+            raise SystemExit(
+                f"the changelog heading for the released version must read "
+                f"'## {version} — YYYY-MM-DD'; it reads '## {version}{status}'. "
+                "A shipped tarball cannot describe itself as unpublished."
+            )
+        try:
+            datetime.date.fromisoformat(heading_date.group(1))
+        except ValueError:
+            raise SystemExit(
+                f"the changelog heading for {version} carries "
+                f"'{heading_date.group(1)}', which is not a real date"
+            ) from None
+
+        # This package pairs by *revision*, not version: it embeds a candid-core
+        # build from one commit. So the wording is "Embeds", where the sibling
+        # gate looks for "Pairs with".
+        #
+        # And the version it names is compared against the crate this build
+        # actually embeds, not merely required to exist. Asserting that *some*
+        # token follows the package name would pass a stale version carried
+        # forward from a previous release — or the word "nonsense" — while the
+        # tarball claims verified provenance. `candid-core-wasm` depends on the
+        # root crate by path, so the root manifest is what it embeds.
+        embedded = re.search(r"Embeds `candid-core` (\S+)", entry_body)
+        if not embedded:
+            raise SystemExit(
+                f"the changelog entry for {version} names no embedded "
+                "`candid-core` revision, which is the pairing this package "
+                "promises in place of a version pairing"
+            )
+        named = embedded.group(1).rstrip(".,;")
+        root_manifest = (REPO / "Cargo.toml").read_text()
+        actual = re.search(r'^version\s*=\s*"([^"]+)"', root_manifest, re.M)
+        if not actual:
+            raise SystemExit("could not read the crate version from Cargo.toml")
+        if named != actual.group(1):
+            raise SystemExit(
+                f"the changelog entry for {version} says it embeds "
+                f"`candid-core` {named}, but this build embeds "
+                f"{actual.group(1)}. An npm version is permanent, so the "
+                "provenance it claims has to be the provenance it has."
+            )
+
+        # 4. Nothing in the tarball's prose cites an internal issue number.
         #    A consumer cannot follow one, and unlike the sibling package
         #    nothing here strips comments on the way out.
         for path in sorted(root.rglob("*")):
@@ -119,7 +183,7 @@ def main():
                         f"number ({hit.group(0)}…), which a consumer cannot follow"
                     )
 
-        # 4. A real consumer: install the tarball beside the schema package it
+        # 5. A real consumer: install the tarball beside the schema package it
         #    declares, run the CLI end to end, and compile against it with no
         #    DOM lib — the shape most Node consumers of a CLI actually use.
         # The peer's `dist/` is a build product excluded from git, so packing
@@ -161,7 +225,7 @@ def main():
                 f"the emitted envelope is not one: keys {sorted(envelope)}"
             )
 
-        # 5. The declared peer must be able to load what the CLI emitted, and
+        # 6. The declared peer must be able to load what the CLI emitted, and
         #    the package's own declarations must compile without the DOM.
         # No host globals here on purpose (no `console`, no `process`): with
         # `types: []` and no DOM lib those are undeclared, and using one would
@@ -213,7 +277,7 @@ def main():
             )
         run([str(tsc), "-p", "tsconfig.json"], cwd=consumer)
 
-        # 6. The module the CLI actually emitted compiles against the peer too.
+        # 7. The module the CLI actually emitted compiles against the peer too.
         emitted = next(p for p in (consumer / "out").iterdir() if p.suffix == ".ts")
         shutil.copy(emitted, consumer / "emitted.ts")
         (consumer / "tsconfig.emitted.json").write_text(
