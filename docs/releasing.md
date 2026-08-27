@@ -513,6 +513,6 @@ Two differences, both because the artifact embeds a wasm build:
    SHA; the `wasm CLI` workflow's parity gates are what make that pairing a
    verified property rather than a claim.
 
-This workflow is prepared and has deliberately **not** been dispatched: the
-first publish of the name is the owner's explicit act, per the standing
-release discipline.
+The name's first publish was the owner's explicit act, per the standing
+release discipline: the once-per-name bootstrap above, then the trusted
+publisher, then a dispatch of this workflow like any other.

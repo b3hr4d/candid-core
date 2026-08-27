@@ -98,7 +98,10 @@ node website/build.mjs && node website/check.mjs
 And, **in a code block only** — because a page is expected to discuss the
 broken spellings, and a copyable line is the thing that must work:
 
-- an install or `npx` line for `@candid-core/cli`, which is not published;
+- an install, `npx` or bare `import` line for any name in `UNPUBLISHED_NPM`
+  in `check.mjs` — the list this repository keeps of names it has prepared but
+  not published. The list is empty today; adding a name is what preparing the
+  next package does, and emptying it is what publishing one does;
 - a `candid-core` dependency requirement that is anything other than the
   exact pin. The required spelling is derived from the `version` in
   `Cargo.toml` rather than written down here, so a release makes every stale
