@@ -27,13 +27,14 @@ documents) is the only observable change from the bump itself — no
 moved, and `tests/release_metadata.rs` asserts the change and the non-change
 together.
 
-Two things make this release due rather than optional. Both published versions
-carry the unbounded type-depth walk described below, reachable from the public
-`compile_did` entry point under default `Limits`, and a published version cannot
-be corrected in place. And `compile --envelope` — the step `@candid-core/schema`
-tells a consumer to run immediately after `cargo install candid-core` — exists
-in no published version of this crate, so that on-ramp cannot ship honestly
-until this one does.
+Two things made this release due rather than optional. The two versions before
+it — `0.1.0-beta.1` and `0.1.0-beta.2` — carry the unbounded type-depth walk
+described below, reachable from the public `compile_did` entry point under
+default `Limits`, and a published version cannot be corrected in place, so both
+should be left behind rather than pinned. And `compile --envelope` — the step
+`@candid-core/schema` tells a consumer to run immediately after `cargo install
+candid-core` — existed in no published version of this crate until this one, so
+that on-ramp could not ship honestly until it did.
 
 ### Resource bounds
 
