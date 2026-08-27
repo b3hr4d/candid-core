@@ -68,7 +68,12 @@ const unpublishedRules = UNPUBLISHED_NPM.flatMap((name) => [
     message: `install/npx line for ${name}, which is not published on npm`,
   },
   {
-    pattern: new RegExp(`from\\s+["']${escapeRe(name)}(/[^"']*)?["']`),
+    /* Both spellings that reach a module specifier: `import x from "n"` and
+     * the side-effect form `import "n"`, which carries no `from` at all. The
+     * optional parenthesis also catches a dynamic `import("n")`. */
+    pattern: new RegExp(
+      `(from|import)\\s*\\(?\\s*["']${escapeRe(name)}(/[^"']*)?["']`,
+    ),
     message: `import of ${name}, which is not published on npm`,
   },
 ]);

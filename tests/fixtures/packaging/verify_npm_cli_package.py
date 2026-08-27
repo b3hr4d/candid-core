@@ -144,11 +144,31 @@ def main():
         # This package pairs by *revision*, not version: it embeds a candid-core
         # build from one commit. So the wording is "Embeds", where the sibling
         # gate looks for "Pairs with".
-        if not re.search(r"Embeds `candid-core` \S+", entry_body):
+        #
+        # And the version it names is compared against the crate this build
+        # actually embeds, not merely required to exist. Asserting that *some*
+        # token follows the package name would pass a stale version carried
+        # forward from a previous release — or the word "nonsense" — while the
+        # tarball claims verified provenance. `candid-core-wasm` depends on the
+        # root crate by path, so the root manifest is what it embeds.
+        embedded = re.search(r"Embeds `candid-core` (\S+)", entry_body)
+        if not embedded:
             raise SystemExit(
                 f"the changelog entry for {version} names no embedded "
                 "`candid-core` revision, which is the pairing this package "
                 "promises in place of a version pairing"
+            )
+        named = embedded.group(1).rstrip(".,;")
+        root_manifest = (REPO / "Cargo.toml").read_text()
+        actual = re.search(r'^version\s*=\s*"([^"]+)"', root_manifest, re.M)
+        if not actual:
+            raise SystemExit("could not read the crate version from Cargo.toml")
+        if named != actual.group(1):
+            raise SystemExit(
+                f"the changelog entry for {version} says it embeds "
+                f"`candid-core` {named}, but this build embeds "
+                f"{actual.group(1)}. An npm version is permanent, so the "
+                "provenance it claims has to be the provenance it has."
             )
 
         # 4. Nothing in the tarball's prose cites an internal issue number.
