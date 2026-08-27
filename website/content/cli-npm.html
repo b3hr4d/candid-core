@@ -48,7 +48,10 @@
     </tr>
     <tr>
       <td>Library entry point</td>
-      <td><code>"."</code> → <code>./lib/index.js</code>. No subpath exports</td>
+      <td>
+        <code>"."</code> → <code>./lib/index.js</code>, under a <code>types</code> condition.
+        <code>./package.json</code> is the only other entry in the map
+      </td>
     </tr>
     <tr>
       <td>Module format</td>
@@ -56,13 +59,20 @@
     </tr>
     <tr>
       <td>Runtime dependencies</td>
-      <td>None. The one devDependency, <code>playwright-core</code>, drives the browser test</td>
+      <td>
+        None. <code>@candid-core/schema</code> <code>^0.2.0</code> is declared as an
+        <em>optional</em> peer — every module the CLI emits imports from it, but a
+        consumer calling only <code>didToContract</code> never loads it. The one
+        devDependency, <code>playwright-core</code>, drives the browser test
+      </td>
     </tr>
     <tr>
       <td>Types</td>
       <td>
-        No <code>.d.ts</code> ships for the library. The generated <code>.ts</code> module it writes is
-        a separate matter and is fully typed
+        A hand-written <code>lib/index.d.ts</code>, reached through the <code>types</code>
+        condition. The wasm-pack generated declarations are deliberately not shipped:
+        they name <code>BufferSource</code>, <code>URL</code>, <code>Response</code> and
+        <code>WebAssembly</code>, which do not resolve without the DOM library
       </td>
     </tr>
     <tr>

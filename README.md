@@ -1,7 +1,6 @@
 # Candid Core
 
-> **Unstable beta.** The version being prepared is `0.1.0-beta.3`;
-> `0.1.0-beta.2` is the current release on crates.io. Until 1.0, any release may change the
+> **Unstable beta.** `0.1.0-beta.3` is the current release on crates.io. Until 1.0, any release may change the
 > public Rust API, the serialized Contract/Compilation/envelope shapes, the
 > canonical bytes, and every identity computed over them. Pin an exact version.
 > See the [changelog](CHANGELOG.md) for the beta's scope and
