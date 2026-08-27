@@ -256,7 +256,7 @@ npm install @candid-core/schema
 <ul>
   <li><strong>Manifest:</strong> <code>crates/candid-core-wasm/npm/package.json</code>.</li>
   <li><strong>Binary name:</strong> <code>candid-core-cli</code>, at <code>./bin/cli.js</code>.</li>
-  <li><strong>Exports:</strong> one entry, <code>"."</code> → <code>./lib/index.js</code>. ESM only, Apache-2.0, no runtime dependencies. The one devDependency is <code>playwright-core</code> for the browser tests.</li>
+  <li><strong>Exports:</strong> <code>"."</code> → <code>./lib/index.js</code> under a <code>types</code> condition, plus <code>./package.json</code>. ESM only, Apache-2.0, no runtime dependencies; the single peer, <code>@candid-core/schema</code> <code>^0.2.0</code>, is declared optional. The one devDependency is <code>playwright-core</code> for the browser tests.</li>
   <li><strong>CLI grammar:</strong> exactly <code>candid-core-cli gen &lt;service.did&gt; [-o &lt;dir&gt;]</code>. <code>-o</code> defaults to the current working directory. Output names come from the entry file's stem: <code>service.did</code> writes <code>service.ts</code> and <code>service.envelope.json</code>, and prints the content-addressed identities.</li>
   <li><strong>Library exports:</strong> <code>didToContract(sources)</code> and <code>didToModule(sources)</code>, each taking either a string of Candid text or a <code>{ entry, files }</code> bundle, plus <code>init(input)</code>, which loads the embedded WebAssembly module once and needs no argument under Node.</li>
 </ul>

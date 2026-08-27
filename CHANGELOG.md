@@ -7,26 +7,34 @@ release procedure that produces an entry here is [docs/releasing.md](docs/releas
 API, the serialized Contract/Compilation/envelope shapes, the canonical bytes,
 and therefore the identities computed over them. Pin an exact version.
 
-## 0.1.0-beta.3 — prepared, not yet published
+## 0.1.0-beta.3 — published 2026-08-24
 
 The third prerelease, and the first that carries a fix for a defect in an
-already-published version. As with every release, the archive is built and
-digested before publication, so the copy of this file inside the published
-archive necessarily says "prepared"; the release record carries the publication
-evidence. This version follows the issue #81 bump protocol:
+already-published version. Released from commit
+`fcbf7eb39d8c8a337c5c2546ba0fdd13201e595c`. The `.crate` SHA-256 crates.io
+recorded is
+`c9c83cc8bf68bfa4747b076bfdf41b366367431d7e5659fdd1c547661699e2b5`, matching
+the digest the release gates measured, the one the `guard` job reproduced by
+repackaging the commit independently, and the one the `confirm` job read back
+from crates.io after publication.
+
+The archive published under this version was built and digested before
+publication, so the copy of this file inside it still describes the release as
+prepared. This version follows the issue #81 bump protocol:
 `ProducerInfo::current().version` (and therefore the octets of newly serialized
 documents) is the only observable change from the bump itself — no
 `contract_id`, `interface_id`, `source_bundle_id`, or frozen exact-octet vector
 moved, and `tests/release_metadata.rs` asserts the change and the non-change
 together.
 
-Two things make this release due rather than optional. Both published versions
-carry the unbounded type-depth walk described below, reachable from the public
-`compile_did` entry point under default `Limits`, and a published version cannot
-be corrected in place. And `compile --envelope` — the step `@candid-core/schema`
-tells a consumer to run immediately after `cargo install candid-core` — exists
-in no published version of this crate, so that on-ramp cannot ship honestly
-until this one does.
+Two things made this release due rather than optional. The two versions before
+it — `0.1.0-beta.1` and `0.1.0-beta.2` — carry the unbounded type-depth walk
+described below, reachable from the public `compile_did` entry point under
+default `Limits`, and a published version cannot be corrected in place, so both
+should be left behind rather than pinned. And `compile --envelope` — the step
+`@candid-core/schema` tells a consumer to run immediately after `cargo install
+candid-core` — existed in no published version of this crate until this one, so
+that on-ramp could not ship honestly until it did.
 
 ### Resource bounds
 
