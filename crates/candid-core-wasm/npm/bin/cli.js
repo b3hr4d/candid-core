@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// The @candid-core/cli entry point (issue #153):
+// The @candid-core/cli entry point:
 //
 //   candid-core-cli gen <service.did> [-o <dir>]
 //

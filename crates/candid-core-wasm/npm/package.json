@@ -15,7 +15,11 @@
     "candid-core-cli": "./bin/cli.js"
   },
   "exports": {
-    ".": "./lib/index.js"
+    ".": {
+      "types": "./lib/index.d.ts",
+      "default": "./lib/index.js"
+    },
+    "./package.json": "./package.json"
   },
   "files": [
     "bin",
@@ -33,5 +37,13 @@
   },
   "devDependencies": {
     "playwright-core": "1.62.1"
+  },
+  "peerDependencies": {
+    "@candid-core/schema": "^0.2.0"
+  },
+  "peerDependenciesMeta": {
+    "@candid-core/schema": {
+      "optional": true
+    }
   }
 }

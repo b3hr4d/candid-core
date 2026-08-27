@@ -3,7 +3,7 @@
 Candid `.did` interfaces to [`@candid-core/schema`] runtimes, with no Rust
 toolchain: the [candid-core] compiler and its TypeScript generator compiled
 to WebAssembly, usable as a Node CLI and as a browser library. Data in, data
-out — no eval, no dynamic import, no network.
+out — no eval, no network, and nothing generated is ever executed.
 
 ```sh
 npx @candid-core/cli gen ./service.did -o ./generated

@@ -128,6 +128,16 @@ jobs:
           npm ci
           npm test
 
+      # The gate `npm-release.yml` runs for the schema package, in the shape
+      # this package needs: what the tarball actually ships, that the wasm is
+      # in it, and that a clean consumer can install it, run it, and compile
+      # against the peer it declares.
+      - name: The packaged consumer
+        run: |
+          set -euo pipefail
+          (cd crates/candid-core-ts/ts && npm ci)
+          python3 tests/fixtures/packaging/verify_npm_cli_package.py
+
   publish:
     name: Publish to npm (protected)
     needs: verify
