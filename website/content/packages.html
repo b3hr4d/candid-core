@@ -1,0 +1,349 @@
+<p>This repository ships one published Rust crate, one published npm package, and four more units that exist for good reasons but are deliberately on no registry at all. This page is the whole inventory: what each one is, who it is for, where its manifest lives, whether you can install it today, and the exact line you write to depend on it.</p>
+
+<p>The short version. If you write Rust, you want <code>candid-core</code>. If you write TypeScript, you want <code>@candid-core/schema</code>. Everything else on this page either produces one of those two, or tests them.</p>
+
+<h2>The pipeline in one view</h2>
+
+<p>Every unit sits somewhere on one path. Candid source text goes in at the left; a canonical, validated document comes out of the middle; typed language bindings come out of the right. A <strong>Contract</strong> is this project's name for that middle document. It holds an arena of numbered type nodes, a list of named declarations pointing into it, an optional actor, and the content-addressed identities computed over it.</p>
+
+<div class="pipeline">
+  <div class="pipeline-step">
+    <span class="n">01</span>
+    <h3>.did source</h3>
+    <p>Your Candid interface and every file it imports. Text, with whitespace, comments and declaration spellings that mean nothing to the wire.</p>
+  </div>
+  <div class="pipeline-step">
+    <span class="n">02</span>
+    <h3>Compilation</h3>
+    <p><code>candid-core</code> hands the source to the exact-pinned <code>candid_parser</code> for parsing and type checking, then projects the result into a validated graph under an explicit resource budget.</p>
+  </div>
+  <div class="pipeline-step">
+    <span class="n">03</span>
+    <h3>Contract document</h3>
+    <p>Canonical JSON: <code>types</code>, <code>declarations</code>, an optional actor, and <code>identities</code>. Optionally wrapped in a <code>ContractEnvelope</code> that also carries the field-name table.</p>
+  </div>
+  <div class="pipeline-step">
+    <span class="n">04</span>
+    <h3>Bindings and runtime</h3>
+    <p><code>candid-core-ts</code> turns the graph into a TypeScript module. <code>@candid-core/schema</code> validates values against it, encodes and decodes Candid bytes, and calls canisters.</p>
+  </div>
+</div>
+
+<p>Steps 02 and 03 are Rust. Step 04 is split. The generator is Rust; the runtime it targets is TypeScript. <code>@candid-core/cli</code> is prepared in the repository so that a JavaScript-only project can get from 01 to 04 without a Rust toolchain; it is not on npm yet. It is the same Rust code compiled to WebAssembly, not a reimplementation.</p>
+
+<h2>The full inventory</h2>
+
+<table>
+  <thead>
+    <tr><th>Unit</th><th>Kind</th><th>Manifest</th><th>Registry</th><th>Version</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>candid-core</code></td><td>Rust library</td><td><code>Cargo.toml</code></td><td>crates.io</td><td><code>0.1.0-beta.3</code></td></tr>
+    <tr><td><code>candid-core</code> (binary)</td><td>CLI, same crate</td><td><code>Cargo.toml</code> <code>[[bin]]</code></td><td>crates.io</td><td><code>0.1.0-beta.3</code></td></tr>
+    <tr><td><code>candid-core-ts</code></td><td>Rust library</td><td><code>crates/candid-core-ts/Cargo.toml</code></td><td>none, by <code>publish = false</code></td><td><code>0.0.0</code></td></tr>
+    <tr><td><code>@candid-core/schema</code></td><td>npm package</td><td><code>crates/candid-core-ts/ts/package.json</code></td><td>npm</td><td><code>0.2.0</code></td></tr>
+    <tr><td><code>@candid-core/cli</code></td><td>npm package</td><td><code>crates/candid-core-wasm/npm/package.json</code></td><td>none, never released</td><td><code>0.1.0</code> declared</td></tr>
+    <tr><td><code>candid-core-wasm</code></td><td>Rust library</td><td><code>crates/candid-core-wasm/Cargo.toml</code></td><td>none, by <code>publish = false</code></td><td><code>0.1.0</code></td></tr>
+    <tr><td><code>candid-core-fuzz</code></td><td>Fuzz harness</td><td><code>fuzz/Cargo.toml</code></td><td>none, by <code>publish = false</code></td><td><code>0.0.0</code></td></tr>
+  </tbody>
+</table>
+
+<p>Three of those seven rows resolve from a package manager today, and two of them are the same crate. The rest are tracked, buildable and gated: three carry a deliberate <code>publish = false</code>, one of those because its registry name has not been decided yet, and <code>@candid-core/cli</code> has never been released at all. All of them exist in the repository; none of them will install from a registry.</p>
+
+<callout type="warn" title="Everything here is pre-1.0">
+  <p>The Rust crate is a prerelease and the npm package is <code>0.2.0</code>. Until 1.0, any release may change the public API, the serialized document shapes, the canonical bytes, and therefore every identity computed over them. Pin an exact version in both ecosystems. See <a href="status.html">Status, versions and releases</a>.</p>
+</callout>
+
+<h2>Which one do I need?</h2>
+
+<table>
+  <thead>
+    <tr><th>What you are trying to do</th><th>Reach for</th><th>Where to read next</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>Turn a <code>.did</code> file into a validated Contract from Rust</td><td><code>candid-core</code>, default features</td><td><a href="rust-compiling.html">Compiling Candid sources</a></td></tr>
+    <tr><td>Consume Contracts someone else produced, with no Candid parser in your dependency graph</td><td><code>candid-core</code>, <code>default-features = false</code></td><td><a href="rust-install.html">Install and feature surfaces</a></td></tr>
+    <tr><td>Get a Contract document on the command line, no Rust code of your own</td><td>the <code>candid-core</code> binary</td><td><a href="cli-rust.html">The candid-core binary</a></td></tr>
+    <tr><td>Validate, encode, decode or call a canister from TypeScript</td><td><code>@candid-core/schema</code></td><td><a href="quickstart-typescript.html">Quickstart: TypeScript</a></td></tr>
+    <tr><td>Build schemas at runtime from a Contract document, with no code generation step</td><td><code>@candid-core/schema</code>, subpath <code>./contract</code></td><td><a href="schema-from-contract.html">Schemas at runtime</a></td></tr>
+    <tr><td>Emit a TypeScript module from a Contract inside your own Rust tool</td><td><code>candid-core-ts</code>, path or git dependency</td><td><a href="generator.html">The code generator</a></td></tr>
+    <tr><td>Do all of the above from a JavaScript-only project</td><td><code>@candid-core/cli</code>, built from source; it is not on npm</td><td><a href="cli-npm.html">@candid-core/cli</a></td></tr>
+    <tr><td>Drive an untrusted-input boundary with a fuzzer</td><td><code>candid-core-fuzz</code></td><td>the section below</td></tr>
+  </tbody>
+</table>
+
+<h2>candid-core, the Rust library</h2>
+
+<p>The root package of the workspace, and the only thing here published on crates.io. It owns the Contract model, validation, canonicalization, the content-addressed identities, the limits and cancellation machinery, and the structured diagnostics. With the compiler feature on, it also owns the projection from Candid source into that model. It is for anyone who needs a Candid interface as data rather than as text: a registry that pins interfaces, a tool that detects drift, a service that accepts <code>.did</code> files it did not write.</p>
+
+<ul>
+  <li><strong>Manifest:</strong> <code>Cargo.toml</code> at the repository root.</li>
+  <li><strong>Published:</strong> yes, on <a href="https://crates.io/crates/candid-core">crates.io</a>. Released versions are <code>0.1.0-beta.1</code>, <code>0.1.0-beta.2</code> and <code>0.1.0-beta.3</code>; none are yanked. API documentation is on <a href="https://docs.rs/candid-core">docs.rs</a>.</li>
+  <li><strong>Edition</strong> 2021, <strong>MSRV</strong> <code>rust-version = "1.78"</code>, licensed Apache-2.0.</li>
+</ul>
+
+<h3>Depending on the crate</h3>
+
+<pre data-lang="toml" data-file="Cargo.toml">
+[dependencies]
+candid-core = "=0.1.0-beta.3"
+</pre>
+
+<callout type="danger" title="A caret requirement will not resolve">
+  <p>A bare version string such as <code>"0.1"</code> is a caret requirement, and it selects nothing here. Cargo's caret requirement never matches a prerelease, and every published version so far is one. Write the exact requirement <code>"=0.1.0-beta.3"</code>, exactly as above.</p>
+</callout>
+
+<p>To take the model without the Candid engine, turn the defaults off:</p>
+
+<pre data-lang="toml" data-file="Cargo.toml">
+[dependencies]
+candid-core = { version = "=0.1.0-beta.3", default-features = false }
+</pre>
+
+<h3>The four feature surfaces</h3>
+
+<p>One package, four build surfaces. <code>default = ["compiler", "filesystem-compiler", "host-value"]</code>, so the dependency line above gives you all of it. The base surface is what remains once <code>default-features = false</code> removes every feature. It is not a named feature; it is the floor.</p>
+
+<table>
+  <thead>
+    <tr><th>Surface</th><th>What it adds</th><th>What enters your graph</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><span class="pill">base</span></td>
+      <td><code>Contract</code>, <code>ContractDraft</code>, <code>RawContract</code>, validation, canonicalization, the identities, <code>Limits</code> / <code>RuntimeContext</code>, the diagnostics types, <code>ContractEnvelope</code>, <code>artifact_id_with_limits</code> and <code>artifact_id_with_context</code></td>
+      <td>No Candid engine, no filesystem crate</td>
+    </tr>
+    <tr>
+      <td><span class="pill accent">compiler</span></td>
+      <td><code>compile_did</code>, <code>compile_with_resolver</code>, <code>Compilation</code>, <code>SourceInfo</code>, <code>SourceId</code> / <code>SourceResolver</code> / <code>MemoryResolver</code></td>
+      <td><code>candid =0.10.30</code>, <code>candid_parser =0.4.0</code></td>
+    </tr>
+    <tr>
+      <td><span class="pill accent">filesystem-compiler</span></td>
+      <td><code>WorkspaceResolver</code>, <code>compile_did_file</code>, and the <code>candid-core</code> binary. Implies <code>compiler</code>.</td>
+      <td><code>cap-std =4.0.2</code>, and only on targets that are not <code>target_os = "unknown"</code></td>
+    </tr>
+    <tr>
+      <td><span class="pill accent">host-value</span></td>
+      <td><code>HostValue</code> and <code>validate_host_value</code></td>
+      <td><code>ic_principal =0.1.5</code></td>
+    </tr>
+  </tbody>
+</table>
+
+<p>A disabled feature removes its API rather than leaving a stub that fails later. The full account, including what feature splitting does and does not bound in a workspace, is on <a href="rust-install.html">Install and feature surfaces</a>.</p>
+
+<h2>candid-core, the command-line binary</h2>
+
+<p>The same published crate also ships a binary, declared as <code>[[bin]] name = "candid-core"</code> at <code>src/bin/candid-core.rs</code> with <code>required-features = ["filesystem-compiler"]</code>. It is for the developer who wants a Contract document on disk and does not want to write Rust to get one. It fits a build step, a CI check, or a drift comparison run by hand.</p>
+
+<p>Because <code>filesystem-compiler</code> is part of the default set, an ordinary install builds it. From the published crate:</p>
+
+<pre data-lang="bash">
+cargo install candid-core --locked --version '=0.1.0-beta.3'
+candid-core compile ./service.did
+</pre>
+
+<p>From a checkout of the repository, without installing anything:</p>
+
+<pre data-lang="bash">
+cargo run --bin candid-core -- compile ./service.did
+cargo run --bin candid-core -- compile ./service.did --envelope
+cargo run --bin candid-core -- validate ./contract.json
+</pre>
+
+<p>It accepts exactly this grammar and nothing else:</p>
+
+<pre data-lang="text" data-file="src/bin/candid-core.rs">
+candid-core compile <path> [--no-source-info | --envelope]
+candid-core validate <path>
+</pre>
+
+<p>Every non-usage outcome is one pretty-printed JSON document on stdout with an empty stderr. A failure is exit 1 and <code>{"ok": false, "diagnostics": …}</code>. Success is exit 0: plain <code>compile</code> and <code>validate</code> print <code>"ok": true</code> alongside the contract, while <code>compile --envelope</code> prints the envelope document itself — <code>{"contract": …, "extensions": …}</code>, with no <code>ok</code> key — so the output can be saved and consumed whole. Anything outside the grammar exits 64, prints the usage text on stderr, and writes nothing to stdout. <a href="cli-rust.html">The candid-core binary</a> has the full contract.</p>
+
+<h2>candid-core-ts, the TypeScript generator</h2>
+
+<p>A Rust library that reads a validated Contract and returns the complete text of one TypeScript module: for every declaration, a hand-readable type alias and a runtime schema object annotated so that <code>tsc</code> itself proves the two agree. It is for whoever is building code generation into their own tool, a build script or a CLI or an editor plugin, rather than shelling out to a binary.</p>
+
+<ul>
+  <li><strong>Manifest:</strong> <code>crates/candid-core-ts/Cargo.toml</code>. A member of the root workspace.</li>
+  <li><strong>Published:</strong> <strong>no</strong>, and not by accident. The manifest carries <code>publish = false</code> because a crates.io crate name is as permanent as a version, and <code>candid-core-ts</code> is a working name, not a decision. The gate stands until the name is chosen deliberately.</li>
+  <li><strong>Version</strong> <code>0.0.0</code>, edition 2021, <code>rust-version = "1.78"</code>, Apache-2.0.</li>
+  <li><strong>Depends on</strong> <code>candid-core</code> at <code>version = "=0.1.0-beta.3"</code> with <code>default-features = false</code>, and a <code>path</code> alongside it so the workspace builds against the sibling. The base surface only, which is the design statement: a generator needs no Candid parser, no filesystem capability and no host-value ABI.</li>
+</ul>
+
+<h3>Depending on the generator</h3>
+
+<p>Path or git, or not at all. There is no <code>cargo add</code> line for it and there will not be one until the name question is settled.</p>
+
+<pre data-lang="toml" data-file="Cargo.toml">
+[dependencies]
+# Inside a checkout of this repository:
+candid-core-ts = { path = "crates/candid-core-ts" }
+
+# Or from git, pinned to a commit:
+candid-core-ts = { git = "https://github.com/b3hr4d/candid-core", rev = "<commit sha>" }
+</pre>
+
+<p>That choice travels. crates.io refuses a package with a git dependency outright, and a path dependency must also carry a version requirement the registry can resolve — which <code>candid-core-ts</code>, having no published version, cannot satisfy. So depending on it this way is fine for an application or an internal tool, and means your own crate cannot go to crates.io either. If you need generated TypeScript without that constraint, run the binary or the WebAssembly CLI instead of linking the generator.</p>
+
+<h3>What it exposes</h3>
+
+<p>One entry point plus the two inputs it needs:</p>
+
+<pre data-lang="rust" data-file="crates/candid-core-ts/src/lib.rs">
+pub fn generate_module(
+    contract: &Contract,
+    names: &TsNames,
+    options: &TsOptions,
+) -> Result<String, TsGenError>
+</pre>
+
+<p><code>TsNames</code> is the table of field and variant-arm spellings, keyed by <code>(container, label id)</code>. A Contract stores only the numeric Candid label id, so you supply the spellings yourself. Build it with <code>TsNames::new()</code> (every field renders <code>_N_</code>), <code>TsNames::from_pairs</code>, or <code>TsNames::from_source_info</code>. <code>TsOptions</code> carries one field, <code>principal_import</code>.</p>
+
+<table>
+  <thead><tr><th>Feature</th><th>What it adds</th></tr></thead>
+  <tbody>
+    <tr><td><span class="pill">none</span></td><td>The default. A pure base-surface consumer of <code>candid-core</code>. This featureless build is the boundary claim, and CI checks it on its own.</td></tr>
+    <tr><td><span class="pill accent">compiler</span></td><td>Enables <code>candid-core/compiler</code> and with it <code>TsNames::from_source_info</code>, the bridge from a compilation's provenance sidecar into the name table.</td></tr>
+  </tbody>
+</table>
+
+<h2>@candid-core/schema, the npm runtime</h2>
+
+<p>The TypeScript half of the project, and the package most readers will actually install: schema builders with real static inference, structural validation, a TypeScript-native Candid binary codec, typed actors over a transport-only agent, and form metadata. It is for any TypeScript consumer of a canister, with or without a generated module, since the same schemas can be built at runtime from a Contract document.</p>
+
+<ul>
+  <li><strong>Manifest:</strong> <code>crates/candid-core-ts/ts/package.json</code>.</li>
+  <li><strong>Published:</strong> yes, on <a href="https://www.npmjs.com/package/@candid-core/schema">npm</a>. Released versions are <code>0.0.0-bootstrap</code>, <code>0.1.0</code>, <code>0.1.1</code> and <code>0.2.0</code>; <code>0.2.0</code> is current and pairs with <code>candid-core</code> <code>0.1.0-beta.3</code>.</li>
+  <li><strong>ESM only</strong> (<code>"type": "module"</code>), <code>sideEffects: false</code>, Apache-2.0. The tarball ships <code>dist</code>, <code>README.md</code>, <code>CHANGELOG.md</code> and <code>LICENSE</code>.</li>
+  <li><strong>Versions independently</strong> of the Rust crate. Its changelog names the <code>candid-core</code> version each release pairs with.</li>
+</ul>
+
+<pre data-lang="bash">
+npm install @candid-core/schema
+</pre>
+
+<p>That is the whole install. The single peer dependency, <code>@icp-sdk/core &gt;= 6</code>, is declared <strong>optional</strong> in <code>peerDependenciesMeta</code> because only the <code>./transport-icp</code> subpath imports it. Every other module is self-contained, principal typing included.</p>
+
+<h3>The eight subpath exports</h3>
+
+<p>The <code>exports</code> map has exactly these entries, each resolving to a <code>.d.ts</code> and a <code>.js</code> under <code>dist/</code>. There are no others, and nothing outside the map is importable.</p>
+
+<table>
+  <thead><tr><th>Subpath</th><th>What it is</th></tr></thead>
+  <tbody>
+    <tr><td><span class="pill accent">.</span></td><td>The schema core: the <code>c</code> builders, the deliberately invariant <code>Schema&lt;in out T&gt;</code>, <code>Infer</code>, the node interfaces walkers narrow on, plus <code>resolveSchema</code> and <code>serviceMethods</code> for reading a schema back. See <a href="schema-builders.html">Builders and inference</a>.</td></tr>
+    <tr><td><span class="pill accent">./validate</span></td><td>Structural validation that never throws on any value. Issues carry stable codes and <code>$</code>-rooted paths, plus <code>isResultSchema</code> and <code>unwrapResult</code> for the <code>variant { ok; err }</code> convention. See <a href="schema-validation.html">Validation</a>.</td></tr>
+    <tr><td><span class="pill accent">./contract</span></td><td><code>schemaFromContract</code>: build the same schemas at runtime from a canonical Contract JSON document, or from a one-document <code>ContractEnvelope</code> carrying its field-name table. See <a href="schema-from-contract.html">Schemas at runtime</a>.</td></tr>
+    <tr><td><span class="pill accent">./codec</span></td><td>The Candid binary wire format, schema-directed, with the specification's coercion relation on decode and explicit resource budgets. See <a href="schema-codec.html">Binary codec</a>.</td></tr>
+    <tr><td><span class="pill accent">./actor</span></td><td><code>createActor</code> and <code>callFunc</code> over a two-method byte-pipe <code>Transport</code>; the agent never sees a schema. See <a href="schema-actors.html">Typed actors</a>.</td></tr>
+    <tr><td><span class="pill accent">./transport-icp</span></td><td>The compiled, tested <code>Transport</code> adapter over <code>@icp-sdk/core</code>'s <code>HttpAgent</code>. Importing this subpath is what turns the optional peer into a runtime requirement.</td></tr>
+    <tr><td><span class="pill accent">./forms</span></td><td>Form-generation metadata: per-kind controls, constraints, labels, lazy recursion, and resolution from a validation issue to a form node. See <a href="schema-forms.html">Form metadata</a>.</td></tr>
+    <tr><td><span class="pill accent">./labels</span></td><td>The Candid label hash and the <code>_N_</code> rendering convention, the bridge between numeric label ids and rendered schema keys.</td></tr>
+  </tbody>
+</table>
+
+<h2>@candid-core/cli, the WebAssembly on-ramp</h2>
+
+<callout type="warn" title="Not published">
+  <p><code>@candid-core/cli</code> has never been released. The npm registry returns "Not found" for that name, so no install or <code>npx</code> line for it resolves — do not expect one to work. The package is prepared in the repository, and its release workflow exists and has deliberately not been dispatched. The <code>0.1.0</code> in its manifest is a declared version, not a published one. Until it ships, build it from source with the steps below.</p>
+</callout>
+
+<p>When it ships it will give a JavaScript-only project the whole pipeline with no Rust toolchain. The <code>candid-core</code> compiler surface and the <code>candid-core-ts</code> generator are compiled together into one WebAssembly artifact, wrapped in a Node CLI and a small JS module that also runs in a browser. Both library calls are data in, data out: one JSON-serialisable request to the WebAssembly module, its parsed JSON response returned verbatim, no <code>eval</code>, and no filesystem access from the WebAssembly side.</p>
+
+<ul>
+  <li><strong>Manifest:</strong> <code>crates/candid-core-wasm/npm/package.json</code>.</li>
+  <li><strong>Binary name:</strong> <code>candid-core-cli</code>, at <code>./bin/cli.js</code>.</li>
+  <li><strong>Exports:</strong> one entry, <code>"."</code> → <code>./lib/index.js</code>. ESM only, Apache-2.0, no runtime dependencies. The one devDependency is <code>playwright-core</code> for the browser tests.</li>
+  <li><strong>CLI grammar:</strong> exactly <code>candid-core-cli gen &lt;service.did&gt; [-o &lt;dir&gt;]</code>. <code>-o</code> defaults to the current working directory. Output names come from the entry file's stem: <code>service.did</code> writes <code>service.ts</code> and <code>service.envelope.json</code>, and prints the content-addressed identities.</li>
+  <li><strong>Library exports:</strong> <code>didToContract(sources)</code> and <code>didToModule(sources)</code>, each taking either a string of Candid text or a <code>{ entry, files }</code> bundle, plus <code>init(input)</code>, which loads the embedded WebAssembly module once and needs no argument under Node.</li>
+</ul>
+
+<h3>Building it from source</h3>
+
+<p>The <code>wasm/</code> directory is build output and is not committed, so the first step is always to produce it. <code>wasm-pack</code> <code>0.14.0</code> is the version the repository's own workflows install.</p>
+
+<ol class="steps">
+  <li>
+    <p class="step-title">Get the toolchain</p>
+    <pre data-lang="bash">rustup target add wasm32-unknown-unknown
+cargo install wasm-pack --version 0.14.0 --locked</pre>
+  </li>
+  <li>
+    <p class="step-title">Build the WebAssembly artifact</p>
+    <pre data-lang="bash">cd crates/candid-core-wasm
+wasm-pack build --target web --out-dir npm/wasm --no-pack --release -- --locked</pre>
+  </li>
+  <li>
+    <p class="step-title">Run the CLI from the package directory</p>
+    <pre data-lang="bash">cd npm
+node ./bin/cli.js gen ./service.did -o ./generated</pre>
+  </li>
+</ol>
+
+<p>That writes <code>generated/service.ts</code> and <code>generated/service.envelope.json</code>. Details of both, and of the failure shapes, are on <a href="cli-npm.html">@candid-core/cli</a>.</p>
+
+<h2>candid-core-wasm, the crate behind the CLI</h2>
+
+<p>The Rust crate that becomes that artifact. It is a thin <code>wasm-bindgen</code> shim over two things it does not implement: <code>candid-core</code>'s <code>compiler</code> surface (<code>compile_with_resolver</code> plus <code>MemoryResolver</code>, so no filesystem is ever touched from the WebAssembly side) and the <code>candid-core-ts</code> generator. It exposes two functions, both string in and string out:</p>
+
+<pre data-lang="rust" data-file="crates/candid-core-wasm/src/lib.rs">
+#[wasm_bindgen(js_name = didToContract)]
+pub fn did_to_contract(request: &str) -> String
+
+#[wasm_bindgen(js_name = didToModule)]
+pub fn did_to_module(request: &str) -> String
+</pre>
+
+<ul>
+  <li><strong>Manifest:</strong> <code>crates/candid-core-wasm/Cargo.toml</code>. Version <code>0.1.0</code>, <code>publish = false</code>, Apache-2.0, <code>crate-type = ["cdylib", "rlib"]</code>.</li>
+  <li><strong>Its own workspace root.</strong> The manifest carries a bare <code>[workspace]</code> table and a tracked <code>Cargo.lock</code> of its own, and the root manifest names it in <code>exclude = ["fuzz", "crates/candid-core-wasm"]</code>. That is the point: <code>wasm-bindgen</code> never enters the main workspace's resolved graph or its feature unification, and <code>cargo metadata</code> over the published crate never sees it.</li>
+  <li><strong>Dependencies:</strong> <code>candid-core</code> and <code>candid-core-ts</code> by path, <code>serde_json =1.0.150</code>, and <code>wasm-bindgen =0.2.108</code> only under <code>cfg(target_arch = "wasm32")</code>.</li>
+</ul>
+
+<p>You do not depend on this crate; you build it. <code>wasm-opt</code> is switched off in the manifest on purpose, so the emitted bytes are a function of the pinned <code>rustc</code> and <code>wasm-bindgen</code> alone with no binaryen download in the build path.</p>
+
+<h2>candid-core-fuzz, the fuzz harness</h2>
+
+<p>Internal, and the only unit here that never enters a consumer's build. Each target drives one untrusted-input boundary with arbitrary bytes.</p>
+
+<ul>
+  <li><strong>Manifest:</strong> <code>fuzz/Cargo.toml</code>. Version <code>0.0.0</code>, <code>publish = false</code>, <code>[package.metadata] cargo-fuzz = true</code>.</li>
+  <li><strong>Its own workspace root</strong> with its own tracked <code>fuzz/Cargo.lock</code>, excluded from the root workspace for the same reason as <code>candid-core-wasm</code>. Dependencies are exact-pinned to match the crate under test, <code>libfuzzer-sys =0.4.13</code> and <code>serde_json =1.0.150</code>, because the library's observable decode behaviour depends on <code>serde_json</code>'s recursion limit.</li>
+  <li><strong>Features</strong> mirror the library's: <code>default = ["compiler", "filesystem-compiler", "host-value"]</code>, each forwarding to the matching <code>candid-core</code> feature, so a target is only built when the feature owning the API it drives is on.</li>
+  <li><strong>Seven targets:</strong> <code>source_parsing</code>, <code>contract_json</code>, <code>canonicalization</code>, <code>resolver_ids</code>, <code>provenance</code>, <code>host_value</code> and <code>envelope_json</code>.</li>
+</ul>
+
+<p>Run one from the repository root, passing the writable corpus directory first so the tracked seeds and regressions stay read-only:</p>
+
+<pre data-lang="bash" data-file="fuzz/README.md">
+cargo +nightly fuzz run contract_json \
+  fuzz/corpus/contract_json fuzz/seeds/contract_json fuzz/regressions/contract_json \
+  -- -max_total_time=60
+</pre>
+
+<h2>What ships and what does not</h2>
+
+<p>The published <code>.crate</code> archive is governed by a positive allowlist in the root <code>Cargo.toml</code>, not a growing list of exclusions. A newly tracked file is <em>outside</em> the archive until it is named in <code>include</code> on purpose. What is named: <code>/src/**/*.rs</code>, <code>/examples/**/*.rs</code>, <code>/docs/**/*.md</code>, <code>/README.md</code>, <code>/CHANGELOG.md</code> and <code>/LICENSE</code>.</p>
+
+<p>So <code>tests/</code>, <code>benches/</code>, <code>crates/</code>, <code>fuzz/</code> and <code>.github/</code> never reach a consumer's registry download. That means <code>candid-core-ts</code>, <code>candid-core-wasm</code> and <code>candid-core-fuzz</code> are reachable only from a git checkout, whatever their <code>publish</code> setting says. The release and release-candidate workflows run <code>tests/fixtures/packaging/verify_package_manifest.py</code>, which asserts both halves of that policy: every required path present, every forbidden path absent, and no unexplained extra.</p>
+
+<div class="card-grid">
+  <a class="card" href="rust-install.html">
+    <span class="card-kicker">Rust crate</span>
+    <span class="card-title">Install and feature surfaces</span>
+    <p>The four surfaces in depth, and what each one adds to your dependency graph.</p>
+  </a>
+  <a class="card" href="ts-overview.html">
+    <span class="card-kicker">TypeScript</span>
+    <span class="card-title">How the TypeScript side fits together</span>
+    <p>Generator, schema runtime, codec and actors, and the order to read them in.</p>
+  </a>
+  <a class="card" href="status.html">
+    <span class="card-kicker">Project</span>
+    <span class="card-title">Status, versions and releases</span>
+    <p>Where each unit is in its life cycle, what is settled, and what is still moving.</p>
+  </a>
+</div>

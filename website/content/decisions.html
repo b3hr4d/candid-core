@@ -1,0 +1,169 @@
+<p>Seven architecture decision records define the protocol boundaries this project is built on. They are short, dated documents in <code>docs/adrs/</code>, and they are the reason several parts of the API look the way they do rather than the more obvious way. Each one below gets the problem it was written to solve, what was decided, the consequence you can actually see when you use the crate, and its status line exactly as the file carries it.</p>
+
+<p>Readiness is tracked per decision, and the two states are not decoration. <em>Implemented, verification pending</em> means a working reference implementation exists and its required-verification list is written down, while at least one gate on that list has no recorded evidence. <em>Verified</em> means those gates completed and the pull request, commit and CI run are recorded. <a href="guarantees.html">Guarantees and verification</a> covers what that evidence consists of.</p>
+
+<h2>The seven foundation records</h2>
+
+<table>
+  <thead><tr><th>ADR</th><th>Decision</th><th>Status</th></tr></thead>
+  <tbody>
+    <tr><td>0001</td><td>Separate interface, Contract, and source-bundle identities</td><td><span class="pill warn">Implemented, verification pending</span></td></tr>
+    <tr><td>0002</td><td>Version schema, semantics, and canonical bytes independently</td><td><span class="pill ok">Verified</span></td></tr>
+    <tr><td>0003</td><td>Make validated artifacts and provenance binding explicit</td><td><span class="pill warn">Implemented, verification pending</span></td></tr>
+    <tr><td>0004</td><td>Resolve imports through a hermetic capability boundary</td><td><span class="pill warn">Implemented, verification pending</span></td></tr>
+    <tr><td>0005</td><td>Bound all untrusted work and avoid recursive execution</td><td><span class="pill warn">Implemented, verification pending</span></td></tr>
+    <tr><td>0006</td><td>Use a lossless tagged HostValue ABI</td><td><span class="pill warn">Implemented, verification pending</span></td></tr>
+    <tr><td>0007</td><td>Give artifacts whose exact octets must be committed to a detached identity</td><td><span class="pill warn">Implemented, verification pending</span></td></tr>
+  </tbody>
+</table>
+
+<h3>ADR 0001 — Three identities, not one</h3>
+
+<p><strong>Problem.</strong> A single digest over the type graph and actor cannot safely serve interface-compatibility caches, artifact registries, provenance binding and human-facing package identity at the same time, because those four uses need different equality claims.</p>
+
+<p><strong>Decision.</strong> Expose three domain-separated content identifiers over canonical bytes. <code>interface_id</code> covers only the graph reachable from the actor. <code>contract_id</code> covers the complete canonical Contract, declarations and their names included. <code>source_bundle_id</code> covers the normalized logical source IDs, the source bytes and the import edges. The first two are <em>semantic</em>; the third is a raw-source content identity, which is precisely why formatting and comments move it. No unkeyed content ID authenticates anything by itself.</p>
+
+<p><strong>What you see.</strong> <code>contract_id()</code> returns <code>&amp;str</code> and <code>interface_id()</code> returns <code>Option&lt;&amp;str&gt;</code> — an actorless Contract has no interface identity at all, and validation rejects one that claims otherwise. A persisted or cross-process type reference is <code>{ contract_id, type_ref }</code> rather than a bare index, and method selection is <code>{ contract_id, method_name }</code>, because a <code>TypeRef</code> is document-local. Adding a declaration the actor never uses moves <code>contract_id</code> and leaves <code>interface_id</code> alone; renaming a declaration does the same.</p>
+
+<p><strong>Status:</strong> <code>Implemented, verification pending</code>. <a href="https://github.com/b3hr4d/candid-core/blob/main/docs/adrs/0001-contract-identities.md">Read the record</a>.</p>
+
+<h3>ADR 0002 — Version the schema, the semantics and the bytes separately</h3>
+
+<p><strong>Problem.</strong> The JSON shape, the interpreted Candid type system and the byte-level canonicalization rules change for different reasons; one version number would force every consumer to treat every change as the same kind of break.</p>
+
+<p><strong>Decision.</strong> Every persisted Contract envelope declares four markers, each governing its own concern, and unknown versions or profiles fail closed. The canonicalization specification — not the Rust code — is normative, and any observable change to the bytes requires a <em>new</em> profile name rather than an edit to this one.</p>
+
+<pre data-lang="json" data-file="docs/adrs/0002-versioning-and-canonical-bytes.md">
+{
+  "format": "candid-core",
+  "format_version": 1,
+  "semantics_profile": "candid-1",
+  "canonicalization_profile": "candid-core-canon-1"
+}
+</pre>
+
+<p><strong>What you see.</strong> Those four keys are at the top of every Contract document you will ever read from this project, and a document carrying an unrecognised value for any of them is rejected rather than best-guessed. A parser bug fix can be recorded in <code>producer</code> metadata, which participates in no semantic identity; a semantic change needs a new profile or an explicit compatibility ruling.</p>
+
+<p><strong>Status:</strong> <code>Verified</code> — the only one of the seven. <a href="https://github.com/b3hr4d/candid-core/blob/main/docs/adrs/0002-versioning-and-canonical-bytes.md">Read the record</a>.</p>
+
+<h3>ADR 0003 — Validated and merely decoded are different types</h3>
+
+<p><strong>Problem.</strong> A type whose name promises validity could be constructed by hand with public fields, and a provenance sidecar could be paired with an unrelated Contract without anything noticing.</p>
+
+<p><strong>Decision.</strong> Split the model so that "decoded but unchecked" and "validated" are different Rust types with different names. <code>RawContract</code> and <code>RawSourceInfo</code> are plain serde DTOs with no validity claim; <code>Contract</code>, <code>SourceInfo</code> and <code>Compilation</code> have private fields and are reachable only through constructors that validate, canonicalize and check identities. <code>ContractDraft</code> is the producer-side entry point and carries no identity fields at all, so a draft <em>cannot</em> hold a fake one. Core structs stay closed with unknown keys rejected, and ecosystem metadata moves into a separate namespaced extension envelope.</p>
+
+<p><strong>What you see.</strong> <code>Contract</code>, <code>ContractEnvelope</code>, <code>Compilation</code> and <code>HostValue</code> deliberately do <strong>not</strong> implement <code>Deserialize</code>. A trait implementation has no argument position for a resource policy, so it could only ever decode under limits the library picked for you. Untrusted JSON reaches these types through bounded entry points instead, and a plugin cannot smuggle a UI hint into the core by adding a JSON key.</p>
+
+<pre data-lang="rust" data-file="examples/trust_boundary.rs">
+let compilation = compile_did("service : { ping: () -> (nat) query };")?;
+let canonical_json = compilation.contract().to_json_pretty()?;
+let accepted = Contract::from_json(&canonical_json)?;
+
+let mut injected: serde_json::Value = serde_json::from_str(&canonical_json)?;
+injected["widget"] = serde_json::json!("date-picker");
+let rejected = Contract::from_json(&serde_json::to_string(&injected)?).unwrap_err();
+println!("unknown core metadata rejected: {rejected}");
+</pre>
+
+<p><strong>Status:</strong> <code>Implemented, verification pending</code>. <a href="https://github.com/b3hr4d/candid-core/blob/main/docs/adrs/0003-validated-artifact-boundaries.md">Read the record</a>. More on this in <a href="trust-boundary.html">The trust boundary</a>.</p>
+
+<h3>ADR 0004 — Imports resolve through a capability, never ambient authority</h3>
+
+<p><strong>Problem.</strong> The old file compiler walked imports for provenance and then handed the job to a checker that read them again, producing two snapshots of a directory, host-specific paths and no single place to impose import policy. That is unusable for browsers, agents, sandboxes and reproducible builds.</p>
+
+<p><strong>Decision.</strong> Compilation with imports requires an explicit <code>SourceResolver</code> capability supplied by the caller. <code>SourceId</code> is a normalized logical URI with a platform-independent <code>/</code> grammar — not an absolute host path — and the resolver produces one immutable bundle that the checker and the provenance collector both consume.</p>
+
+<pre data-lang="rust">
+pub fn compile_with_resolver(
+    entry: &str,
+    resolver: &dyn SourceResolver,
+    options: CompileOptions,
+    context: &RuntimeContext,
+) -> Result<Compilation, CompileError>
+</pre>
+
+<p><strong>What you see.</strong> There is no entry point that quietly reads your working directory. <code>MemoryResolver</code> <span class="pill accent">compiler</span> serves tests, editors, agents and network-fetched bundles; <code>WorkspaceResolver</code> <span class="pill accent">filesystem-compiler</span> is rooted at a directory you explicitly authorize and rejects absolute imports, parent escapes and symlink escapes by default. The same code compiles a multi-file bundle in a browser, and a host can put a real permission prompt in front of the resolver.</p>
+
+<p><strong>Status:</strong> <code>Implemented, verification pending</code>. <a href="https://github.com/b3hr4d/candid-core/blob/main/docs/adrs/0004-hermetic-source-resolution.md">Read the record</a>. More in <a href="source-resolution.html">Sources, imports and provenance</a>.</p>
+
+<h3>ADR 0005 — Bound every piece of untrusted work, and never recurse on input</h3>
+
+<p><strong>Problem.</strong> Valid structure is not the same as safe cost. Unbounded input, graph refinement, recursive walks and import expansion can exhaust memory, CPU or the call stack even when every byte is well-formed.</p>
+
+<p><strong>Decision.</strong> Every public parse, compile, validate and canonicalize entry point accepts a resource policy, directly or through a context. Graph and import algorithms use explicit work queues rather than call-stack recursion. Exhaustion fails closed with a stable <code>resource_limit_exceeded</code> diagnostic carrying <code>resource</code>, <code>limit</code> and the observed value, and no partially validated Contract is ever returned. Default numbers live in a versioned operational profile rather than in the Contract format, so a host can pick different budgets without moving a single identity.</p>
+
+<p><strong>What you see.</strong> The <code>*_with_limits</code> and <code>*_with_context</code> pairs across the API, a <code>Limits</code> type with private fields built from a profile plus <code>with_*</code> builders, and a portable serialized policy that names its profile and carries only explicit overrides:</p>
+
+<pre data-lang="json">
+{ "version": 1, "profile": "interactive_v1", "overrides": {} }
+</pre>
+
+<p>An override the platform cannot represent is rejected with a structured error, never truncated. <code>LimitsProfile::InteractiveV1</code> is the only released profile and its numbers are frozen — future tunings become new profile names.</p>
+
+<p><strong>Status:</strong> <code>Implemented, verification pending</code>. <a href="https://github.com/b3hr4d/candid-core/blob/main/docs/adrs/0005-resource-limits.md">Read the record</a>. Every value is listed in the <a href="reference-limits.html">limits reference</a>.</p>
+
+<h3>ADR 0006 — Values get a lossless tagged ABI, not convenient JSON</h3>
+
+<p><strong>Problem.</strong> Ordinary JSON cannot faithfully carry arbitrary-precision <code>nat</code> and <code>int</code>, all 64-bit integers in JavaScript, floating-point bit patterns, principals, option presence, field IDs or variant tags. Picking a convenient shape first would bake lossy coercions into every SDK, form and agent tool built afterwards.</p>
+
+<p><strong>Decision.</strong> A closed, explicitly tagged <code>HostValue</code> algebra that round-trips exactly. Floats keep their IEEE bits, so NaN payloads and signed zero survive; arbitrary integers use canonical decimal strings; record fields use authoritative <code>u32</code> IDs, with labels remaining provenance. The core validator performs no coercion, no UI defaults, no tuple guessing and no missing-option repair.</p>
+
+<pre data-lang="json" data-file="docs/adrs/0006-lossless-host-value-abi.md">
+{ "kind": "nat", "value": "340282366920938463463374607431768211456" }
+{ "kind": "float64", "bits": "7ff8000000000001" }
+{ "kind": "variant", "id": 24860, "value": { "kind": "text", "value": "ok" } }
+</pre>
+
+<p><strong>What you see.</strong> The portable ABI is verbose on purpose, and a friendlier JSON view is somebody else's layer. Validation is directed by the Contract graph through a contract-bound selector — <code>validate_host_value(&amp;contract, &amp;selector, &amp;value, &amp;limits)</code> — so a value is never checked against a type that arrived from the same untrusted document. <code>host-value</code> adds only a principal library to the base graph, so a host that validates values but never compiles DID source builds no parser.</p>
+
+<p><strong>Status:</strong> <code>Implemented, verification pending</code>. <a href="https://github.com/b3hr4d/candid-core/blob/main/docs/adrs/0006-lossless-host-value-abi.md">Read the record</a>. More in <a href="host-values.html">Host values</a>.</p>
+
+<h3>ADR 0007 — A fourth identity, for when the claim is about a file</h3>
+
+<p><strong>Problem.</strong> ADR 0001 originally recommended <code>contract_id</code> for "registries, persisted references, signatures, and extension envelopes". Those are not the same claim, and <code>contract_id</code> supports only one of them: it excludes <code>producer</code>, it is computed over the Contract alone so envelope extensions and a provenance sidecar sit outside it, and canonical bytes are not the only encoding of a Contract. A registry entry or signature keyed on it therefore commits to <em>strictly less</em> than the file the publisher believes they shipped.</p>
+
+<p><strong>Decision.</strong> Add a fourth identity that is explicitly not semantic: a detached, exact-octet artifact identity over a frozen per-kind domain. Five properties are load-bearing — it is <em>detached</em> (returned to the caller, never written into the artifact), over <em>exact octets</em> (never parsed, canonicalized or re-encoded), <em>kind-separated</em>, <em>bounded</em> like everything else, and deliberately <em>narrow</em>: no signer model, no key format, no registry protocol, no verification helper.</p>
+
+<pre data-lang="rust" data-file="src/artifact_id.rs">
+pub fn artifact_id_with_limits(
+    kind: ArtifactKind,
+    bytes: &[u8],
+    limits: &Limits,
+) -> Result<String, ContractValidationError>
+</pre>
+
+<p><strong>What you see.</strong> <code>ArtifactKind</code> is <code>#[non_exhaustive]</code> with three frozen variants, so naming a further kind later is additive. There is deliberately no default-limits convenience function — you pass a policy or a context, and nothing shorter exists. Identical bytes under two kinds are two different identities, and an artifact ID exists for bytes that would fail validation, because computing one is not a validity claim.</p>
+
+<p><strong>Status:</strong> <code>Implemented, verification pending</code>. <a href="https://github.com/b3hr4d/candid-core/blob/main/docs/adrs/0007-artifact-identity.md">Read the record</a>. All four identities are compared side by side in <a href="identities.html">Content-addressed identities</a>.</p>
+
+<h2>Decisions that never became ADRs</h2>
+
+<p>These are not in <code>docs/adrs/</code>, but they govern the shape of the project as much as the seven that did. Each one is recorded in a manifest comment, a module doc or a README where the decision is actually enforced.</p>
+
+<h3>Candid parsing and type checking belong to <code>candid_parser</code></h3>
+
+<p>This crate does not implement the Candid grammar or its type rules. It delegates both to the official <code>candid_parser</code> and projects the checked result into a Contract graph. The manifest says so where it hurts most — the crates.io category list deliberately omits <code>parser-implementations</code>, because claiming it would overstate what the crate is.</p>
+
+<p>The consequence is about ownership. A disagreement about what a <code>.did</code> file <em>means</em> is an upstream question, answered through an exact-pinned dependency rather than by a reimplementation that can drift. What this project owns is the canonical encoding of the validated graph, the graph itself, and the identities over it. One narrow exception is written down and pinned: the Candid label hash is reimplemented in eight lines so base validation can check method IDs without linking a Candid engine, and it is cross-checked against the upstream reference in every feature configuration, including the one where the parser is absent.</p>
+
+<h3>The include allowlist is positive, so a new file ships only when named</h3>
+
+<p>The published archive lists what goes in, not what stays out. A file added to the repository tomorrow is <em>outside</em> the archive until somebody names it in <code>Cargo.toml</code> on purpose. The failure direction is the whole point: an exclude list ships a mistake, an include list omits one, and an omission is caught by the packaging gate while an accidental inclusion is permanent once published. <code>docs/**/*.md</code> rather than <code>docs/**</code> is deliberate too — it keeps editor and OS droppings out of a release even when a contributor's working tree has them.</p>
+
+<h3><code>publish = false</code> on the generator crate, because a registry name is permanent</h3>
+
+<p>Three of the four Rust crates in the repository carry <code>publish = false</code>. For <code>candid-core-ts</code> the manifest states the reason directly: <code>candid-core-ts</code> is a <em>working</em> name, not a published one, and nothing may publish the crate until its registry name is decided deliberately, because crate names on crates.io are permanent exactly like versions. <code>candid-core-wasm</code> is unpublishable for a related reason — its real deliverable is an npm package, not a crate. The same caution governs npm: the first publish of a new npm name is treated as the owner's explicit act, which is why one of the two npm packages is prepared but not published.</p>
+
+<h3>agent-js wire compatibility is an explicit non-goal</h3>
+
+<p>The generated TypeScript describes the modern domain rather than the runtime shapes agent-js produces. <code>opt T</code> is <code>T | null</code>, variants are <code>{ tag, value }</code> discriminated unions, anonymous <code>vec nat8</code> is <code>Uint8Array</code>, and <code>nat</code>, <code>int</code> and the 64-bit integers are <code>bigint</code>. Two consequences are deliberate rather than accidental. An <code>opt</code> whose inner type can itself be <code>null</code> — another <code>opt</code>, <code>null</code>, <code>reserved</code> — <em>fails closed</em> at generation, because <code>T | null</code> cannot distinguish <code>None</code> from <code>Some(None)</code>. And using these types against a live agent needs a boundary conversion: the types describe the domain, not the transport.</p>
+
+<h3>No network access anywhere in the library</h3>
+
+<p>The crate never fetches anything, never resolves asynchronously, never consults a registry and never generates bindings on your behalf. Bytes enter through the resolver capability you supply and through nothing else, and network access is never implicit. The supported boundary is synchronous immutable source data supplied by the host — which is what makes compilation reproducible, testable with no filesystem at all, and safe to put behind a permission prompt.</p>
+
+<h3>The fuzz and wasm crates are their own workspace roots</h3>
+
+<p><code>fuzz/</code> and <code>crates/candid-core-wasm/</code> each declare their own <code>[workspace]</code> table and are named in the root manifest's <code>exclude</code> list. That keeps <code>libfuzzer-sys</code> and <code>wasm-bindgen</code> out of the published crate's resolved dependency graph and out of Cargo's feature unification entirely — and it means <code>fuzz/Cargo.lock</code> is its own tracked graph, which CI checks for freshness because <code>cargo fuzz</code> has no <code>--locked</code> flag of its own. The two workspace members are listed explicitly with no globs, so a stray directory can never become a member by accident.</p>
+
+<p>Next: <a href="guarantees.html">Guarantees and verification</a> shows which of these decisions has independent evidence behind it and which does not. <a href="status.html">Status, versions and releases</a> covers the pre-1.0 policy that all of them sit under.</p>

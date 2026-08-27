@@ -30,6 +30,16 @@
 # Build output of `npm run build`, and the packaged-consumer fixture's tree.
 /crates/candid-core-ts/ts/dist/
 
+# Documentation page fragments. Inside a <pre> the text is taken literally by
+# website/build.mjs and escaped on the way out, so a sample containing
+# `Vec<TypeNode>` or `Option<&str>` is correct source that Prettier's HTML
+# parser cannot read: it reports `Unexpected closing tag "pre"` and refuses the
+# file. The generated pages under website/dist/ do parse, and are already
+# covered by the /website/dist/ entry in .gitignore. Everything else in
+# website/ — the CSS, the generator, the checker, the site script — is
+# formatted by this same Prettier and must stay that way.
+/website/content/
+
 # Restated from .gitignore so --ignore-path invocations stay safe.
 node_modules/
 /target/

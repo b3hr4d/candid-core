@@ -1,0 +1,443 @@
+<p>
+  <a href="https://www.npmjs.com/package/@candid-core/schema"><code>@candid-core/schema</code></a>
+  keeps a Candid type alive at runtime as a plain data object.
+  <a href="schema-builders.html">The builders</a> construct it; the <code>./validate</code> subpath
+  walks it. Given a schema and any JavaScript value, <code>validate</code> answers whether that
+  value is one the schema describes — and when it is not, exactly which parts are wrong and where
+  they sit.
+</p>
+
+<p>
+  Two decisions shape the whole module. It never throws for a bad value: a failure is a return
+  value, so validation is not control flow through exceptions. And every walk is bounded, so a
+  value that arrived from a canister reply, a form submission or an attacker terminates whatever
+  shape it has. Nothing else in the package is pulled in — importing the validator does not drag a
+  codec or an agent with it.
+</p>
+
+<pre data-lang="ts">import { c } from "@candid-core/schema";
+import { validate } from "@candid-core/schema/validate";</pre>
+
+<h2>The signature and the result</h2>
+
+<pre data-lang="ts" data-file="crates/candid-core-ts/ts/validate.ts">
+export function validate<T>(
+  schema: Schema<T>,
+  value: unknown,
+  options: ValidateOptions = {},
+): ValidateResult;
+
+export type ValidateResult =
+  { readonly ok: true } | { readonly ok: false; readonly issues: readonly ValidationIssue[] };
+</pre>
+
+<p>
+  <code>value</code> is <code>unknown</code> on purpose. You hand over what you actually have — a
+  parsed JSON body, a decoded reply, whatever a form produced — without first writing a cast that
+  asserts the very thing you are asking about. <code>ok</code> discriminates the result, and a
+  failure always carries at least one issue, so on the branch where <code>issues</code> is readable
+  it is never empty.
+</p>
+
+<p>The third argument bounds the walk. Each field has an exported default constant.</p>
+
+<table>
+  <thead>
+    <tr><th>Option</th><th>Default</th><th>Bounds</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><code>maxDepth</code></td>
+      <td><code>DEFAULT_MAX_DEPTH</code> = 256</td>
+      <td>Schema traversal depth. Every step consumes one — combinator descent and <code>rec</code> unwrapping alike. It mirrors the Rust crate's <code>max_value_depth</code>.</td>
+    </tr>
+    <tr>
+      <td><code>maxElements</code></td>
+      <td><code>DEFAULT_MAX_ELEMENTS</code> = 1&nbsp;000&nbsp;000</td>
+      <td>Total traversal budget across the whole value, every branch included. Examined record keys are charged too, so a value with a million junk keys stops.</td>
+    </tr>
+    <tr>
+      <td><code>maxIssues</code></td>
+      <td><code>DEFAULT_MAX_ISSUES</code> = 100</td>
+      <td>How many failures one walk collects before it stops looking. The result is still not-ok.</td>
+    </tr>
+  </tbody>
+</table>
+
+<h2>The issue shape</h2>
+
+<pre data-lang="ts" data-file="crates/candid-core-ts/ts/validate.ts">
+export interface ValidationIssue {
+  readonly code: ValidationCode;
+  /** `$`-rooted path to the offending value, candid-core style. */
+  readonly path: string;
+  readonly message: string;
+  readonly resource_limit?: ResourceLimitInfo;
+}
+
+export interface ResourceLimitInfo {
+  readonly resource: "value_depth" | "value_elements";
+  readonly limit: number;
+  readonly observed: number;
+}
+</pre>
+
+<p>
+  The snake_case <code>resource_limit</code> in an otherwise camelCase file is not a slip. This is
+  deliberately the shape a candid-core validation violation serializes to —
+  <code>{ code, path, message }</code>, plus <code>resource_limit</code> when a bound was hit — so a
+  consumer that already reads those reads these without a second parser. The
+  <a href="reference-diagnostics.html">diagnostics reference</a> covers the shared shape, and
+  <a href="limits-and-diagnostics.html">limits and diagnostics</a> covers the Rust side of the same
+  idea.
+</p>
+
+<h3>The eleven codes</h3>
+
+<p>
+  <code>ValidationCode</code> is a closed union. Adding a member is an API change, so you can switch
+  on it exhaustively.
+</p>
+
+<table>
+  <thead>
+    <tr><th>Code</th><th>Fires when</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>invalid_type</code></td><td>The value is the wrong JavaScript type for the node: a <code>number</code> where <code>nat</code> wants a <code>bigint</code>, a non-array for <code>vec</code>, a non-<code>Uint8Array</code> for <code>blob</code>, a non-object where a record or variant is declared, a non-string variant tag.</td></tr>
+    <tr><td><code>not_integer</code></td><td>A fixed-width integer (<code>nat8</code>…<code>int32</code>) got a fractional <code>number</code>.</td></tr>
+    <tr><td><code>out_of_range</code></td><td>A negative <code>nat</code>, a <code>nat64</code>/<code>int64</code> outside its bigint range, or a fixed width outside its declared bounds. 255 passes <code>nat8</code>; 256 does not.</td></tr>
+    <tr><td><code>missing_field</code></td><td>A declared record field is absent, a variant value has no <code>tag</code>, a payload arm has no <code>value</code>, or a func reference is missing <code>principal</code> or <code>method</code>.</td></tr>
+    <tr><td><code>unexpected_field</code></td><td>A key the schema does not declare: an unknown record field, any key at all on <code>c.unit()</code>, anything besides <code>tag</code> on a bare-tag arm, anything besides <code>tag</code>/<code>value</code> on a variant, anything besides <code>principal</code>/<code>method</code> on a func reference.</td></tr>
+    <tr><td><code>unknown_tag</code></td><td>The variant's <code>tag</code> names no arm of this variant.</td></tr>
+    <tr><td><code>invalid_length</code></td><td>A tuple array has the wrong number of elements.</td></tr>
+    <tr><td><code>uninhabited_type</code></td><td><code>c.empty</code> was reached. No value passes, so every value fails here.</td></tr>
+    <tr><td><code>unsupported_schema</code></td><td>The <em>schema</em> object is not one this package builds: an unknown <code>kind</code>, an unknown primitive name, or a <code>rec</code> thunk that returned something other than a schema.</td></tr>
+    <tr><td><code>unreadable_value</code></td><td>The value threw while being inspected — an own accessor that raises, a hostile or revoked <code>Proxy</code>.</td></tr>
+    <tr><td><code>resource_limit_exceeded</code></td><td>A bound tripped. This is the only code that carries <code>resource_limit</code>.</td></tr>
+  </tbody>
+</table>
+
+<h3>The path grammar</h3>
+
+<p>
+  Paths are <code>$</code>-rooted. An ASCII-identifier-shaped key renders as <code>.name</code>;
+  anything else renders bracketed and JSON-quoted, <code>["has space"]</code>; an index renders
+  <code>[3]</code>. A variant contributes <code>.tag</code> and <code>.value</code>, a func
+  reference <code>.principal</code> and <code>.method</code>. So a bad amount two records down reads
+  <code>$.amount.e8s</code>, and a bad element of a vector of records reads
+  <code>$.transactions[4].memo</code>.
+</p>
+
+<p>
+  This is the same grammar the Rust crate uses for <code>$.declarations[3].name</code>, and the same
+  one <a href="schema-forms.html">the form model</a> uses for its node paths — which is what lets
+  <code>formNodeAt(model, issue.path)</code> hand you the control the user typed into.
+</p>
+
+<h2>Three worked calls</h2>
+
+<p>All three use the same two schemas, hand-written here so the shapes are visible.</p>
+
+<pre data-lang="ts">const Tokens = c.record({ e8s: c.nat64 });
+const Account = c.record({ owner: c.principal, subaccount: c.opt(c.blob()) });
+const TransferArg = c.record({ to: Account, amount: Tokens, memo: c.opt(c.blob()) });</pre>
+
+<p>A value the schema describes:</p>
+
+<pre data-lang="ts">validate(TransferArg, {
+  to: { owner: { toText: () => "aaaaa-aa" }, subaccount: null },
+  amount: { e8s: 100_000n },
+  memo: null,
+});
+// { ok: true }</pre>
+
+<p>
+  Note the two <code>null</code>s. <code>opt T</code> renders as <code>T | null</code> with the
+  property <em>present</em>, so <code>memo: null</code> is how you say "no memo". Omitting the key
+  is a different value, and it fails.
+</p>
+
+<p>Two failures at once, each addressed to its own path:</p>
+
+<pre data-lang="ts">const result = validate(TransferArg, {
+  to: { owner: "aaaaa-aa", subaccount: null },
+  amount: { e8s: -1n },
+  memo: null,
+});
+
+// {
+//   ok: false,
+//   issues: [
+//     {
+//       code: "invalid_type",
+//       path: "$.to.owner",
+//       message: "expected a Principal (an object with a toText method), got string"
+//     },
+//     {
+//       code: "out_of_range",
+//       path: "$.amount.e8s",
+//       message: "nat64 must be in [0, 2^64-1], got -1n"
+//     }
+//   ]
+// }</pre>
+
+<p>
+  The first is the structural principal check: <code>c.principal</code> is satisfied by any object
+  with a <code>toText</code> function, because this package deliberately has no runtime dependency
+  on a <code>Principal</code> implementation. A bare text principal is a string, and a string is
+  not that shape.
+</p>
+
+<p>And the omitted-versus-null case, plus an unknown key:</p>
+
+<pre data-lang="ts">validate(TransferArg, {
+  to: { owner: { toText: () => "aaaaa-aa" }, subaccount: null },
+  amount: { e8s: 1n },
+  reference: "abc",
+});
+
+// issues: [
+//   { code: "missing_field",    path: "$.memo",      message: "required field is missing" },
+//   { code: "unexpected_field", path: "$.reference", message: "field is not part of this record" }
+// ]</pre>
+
+<p>
+  Issue order is deterministic: declared fields in the schema's own enumeration order first, then
+  unexpected value keys in the value's enumeration order. Two runs over the same value give the same
+  list, which is what makes an issue list safe to snapshot in a test.
+</p>
+
+<callout type="note" title="Presence means own and enumerable">
+  <p>
+    A field counts as present only if it is an own <em>enumerable</em> property — the projection
+    <code>JSON.stringify</code>, object spread and structured clone all see. An inherited
+    <code>toString</code> does not satisfy a field named <code>toString</code>, and a
+    non-enumerable own property neither satisfies a required field nor counts as an unknown one. The
+    consequence is the useful part: a value that validates never serializes to something the schema
+    would reject.
+  </p>
+</callout>
+
+<h2>Bounds, and what you observe when one trips</h2>
+
+<p>
+  A bound failure is terminal. The walk stops, and the result carries a
+  <code>resource_limit_exceeded</code> issue whose <code>resource_limit</code> names what ran out,
+  the configured <code>limit</code>, and the <code>observed</code> value that crossed it. This is
+  the case worth stating precisely: <strong>a truncated walk never reports <code>ok</code></strong>.
+  A completely valid value comes back not-ok if the budget stopped the examination early, because
+  reporting success would claim an inspection that never happened.
+</p>
+
+<pre data-lang="ts">const big = new Array(1000).fill(0);
+const result = validate(c.vec(c.nat8), big, { maxElements: 10 });
+
+// {
+//   ok: false,
+//   issues: [
+//     {
+//       code: "resource_limit_exceeded",
+//       path: "$[9]",
+//       message: "value_elements limit 10 exceeded (observed 11)",
+//       resource_limit: { resource: "value_elements", limit: 10, observed: 11 }
+//     }
+//   ]
+// }</pre>
+
+<p>
+  Depth behaves the same way with <code>resource: "value_depth"</code>. Because depth counts schema
+  traversal steps — <code>rec</code> unwrapping included — a linked-list-shaped value consumes depth
+  per element, so a hundred-thousand-node list stops at the default 256 rather than overflowing the
+  JavaScript stack. A value that points at itself terminates by the same route, and so does a
+  hand-built <code>rec</code> chain that never resolves — a schema no validated Contract produces,
+  because the compiler refuses a degenerate cycle such as <code>type A = A</code>. The bound is what
+  makes a hand-assembled one end.
+</p>
+
+<callout type="warn" title="Read ok, not issues.length">
+  <p>
+    Branch on <code>result.ok</code>. Treating an empty issue list as success is the mistake the
+    terminal-bound rule exists to prevent: a walk that halted early has issues but has not seen the
+    whole value, and a walk that succeeded has no issue list at all.
+  </p>
+</callout>
+
+<h3>Values that fight inspection</h3>
+
+<p>
+  The no-throw guarantee holds against values built to break walkers. Every read of the value
+  happens behind one choke point, and any exception it raises becomes a terminal
+  <code>unreadable_value</code> issue at the path being examined:
+</p>
+
+<pre data-lang="ts">const schema = c.record({ a: c.record({ b: c.bool }) });
+const value = { a: { get b(): boolean { throw new Error("boom"); } } };
+
+validate(schema, value as never);
+// issues: [{ code: "unreadable_value", path: "$.a.b", message: "the value threw while being inspected" }]</pre>
+
+<callout type="tip" title="What does throw is always a programmer error">
+  <p>
+    <code>validate</code> never throws for a value, and a malformed <em>schema</em> object comes back
+    as an <code>unsupported_schema</code> issue rather than an exception. The helpers that
+    <em>read</em> a schema are stricter. <code>resolveSchema</code>, <code>isResultSchema</code>,
+    <code>unwrapResult</code> and <code>formNodeAt</code> throw <code>TypeError</code> on a foreign
+    object, an unknown <code>kind</code>, or a <code>rec</code> chain running past 256 hops, and
+    <code>unwrapResult</code> throws for a schema it reads without trouble that is not a result
+    variant. <code>formModel</code> throws on a foreign object or an unknown kind, but does not
+    follow <code>rec</code> at all, so an unterminated chain surfaces wherever it is expanded rather
+    than there. The classic case all of this catches is passing the decoded <em>value</em> where its
+    schema belongs.
+  </p>
+</callout>
+
+<h2>Reading ok/err results</h2>
+
+<p>
+  <code>variant { ok : T; err : E }</code> is the near-universal canister result convention, and the
+  usual way to unwrap one generically is to probe the decoded <em>value</em> for <code>ok</code> or
+  <code>err</code> keys. That guess misfires on any record that legitimately carries those field
+  names, and it cannot type the error payload at all, because a value knows nothing about the arm it
+  does not inhabit. Whether a reply <em>is</em> a result, and what each arm carries, is a fact about
+  the schema — so the two helpers read it off the schema.
+</p>
+
+<div class="api-entry">
+  <div class="api-head">
+    <span class="api-name">isResultSchema</span>
+    <span class="pill">./validate</span>
+  </div>
+  <div class="api-body">
+    <pre data-lang="ts">export function isResultSchema(schema: AnyFieldSchema): boolean</pre>
+    <p>
+      True when the schema resolves — through the <code>rec</code> indirections every generated
+      declaration arrives wrapped in — to a variant whose arms are <strong>exactly</strong> an ok arm
+      and an err arm. Two spellings are recognised as pairs: <code>ok</code>/<code>err</code>, which
+      Motoko's <code>Result.Result</code> produces, and <code>Ok</code>/<code>Err</code>, which
+      Rust's candid derive produces. Either order. A record carrying those field names is not a
+      result; neither is a variant with a third arm, nor one that mixes the two spellings.
+    </p>
+  </div>
+</div>
+
+<div class="api-entry">
+  <div class="api-head">
+    <span class="api-name">unwrapResult</span>
+    <span class="pill">./validate</span>
+  </div>
+  <div class="api-body">
+    <pre data-lang="ts">export function unwrapResult<S extends AnyFieldSchema>(
+  schema: S,
+  value: unknown,
+  options: ValidateOptions = {},
+): UnwrapResult<ResultOk<S>, ResultErr<S>></pre>
+    <p>
+      Validates the value against the schema, then reads one arm. Three outcomes:
+      <code>{ ok: true, value }</code>, <code>{ ok: false, error }</code>, or
+      <code>{ ok: false, issues }</code> — that last one carrying the issues the failed
+      <code>validate</code> call produced. An err arm is a value, not an exception; nothing
+      throws for one. <code>options</code> is forwarded, so a bounded caller stays bounded. A schema
+      that is not a result variant is a programmer error rather than an outcome: it throws
+      <code>TypeError</code> eagerly, before the value is touched.
+    </p>
+  </div>
+</div>
+
+<pre data-lang="ts">import { isResultSchema, unwrapResult } from "@candid-core/schema/validate";
+
+const TransferError = c.variant({
+  bad_fee: c.record({ expected_fee: c.nat }),
+  too_old: c.null,
+});
+const TransferResult = c.variant({ ok: c.nat, err: TransferError });
+
+isResultSchema(TransferResult);                          // true
+isResultSchema(c.record({ ok: c.bool, err: c.text }));   // false: a record is not a variant
+
+declare const reply: unknown; // whatever the call decoded to
+
+const outcome = unwrapResult(TransferResult, reply);
+if (outcome.issues) {
+  // Not a value of this schema at all.
+  console.error(outcome.issues[0].path, outcome.issues[0].message);
+} else if (outcome.ok) {
+  const blockIndex: bigint = outcome.value;
+} else {
+  const failure = outcome.error;   // typed from the err arm, not from the value
+}</pre>
+
+<p>
+  Every member of <code>UnwrapResult</code> declares all three keys, the ones it does not hold as
+  optional <code>undefined</code>, so <code>ok</code>, <code>error</code> and <code>issues</code>
+  can each be read and narrowed on directly without a type guard. The companion aliases
+  <code>ResultOk&lt;S&gt;</code> and <code>ResultErr&lt;S&gt;</code> name each arm's payload type on
+  its own. A bare-tag arm — <code>variant { ok; err : text }</code> — unwraps to <code>null</code>,
+  the single value of the Candid <code>null</code> it declares.
+</p>
+
+<h2>The labels module</h2>
+
+<p>
+  A Candid field is identified on the wire by a 32-bit label id, not by its name. A semantic
+  Contract stores only those ids; a schema object stores only rendered keys. The
+  <code>./labels</code> subpath is the bridge, and it is small enough to read in one sitting.
+</p>
+
+<pre data-lang="ts" data-file="crates/candid-core-ts/ts/labels.ts">
+export function candidLabelHash(name: string): number;
+export function numericKeyId(key: string): number | undefined;
+export function isNumericShapedName(name: string): boolean;
+export function fieldIdOfKey(key: string): number;
+export function utf8BytesStrict(text: string): Uint8Array | undefined;
+export function utf8Decode(bytes: Uint8Array): string | undefined;
+</pre>
+
+<p>
+  Two rules cover every key. A key shaped <code>_N_</code> — underscore, decimal digits, underscore
+  — renders the numeric label id <code>N</code>, which is the convention for a Candid field that has
+  no source name. Any other key is a source name, whose id is the Candid label hash
+  <code>h(name) = fold(h * 223 + byte) mod 2^32</code> over the name's UTF-8 bytes.
+  <code>fieldIdOfKey</code> applies them in that order and is total.
+</p>
+
+<pre data-lang="ts">import { candidLabelHash, fieldIdOfKey, numericKeyId } from "@candid-core/schema/labels";
+
+candidLabelHash("owner"); // 947296307
+fieldIdOfKey("owner");    // 947296307 — a source name, so the hash
+fieldIdOfKey("_7_");      // 7 — the id rendering, parsed back
+numericKeyId("owner");    // undefined</pre>
+
+<p>
+  You need this when you are matching a schema key against a wire id yourself: reading a raw Candid
+  type table, writing a debugger, or reconciling a Contract's numeric fields with a generated
+  module. The <a href="schema-codec.html">codec</a> and the
+  <a href="schema-from-contract.html">Contract loader</a> use it internally, so ordinary calling
+  code never has to. <code>isNumericShapedName</code> exists for one fail-closed rule: a
+  <em>source</em> name that is itself <code>_N_</code>-shaped hashes as a name in Candid but becomes
+  indistinguishable from an id rendering once erased to a key, so the Contract loader refuses such
+  names outright with <code>invalid_name_table</code> rather than letting the codec encode a wrong
+  wire id. The two UTF-8 helpers are the same fail-closed discipline at the byte level: both return
+  <code>undefined</code> rather than substituting a replacement character, so text that is not
+  well-formed never silently becomes different text.
+</p>
+
+<h2>Where to go next</h2>
+
+<div class="card-grid">
+  <a class="card" href="schema-forms.html">
+    <span class="card-kicker">Guide</span>
+    <span class="card-title">Form metadata</span>
+    <p>The other consumer of this path grammar: turn an issue's <code>path</code> into the control the user typed into.</p>
+  </a>
+  <a class="card" href="schema-codec.html">
+    <span class="card-kicker">Guide</span>
+    <span class="card-title">The binary codec</span>
+    <p>The same issue shape, applied to encoding and decoding Candid bytes.</p>
+  </a>
+  <a class="card" href="reference-diagnostics.html">
+    <span class="card-kicker">Reference</span>
+    <span class="card-title">Diagnostics</span>
+    <p>The structured error shape the Rust crate and this runtime share.</p>
+  </a>
+</div>

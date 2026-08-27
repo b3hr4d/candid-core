@@ -1,0 +1,578 @@
+<p>A <code>.did</code> file has many spellings for one meaning. You can rename a
+type, reorder record fields, reorder methods, reindent everything and add a page
+of comments without changing a single byte that a caller puts on the wire. Text
+comparison reports all of those as differences. It also misses real ones: two
+files that look almost identical can describe incompatible interfaces.</p>
+
+<p>candid-core answers the question with hashes instead. It normalises a
+<a href="contract-graph.html">Contract</a> — the validated, arena-based type
+graph it compiles a <code>.did</code> file into — and then hashes fixed
+projections of it. Three identities are stored in the documents it emits: two
+inside the Contract itself, and one inside the <code>SourceInfo</code>
+provenance sidecar that travels beside it. A fourth is computed on demand over a
+serialized document's exact octets. They deliberately answer different
+questions, and the useful skill is knowing which one to compare.</p>
+
+<h2>The shape of an identity string</h2>
+
+<p>Every identity in this project is one string with the same three parts: a
+<strong>domain</strong> naming what kind of thing was hashed, the literal
+<code>:sha256:</code>, and 64 lowercase hexadecimal digits.</p>
+
+<pre data-lang="text">candid-core:contract:v1:sha256:d43274872cdb6c503456065d12c26b512ba9e3eac5b0a9533c8f9716293c6e18
+candid-core:interface:v1:sha256:99f400820c0ca2fb7c32cc3ab1df6d6c000bc614cffe0e350b6a9a576da18d48
+candid-core:source-bundle:v1:sha256:52cb9ba7ed7105a36de5a5f2665ef82261080406133498ed4aa8b3cac6f9bcca
+candid-core:artifact:contract-json:v1:sha256:66c1371d29c896c2b292edc5dc1d344bf39103c5a1011141ed6883ace3e95401</pre>
+
+<p>The domain is not decoration. It is also the first thing in the hash
+preimage, which is <code>utf8(domain)</code>, then a single <code>0x00</code>
+byte, then the payload bytes. That is what makes the identity spaces
+non-confusable: hashing one byte sequence under two domains gives two unrelated
+digests, so a source-bundle digest can never be mistaken for a contract digest
+even by accident. Validation enforces the spelling too — a Contract whose
+<code>identities.contract</code> is not exactly
+<code>candid-core:contract:v1:sha256:</code> plus 64 characters drawn from
+<code>0-9a-f</code> is rejected with <code>invalid_contract_id_format</code>
+before any digest is compared, and the interface half has its own
+<code>invalid_interface_id_format</code>.</p>
+
+<h2>interface_id — the callable wire interface</h2>
+
+<p><code>Contract::interface_id()</code> returns
+<code>Option&lt;&amp;str&gt;</code>. It hashes exactly four things: the
+<code>semantics_profile</code>, the <code>canonicalization_profile</code>, the
+part of the canonical type arena reachable from the actor, and the actor node
+itself.</p>
+
+<p>What it leaves out is the point. <code>format</code> and
+<code>format_version</code> are excluded, so a document-shape revision does not
+by itself invalidate a compatibility cache. Declaration names are excluded, and
+so is every type node the actor cannot reach. Equality means one thing: the same
+callable actor interface under the same profiles. That is the right key for
+"can my client still call this canister?".</p>
+
+<p>A Contract with no actor — a <code>.did</code> that declares only types — has
+no interface identity at all. The <code>interface</code> key is omitted from the
+document rather than written as <code>null</code>, and validation rejects an
+actorless Contract that claims one anyway. An <em>empty</em> actor,
+<code>service : {}</code>, is a real actor and does have one.</p>
+
+<h2>contract_id — the whole semantic Contract</h2>
+
+<p><code>Contract::contract_id()</code> returns <code>&amp;str</code>; every
+valid Contract has one. It hashes <code>format</code>,
+<code>format_version</code>, both profiles, the complete canonical type arena,
+the declarations array <em>including the names</em>, and the actor when there is
+one.</p>
+
+<p>Two things it excludes are worth stating out loud, because people assume
+otherwise. The <code>identities</code> block itself is excluded, since that is
+what is being derived. And <code>producer</code> — the tool name, tool version,
+and the <code>candid</code>/<code>candid_parser</code> versions recorded in the
+document — is excluded, deliberately. Producer metadata is unverified
+provenance; binding it would move every existing <code>contract_id</code>
+whenever an unrelated tool re-emitted the same Contract.</p>
+
+<p>Also outside it: envelope extensions, the <code>SourceInfo</code> provenance
+sidecar, source text, comments, formatting, and packaging. Two files with
+different producers, different extensions, or different sidecars share one
+<code>contract_id</code>.</p>
+
+<callout type="warn" title="contract_id is the wrong thing to sign for a file">
+  <p>Because it excludes producer, extensions, the sidecar, and the encoding, a
+  registry entry or signature keyed on <code>contract_id</code> commits to
+  strictly less than the file the publisher believes they shipped. The
+  repository's own vectors show it: nine checked-in documents spanning all three
+  artifact kinds embed one identical <code>contract_id</code> and have nine
+  distinct artifact IDs. When the octets are the claim, commit to an artifact
+  ID.</p>
+</callout>
+
+<h2>source_bundle_id — the raw source files</h2>
+
+<p><code>SourceInfo::source_bundle_id()</code> is not a semantic identity, and
+it is the one people misread most often. It hashes a two-member payload: the
+canonical list of raw sources as <code>{name, source}</code> pairs, and their
+import edges as <code>{from, import, to, kind}</code> records. <code>name</code>
+is a normalised logical source URI such as <code>memory:/root.did</code>;
+<code>source</code> is the literal file text.</p>
+
+<p>So reindenting a file or editing a comment <em>does</em> move it. That is the
+job. It answers "did the inputs change?", which is exactly the question a build
+cache asks. It is available only when the sidecar is (the
+<span class="pill accent">compiler</span> feature), since it describes what was
+compiled.</p>
+
+<p>What it excludes is everything <em>derived</em> from those sources — the
+rederived documentation strings, the declaration and method provenance, the
+field-label table. Those live in the same <code>SourceInfo</code> but not in its
+bundle identity, so it identifies the input bundle rather than the whole
+sidecar. And because the logical source name is inside the payload, the same
+text compiled inline (<code>compile_did</code> names its source
+<code>memory:/inline.did</code>) and read from a workspace file are different
+bundles.</p>
+
+<p>You can recompute one with nothing but a JSON canonicaliser and SHA-256.
+Against a checked-in fixture, this prints <code>True</code>:</p>
+
+<pre data-lang="bash">python3 - <<'EOF'
+import json, hashlib
+doc = json.load(open("tests/fixtures/artifact-identity/artifacts/compilation.json"))
+info = doc["source_info"]
+payload = {"sources": info["sources"], "imports": info["imports"]}
+jcs = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
+digest = hashlib.sha256(b"candid-core:source-bundle:v1" + b"\x00" + jcs).hexdigest()
+print("candid-core:source-bundle:v1:sha256:" + digest == info["source_bundle_id"])
+EOF</pre>
+
+<h2>artifact_id — the detached, exact-octet identity</h2>
+
+<p>None of the three identifies a complete serialized document. That gap is what
+<code>artifact_id_with_limits</code> and <code>artifact_id_with_context</code>
+fill. They hash the exact octet sequence you hand them under a kind-specific
+domain, and hand the digest back.</p>
+
+<p><strong>Detached</strong> is the operative word. Nothing is stored. No
+serialized artifact gains an <code>id</code> field for it. No decode computes it
+implicitly, so no existing validation order or error precedence changes because
+it exists. If you want one, you ask for one.</p>
+
+<div class="api-entry">
+  <div class="api-head">
+    <span class="api-name">artifact_id_with_limits</span>
+  </div>
+  <div class="api-body">
+    <pre data-lang="rust">pub fn artifact_id_with_limits(
+    kind: ArtifactKind,
+    bytes: &[u8],
+    limits: &Limits,
+) -> Result<String, ContractValidationError></pre>
+    <p>Hashes <code>bytes</code> under <code>kind</code>'s domain.
+    <code>artifact_id_with_context</code> is the same computation under a full
+    <code>RuntimeContext</code>, so a caller's cancellation token and deadline
+    are observed before the first byte and again at every 64 KiB chunk
+    boundary — failing closed rather than returning a partial digest. There is
+    deliberately no shorter convenience form.</p>
+  </div>
+</div>
+
+<p><code>ArtifactKind</code> is <code>#[non_exhaustive]</code> and has three
+frozen variants. Selecting a domain is <em>all</em> it does: no variant parses
+or validates anything.</p>
+
+<table>
+  <thead>
+    <tr><th><code>ArtifactKind</code></th><th>Domain</th><th>What a valid document of that kind carries</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><code>ContractJsonV1</code></td>
+      <td><code>candid-core:artifact:contract-json:v1</code></td>
+      <td>The Contract alone, <code>producer</code> included. No extensions, no sidecar.</td>
+    </tr>
+    <tr>
+      <td><code>ContractEnvelopeJsonV1</code></td>
+      <td><code>candid-core:artifact:contract-envelope-json:v1</code></td>
+      <td>A Contract plus its namespaced extension map. No sidecar.</td>
+    </tr>
+    <tr>
+      <td><code>CompilationJsonV1</code></td>
+      <td><code>candid-core:artifact:compilation-json:v1</code></td>
+      <td>A Contract plus its optional <code>SourceInfo</code> sidecar. No extensions.</td>
+    </tr>
+  </tbody>
+</table>
+
+<p>This example is the rustdoc on the function, which runs as a doctest. It
+demonstrates the three properties at once: the domain is the literal prefix of
+the ID, the kind separates the digest space, and one space is a different
+artifact.</p>
+
+<pre data-lang="rust" data-file="src/artifact_id.rs">use candid_core::{artifact_id_with_limits, ArtifactKind, Limits};
+
+let document = br#"{"contract":{}}"#;
+let id = artifact_id_with_limits(
+    ArtifactKind::ContractEnvelopeJsonV1,
+    document,
+    &Limits::default(),
+)?;
+assert!(id.starts_with("candid-core:artifact:contract-envelope-json:v1:sha256:"));
+
+// The same bytes under any other kind are a different identity.
+for other in [ArtifactKind::ContractJsonV1, ArtifactKind::CompilationJsonV1] {
+    let rehashed = artifact_id_with_limits(other, document, &Limits::default())?;
+    assert_ne!(id, rehashed);
+}
+
+// One byte of whitespace is a different artifact.
+let reformatted = artifact_id_with_limits(
+    ArtifactKind::ContractEnvelopeJsonV1,
+    br#"{"contract": {}}"#,
+    &Limits::default(),
+)?;
+assert_ne!(id, reformatted);</pre>
+
+<p>Note what those bytes are: <code>{"contract":{}}</code> is not a valid
+Contract document at all. An artifact ID exists for it anyway, because computing
+one is not a validity claim. Equal IDs mean equal kind and equal octets, under
+the SHA-256 collision assumption — nothing more. It is a content address, not a
+credential: it establishes neither semantic equality, nor structural validity,
+nor authenticity, producer truth, or signature trust. This crate defines no
+signer model, key format, signature algorithm, trust policy, or registry
+protocol. Validate the artifact separately through the bounded parse entry point
+for its kind, then use the ID as the value a signature commits to.</p>
+
+<p>Both entry points are bounded the same way. <code>max_input_bytes</code> is
+enforced against the slice <em>before</em> any hashing, reported as resource
+<code>input_bytes</code>; <code>max_artifact_identity_work</code> is then charged
+one unit per artifact byte plus the fixed domain framing, reported as
+<code>artifact_identity_work</code>. No other counter is consumed, so
+content-addressing a document can neither starve nor be starved by
+canonicalization on a shared budget. If you raise <code>max_input_bytes</code>
+above its 4 MiB default, raise the work limit too, or oversized artifacts start
+failing on the wrong counter.</p>
+
+<h2>What moves which id?</h2>
+
+<p>This is the table to keep. <strong>Moves</strong> means a different digest;
+<strong>unchanged</strong> means byte-identical. Every cell was checked against
+<code>src/canonical.rs</code>, the two normative identity specifications, and
+the tests — the notes under the table say where.</p>
+
+<table>
+  <thead>
+    <tr>
+      <th>Change</th>
+      <th><code>interface_id</code></th>
+      <th><code>contract_id</code></th>
+      <th><code>source_bundle_id</code></th>
+      <th>artifact ID</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Add or edit a comment in the source <sup>a</sup></td>
+      <td>Unchanged</td>
+      <td>Unchanged</td>
+      <td><strong>Moves</strong></td>
+      <td><strong>Moves</strong> — compilation<br><em>contract, envelope: unchanged</em></td>
+    </tr>
+    <tr>
+      <td>Reformat whitespace in the source <sup>b</sup></td>
+      <td>Unchanged</td>
+      <td>Unchanged</td>
+      <td><strong>Moves</strong></td>
+      <td><strong>Moves</strong> — compilation<br><em>contract, envelope: unchanged</em></td>
+    </tr>
+    <tr>
+      <td>Rename a type declaration <sup>c</sup></td>
+      <td>Unchanged</td>
+      <td><strong>Moves</strong></td>
+      <td><strong>Moves</strong></td>
+      <td><strong>Moves</strong> — all three kinds</td>
+    </tr>
+    <tr>
+      <td>Reorder two top-level declarations <sup>d</sup></td>
+      <td>Unchanged</td>
+      <td>Unchanged</td>
+      <td><strong>Moves</strong></td>
+      <td><strong>Moves</strong> — compilation<br><em>contract, envelope: unchanged</em></td>
+    </tr>
+    <tr>
+      <td>Reorder fields inside a record <sup>e</sup></td>
+      <td>Unchanged</td>
+      <td>Unchanged</td>
+      <td><strong>Moves</strong></td>
+      <td><strong>Moves</strong> — compilation<br><em>contract, envelope: unchanged</em></td>
+    </tr>
+    <tr>
+      <td>Rename a record field <sup>f</sup></td>
+      <td><strong>Moves</strong> if the field is actor-reachable</td>
+      <td><strong>Moves</strong></td>
+      <td><strong>Moves</strong></td>
+      <td><strong>Moves</strong> — all three kinds</td>
+    </tr>
+    <tr>
+      <td>Add a method to the service <sup>g</sup></td>
+      <td><strong>Moves</strong></td>
+      <td><strong>Moves</strong></td>
+      <td><strong>Moves</strong></td>
+      <td><strong>Moves</strong> — all three kinds</td>
+    </tr>
+    <tr>
+      <td>Change <code>producer</code> metadata <sup>h</sup></td>
+      <td>Unchanged</td>
+      <td>Unchanged</td>
+      <td>Unchanged</td>
+      <td><strong>Moves</strong> — all three kinds</td>
+    </tr>
+    <tr>
+      <td>Re-serialize the same Contract with different key order <sup>i</sup></td>
+      <td>Unchanged</td>
+      <td>Unchanged</td>
+      <td>Unchanged</td>
+      <td><strong>Moves</strong> — all three kinds</td>
+    </tr>
+  </tbody>
+</table>
+
+<p>The artifact column assumes a valid serialized document of the named kind,
+because that is the only case where "does this change reach the bytes?" has a
+general answer. <code>ArtifactKind</code> itself never parses anything, so the
+honest statement for arbitrary input is shorter: if the octets differ, the ID
+differs.</p>
+
+<h3>Where each row is checked</h3>
+
+<dl>
+  <dt><sup>a</sup> Comment</dt>
+  <dd><code>identities_make_distinct_equality_claims</code> in
+    <code>tests/adr_conformance.rs</code> compiles <code>// first</code> and
+    <code>// second</code> in front of the same service and asserts equal
+    <code>contract_id</code>, different <code>source_bundle_id</code>. The
+    <code>compilation</code> and <code>compilation_source_doc</code> vectors
+    differ only in one doc comment and have different artifact IDs and bundle
+    IDs with an identical <code>contract_id</code>.</dd>
+
+  <dt><sup>b</sup> Whitespace</dt>
+  <dd>The bundle payload stores <code>source</code> as the literal file text
+    (<code>SourceFileInfo</code> in <code>src/model/source_info.rs</code>,
+    populated in <code>src/compile/lower.rs</code>), and no source text enters
+    either semantic payload. The interface half is pinned directly by
+    <code>interface_ids_are_deterministic_and_ignore_provenance_but_track_wire_semantics</code>
+    in <code>tests/contract_foundation.rs</code>, whose two sources differ in
+    formatting, field order, method order, and type alias.</dd>
+
+  <dt><sup>c</sup> Type rename</dt>
+  <dd><code>contract_id_changes_when_declaration_names_change</code> in
+    <code>tests/adr_conformance.rs</code>. Declaration names are in the contract
+    payload and not in the interface payload, and canonical node numbering
+    traverses the actor first and then declaration roots in quotient class-ID
+    order — never name order — so a rename cannot shift the actor-reachable
+    prefix.</dd>
+
+  <dt><sup>d</sup> Declaration order</dt>
+  <dd>No test literally swaps two <code>type</code> declarations in
+    <code>.did</code> <em>source text</em>. What is pinned: the
+    <code>arena_permutation</code> conformance case ships three raw inputs that
+    arrange one graph's arena three different ways — listing its two
+    declarations in both orders across them — and asserts all three converge
+    on one pinned <code>contract_id</code> and <code>interface_id</code>, and
+    the proptest
+    <code>arbitrary_arena_permutations_of_a_nasty_graph_converge</code> in
+    <code>tests/canonical_properties.rs</code> shuffles declaration listing
+    order and asserts the canonical Contract and both IDs are unchanged. Read
+    those two if you want to check this row yourself.</dd>
+
+  <dt><sup>e</sup> Field order</dt>
+  <dd><code>equivalent_source_ordering_preserves_semantic_identity</code> in
+    <code>tests/canonical_properties.rs</code> compiles
+    <code>record { right: text; left: nat }</code> and
+    <code>record { left: nat; right: text }</code> behind the same service and
+    asserts the whole compiled Contracts are equal, which covers both semantic
+    IDs. Canonicalization sorts record and variant fields by label ID
+    ascending.</dd>
+
+  <dt><sup>f</sup> Field rename</dt>
+  <dd>A <code>Field</code> in the graph is <code>{ id: u32, ty: TypeRef }</code>
+    — the spelling is gone, replaced by the Candid label hash. So this row is
+    precisely "moves whenever the new spelling hashes to a different label ID".
+    <code>note</code> is 1225398258 and <code>memo</code> is 1213809850, so that
+    rename moves them. The nearest direct test changes a numeric label from
+    <code>1</code> to <code>2</code> and asserts a different
+    <code>interface_id</code>
+    (<code>tests/contract_foundation.rs</code>).</dd>
+
+  <dt><sup>g</sup> New method</dt>
+  <dd>The interface payload is the actor plus its reachable arena — §9.2 of
+    <a href="https://github.com/b3hr4d/candid-core/blob/main/docs/canonicalization-v1.md">docs/canonicalization-v1.md</a>
+    — and a <code>service</code> node's canonical signature writes each method's
+    ID and name, which is §5 of the same document. Both are implemented in
+    <code>src/canonical.rs</code>. A related assertion in
+    <code>tests/contract_foundation.rs</code> pins that changing one method's
+    mode from <code>query</code> to update moves
+    <code>interface_id</code>.</dd>
+
+  <dt><sup>h</sup> Producer</dt>
+  <dd><code>rewritten_producer_bytes_move_the_artifact_id_and_not_the_semantic_ids</code>
+    in <code>tests/artifact_identity.rs</code> rebrands a producer to
+    <code>candid-core-fork</code>/<code>9.9.9</code> and asserts both semantic
+    IDs are unchanged while the envelope artifact ID moves.</dd>
+
+  <dt><sup>i</sup> Re-serialization</dt>
+  <dd><code>jcs_identity_is_independent_of_input_object_key_order</code> in
+    <code>tests/adr_conformance.rs</code> moves the <code>actor</code> key to the
+    end of the document and asserts the decoded <code>contract_id</code> is
+    unchanged. The <code>contract_envelope</code> and
+    <code>contract_envelope_compact</code> vectors are the same envelope
+    pretty-printed and minified: identical embedded <code>contract_id</code>,
+    different artifact IDs.</dd>
+</dl>
+
+<callout type="note" title="Field names collide, and then nothing moves">
+  <p>The Candid label hash is 32-bit and collides.
+  <code>idl_hash("jhwlzguu")</code> and <code>idl_hash("jsyrjsvk")</code> are
+  both 2823597088. The collision itself is pinned as a unit test in
+  <code>src/name_hash.rs</code>, which asserts the two hash equal; the literal
+  2823597088 is pinned by the <code>hash_collision</code> conformance vector.
+  Renaming a <em>field</em> between two colliding spellings produces a
+  byte-identical Contract, so neither semantic ID moves at all. Renaming a
+  <em>method</em> between them still moves both, because a
+  <code>ServiceMethod</code> keeps its <code>name</code> alongside its
+  <code>id</code> — the text is what you need to make a call. Method names are
+  semantic here; field names are not.</p>
+</callout>
+
+<h2>A worked example</h2>
+
+<p><code>examples/semantic_equivalence.rs</code> is the whole argument in one
+program. Two sources with a different type name, a different comment, a
+different field order and a different method order compile to the same wire
+interface and to different source bytes.</p>
+
+<pre data-lang="rust" data-file="examples/semantic_equivalence.rs">use candid_core::compile_did;
+use std::error::Error;
+
+fn main() -> Result<(), Box<dyn Error>> {
+    let first = compile_did(
+        r#"
+        type Payload = record { owner: principal; amount: nat };
+        service : {
+          z: (Payload) -> () query;
+          a: (Payload) -> () query;
+        };
+        "#,
+    )?;
+    let second = compile_did(
+        r#"
+        // Different name, documentation, field order, and method order.
+        type Transfer = record { amount: nat; owner: principal };
+        service : {
+          a: (Transfer) -> () query;
+          z: (Transfer) -> () query;
+        };
+        "#,
+    )?;
+
+    assert_eq!(
+        first.contract().interface_id(),
+        second.contract().interface_id()
+    );
+    assert_ne!(
+        first.source_info().unwrap().source_bundle_id(),
+        second.source_info().unwrap().source_bundle_id()
+    );
+    Ok(())
+}</pre>
+
+<pre data-lang="bash">cargo run --example semantic_equivalence</pre>
+
+<p>Read it against the table. Rows <em>a</em>, <em>e</em> and one method
+reordering all fire, so <code>source_bundle_id</code> differs and
+<code>interface_id</code> does not. Row <em>c</em> also fires —
+<code>Payload</code> versus <code>Transfer</code> — so these two Contracts have
+different <code>contract_id</code>s, which is why the example compares interface
+identities rather than contract identities.</p>
+
+<p>The canonical document is where this becomes concrete.
+<code>tests/fixtures/conformance/basic.did</code> declares
+<code>type Payload = record { owner: principal; amount: nat }; service : {
+transfer: (Payload) -&gt; () };</code>. Compiling it gives an arena whose node 0
+is the actor's service — canonical numbering traverses the actor first — and
+whose record fields are ordered by label ID ascending rather than by source
+position. Here the two happen to coincide; a source that wrote
+<code>amount</code> first would produce this same document:</p>
+
+<pre data-lang="json" data-file="tests/fixtures/conformance/basic.contract.json">{
+  "format": "candid-core",
+  "format_version": 1,
+  "semantics_profile": "candid-1",
+  "canonicalization_profile": "candid-core-canon-1",
+  "identities": {
+    "contract": "candid-core:contract:v1:sha256:0b553cb65eb436a7ac5d35869d0016d043867bab0a97e844350ae72a5b4aea7d",
+    "interface": "candid-core:interface:v1:sha256:99f400820c0ca2fb7c32cc3ab1df6d6c000bc614cffe0e350b6a9a576da18d48"
+  },
+  "types": [
+    { "kind": "service", "methods": [
+      { "name": "transfer", "id": 3664621355, "function": 1 }
+    ] },
+    { "kind": "func", "args": [2], "results": [], "mode": "update" },
+    { "kind": "record", "fields": [
+      { "id": 947296307, "type": 3 },
+      { "id": 3573748184, "type": 4 }
+    ] },
+    { "kind": "primitive", "primitive": "principal" },
+    { "kind": "primitive", "primitive": "nat" }
+  ],
+  "declarations": [
+    { "name": "Payload", "type": 2 }
+  ],
+  "actor": { "kind": "service", "service": 0 }
+}</pre>
+
+<p>The <code>producer</code> block is elided above. 3664621355 is the Candid
+hash of <code>transfer</code>, 947296307 of <code>owner</code>, 3573748184 of
+<code>amount</code>; all three reproduce under
+<code>h = h * 223 + byte (mod 2³²)</code>. The field <em>names</em> are nowhere
+in the document.</p>
+
+<h2>Embedded identities are recomputed, not trusted</h2>
+
+<p>The two semantic identities are written into the document, which raises the
+obvious question: what stops someone editing them? Nothing does — and nothing
+needs to, because decoding never reads them as fact. <code>Contract::from_json</code>
+recanonicalizes the incoming graph and compares. A mismatch fails with
+<code>contract_id_mismatch</code> at path <code>$.identities.contract</code> or
+<code>interface_id_mismatch</code> at <code>$.identities.interface</code>, and
+the message names both the expected and the found value.</p>
+
+<pre data-lang="rust" data-file="examples/trust_boundary.rs">let compilation = compile_did("service : { ping: () -> (nat) query };")?;
+let canonical_json = compilation.contract().to_json_pretty()?;
+let accepted = Contract::from_json(&canonical_json)?;
+println!("validated {} type nodes", accepted.types().len());
+
+let mut tampered: serde_json::Value = serde_json::from_str(&canonical_json)?;
+tampered["identities"]["contract"] = serde_json::json!(
+    "candid-core:contract:v1:sha256:0000000000000000000000000000000000000000000000000000000000000000"
+);
+let rejected = Contract::from_json(&serde_json::to_string(&tampered)?).unwrap_err();
+println!("tampered semantic identity rejected: {rejected}");</pre>
+
+<p>A presented <code>SourceInfo</code> sidecar gets the same treatment, and more
+of it: its bundle must already be canonically sorted, its
+<code>source_bundle_id</code> must match a recomputation
+(<code>source_bundle_id_mismatch</code>), and the whole bundle is recompiled
+through the same pipeline so every derived provenance field has to match. See
+<a href="trust-boundary.html">The trust boundary</a> for why raw and validated
+types are separate types at all.</p>
+
+<callout type="danger" title="Pre-1.0: the digests themselves are not stable yet">
+  <p>The crate is <code>0.1.0-beta.3</code>. Until 1.0, any release may change
+  the public Rust API, the serialized Contract, compilation and envelope shapes,
+  the canonical bytes, and therefore every identity computed over them. The
+  versioning mechanism described on <a href="canonical-bytes.html">Canonical
+  bytes</a> is what makes such a change <em>announceable</em>; it is not a
+  promise that today's digests survive. Pin an exact version —
+  <code>candid-core = "=0.1.0-beta.3"</code> — and recompute identities after
+  any upgrade rather than assuming stored ones still match.</p>
+</callout>
+
+<h2>Next</h2>
+
+<div class="card-grid">
+  <a class="card" href="canonical-bytes.html">
+    <span class="card-kicker">Concept</span>
+    <span class="card-title">Canonical bytes</span>
+    <p>The written-down byte encoding these digests are taken over, and why an independent implementation can reproduce them.</p>
+  </a>
+  <a class="card" href="source-resolution.html">
+    <span class="card-kicker">Concept</span>
+    <span class="card-title">Sources, imports and provenance</span>
+    <p>How a multi-file bundle is resolved, and what the <code>SourceInfo</code> sidecar carries besides its bundle identity.</p>
+  </a>
+  <a class="card" href="contract-graph.html">
+    <span class="card-kicker">Concept</span>
+    <span class="card-title">The Contract graph</span>
+    <p>The arena, declarations and actor that canonicalization normalises before any of this is hashed.</p>
+  </a>
+</div>

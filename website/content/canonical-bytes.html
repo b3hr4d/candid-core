@@ -1,0 +1,334 @@
+<p>The identities on the <a href="identities.html">previous page</a> are SHA-256
+digests. A digest is only as portable as the bytes it is taken over, and "the
+bytes our Rust serializer happens to emit" is not portable at all. JSON lets you
+order object keys freely, add whitespace anywhere, and spell the same number
+several ways; two programs that agree completely about meaning will still
+disagree about the digest.</p>
+
+<p>So candid-core does not derive its identities from a serializer. It derives
+them from a written specification —
+<a href="https://github.com/b3hr4d/candid-core/blob/main/docs/canonicalization-v1.md">docs/canonicalization-v1.md</a>,
+the <code>candid-core-canon-1</code> profile — which fixes every byte of every
+identity preimage in language-independent terms. The Rust crate is a reference
+implementation of that document, not the document itself. This page explains the
+guarantee and what it costs you to rely on; the specification has the byte-level
+detail.</p>
+
+<h2>Four version markers, four kinds of change</h2>
+
+<p>Schema shape, Candid semantics, and byte-level normalisation change for
+different reasons and on different timelines. Coupling them to one version
+number forces every consumer to treat every change as the same kind of break, so
+every persisted Contract declares four markers instead of one.</p>
+
+<pre data-lang="json">{
+  "format": "candid-core",
+  "format_version": 1,
+  "semantics_profile": "candid-1",
+  "canonicalization_profile": "candid-core-canon-1"
+}</pre>
+
+<table>
+  <thead>
+    <tr><th>Marker</th><th>What it pins</th><th>Rejected with</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><code>format</code></td>
+      <td>That this document is a candid-core Contract at all.</td>
+      <td><code>unsupported_contract_format</code> at <code>$.format</code></td>
+    </tr>
+    <tr>
+      <td><code>format_version</code></td>
+      <td>The JSON field set and tagged unions — the document's shape.</td>
+      <td><code>unsupported_format_version</code> at <code>$.format_version</code></td>
+    </tr>
+    <tr>
+      <td><code>semantics_profile</code></td>
+      <td>Which Candid type system is being interpreted.</td>
+      <td><code>unsupported_semantics_profile</code> at <code>$.semantics_profile</code></td>
+    </tr>
+    <tr>
+      <td><code>canonicalization_profile</code></td>
+      <td>Graph minimization, collection ordering, re-indexing, the canonical bytes, and the identity domains.</td>
+      <td><code>unsupported_canonicalization_profile</code> at <code>$.canonicalization_profile</code></td>
+    </tr>
+  </tbody>
+</table>
+
+<p>Unknown values fail closed everywhere: in the Rust validator, and in the
+TypeScript Contract loader, which reuses the same four codes. Two of the four —
+<code>semantics_profile</code> and <code>canonicalization_profile</code> — are
+also inside the identity preimages, so a profile change is visible in the digest
+rather than silently reinterpreting an old one.</p>
+
+<p><code>candid-core-canon-1</code> is frozen. Any observable change to the bytes
+it defines requires a new profile name, never an edit to this one. That is the
+whole point of naming it: <code>producer</code> can record an implementation fix
+without touching a digest, while a real normalisation change has to announce
+itself.</p>
+
+<h2>Normalise the graph, then write the bytes</h2>
+
+<p>Canonicalization runs in two stages, both before anything is hashed.</p>
+
+<h3>Minimize</h3>
+
+<p>Candid type definitions are equi-recursive: an alias, or a second definition
+with identical structure, does not create a new wire type. So the arena is
+partitioned into classes of nodes that behave identically — including across
+cycles — and one node is kept per class. Two records spelled out separately in
+the source collapse into one node. The partition is computed by repeatedly
+refining classes from exact signature bytes, so its numbering never depends on
+the input's node ordering.</p>
+
+<p>This is pinned by a vector rather than merely asserted. The
+<code>duplicate_semantic_nodes</code> conformance vector's raw input has four
+type nodes — two identical <code>record</code> nodes each pointing at its own
+<code>nat</code> node — and the pinned canonical output has two, with both
+declarations targeting node 0.</p>
+
+<h3>Re-index</h3>
+
+<p>The surviving nodes are renumbered by a depth-first walk that starts at the
+actor and then visits declaration roots. Record and variant fields sort by label
+ID ascending; service methods by ID, then name, then function reference;
+declarations by name. All string comparisons are unsigned UTF-8 byte order,
+which for well-formed strings is Unicode scalar order — deliberately
+<em>not</em> UTF-16 code-unit order, so U+FF61 sorts before U+10000 here.</p>
+
+<p>Two ordering facts are easy to get wrong when reimplementing.
+<code>func</code> argument and result lists and <code>class</code> init lists are
+positional: their order is semantic and is never sorted. And the traversal that
+assigns node indices visits declaration targets in ascending class-ID order,
+even though the <em>output</em> declarations array is sorted by name — the
+<code>declaration_root_order</code> vector exists to catch an implementation that
+used name order for traversal.</p>
+
+<p>Because the walk starts at the actor, every actor-reachable node lands in a
+contiguous block at the front of the arena. That prefix is exactly the
+<code>interface_id</code> payload: never a node short, never a declaration-only
+node extra.</p>
+
+<h2>The constrained JSON writer</h2>
+
+<p>The normalised payload is then rendered by a writer with no room for
+choice.</p>
+
+<dl>
+  <dt>No whitespace</dt>
+  <dd>None anywhere. The separators are exactly <code>{</code>, <code>}</code>,
+    <code>[</code>, <code>]</code>, <code>:</code> and <code>,</code>.</dd>
+
+  <dt>Object keys sorted, compared as UTF-8 bytes</dt>
+  <dd>Every key in the payload vocabulary is one of 22 fixed ASCII schema names
+    (<code>actor</code>, <code>args</code>,
+    <code>canonicalization_profile</code>, <code>class</code>,
+    <code>declarations</code>, <code>fields</code>, <code>format</code>,
+    <code>format_version</code>, <code>function</code>, <code>id</code>,
+    <code>init</code>, <code>inner</code>, <code>kind</code>,
+    <code>methods</code>, <code>mode</code>, <code>name</code>,
+    <code>primitive</code>, <code>results</code>,
+    <code>semantics_profile</code>, <code>service</code>, <code>type</code>,
+    <code>types</code>). Arrays are never sorted by the writer: array order is
+    already semantic, decided by the re-indexing stage.</dd>
+
+  <dt>Numbers in shortest decimal form</dt>
+  <dd>The vocabulary contains only unsigned integers that fit in a
+    <code>u32</code>. They are written with no sign, no leading zeros, no
+    exponent and no fraction. Booleans, <code>null</code>, floats, negatives and
+    integers at or above 2³² do not occur, and a conforming implementation must
+    not emit them.</dd>
+
+  <dt>A fixed string escape set</dt>
+  <dd><code>\"</code> and <code>\\</code>; the five short escapes
+    <code>\b \t \n \f \r</code>; a six-character
+    <code>\u00</code>-plus-two-<strong>lowercase</strong>-hex-digits form for the
+    remaining control characters U+0000–U+001F; and literal UTF-8 bytes for
+    everything else, including U+007F and every non-ASCII scalar. Printable
+    characters are never <code>\uXXXX</code>-escaped.</dd>
+
+  <dt>Unicode hygiene, with no repairs</dt>
+  <dd>Input strings must already be well-formed scalar sequences. A writer that
+    meets an unpaired surrogate must fail — it must not normalize, substitute
+    U+FFFD, or drop anything. There is no Unicode normalization at any stage, so
+    NFC <code>é</code> and NFD <code>e</code> + U+0301 stay distinct byte
+    sequences and produce different digests.</dd>
+</dl>
+
+<callout type="note" title="This is a constrained JCS profile, not general RFC 8785">
+  <p>Within this vocabulary the output is byte-identical to RFC 8785, but two
+  JCS behaviours are deliberately out of scope. RFC 8785 sorts property names by
+  UTF-16 code units; this writer sorts by UTF-8 bytes — the orders differ only
+  for a key mixing a supplementary-plane scalar with one in U+E000–U+FFFF, which
+  cannot happen when every key is a fixed ASCII name. And RFC 8785 serializes
+  numbers through IEEE-754 ES6 rules, which never comes up when the vocabulary
+  is <code>u32</code> only. A general JCS library that is byte-correct on this
+  vocabulary may be substituted, but the conformance vectors are the arbiter,
+  not the library's own claims.</p>
+</callout>
+
+<h2>The preimage and the digest</h2>
+
+<p>Hashing is domain-separated. For a payload <code>P</code> with domain
+<code>D</code>:</p>
+
+<pre data-lang="text">preimage = utf8(D) ++ 00 ++ canonical-json-bytes(P)
+digest   = SHA-256(preimage)
+identity = D ++ ":sha256:" ++ lowercase-hex(digest)</pre>
+
+<p>One <code>0x00</code> byte separates the domain from the payload. There is no
+length field and no second kind label, because the domain already names the kind
+and the payload is one contiguous run. Uppercase hex spellings are invalid.</p>
+
+<h2>Recompute one yourself</h2>
+
+<p><code>tests/fixtures/conformance/actorless.identity.json</code> pins the
+canonical payload text, the same bytes as hex, the full preimage as hex, and the
+resulting ID for a one-line source file:
+<code>type LibraryValue = record { value: nat; note: text };</code>. Here is the
+canonical payload in full — one line, no whitespace, keys sorted:</p>
+
+<pre data-lang="json" data-file="tests/fixtures/conformance/actorless.identity.json">{"canonicalization_profile":"candid-core-canon-1","declarations":[{"name":"LibraryValue","type":0}],"format":"candid-core","format_version":1,"semantics_profile":"candid-1","types":[{"fields":[{"id":834174833,"type":1},{"id":1225398258,"type":2}],"kind":"record"},{"kind":"primitive","primitive":"nat"},{"kind":"primitive","primitive":"text"}]}</pre>
+
+<p>Read what the rules did. Keys are sorted, so
+<code>canonicalization_profile</code> comes first and <code>types</code> last,
+and inside each node <code>fields</code> precedes <code>kind</code>. There is no
+<code>actor</code> key at all — an actorless Contract omits the member entirely,
+and <code>"actor": null</code> never appears in a payload. The field names are
+gone, replaced by their Candid label IDs: 834174833 is <code>value</code> and
+1225398258 is <code>note</code>, sorted ascending. And the two profile markers
+are inside the bytes being hashed.</p>
+
+<p>This rebuilds the preimage and the digest from those bytes with nothing but
+the Python standard library — no Rust, no candid-core. Deriving the bytes
+themselves from a raw graph is the rest of the job, and the reference
+implementation described below does that for every scenario:</p>
+
+<pre data-lang="bash">python3 - <<'EOF'
+import json, hashlib
+pins = json.load(open("tests/fixtures/conformance/actorless.identity.json"))
+preimage = pins["domain"].encode() + b"\x00" + pins["jcs"].encode()
+assert preimage.hex() == pins["preimage_hex"]
+recomputed = pins["domain"] + ":sha256:" + hashlib.sha256(preimage).hexdigest()
+print(recomputed)
+print("matches the pin:", recomputed == pins["contract_id"])
+EOF</pre>
+
+<pre data-lang="text">candid-core:contract:v1:sha256:d43274872cdb6c503456065d12c26b512ba9e3eac5b0a9533c8f9716293c6e18
+matches the pin: True</pre>
+
+<h2>The saved document is not the canonical bytes</h2>
+
+<p>This trips people up, so it is worth stating flatly. The canonical bytes
+exist only as a hash preimage. They are never what you write to disk.</p>
+
+<p><code>Contract::to_json_pretty()</code> revalidates, recanonicalizes, and then
+pretty-prints the canonical Contract with ordinary indentation and the struct's
+own field order. That document is presentation. It embeds the identities, and
+those identities were computed over the constrained bytes, which are not in the
+file at all.</p>
+
+<p>The consequence is the one you want: the same Contract can be handed to you
+minified, pretty-printed, or with its keys in any order, and it still decodes to
+the same <code>contract_id</code> — because decoding recanonicalizes and
+recomputes rather than reading the stored value as fact. The repository pins both
+halves. <code>jcs_identity_is_independent_of_input_object_key_order</code> moves
+the <code>actor</code> key to the end of a document and asserts the decoded
+<code>contract_id</code> is unchanged; the <code>contract_envelope</code> and
+<code>contract_envelope_compact</code> artifact vectors are the same envelope
+pretty-printed and minified, with one shared <code>contract_id</code> and two
+different artifact IDs.</p>
+
+<h2>Two implementations, one manifest</h2>
+
+<p>A specification nobody has independently implemented is a hope, not a
+guarantee. So the format is checked by two implementations that share nothing
+but the fixtures.</p>
+
+<p><code>tests/fixtures/conformance/manifest.json</code> pins <strong>11 required
+scenarios</strong>: actorless, empty actor, class actor, basic service, direct
+recursion, mutual recursion, an <code>idl_hash</code> collision, Unicode,
+duplicate semantic nodes, arena permutations, and declaration-root traversal
+order. Between them they carry <strong>24 raw input graphs</strong> — deliberately
+noncanonical arrangements mixed with already-canonical ones, which is what pins
+idempotence — and, per scenario, the expected canonical graph, the canonical JSON
+as text and as hex, the domain preimage, and the contract identity, plus the
+interface identity for every scenario that has an actor. Scenarios with several
+raw inputs must all converge on one identical canonical result.</p>
+
+<ul>
+  <li><code>tests/conformance_vectors.rs</code> drives the manifest from Rust,
+    with supporting exact-fixture coverage in <code>tests/adr_conformance.rs</code>
+    and ordering, normalization and permutation properties in
+    <code>tests/canonical_properties.rs</code>.</li>
+  <li><code>tests/fixtures/conformance/verify_vectors.py</code> is an independent
+    canonicalizer written against the specification using the Python standard
+    library only. It recomputes every canonical graph, payload byte, preimage and
+    ID from the raw vectors without touching the Rust implementation. CI runs it
+    as its own job, <em>Independent conformance reference</em>.</li>
+</ul>
+
+<p>Detached artifact identity has a parallel setup, kept deliberately separate so
+the closed semantic conformance set keeps meaning exactly what it did:
+<code>tests/fixtures/artifact-identity/manifest.json</code> pins 10 vectors plus
+6 cross-kind entries, <code>verify_artifact_ids.py</code> recomputes them all in
+Python, and CI runs that as <em>Independent artifact identity reference</em>.
+A third job hashes documents inside a real headless browser and checks the
+per-kind framing anchors there against the same literals the native tests pin,
+which is what would catch a digest that differed between native and WebAssembly
+builds.</p>
+
+<p>An implementation conforms to <code>candid-core-canon-1</code> if and only if
+it reproduces every pinned value of every manifest vector. That is the whole
+definition, and it is what makes the same digest reachable from a language
+nobody here has written yet. The Python reference is the existence proof: it was
+written against the specification, and it agrees with the Rust crate down to the
+byte.</p>
+
+<callout type="note" title="Resource policy is not identity">
+  <p>Every entry point is bounded — see
+  <a href="limits-and-diagnostics.html">Limits, budgets and diagnostics</a> — but
+  limit values, work-accounting formulas, and which limit fires first are
+  explicitly non-normative and must not influence a single canonical byte. Two
+  conforming implementations with different budgets differ only in <em>which
+  inputs they refuse</em>, never in the bytes or IDs of an input both accept.</p>
+</callout>
+
+<h2>What the guarantee is, and is not</h2>
+
+<p>What it is: identity stability across machines, toolchains and languages is a
+property you can test, and the project tests it. Given a Contract graph, the
+digest does not depend on your platform, your JSON library, your locale, or
+whether you got there from a <code>.did</code> file or by building the graph
+directly. ADR 0002 records this decision and is the only one of the seven
+foundation ADRs currently marked Verified; the evidence it cites is the Python
+reference reproducing every canonical graph, payload byte, domain preimage and
+ID across the 11 required scenarios.</p>
+
+<p>What it is not: a promise that today's digests are permanent. The crate is
+<code>0.1.0-beta.3</code>, and until 1.0 any release may change the public API,
+the serialized shapes, the canonical bytes, and every identity computed over
+them. The profile mechanism is what makes such a change announceable and
+detectable rather than silent — it does not prevent it. Pin an exact version and
+recompute after an upgrade.</p>
+
+<h2>Next</h2>
+
+<div class="card-grid">
+  <a class="card" href="identities.html">
+    <span class="card-kicker">Concept</span>
+    <span class="card-title">Content-addressed identities</span>
+    <p>The four identities these bytes produce, and the table of what moves which one.</p>
+  </a>
+  <a class="card" href="contract-graph.html">
+    <span class="card-kicker">Concept</span>
+    <span class="card-title">The Contract graph</span>
+    <p>The arena, declarations and actor that minimization and re-indexing operate on.</p>
+  </a>
+  <a class="card" href="guarantees.html">
+    <span class="card-kicker">Project</span>
+    <span class="card-title">Guarantees and verification</span>
+    <p>Which claims are actually proven, by which gate, and what is explicitly not claimed.</p>
+  </a>
+</div>

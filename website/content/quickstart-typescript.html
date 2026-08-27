@@ -1,0 +1,309 @@
+<p>The four steps below take you from an empty Node project to a value you have
+typed, validated and encoded to Candid wire bytes, using one npm package and
+nothing else. There is no Rust toolchain on that path, no build step, and no
+code generation — you describe the interface once with the builder API, and
+TypeScript infers the rest. The two sections after them show how to stop
+hand-writing the description, and those routes do involve the Rust crate.</p>
+
+<p>The package is <a href="https://www.npmjs.com/package/@candid-core/schema"><code>@candid-core/schema</code></a>,
+currently at <code>0.2.0</code>. It is a schema runtime for Candid in the shape
+Zod made familiar: a builder object called <code>c</code>, one combinator per
+Candid type, and a type-level <code>Infer</code> that reads the domain type
+back out of a schema. Its one peer dependency, <code>@icp-sdk/core</code>, is
+declared optional and is needed only if you import the
+<span class="pill">./transport-icp</span> subpath, so the install below pulls
+in nothing else.</p>
+
+<callout type="note" title="Pre-1.0, on purpose">
+  <p><code>@candid-core/schema</code> is below 1.0 and versions independently of
+  the Rust crate. The builder surface and the issue codes are the parts meant to
+  be depended on; the serialized Contract format they are derived from is
+  explicitly not a stable v1 yet. Pin an exact version and read the
+  <a href="status.html">status page</a> before you build on it.</p>
+</callout>
+
+<h2>Four steps to a validated value</h2>
+
+<ol class="steps">
+  <li>
+    <h3>Install the package</h3>
+    <pre data-lang="bash">npm install @candid-core/schema</pre>
+    <p>That is the whole install. The package ships its own type declarations,
+    so there is no <code>@types</code> package to add. It is ESM only — no
+    CommonJS build ships — and it has no top-level <code>main</code> or
+    <code>types</code> field, only an <code>exports</code> map, so
+    <code>moduleResolution</code> must be <code>node16</code>,
+    <code>nodenext</code> or <code>bundler</code>; <code>node10</code> cannot
+    see the package at all and fails every import with <code>TS2307</code>.
+    TypeScript 5.0 is a hard floor, and Node 16 is the oldest runtime the
+    peer-free subpaths are exercised on.</p>
+    <p>Each module is a separate subpath export, and you import from the one you
+    need: <span class="pill">.</span> for the builders,
+    <span class="pill">./validate</span>,
+    <span class="pill">./codec</span>,
+    <span class="pill">./contract</span>,
+    <span class="pill">./actor</span>,
+    <span class="pill">./transport-icp</span>,
+    <span class="pill">./forms</span> and
+    <span class="pill">./labels</span>. Nothing is re-exported from the root
+    barrel, so importing the builders never drags the codec in behind them.</p>
+  </li>
+
+  <li>
+    <h3>Describe the interface with the <code>c</code> builders</h3>
+    <p>Take a fragment of the <code>.did</code> file you already have and write
+    it out with the builders. One combinator per Candid type, nested the same
+    way the source nests.</p>
+    <pre data-lang="candid" data-file="service.did">type Account = record { owner : principal; balance : nat };
+type TransferResult = variant { ok : nat; err : text; pending };</pre>
+    <pre data-lang="ts">import { c, type Infer } from "@candid-core/schema";
+
+const Account = c.record({ owner: c.principal, balance: c.nat });
+type Account = Infer<typeof Account>;
+// { owner: PrincipalValue; balance: bigint }
+
+const TransferResult = c.variant({ ok: c.nat, err: c.text, pending: c.null });
+type TransferResult = Infer<typeof TransferResult>;
+// | { tag: "ok"; value: bigint }
+// | { tag: "err"; value: string }
+// | { tag: "pending" }</pre>
+    <p>Three mapping decisions are visible there, and each is deliberate.
+    <code>nat</code> is <code>bigint</code>, never <code>number</code>: the type
+    is unbounded and exceeds 2<sup>53</sup> on the wire, so a
+    <code>number</code> is rejected rather than coerced. A variant is a
+    discriminated union on <code>tag</code>, and an arm whose payload is
+    <code>null</code> — Candid's <code>pending</code> and
+    <code>pending : null</code> are the same arm — is a bare
+    <code>{ tag }</code> with no <code>value</code> key at all.
+    <code>c.principal</code> is the structural
+    <code>PrincipalValue</code>, which is <code>{ toText(): string }</code> and
+    nothing more, because that is exactly what the codec produces on decode.</p>
+
+    <p>You do not have to take the comments on faith. Annotate the schema with
+    the type you would have written by hand and let <code>tsc</code> check
+    them against each other:</p>
+    <pre data-lang="ts">import { c, type PrincipalValue, type Schema } from "@candid-core/schema";
+
+type Account = { owner: PrincipalValue; balance: bigint };
+
+// Compiles only if the builder's inferred type and the alias are the same
+// type in both directions.
+const Account: Schema<Account> = c.rec(() => c.record({ owner: c.principal, balance: c.nat }));</pre>
+    <p><code>Schema&lt;in out T&gt;</code> is declared invariant, so
+    <code>T</code> may be neither widened nor narrowed across that assignment.
+    A schema that drifted from the alias — a field added, a
+    <code>nat</code> quietly turned into a <code>nat32</code> — fails to
+    compile. This is the same mechanism the code generator relies on, and
+    <code>c.rec</code> is the lazy indirection that also lets a declaration
+    refer to itself.</p>
+  </li>
+
+  <li>
+    <h3>Validate a value</h3>
+    <p><code>validate</code> is a verdict, not an exception and not a type
+    guard. It returns <code>{ ok: true }</code> or
+    <code>{ ok: false, issues }</code>, and it never throws for any value you
+    hand it — a getter that throws or a revoked <code>Proxy</code> comes back as
+    an <code>unreadable_value</code> issue instead.</p>
+    <pre data-lang="ts">import { validate } from "@candid-core/schema/validate";
+
+const owner = { toText: () => "aaaaa-aa" };
+
+validate(Account, { owner, balance: 5n });
+// { ok: true }
+
+validate(Account, { owner, balance: 5 });
+// {
+//   ok: false,
+//   issues: [
+//     {
+//       code: "invalid_type",
+//       path: "$.balance",
+//       message: "expected a bigint for nat, got number",
+//     },
+//   ],
+// }</pre>
+    <p>Every issue has the same three keys —
+    <code>code</code>, <code>path</code> and <code>message</code> — plus an
+    optional <code>resource_limit</code> when a traversal budget was the thing
+    that failed. <code>code</code> and <code>path</code> are the machine
+    surface and are stable; <code>message</code> is for humans and is not.
+    Paths are <code>$</code>-rooted, using <code>.name</code> for an
+    identifier-shaped key, <code>[0]</code> for an index, and a quoted
+    <code>["odd key"]</code> otherwise.</p>
+    <pre data-lang="ts">declare const incoming: unknown; // whatever arrived over the network
+
+const result = validate(Account, incoming);
+if (!result.ok) {
+  for (const issue of result.issues) {
+    console.error(`${issue.path}: ${issue.code} — ${issue.message}`);
+  }
+  return;
+}
+// `incoming` is still `unknown` here: the verdict says the value fits, it does
+// not narrow the binding. Assert or re-read it deliberately.</pre>
+    <p>The closed set of codes is
+    <code>invalid_type</code>, <code>not_integer</code>,
+    <code>out_of_range</code>, <code>missing_field</code>,
+    <code>unexpected_field</code>, <code>unknown_tag</code>,
+    <code>invalid_length</code>, <code>uninhabited_type</code>,
+    <code>unsupported_schema</code>, <code>unreadable_value</code> and
+    <code>resource_limit_exceeded</code>. Adding one is an API change.</p>
+
+    <callout type="warn" title="Records are strict in both directions">
+      <p>A missing key is <code>missing_field</code>; an unknown key is
+      <code>unexpected_field</code>. That includes <code>opt</code> fields: the
+      domain shape is <code>T | null</code> with the property <em>present</em>,
+      so <code>{ memo: null }</code> validates and <code>{}</code> fails at
+      <code>$.memo</code>. <code>undefined</code> is not a Candid value
+      anywhere.</p>
+    </callout>
+  </li>
+
+  <li>
+    <h3>Encode and decode Candid bytes</h3>
+    <p>The codec is schema-directed and self-contained — it builds the wire type
+    table from the schema you pass and constructs no SDK classes. Both
+    directions return a result object rather than throwing.</p>
+    <pre data-lang="ts" data-file="crates/candid-core-ts/ts/codec.ts">export function encode<T>(schema: Schema<T>, value: unknown, options?: CodecOptions): EncodeResult;
+export function encodeArgs(schemas: readonly AnyFieldSchema[], values: readonly unknown[], options?: CodecOptions): EncodeResult;
+
+export function decode<T>(schema: Schema<T>, bytes: Uint8Array, options?: CodecOptions):
+  | { ok: true; value: unknown }
+  | { ok: false; issues: readonly CodecIssue[] };
+export function decodeArgs(schemas: readonly AnyFieldSchema[], bytes: Uint8Array, options?: CodecOptions): DecodeResult;</pre>
+    <pre data-lang="ts">import { decode, encode } from "@candid-core/schema/codec";
+
+const encoded = encode(Account, { owner, balance: 5n });
+if (!encoded.ok) {
+  throw new Error(encoded.issues[0].message);
+}
+
+encoded.bytes; // Uint8Array, a complete one-argument Candid message
+
+const decoded = decode(Account, encoded.bytes);
+if (decoded.ok) {
+  const account = decoded.value as Account;
+  account.balance; // 5n
+  account.owner.toText(); // "aaaaa-aa"
+}</pre>
+    <p>Two things to note. <code>decode</code> hands back
+    <code>value: unknown</code>, so the assertion above is yours to make — the
+    decoder checked the bytes against the schema, but the signature does not
+    pretend to have narrowed anything. And <code>encode</code> is stricter than
+    <code>validate</code> in a few places on purpose: a <code>float32</code>
+    that is not <code>Math.fround</code>-exact fails with
+    <code>unrepresentable_float32</code> rather than being rounded, and a
+    string containing a lone surrogate fails with <code>invalid_text</code>,
+    because Candid <code>text</code> is a sequence of Unicode scalar
+    values.</p>
+    <p><code>CodecIssue</code> has the same
+    <code>{ code, path, message }</code> shape as a validation issue, over a
+    superset of the codes; the extra ones name wire-level failures such as
+    <code>invalid_magic</code>, <code>malformed_type_table</code>,
+    <code>overlong_leb128</code>, <code>truncated</code> and
+    <code>trailing_bytes</code>. Paths into a multi-argument message read
+    <code>$args[0]</code>, <code>$args[1]</code> and so on.</p>
+  </li>
+</ol>
+
+<h2>Two ways to stop hand-writing schemas</h2>
+
+<p>Writing builders by hand is honest for a handful of types and tedious for a
+real canister interface. Both routes below start from the same thing: a
+<strong>Contract</strong>, which is what this project calls a
+<code>.did</code> interface after it has been parsed, validated, canonicalized
+and given content-addressed identities. Producing one from Candid source needs
+the Rust compiler crate today; what you do with it afterwards does not.</p>
+
+<h3>Generate a TypeScript module ahead of time</h3>
+
+<p>The <code>candid-core-ts</code> crate turns a Contract graph into a
+TypeScript module of <code>export const X: Schema&lt;X&gt; = c.rec(() =&gt; …)</code>
+declarations plus the matching type aliases — which is why the invariance trick
+in step 2 matters: <code>tsc</code> compiling the generated file <em>is</em> the
+proof that the emitted schemas and the emitted types agree. The crate is
+marked <code>publish = false</code> deliberately, because its registry name has
+not been decided, so you depend on it by path or by git from this repository
+rather than from crates.io. See <a href="generator.html">the code generator</a>
+for the full procedure and the mapping it applies.</p>
+
+<h3>Build schemas at runtime from a Contract document</h3>
+
+<p>If you would rather not have a generated file in your tree, the same schemas
+can be built at startup from the canonical Contract JSON. The
+<code>candid-core</code> binary writes that document; <code>schemaFromContract</code>
+reads it.</p>
+
+<pre data-lang="bash">cargo install candid-core --version 0.1.0-beta.3 --locked
+candid-core compile ./service.did --envelope > ./service.json</pre>
+
+<p><code>--envelope</code> prints one self-describing document: the canonical
+Contract plus an <code>extensions</code> map whose
+<code>org.candid-core.field-names/v1</code> entry carries the field-name table.
+A semantic Contract stores field label <em>ids</em>, not text, so names have to
+travel beside it — and envelope extensions sit outside the canonical identities
+by design, so carrying them never moves a <code>contract_id</code>.</p>
+
+<pre data-lang="ts" data-file="crates/candid-core-ts/ts/README.md">import { readFileSync } from "node:fs";
+import { schemaFromContract } from "@candid-core/schema/contract";
+
+const built = schemaFromContract(JSON.parse(readFileSync("./service.json", "utf8")));
+if (!built.ok) {
+  throw new Error(JSON.stringify(built.issues));
+}
+
+built.schemas.Account; // one Schema per declaration, in declaration order
+built.actor;           // the service schema, when the document has one</pre>
+
+<p>Schemas built this way are lazy at every edge, so a schema reached by name
+reports <code>kind === "rec"</code>; call <code>resolveSchema</code> from the
+root export before you read its structure. Names are hash-enforced — each one
+must be the Candid preimage of the id it claims — so a table that lies fails
+closed instead of silently renaming a field. <a href="schema-from-contract.html">Schemas
+at runtime</a> covers the options and the failure modes;
+<a href="cli-rust.html">the candid-core binary</a> covers the compile side.</p>
+
+<callout type="warn" title="The JavaScript-only compiler is not on npm yet">
+  <p>A second package, <code>@candid-core/cli</code>, compiles the same pipeline
+  to WebAssembly so that <code>.did</code> → schemas needs no Rust at all. It
+  exists in this repository under <code>crates/candid-core-wasm/</code> and its
+  <code>package.json</code> declares version <code>0.1.0</code> with the bin
+  name <code>candid-core-cli</code> — but it has <strong>never been published</strong>.
+  The npm registry has no entry under that name, so there is no install or
+  <code>npx</code> line to give you: any invocation of it fails to resolve.
+  Building it from source is <code>npm run build</code> in
+  <code>crates/candid-core-wasm/npm</code>, which shells out to
+  <code>wasm-pack</code> and therefore wants a Rust toolchain anyway. Until it
+  ships, the Rust binary above is the compile step. See
+  <a href="cli-npm.html">@candid-core/cli</a> for what it will do.</p>
+</callout>
+
+<h2>Next: calling a canister</h2>
+
+<p>Once a service schema exists — hand-written, generated, or loaded from a
+Contract document — <code>createActor</code> turns it into a typed call object.
+It needs a <code>Transport</code>, which is two methods that move Candid bytes
+and nothing more; the agent never sees a schema, and identity, polling and
+certificate verification stay on its side of that pipe. The compiled adapter
+over <code>@icp-sdk/core</code> ships as the
+<span class="pill">./transport-icp</span> subpath, and importing it is the
+moment the optional peer becomes a real runtime requirement.</p>
+
+<div class="card-grid">
+  <a class="card" href="schema-actors.html">
+    <span class="card-kicker">TypeScript</span>
+    <span class="card-title">Typed actors</span>
+    <p><code>createActor</code>, <code>callFunc</code>, the transport contract, and how a codec failure surfaces.</p>
+  </a>
+  <a class="card" href="schema-builders.html">
+    <span class="card-kicker">Reference</span>
+    <span class="card-title">Builders and inference</span>
+    <p>Every combinator on <code>c</code>, and the full Candid-to-TypeScript mapping each one applies.</p>
+  </a>
+  <a class="card" href="quickstart-rust.html">
+    <span class="card-kicker">Quickstart</span>
+    <span class="card-title">Rust</span>
+    <p>The other half: compiling <code>.did</code> source into the Contract these schemas come from.</p>
+  </a>
+</div>

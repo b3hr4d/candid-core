@@ -1,0 +1,475 @@
+<callout type="danger" title="Not published — there is no install command yet">
+  <p>
+    <code>@candid-core/cli</code> has never been released to the npm registry. The registry returns
+    "not found" for the name, so there is no <code>npm install</code> line and no <code>npx</code> line
+    on this page, and any you find elsewhere will not resolve. What exists is the complete package in
+    the repository, its test suites, and a dispatch-only publish workflow that has deliberately not been
+    run: the first publish of a name is the maintainer's explicit act. Until then, build it from a clone
+    — or use <a href="cli-rust.html">the <code>candid-core</code> binary</a>, which is published and
+    does the same compilation.
+  </p>
+</callout>
+
+<p>
+  With that stated, here is what the package is and what it will do. Everything candid-core does to a
+  <code>.did</code> file normally happens in Rust. <code>@candid-core/cli</code> is that same Rust code
+  — the compiler's <span class="pill accent">compiler</span> feature surface plus the
+  <a href="generator.html"><code>candid-core-ts</code></a> TypeScript generator — compiled once to
+  WebAssembly and wrapped in a small Node CLI and an ES module. A JavaScript project can therefore go
+  from a Candid interface to typed, validated schemas with npm as its only toolchain.
+</p>
+
+<p>
+  It is not a reimplementation, and that is the point of its test suites: the same crates are compiled
+  into one wasm artifact, and CI compares the artifact's output byte-for-byte against the reviewed
+  goldens and against a document the native binary actually produced. The
+  <a href="https://github.com/b3hr4d/candid-core/tree/main/crates/candid-core-wasm">crate that produces
+  it</a> sets <code>publish = false</code> and is its own workspace root, so it never appears in the
+  published Rust crate's dependency graph; the npm package is the deliverable.
+</p>
+
+<h2>What is in the package</h2>
+
+<table>
+  <thead>
+    <tr>
+      <th>Field</th>
+      <th>Value</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>Name and declared version</td>
+      <td><code>@candid-core/cli</code>, <code>0.1.0</code> — declared in the manifest, unpublished</td>
+    </tr>
+    <tr>
+      <td>Binary</td>
+      <td><code>candid-core-cli</code> → <code>./bin/cli.js</code></td>
+    </tr>
+    <tr>
+      <td>Library entry point</td>
+      <td><code>"."</code> → <code>./lib/index.js</code>. No subpath exports</td>
+    </tr>
+    <tr>
+      <td>Module format</td>
+      <td><code>"type": "module"</code> — ESM only, no CommonJS <code>require</code> path</td>
+    </tr>
+    <tr>
+      <td>Runtime dependencies</td>
+      <td>None. The one devDependency, <code>playwright-core</code>, drives the browser test</td>
+    </tr>
+    <tr>
+      <td>Types</td>
+      <td>
+        No <code>.d.ts</code> ships for the library. The generated <code>.ts</code> module it writes is
+        a separate matter and is fully typed
+      </td>
+    </tr>
+    <tr>
+      <td>Licence</td>
+      <td>Apache-2.0</td>
+    </tr>
+  </tbody>
+</table>
+
+<h2>The command</h2>
+
+<p>One command, one optional flag, and nothing else:</p>
+
+<pre data-lang="text" data-file="crates/candid-core-wasm/npm/bin/cli.js">
+usage: candid-core-cli gen <service.did> [-o <dir>]
+</pre>
+
+<p>It writes two files and prints the identities:</p>
+
+<ul>
+  <li>
+    <code>&lt;stem&gt;.ts</code> — the generated <code>@candid-core/schema</code> module: one reviewed
+    type alias and one schema builder per declaration.
+  </li>
+  <li>
+    <code>&lt;stem&gt;.envelope.json</code> — the one-document <code>ContractEnvelope</code>: the
+    canonical Contract plus its field-name table under the
+    <code>org.candid-core.field-names/v1</code> extension, ready to hand whole to
+    <a href="schema-from-contract.html"><code>schemaFromContract</code></a>.
+  </li>
+  <li>
+    the content-addressed identities, on stdout. The <code>interface:</code> line appears only when the
+    interface identity is present, which means only when the source has an actor.
+  </li>
+</ul>
+
+<p>
+  Run over the repository's two-line <code>basic.did</code> fixture — the same one shown on
+  <a href="cli-rust.html">the candid-core binary</a> page — with <code>-o generated</code>, stdout is
+  four lines and the exit status is 0:
+</p>
+
+<pre data-lang="text">
+contract:  candid-core:contract:v1:sha256:0b553cb65eb436a7ac5d35869d0016d043867bab0a97e844350ae72a5b4aea7d
+interface: candid-core:interface:v1:sha256:99f400820c0ca2fb7c32cc3ab1df6d6c000bc614cffe0e350b6a9a576da18d48
+wrote generated/basic.ts
+wrote generated/basic.envelope.json
+</pre>
+
+<p>
+  Those are the real identities for that fixture, and they are the same addresses the Rust binary
+  computes — a test compares the emitted envelope against the native binary's committed output byte for
+  byte. The stem comes from the entry file's name, so <code>service.did</code> would produce
+  <code>service.ts</code> and <code>service.envelope.json</code>. <code>-o</code> defaults to
+  <code>"."</code> — the current working directory, not the entry file's directory — and the output
+  directory is created if it does not exist.
+</p>
+
+<h3>How imports are found</h3>
+
+<p>
+  The wasm side never touches a filesystem, so the Node host does all the I/O. <code>gen</code> walks
+  the entry file's directory <em>recursively</em>, collects every <code>.did</code> beneath it keyed by
+  its <code>/</code>-separated relative path, and hands that map to the compiler as one in-memory
+  bundle. Relative imports then resolve inside the bundle with no filesystem access from wasm. The
+  consequence to plan for: unrelated sibling <code>.did</code> files under the same directory are pulled
+  in too. The parity tests copy each fixture into an otherwise-empty temporary directory precisely so
+  the walk cannot smuggle unrelated sources into provenance.
+</p>
+
+<p>
+  The walk is bounded before anything is read. File count, per-file size (through <code>stat</code>) and
+  aggregate size are checked against the compiler's own default limits — 256 sources, 1 MiB per file,
+  8 MiB in total — so an oversized tree fails with a structured diagnostic rather than by exhausting the
+  JavaScript heap:
+</p>
+
+<pre data-lang="json">
+{
+  "ok": false,
+  "diagnostics": [
+    {
+      "code": "resource_limit_exceeded",
+      "phase": "load",
+      "severity": "error",
+      "message": "huge.did is 1048577 bytes, over the 1048576-byte source limit",
+      "resource_limit": { "resource": "source_bytes", "limit": 1048576, "observed": 1048577 }
+    }
+  ]
+}
+</pre>
+
+<h3>Exit codes</h3>
+
+<p>They follow the native binary's convention exactly.</p>
+
+<table>
+  <thead>
+    <tr>
+      <th>Exit</th>
+      <th>When</th>
+      <th>Where the output goes</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><code>0</code></td>
+      <td>Both files written</td>
+      <td>Identities and two <code>wrote</code> lines on stdout</td>
+    </tr>
+    <tr>
+      <td><code>1</code></td>
+      <td>Compile or generation failure</td>
+      <td>The <code>{ "ok": false, "diagnostics": […] }</code> document on stdout</td>
+    </tr>
+    <tr>
+      <td><code>1</code></td>
+      <td>Entry file missing or unreadable, or a determinism mismatch</td>
+      <td>A plain message on stderr — the two paths that print no JSON</td>
+    </tr>
+    <tr>
+      <td><code>64</code></td>
+      <td>Usage error</td>
+      <td>The usage line on stderr, nothing on stdout</td>
+    </tr>
+  </tbody>
+</table>
+
+<p>
+  That determinism path is unusual enough to name. Every generation is run twice and the results
+  compared; on any byte mismatch the tool prints
+  <code>determinism check failed: two &lt;label&gt; runs disagreed; refusing to write</code> and exits
+  without writing anything. Determinism is enforced at run time, not only asserted in CI.
+</p>
+
+<h2>The library API</h2>
+
+<p>
+  Three exports, and the whole surface. Both operations take one JSON-serializable request and return
+  one parsed JSON document; nothing is thrown for a data error.
+</p>
+
+<div class="api-entry">
+  <div class="api-head">
+    <span class="api-name">didToContract</span>
+  </div>
+  <div class="api-body">
+    <pre data-lang="js" data-file="crates/candid-core-wasm/npm/lib/index.js">export async function didToContract(sources)</pre>
+    <p>
+      Compiles Candid sources into a one-document <code>ContractEnvelope</code> carrying the
+      <code>org.candid-core.field-names/v1</code> extension — the same document
+      <code>candid-core compile &lt;path&gt; --envelope</code> emits. <code>sources</code> is either a
+      string of Candid text or <code>{ entry, files: { name: text } }</code> for a bundle. On success it
+      returns the envelope <em>itself</em>, so you test <code>"contract" in result</code>; on failure it
+      returns <code>{ ok: false, diagnostics }</code>.
+    </p>
+  </div>
+</div>
+
+<div class="api-entry">
+  <div class="api-head">
+    <span class="api-name">didToModule</span>
+  </div>
+  <div class="api-body">
+    <pre data-lang="js" data-file="crates/candid-core-wasm/npm/lib/index.js">export async function didToModule(sources)</pre>
+    <p>
+      Generates the <code>@candid-core/schema</code> TypeScript module for the same two source shapes.
+      Returns <code>{ ok: true, module }</code>, where <code>module</code> is the generated text, or
+      <code>{ ok: false, diagnostics }</code>.
+    </p>
+  </div>
+</div>
+
+<div class="api-entry">
+  <div class="api-head">
+    <span class="api-name">init</span>
+  </div>
+  <div class="api-body">
+    <pre data-lang="js" data-file="crates/candid-core-wasm/npm/lib/index.js">export function init(input)</pre>
+    <p>
+      Initializes the embedded wasm module, memoized, so calling it again is a no-op. Under Node with no
+      argument it reads the <code>.wasm</code> bytes from inside the package; in a browser with no
+      argument the artifact is fetched relative to the module, and a browser may instead pass its own
+      <code>BufferSource</code>, <code>URL</code> or <code>Response</code>. Both functions above await it
+      internally, so calling it yourself is optional.
+    </p>
+  </div>
+</div>
+
+<callout type="warn" title="The two functions signal success differently">
+  <p>
+    <code>didToModule</code> returns <code>{ ok: true, module }</code>. <code>didToContract</code> does
+    <em>not</em> carry an <code>ok</code> key on success — it returns the envelope document, and you
+    check for <code>"contract" in result</code>. This mirrors the native binary, where
+    <code>compile --envelope</code> prints the envelope rather than an <code>ok</code>-wrapped response.
+    Only failures share one shape.
+  </p>
+</callout>
+
+<p>
+  The examples below import from the package name as it will read once the package is published; from a
+  clone, import <code>crates/candid-core-wasm/npm/lib/index.js</code> directly.
+</p>
+
+<pre data-lang="js">
+import { didToContract, didToModule } from "@candid-core/cli";
+
+const envelope = await didToContract("service : { ping : () -> () };");
+// → the ContractEnvelope document ("contract" in envelope), or
+//   { ok: false, diagnostics } with the compiler's diagnostics verbatim.
+
+const generated = await didToModule({
+  entry: "main.did",
+  files: {
+    "main.did": 'import "types.did";\nservice : { get : () -> (Item) query };',
+    "types.did": "type Item = record { id : nat };",
+  },
+});
+// → { ok: true, module } with the generated TypeScript text, or
+//   { ok: false, diagnostics }.
+</pre>
+
+<p>
+  The envelope is designed to need no glue on the way out.
+  <code>schemaFromContract</code> accepts either a bare Contract or an envelope — it recognises the
+  envelope by its <code>contract</code> key — and consumes the field-name table itself, which is what
+  lets record and variant fields come back with their source spellings instead of numeric label hashes:
+</p>
+
+<pre data-lang="js">
+import { didToContract } from "@candid-core/cli";
+import { schemaFromContract } from "@candid-core/schema/contract";
+
+const built = schemaFromContract(await didToContract(didText));
+</pre>
+
+<h3>Failures</h3>
+
+<p>
+  Data errors never throw and never half-succeed. Every failure is
+  <code>{ ok: false, diagnostics: [...] }</code>. Compiler diagnostics pass through verbatim with their
+  stable codes — <code>did_parse_error</code>, resolver refusals such as
+  <code>did_source_scheme_mismatch</code>, resource bounds. Two codes originate in this layer:
+  <code>invalid_request</code> (phase <code>load</code>) when the request document is neither of the two
+  accepted shapes, and <code>ts_generation_refused</code> (phase <code>generate</code>) carrying the
+  generator's fail-closed refusal text. A matrix of nine malformed requests — including
+  <code>"not json"</code>, <code>"{}"</code>, and a request carrying both <code>source</code> and
+  <code>entry</code> — is pinned to return <code>invalid_request</code> rather than panicking.
+</p>
+
+<h2>In a browser</h2>
+
+<p>
+  The artifact is built for the <code>web</code> target, not <code>nodejs</code>, and one artifact serves
+  both hosts — under Node the wrapper supplies the bytes itself. The wasm side evaluates no code, opens
+  no network connection and touches no filesystem: it sees only the strings handed to it. The wrapper's
+  one <code>node:</code> import is a dynamic <code>node:fs/promises</code> inside <code>init</code>,
+  reached only when it detects Node and reads the packaged <code>.wasm</code>; a page never takes that
+  branch, which is what the headless-Chrome test below exercises. Candid imports are resolved from the
+  map you hand over, so a page that already fetched its <code>.did</code> sources can compile them in
+  place.
+</p>
+
+<p>
+  A headless-Chrome test in the repository serves the wasm and the schema runtime over HTTP and runs
+  this, asserting that the envelope-carried names really do become the schema's keys — a value keyed
+  <code>owner</code>/<code>amount</code> validates:
+</p>
+
+<pre data-lang="js" data-file="crates/candid-core-wasm/npm/test/browser/smoke.test.js">
+import init, { didToContract } from "/wasm/candid_core_wasm.js";
+import { schemaFromContract } from "/schema/contract.js";
+import { validate } from "/schema/validate.js";
+
+await init();
+const envelope = JSON.parse(didToContract(JSON.stringify({ source: didText })));
+const built = schemaFromContract(envelope);
+// built.schemas.Payload now validates { owner: <a principal>, amount: 5n }
+</pre>
+
+<p>
+  Note the shapes there: importing the wasm module directly gives you the raw wasm-bindgen exports,
+  which are string in, string out. The whole wasm ABI is two functions wide —
+  <code>didToContract(request: string): string</code> and
+  <code>didToModule(request: string): string</code> — and every richer shape lives in the JSON
+  documents, which is what keeps the boundary reviewable. Importing from the package instead gives you
+  the wrapper that does the JSON encoding for you.
+</p>
+
+<h2>Building it from a clone</h2>
+
+<p>
+  The <code>wasm/</code> directory is a build output and is not checked in, so the build comes first.
+  The package's own <code>build</code> script is the exact command:
+</p>
+
+<pre data-lang="json" data-file="crates/candid-core-wasm/npm/package.json">
+"scripts": {
+  "build": "cd .. && wasm-pack build --target web --out-dir npm/wasm --no-pack --release",
+  "test": "node --test test/*.test.js",
+  "test:browser": "node --test test/browser/*.test.js"
+}
+</pre>
+
+<ol class="steps">
+  <li>
+    <h3>Install the pinned wasm-pack and the wasm target</h3>
+    <pre data-lang="bash">
+cargo install wasm-pack --version 0.14.0 --locked
+rustup target add wasm32-unknown-unknown
+</pre>
+  </li>
+  <li>
+    <h3>Build the artifact</h3>
+    <pre data-lang="bash">
+cd crates/candid-core-wasm/npm
+npm run build
+</pre>
+  </li>
+  <li>
+    <h3>Run the CLI and its suite</h3>
+    <pre data-lang="bash">
+npm ci
+node bin/cli.js gen ./service.did -o ./out
+npm test
+</pre>
+    <p>
+      <code>node bin/cli.js gen …</code> is exactly how the tests invoke it, so it is the verified local
+      entry point. <code>npm test</code> runs the byte-for-byte parity suite.
+    </p>
+  </li>
+</ol>
+
+<p>
+  CI runs the same build with <code>-- --locked</code> appended, under the exact-pinned release
+  toolchain rather than the rolling <code>stable</code> of ordinary jobs. <code>wasm-opt</code> is
+  deliberately disabled so the artifact's bytes are a pure function of the pinned rustc and
+  wasm-bindgen, with no binaryen download anywhere in the build path.
+</p>
+
+<h2>What the parity gate actually asserts</h2>
+
+<p>
+  The <code>wasm CLI</code> workflow runs three jobs, and it is worth being precise about what each one
+  establishes, because "there is a gate" and "there is a released package" are different claims.
+</p>
+
+<table>
+  <thead>
+    <tr>
+      <th>Job</th>
+      <th>What it asserts</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><code>host</code></td>
+      <td>
+        Format, clippy with warnings denied, and the Rust parity tests: ten golden fixtures reproduce
+        their reviewed <code>.ts</code> module byte for byte; the emitted envelope equals the committed
+        fixture the native <code>candid-core compile --envelope</code> binary produced, byte for byte;
+        the field-name triples equal the generator's reviewed <code>*.names.json</code> goldens for five
+        fixtures; identical requests produce identical responses.
+      </td>
+    </tr>
+    <tr>
+      <td><code>artifact</code></td>
+      <td>
+        The same comparisons again through the real WebAssembly under Node — the npm suite runs
+        <code>bin/cli.js</code>, which loads the compiled wasm — plus artifact determinism: hash the
+        build, <code>cargo clean</code>, delete the output, rebuild, and require the hashes to match.
+      </td>
+    </tr>
+    <tr>
+      <td><code>browser</code></td>
+      <td>
+        <code>didToContract</code> inside a pinned headless Chrome build, feeding
+        <code>schemaFromContract</code>, with envelope-carried field names rendering as schema keys.
+      </td>
+    </tr>
+  </tbody>
+</table>
+
+<p>
+  What that buys you is specific: for those fixtures, at that commit, the WebAssembly path and the
+  native Rust path emit the same bytes, and the artifact is reproducible from its pinned inputs. What it
+  does not buy you is a package on npm — no gate can make a name exist in a registry — nor a promise
+  about versions beyond the tested set. The version pairing is a <em>revision</em> pairing: the package
+  embeds the compiler and generator from the exact commit a release is dispatched from, and the
+  changelog names the revisions per release. Read the changelog for the pairing rather than assuming a
+  crate version.
+</p>
+
+<callout type="note" title="Pre-1.0, on both sides">
+  <p>
+    Until 1.0 any release may change the CLI grammar, the library API, and the request and response
+    shapes — the same warning the Rust crate carries. When the package does reach npm, pin an exact
+    version.
+  </p>
+</callout>
+
+<h2>Next</h2>
+
+<p>
+  The route that works today is the published Rust binary:
+  <a href="cli-rust.html">the candid-core binary</a> produces the same envelope document, and
+  <a href="schema-from-contract.html">Schemas from a Contract document</a> shows the TypeScript side
+  consuming it — which is the whole hand-off this package is designed to shorten. For where each unit
+  stands, see <a href="status.html">Status, versions and releases</a>.
+</p>

@@ -1,0 +1,513 @@
+<p>
+  Compiling turns Candid <code>.did</code> text into a <strong>Compilation</strong>:
+  a validated, canonically ordered <a href="contract-graph.html">Contract graph</a>
+  plus an optional <code>SourceInfo</code> provenance sidecar carrying everything the
+  Contract deliberately drops — raw source text, import edges, doc comments, argument
+  names, original field-label spellings. Parsing and semantic checking are delegated
+  to the official <code>candid_parser</code> crate; what this crate adds is the
+  projection, the canonicalization, the identities, and the bounds.
+</p>
+
+<p>
+  The entry points fall into three families, differing in exactly one respect: where
+  the source bytes come from. Nothing on any of these paths opens a network socket, and
+  only one of them touches a filesystem. All of them are behind the
+  <span class="pill accent">compiler</span> feature or its superset
+  <span class="pill accent">filesystem-compiler</span>, both on by default.
+</p>
+
+<h2>The seven entry points</h2>
+
+<p>
+  Seven public functions, three families. There is no <code>_with_limits</code>
+  variant of any of them — a compile takes a full <code>RuntimeContext</code>, so a
+  caller who wants to set limits also gets the cancellation token and the deadline
+  that travel with them.
+</p>
+
+<table>
+  <thead>
+    <tr>
+      <th>Function</th>
+      <th>Source of bytes</th>
+      <th>Feature</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><code>compile_did</code><br><code>compile_did_with_options</code><br><code>compile_did_with_context</code></td>
+      <td>One self-contained <code>&amp;str</code>. Imports rejected.</td>
+      <td><span class="pill accent">compiler</span></td>
+    </tr>
+    <tr>
+      <td><code>compile_with_resolver</code></td>
+      <td>A host-supplied <code>SourceResolver</code>. Imports included, no filesystem.</td>
+      <td><span class="pill accent">compiler</span></td>
+    </tr>
+    <tr>
+      <td><code>compile_did_file</code><br><code>compile_did_file_with_options</code><br><code>compile_did_file_with_context</code></td>
+      <td>A path on disk, through a sandboxed <code>WorkspaceResolver</code>.</td>
+      <td><span class="pill accent">filesystem-compiler</span></td>
+    </tr>
+  </tbody>
+</table>
+
+<p>
+  Within each file-or-string family the three names are a widening of control, and
+  each funnels into the next: the plain form calls the
+  <code>_with_options</code> form with <code>CompileOptions::default()</code>, which
+  calls the <code>_with_context</code> form with
+  <code>RuntimeContext::default()</code>. <code>compile_with_resolver</code> has no
+  variants at all, because options and context are always explicit there.
+</p>
+
+<h2>compile_did — one self-contained source</h2>
+
+<div class="api-entry">
+  <div class="api-head">
+    <span class="api-name">compile_did</span>
+    <span class="pill accent">compiler</span>
+  </div>
+  <div class="api-body">
+    <pre data-lang="rust" data-file="src/compile/mod.rs">
+pub fn compile_did(source: &str) -> Result<Compilation, CompileError>
+
+pub fn compile_did_with_options(
+    source: &str,
+    options: CompileOptions,
+) -> Result<Compilation, CompileError>
+
+pub fn compile_did_with_context(
+    source: &str,
+    options: CompileOptions,
+    context: &RuntimeContext,
+) -> Result<Compilation, CompileError>
+</pre>
+    <p>
+      Compiles one string with no import resolution and no filesystem access. The
+      single in-memory source is named <code>memory:/inline.did</code>, and that name
+      appears in any span or provenance output.
+    </p>
+  </div>
+</div>
+
+<p>
+  This is the entry point for source you already hold as text: a request body, an
+  editor buffer, a string literal in a test. Reading the result is the same on every
+  path — <code>contract()</code> for the graph, <code>source_info()</code> for the
+  sidecar.
+</p>
+
+<pre data-lang="rust" data-file="examples/contract_walkthrough.rs">
+use candid_core::{compile_did, Actor, TypeNode};
+use std::error::Error;
+
+fn main() -> Result<(), Box<dyn Error>> {
+    let compilation = compile_did(
+        r#"
+        /// A recursive value that remains finite in the Contract graph.
+        type List = opt record {
+          /// The current item.
+          head: nat;
+          /// The rest of the list.
+          tail: List;
+        };
+
+        /// A small service used by the walkthrough.
+        service : {
+          /// Return the supplied list.
+          echo: (input: List) -> (output: List) query;
+        };
+        "#,
+    )?;
+
+    let contract = compilation.contract();
+    println!("contract identity: {}", contract.contract_id());
+    println!("interface identity: {:?}", contract.interface_id());
+    println!("canonical type nodes: {}", contract.types().len());
+
+    let Some(Actor::Service { service }) = contract.actor() else {
+        return Err("walkthrough expected a service actor".into());
+    };
+    let TypeNode::Service { methods } = &contract.types()[*service as usize] else {
+        return Err("actor did not reference a service node".into());
+    };
+    for method in methods {
+        let TypeNode::Func { args, results, mode } = &contract.types()[method.function as usize]
+        else {
+            return Err("service method did not reference a function node".into());
+        };
+        println!(
+            "method {} (wire id {}): {:?}, {} argument(s), {} result(s)",
+            method.name, method.id, mode, args.len(), results.len()
+        );
+    }
+
+    println!("\nCanonical Contract JSON:\n{}", contract.to_json_pretty()?);
+    Ok(())
+}
+</pre>
+
+<pre data-lang="bash">
+cargo run --example contract_walkthrough
+</pre>
+
+<callout type="warn" title="compile_did refuses any source containing an import">
+  <p>
+    After parsing, the declarations are scanned for <code>import</code> and
+    <code>import service</code>. If any are present the call fails in the
+    <code>Load</code> phase with the code
+    <code>did_import_requires_file</code>, carrying one note per import path
+    (<code>import: types.did</code>) and a message naming the two alternatives.
+  </p>
+  <p>
+    This is not a limitation to route around by concatenating your files.
+    <code>import service</code> merges the target's main service methods into yours;
+    those merge semantics are not textual, and doing it by hand produces a different
+    interface.
+  </p>
+</callout>
+
+<h2>compile_with_resolver — a bundle the host supplies</h2>
+
+<div class="api-entry">
+  <div class="api-head">
+    <span class="api-name">compile_with_resolver</span>
+    <span class="pill accent">compiler</span>
+  </div>
+  <div class="api-body">
+    <pre data-lang="rust" data-file="src/compile/mod.rs">
+pub fn compile_with_resolver(
+    entry: &str,
+    resolver: &dyn SourceResolver,
+    options: CompileOptions,
+    context: &RuntimeContext,
+) -> Result<Compilation, CompileError>
+</pre>
+    <p>
+      Compiles a whole multi-file bundle — imports included — from sources the host
+      supplies synchronously as data. The sources are merged into one virtual program
+      and type-checked in memory through the official <code>candid_parser</code>
+      merged-program APIs. Nothing is materialized, no directory is opened and no
+      ambient authority is used, so this runs on
+      <code>wasm32-unknown-unknown</code>.
+    </p>
+  </div>
+</div>
+
+<p>
+  This is the platform primitive. The supported boundary is
+  <em>synchronous, immutable source data supplied by the host</em>: the resolver
+  decides identity and returns bytes, and the compiler owns every limit.
+  <code>candid-core</code> never fetches anything, never resolves asynchronously and
+  never consults a registry.
+</p>
+
+<h3>The SourceResolver trait</h3>
+
+<pre data-lang="rust" data-file="src/resolver.rs">
+pub trait SourceResolver {
+    fn identify(&self, from: Option<&SourceId>, import: &str) -> Result<SourceId, ResolveError>;
+
+    fn load(&self, id: &SourceId, limits: &Limits) -> Result<ResolvedSource, ResolveError>;
+
+    // Defaulted. Override load_with_context to checkpoint inside long work.
+    fn load_with_context(&self, id: &SourceId, context: &RuntimeContext)
+        -> Result<ResolvedSource, ResolveError>;
+    fn resolve(&self, from: Option<&SourceId>, import: &str, limits: &Limits)
+        -> Result<ResolvedSource, ResolveError>;
+    fn resolve_with_context(&self, from: Option<&SourceId>, import: &str, context: &RuntimeContext)
+        -> Result<ResolvedSource, ResolveError>;
+}
+</pre>
+
+<p>
+  Only <code>identify</code> and <code>load</code> are required.
+  <code>identify</code> turns an import spelling — relative to the importing source,
+  or <code>None</code> for the entry — into a canonical <code>SourceId</code>, a
+  normalized logical URI of the form <code>&lt;scheme&gt;:/&lt;path&gt;</code>, not a
+  host path. <code>load</code> returns a <code>ResolvedSource</code>: the canonical
+  ID, the text, and a <code>sha256:&lt;hex&gt;</code> digest of that text.
+</p>
+
+<callout type="note" title="Three ways a custom resolver is rejected before its bytes are used">
+  <p>
+    The loader re-parses whatever <code>SourceId</code> you return and rejects it as
+    <code>did_invalid_source_id</code> if it is not already canonical; it rejects
+    <code>did_resolver_identity_mismatch</code> if <code>load</code> returns a source
+    whose <code>id</code> differs from the one it was asked for; and it calls
+    <code>ResolvedSource::verify()</code>, rejecting
+    <code>did_source_digest_mismatch</code> if the declared digest does not match the
+    bytes. Compute the digest from the bytes you are actually returning.
+  </p>
+</callout>
+
+<h3>MemoryResolver — the bundle you already hold</h3>
+
+<p>
+  <code>MemoryResolver</code> is a resolver over a map you fill in. IDs must use the
+  <code>memory</code> scheme; a bare name like <code>"api/root.did"</code> is
+  normalized to <code>memory:/api/root.did</code>. <code>insert</code> takes
+  <code>&amp;mut self</code>; <code>with_source</code> is the chaining form.
+</p>
+
+<pre data-lang="rust" data-file="examples/hermetic_bundle.rs">
+//! Imported-bundle compilation with no filesystem.
+
+use candid_core::{compile_with_resolver, CompileOptions, MemoryResolver, RuntimeContext};
+use std::error::Error;
+
+fn main() -> Result<(), Box<dyn Error>> {
+    let mut resolver = MemoryResolver::new();
+    resolver.insert(
+        "api/root.did",
+        r#"import "types.did"; service : { read: () -> (Item) query };"#,
+    )?;
+    resolver.insert(
+        "api/types.did",
+        "type Item = record { id: nat64; label: text };",
+    )?;
+
+    let compilation = compile_with_resolver(
+        "api/root.did",
+        &resolver,
+        CompileOptions::default(),
+        &RuntimeContext::default(),
+    )?;
+    let source_info = compilation
+        .source_info()
+        .ok_or("source provenance was not requested")?;
+    println!("contract: {}", compilation.contract().contract_id());
+    println!("source bundle: {}", source_info.source_bundle_id());
+    for source in source_info.sources() {
+        println!("- {} ({} bytes)", source.name, source.source.len());
+    }
+    Ok(())
+}
+</pre>
+
+<pre data-lang="bash">
+cargo run --example hermetic_bundle
+</pre>
+
+<p>
+  A repeated import target is loaded exactly once: the loader keys sources by
+  canonical <code>SourceId</code> and, on a repeat, records whether that edge also
+  required merging the target's actor. A diamond of four sources produces exactly
+  four <code>load</code> calls. Import depth is bounded by
+  <code>max_import_depth</code> (default 64) and edges by
+  <code>max_import_edges</code> (default 1024); a cycle fails with
+  <code>did_import_cycle</code>. See
+  <a href="source-resolution.html">Sources, imports and provenance</a>.
+</p>
+
+<h2>compile_did_file — a sandboxed native workspace</h2>
+
+<div class="api-entry">
+  <div class="api-head">
+    <span class="api-name">compile_did_file</span>
+    <span class="pill accent">filesystem-compiler</span>
+  </div>
+  <div class="api-body">
+    <pre data-lang="rust" data-file="src/compile/mod.rs">
+pub fn compile_did_file(path: impl AsRef<Path>) -> Result<Compilation, CompileError>
+
+pub fn compile_did_file_with_options(
+    path: impl AsRef<Path>,
+    options: CompileOptions,
+) -> Result<Compilation, CompileError>
+
+pub fn compile_did_file_with_context(
+    path: impl AsRef<Path>,
+    options: CompileOptions,
+    context: &RuntimeContext,
+) -> Result<Compilation, CompileError>
+</pre>
+    <p>
+      Splits the path into a parent directory and a file name, opens a
+      <code>WorkspaceResolver</code> rooted at that parent, resolves the bundle, then
+      type-checks it through <code>candid_parser::check_file</code> over a
+      materialized copy written into a private temporary directory.
+    </p>
+  </div>
+</div>
+
+<p>
+  <code>WorkspaceResolver</code> holds an open <code>cap-std</code> directory
+  capability for the authorized root and opens every path relative to it.
+  Authorization and reading use the same handle, so replacing a path concurrently
+  cannot swap in a file from outside. An escape — an absolute symlink out of the
+  root, a parent traversal — fails with <code>did_import_outside_workspace</code>,
+  while an ordinary permission denial stays <code>did_file_read_error</code>. The two
+  are kept distinct on purpose.
+</p>
+
+<pre data-lang="rust">
+use candid_core::{compile_did_file_with_options, CompileOptions};
+use std::error::Error;
+
+fn main() -> Result<(), Box<dyn Error>> {
+    // Only ./api is authorized: the resolver is rooted at the file's parent.
+    let compilation = compile_did_file_with_options(
+        "api/root.did",
+        CompileOptions { include_source_info: true },
+    )?;
+
+    let (contract, source_info) = compilation.into_parts();
+    println!("contract: {}", contract.contract_id());
+    if let Some(info) = source_info {
+        println!("bundle:   {}", info.source_bundle_id());
+        for edge in info.imports() {
+            println!("{} -> {} (spelled {:?})", edge.from, edge.to, edge.import);
+        }
+    }
+    Ok(())
+}
+</pre>
+
+<callout type="warn" title="The workspace root is the file's own parent directory">
+  <p>
+    <code>compile_did_file("api/root.did")</code> authorizes <code>api/</code> and
+    nothing else, so an import of <code>"../shared/types.did"</code> pops past the
+    root and fails with <code>did_import_outside_workspace</code>. If your bundle
+    spans directories, root a <code>WorkspaceResolver</code> higher yourself and call
+    <code>compile_with_resolver</code>, or restructure the imports.
+  </p>
+</callout>
+
+<p>
+  The file path keeps <code>candid_parser::check_file</code> as its authority rather
+  than routing through the in-memory backend, which is why it exists as a separate
+  path at all. The two backends are held to each other by an in-crate differential
+  test: valid bundles must produce byte-identical Contracts, identities and
+  provenance; invalid bundles must produce identical stable codes and phases.
+</p>
+
+<p>
+  Materialization writes the resolved sources under numeric names
+  (<code>0.did</code>, <code>1.did</code>, …), and upstream errors mention those
+  names. Each is mapped back to its logical source ID before it reaches you, and byte
+  offsets that cannot be proven correct against your original text are withheld
+  rather than reported. No diagnostic ever exposes a temporary directory, a numeric
+  materialized name, or a rewritten offset presented as an original one.
+</p>
+
+<h2>CompileOptions</h2>
+
+<pre data-lang="rust" data-file="src/compile/artifact.rs">
+pub struct CompileOptions {
+    /// Preserve optional names, comments, raw source, and label spelling in a
+    /// sidecar. This never changes the Contract or its identities.
+    pub include_source_info: bool,
+}
+</pre>
+
+<p>
+  One field, and <code>Default</code> sets it to <code>true</code>. So every
+  <code>compile_did</code> and <code>compile_did_file</code> call collects and
+  validates the full sidecar unless you opt out: the raw text of every source, every
+  doc comment, every label spelling. Pass
+  <code>CompileOptions { include_source_info: false }</code> when you only want the
+  graph. The Contract and its identities are byte-identical either way — provenance
+  is bound to <code>contract_id</code> but never enters it.
+</p>
+
+<h2>What a Compilation holds</h2>
+
+<pre data-lang="rust" data-file="src/compile/artifact.rs">
+impl Compilation {
+    pub fn contract(&self) -> &Contract;
+    pub fn source_info(&self) -> Option<&SourceInfo>;
+    pub fn into_parts(self) -> (Contract, Option<SourceInfo>);
+}
+</pre>
+
+<p>
+  Borrow both halves with <code>contract()</code> and <code>source_info()</code>, or
+  take ownership of both with <code>into_parts()</code>.
+  <code>source_info()</code> is <code>None</code> exactly when
+  <code>include_source_info</code> was <code>false</code>.
+</p>
+
+<p>
+  A <code>Compilation</code> serializes as
+  <code>{"contract": …, "source_info": …}</code>, with the sidecar key omitted when
+  absent. It does <strong>not</strong> implement <code>Deserialize</code>, and that is
+  deliberate: a trait impl has no argument position for a resource policy, so it could
+  only ever decode under limits the library chose. Decode through the bounded entry
+  points instead.
+</p>
+
+<pre data-lang="rust" data-file="src/compile/artifact.rs">
+// Decoding: max_input_bytes gates the input before serde_json is invoked, and
+// the gate, the decode and validation share one budget.
+Compilation::from_json_with_limits(input: &str, limits: &Limits)   -> Result<Self, ContractJsonError>
+Compilation::from_json_with_context(input: &str, context: &RuntimeContext)
+Compilation::from_slice_with_limits(input: &[u8], limits: &Limits)
+Compilation::from_slice_with_context(input: &[u8], context: &RuntimeContext)
+
+// Rendering: revalidates, then charges the rendered length against
+// max_canonicalization_work.
+Compilation::to_json_pretty_with_limits(&self, limits: &Limits)  -> Result<String, ContractValidationError>
+Compilation::to_json_pretty_with_context(&self, context: &RuntimeContext)
+</pre>
+
+<p>
+  To authenticate a sidecar somebody handed you rather than one you compiled, use
+  <code>SourceInfo::try_from_raw(raw, contract, limits)</code> or its
+  <code>_with_context</code> twin. It recompiles the embedded source bundle through
+  the same backend <code>compile_with_resolver</code> uses and rejects the sidecar
+  unless the rederived identity and every provenance collection match exactly.
+</p>
+
+<h2>When compilation fails</h2>
+
+<p>
+  Every entry point returns <code>CompileError</code>, which carries
+  <code>diagnostics: Vec&lt;Diagnostic&gt;</code>. Each diagnostic has a stable
+  machine-matchable <code>code</code>, a <code>phase</code>, a human
+  <code>message</code>, and optionally a span, related locations, notes, and a
+  resource triple. The <code>code</code> and the <code>phase</code> are the stable
+  surface; message text is not.
+</p>
+
+<table>
+  <thead>
+    <tr><th>Phase</th><th>Serialized</th><th>What failed</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>Parse</code></td><td><code>parse</code></td><td>The source is not valid Candid syntax.</td></tr>
+    <tr><td><code>TypeCheck</code></td><td><code>type_check</code></td><td>It parses but does not type-check.</td></tr>
+    <tr><td><code>Load</code></td><td><code>load</code></td><td>A source could not be resolved, read, or accepted — including <code>did_import_requires_file</code> and every resolver failure.</td></tr>
+    <tr><td><code>Lower</code></td><td><code>lower</code></td><td>The checked result could not be projected into the Contract graph.</td></tr>
+  </tbody>
+</table>
+
+<p>
+  A budget failure keeps the phase it happened in and reports what ran out:
+  <code>resource_limit_exceeded</code> with a
+  <code>{resource, limit, observed}</code> triple attached,
+  <code>operation_cancelled</code>, or <code>operation_deadline_exceeded</code>. See
+  <a href="rust-limits.html">Working with limits</a> and
+  <a href="reference-diagnostics.html">the diagnostics reference</a>.
+</p>
+
+<h2>Next</h2>
+
+<div class="card-grid">
+  <a class="card" href="rust-limits.html">
+    <span class="card-kicker">Rust crate</span>
+    <span class="card-title">Working with limits</span>
+    <p>The RuntimeContext every <code>_with_context</code> variant takes, and how to build one.</p>
+  </a>
+  <a class="card" href="source-resolution.html">
+    <span class="card-kicker">Concept</span>
+    <span class="card-title">Sources, imports and provenance</span>
+    <p>How bundles are resolved hermetically, and how the sidecar is re-derivable rather than trusted.</p>
+  </a>
+  <a class="card" href="rust-examples.html">
+    <span class="card-kicker">Rust crate</span>
+    <span class="card-title">Worked examples</span>
+    <p>The runnable programs in <code>examples/</code> and the exact command for each.</p>
+  </a>
+</div>

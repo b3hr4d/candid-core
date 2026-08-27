@@ -1,0 +1,429 @@
+<p>
+  A <strong>Contract</strong> is candid-core's validated model of a Candid interface: an arena
+  of type nodes, a table of declared names, an optional actor, and the content identities
+  computed over them. The library takes a position that shapes its whole API surface — a value
+  of type <code>Contract</code> is always valid, and the only way to get one is through a
+  constructor that actually did the checking. That is enforced by keeping "decoded but
+  unchecked" and "validated" as <em>different Rust types with different names</em>, rather than
+  as two states of one type separated by a convention.
+</p>
+<p>
+  There are two directions across that boundary and they are not symmetrical. When you are
+  <em>producing</em> a Contract you have no trustworthy identity yet, so the producer type has
+  no identity fields to fill in wrongly. When you are <em>receiving</em> one, the document
+  already claims identities, so the receiving path recomputes them and compares. Mixing the two
+  up is the mistake this design makes unrepresentable.
+</p>
+
+<h2>Why Contract does not implement Deserialize</h2>
+
+<p>
+  Four public types deliberately do not implement serde's <code>Deserialize</code>:
+  <code>Contract</code>, <code>ContractEnvelope</code>, <code>Compilation</code> and
+  <code>HostValue</code>. Nor does <code>SourceInfo</code>, the provenance sidecar. The reason
+  is stated in one line in the source, and it is a reason about the trait rather than about
+  taste:
+</p>
+
+<blockquote>
+  <p>
+    A trait impl has no argument position for a resource policy, so it could only ever decode
+    under limits the library chose.
+  </p>
+</blockquote>
+
+<p>
+  <code>Deserialize::deserialize</code> takes a deserializer and nothing else. There is nowhere
+  to pass a byte ceiling, a node count, a depth bound, a deadline or a cancellation token. An
+  implementation would therefore have to pick limits on your behalf and apply them to every
+  caller, or apply none — and applying none is how a four-line JSON document turns into an
+  unbounded allocation. Rather than ship a decode path that cannot be governed, the crate
+  refuses to have one. For <code>Contract</code>, <code>ContractEnvelope</code> and
+  <code>Compilation</code>, a <code>compile_fail</code> doctest pins the refusal, so a future
+  derive cannot reintroduce it quietly:
+</p>
+
+<pre data-lang="rust" data-file="src/model/contract.rs">
+/// ```compile_fail
+/// // A validated Contract cannot be produced by serde alone.
+/// let _: candid_core::Contract = serde_json::from_str("{}").unwrap();
+/// ```
+</pre>
+
+<p>
+  What you use instead is a bounded entry point. For the three document types —
+  <code>Contract</code>, <code>ContractEnvelope</code> and <code>Compilation</code> — that
+  entry point enforces <code>max_input_bytes</code> <em>before</em> handing the bytes to
+  <code>serde_json</code>, then shares one budget between the decode and the validation that
+  follows. <code>HostValue</code> gates on a different limit, which is its own section below,
+  and <code>SourceInfo::try_from_raw</code> starts from a DTO you decoded yourself, so it has
+  no byte gate of its own.
+</p>
+
+<table>
+  <thead>
+    <tr><th>Type</th><th>Bounded entry points</th><th>Feature</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><code>Contract</code></td>
+      <td><code>from_json</code>, <code>from_json_with_limits</code>, <code>from_json_with_context</code>, <code>from_slice_with_limits</code>, <code>from_slice_with_context</code></td>
+      <td>base</td>
+    </tr>
+    <tr>
+      <td><code>ContractEnvelope</code></td>
+      <td><code>from_json_with_limits</code>, <code>from_json_with_context</code>, <code>from_slice_with_limits</code>, <code>from_slice_with_context</code></td>
+      <td>base</td>
+    </tr>
+    <tr>
+      <td><code>Compilation</code></td>
+      <td><code>from_json_with_limits</code>, <code>from_json_with_context</code>, <code>from_slice_with_limits</code>, <code>from_slice_with_context</code></td>
+      <td><span class="pill accent">compiler</span></td>
+    </tr>
+    <tr>
+      <td><code>HostValue</code></td>
+      <td><code>from_json_with_limits</code>, <code>from_json_with_context</code></td>
+      <td><span class="pill accent">host-value</span></td>
+    </tr>
+    <tr>
+      <td><code>SourceInfo</code></td>
+      <td><code>try_from_raw</code>, <code>try_from_raw_with_context</code> (from an already-decoded DTO)</td>
+      <td><span class="pill accent">compiler</span></td>
+    </tr>
+  </tbody>
+</table>
+
+<p>
+  <code>Contract::from_json</code> is the only one that takes no policy argument, and it is not
+  an exception to the rule: it applies <code>Limits::default()</code>, which is the versioned
+  <code>interactive_v1</code> profile. See <a href="limits-and-diagnostics.html">limits, budgets
+  and diagnostics</a> for what that profile allows and how to choose a different one.
+</p>
+
+<h2>Raw DTOs are the trusted serde integration</h2>
+
+<p>
+  <code>RawContract</code> and <code>RawSourceInfo</code> do derive <code>Deserialize</code>,
+  and that is on purpose. They are the plain data-transfer objects for a document you already
+  decoded from somewhere — same fields, same JSON, no validity claim in the name and none in
+  the type.
+</p>
+
+<pre data-lang="rust" data-file="src/model/contract.rs">
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RawContract {
+    pub format: String,
+    pub format_version: u32,
+    pub semantics_profile: String,
+    pub canonicalization_profile: String,
+    pub identities: ContractIdentities,
+    pub producer: ProducerInfo,
+    pub types: Vec<TypeNode>,
+    #[serde(default)]
+    pub declarations: Vec<Declaration>,
+    // serde attributes elided: an absent `actor` key means "actorless", and an
+    // explicit `"actor": null` is a decode error rather than a second spelling.
+    pub actor: Option<Actor>,
+}
+</pre>
+
+<callout type="warn" title="Decoding a raw DTO is not a bounded operation">
+  <p>
+    <code>serde_json::from_str::&lt;RawContract&gt;(…)</code> consults no limits, revalidates
+    nothing, and carries no allocation bound. It is the right tool when the bytes are already
+    yours — a file you wrote, a value you round-tripped in memory. If the bytes came from
+    somewhere you do not control, either gate the length yourself before calling it, or skip it
+    entirely and use a bounded entry point from the table above.
+  </p>
+  <p>
+    The same applies to <code>ContractDraft</code>, which also derives
+    <code>Deserialize</code>: it cannot carry a fabricated identity, but decoding one is still
+    unbounded.
+  </p>
+</callout>
+
+<p>
+  The mirror image is <code>Serialize</code>. It <em>is</em> implemented on
+  <code>Contract</code>, <code>ContractEnvelope</code>, <code>Compilation</code>,
+  <code>HostValue</code> and <code>SourceInfo</code> — writing out a value you already hold is
+  not a trust boundary, because the value is already validated. That path consults no limits
+  and revalidates nothing, which is exactly what you want for a trusted value. The bounded
+  counterpart, <code>Contract::to_json_pretty_with_limits</code>, revalidates and charges the
+  rendered byte length against <code>max_canonicalization_work</code>, so a Contract built under
+  raised structural limits can still fail to render under default ones.
+</p>
+
+<h2>Validating a document that arrived from somewhere else</h2>
+
+<p>
+  <code>Contract::try_from_raw</code> is the promotion step. It takes a decoded
+  <code>RawContract</code> and returns a <code>Contract</code> only after running the full
+  structural checklist, canonicalising, and — this is the part that matters — recomputing the
+  document's own identities and comparing them with the ones it presented.
+</p>
+
+<div class="api-entry">
+  <div class="api-head">
+    <span class="api-name">Contract::try_from_raw</span>
+    <span class="pill">base</span>
+  </div>
+  <div class="api-body">
+<pre data-lang="rust">pub fn try_from_raw(raw: RawContract) -> Result<Self, ContractValidationError></pre>
+    <p>
+      Validates and canonicalises under <code>Limits::default()</code>.
+      <code>try_from_raw_with_limits</code> and <code>try_from_raw_with_context</code> take an
+      explicit resource policy. A presented <code>contract_id</code> that does not match
+      recomputation fails with <code>contract_id_mismatch</code>; a presented
+      <code>interface_id</code> that does not match fails with
+      <code>interface_id_mismatch</code>. Neither is silently repaired.
+    </p>
+  </div>
+</div>
+
+<p>
+  Two other rules do a lot of work here. Every struct and every tagged enum in the model
+  carries <code>#[serde(deny_unknown_fields)]</code>, so an unrecognised key anywhere in a Contract
+  document is a decode error — you cannot smuggle UI hints, defaults or workflow metadata into
+  the semantic core. And the format markers fail closed: an unrecognised
+  <code>format_version</code>, <code>semantics_profile</code> or
+  <code>canonicalization_profile</code> is rejected rather than assumed compatible
+  (<code>unsupported_format_version</code>, <code>unsupported_semantics_profile</code>,
+  <code>unsupported_canonicalization_profile</code>).
+</p>
+
+<h3>A worked example</h3>
+
+<p>
+  This is a runnable program in the repository — <code>cargo run --example
+  trust_boundary</code>. It compiles a tiny interface, serialises it, accepts it back, and then
+  shows the two ways a tampered version is refused.
+</p>
+
+<pre data-lang="rust" data-file="examples/trust_boundary.rs">
+use candid_core::{compile_did, Contract};
+use std::error::Error;
+
+fn main() -> Result<(), Box<dyn Error>> {
+    let compilation = compile_did("service : { ping: () -> (nat) query };")?;
+    let canonical_json = compilation.contract().to_json_pretty()?;
+    let accepted = Contract::from_json(&canonical_json)?;
+    println!("validated {} type nodes", accepted.types().len());
+
+    let mut injected: serde_json::Value = serde_json::from_str(&canonical_json)?;
+    injected["widget"] = serde_json::json!("date-picker");
+    let rejected = Contract::from_json(&serde_json::to_string(&injected)?).unwrap_err();
+    println!("unknown core metadata rejected: {rejected}");
+
+    let mut tampered: serde_json::Value = serde_json::from_str(&canonical_json)?;
+    tampered["identities"]["contract"] = serde_json::json!(
+        "candid-core:contract:v1:sha256:0000000000000000000000000000000000000000000000000000000000000000"
+    );
+    let rejected = Contract::from_json(&serde_json::to_string(&tampered)?).unwrap_err();
+    println!("tampered semantic identity rejected: {rejected}");
+    Ok(())
+}
+</pre>
+
+<p>
+  The extra <code>"widget"</code> key fails because of <code>deny_unknown_fields</code>. The
+  hand-edited <code>identities.contract</code> fails because decoding recomputes the hash and
+  compares. In a real service you would replace <code>from_json</code> with
+  <code>from_slice_with_context</code> and pass a <code>RuntimeContext</code> carrying your own
+  limits, a deadline and a cancellation token — everything else about the shape is the same.
+</p>
+
+<p>
+  Errors come back as <code>ContractJsonError</code>, which separates the two failure modes
+  cleanly: <code>MalformedJson(String)</code> for "this is not JSON, or not this shape", and
+  <code>InvalidContract(ContractValidationError)</code> for "this decoded but breaks a Contract
+  rule". The second carries a list of violations, each with a stable <code>code</code>, a
+  JSON-pointer-like <code>path</code>, and — when a limit fired — a structured
+  <code>{ resource, limit, observed }</code> triple. Codes and paths are the machine-matchable
+  surface; message text is not.
+  See <a href="reference-diagnostics.html">the diagnostics reference</a>.
+</p>
+
+<callout type="note" title="A content identity is not a signature">
+  <p>
+    Recomputation proves the document is internally consistent — that the hash matches the
+    content. It proves nothing about <em>who</em> sent it. <code>contract_id</code> and
+    <code>interface_id</code> are unkeyed content addresses, and no unkeyed content ID
+    authenticates itself. If you need authenticity, sign something, and read
+    <a href="identities.html">content-addressed identities</a> to pick which identity your
+    signature should commit to.
+  </p>
+</callout>
+
+<h2>Host values: the same idea, a different limit</h2>
+
+<p>
+  <code>HostValue</code> is the lossless tagged encoding for Candid <em>values</em> rather than
+  types (see <a href="host-values.html">host values</a>). It sits on the same side of the
+  boundary — no <code>Deserialize</code>, bounded entry points only — but it is gated by a
+  different limit, and that catches people out.
+</p>
+
+<pre data-lang="rust" data-file="src/value.rs">
+pub fn from_json_with_context(
+    input: &str,
+    context: &crate::RuntimeContext,
+) -> Result<Self, HostValueJsonError> {
+    let limits = &context.limits;
+    if input.len() > limits.max_value_bytes {
+        return Err(HostValueJsonError::Limit {
+            limit: limits.max_value_bytes,
+            observed: input.len(),
+        });
+    }
+</pre>
+
+<callout type="warn" title="Lowering max_input_bytes does not bound host value decoding">
+  <p>
+    The byte gate here reads <code>max_value_bytes</code> (16 MiB by default), not
+    <code>max_input_bytes</code> (4 MiB). If you tightened <code>max_input_bytes</code> for
+    Contract documents and assumed values were covered, they are not — lower
+    <code>max_value_bytes</code> too.
+  </p>
+</callout>
+
+<p>
+  There is a second, smaller asymmetry. The failure that gate produces is
+  <code>HostValueJsonError::Limit { limit, observed }</code>, which carries <strong>no resource
+  name</strong>. The other limit failures in the same enum use a different variant,
+  <code>HostValueJsonError::ValueLimit { resource, limit, observed, path }</code>, which does.
+  So if you are matching on the error to report which budget fired, the top-level byte gate is
+  the one case where the enum variant itself is the only label you get.
+</p>
+
+<h2>The producer side: ContractDraft</h2>
+
+<p>
+  When you are authoring a Contract — building one from a schema, a database, an editor, or
+  anything that is not <code>.did</code> text — you do not have an identity yet, because the
+  identity is a hash of the thing you are still assembling. <code>ContractDraft</code> is
+  shaped around that fact: it has four fields and none of them is an identity.
+</p>
+
+<pre data-lang="rust" data-file="src/model/contract.rs">
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ContractDraft {
+    pub types: Vec<TypeNode>,
+    #[serde(default)]
+    pub declarations: Vec<Declaration>,
+    // serde attributes elided on the two optional fields; an explicit JSON
+    // `null` is rejected for both, exactly as `RawContract` rejects it.
+    pub actor: Option<Actor>,
+    pub producer: Option<ProducerInfo>,
+}
+</pre>
+
+<p>
+  No format marker, no version, no profile, no <code>identities</code>. <code>build()</code>
+  stamps the four format constants and calculates the hashes, under the same validation and
+  canonicalisation budgets as every other entry point. A draft cannot carry a fake, stale or
+  placeholder identity, because there is no field in which to put one. This is the doctest on
+  the type, so it is compiled and run by <code>cargo test</code>:
+</p>
+
+<pre data-lang="rust" data-file="src/model/contract.rs">
+use candid_core::{ContractDraft, PrimitiveType, TypeNode};
+
+let contract = ContractDraft::new(
+    vec![TypeNode::Primitive { primitive: PrimitiveType::Nat }],
+    vec![candid_core::Declaration { name: "Amount".to_string(), ty: 0 }],
+    None,
+)
+.build()?;
+assert!(contract.contract_id().starts_with("candid-core:contract:v1:sha256:"));
+assert_eq!(contract.producer(), &candid_core::ProducerInfo::current());
+</pre>
+
+<p>
+  <code>build_with_limits</code> and <code>build_with_context</code> take a policy;
+  <code>with_producer</code> overrides the default <code>ProducerInfo::current()</code>. That
+  producer metadata is caller-supplied and unverified by design, and it is excluded from both
+  semantic identities — two Contracts differing only in <code>producer</code> share the same
+  <code>contract_id</code>.
+</p>
+
+<h3>What was removed, and why it is worth knowing</h3>
+
+<p>
+  Earlier pre-1.0 releases had a different producer path: <code>RawContract::new</code>, paired
+  with <code>Contract::build_raw</code> / <code>build_raw_with_context</code>. Both were removed
+  in the pre-1.0 API cleanup. <code>RawContract::new</code> fabricated placeholder zero
+  identities, which made the pairing a reader would naturally reach for —
+  <code>RawContract::new</code> then <code>Contract::try_from_raw</code> — fail by construction,
+  because <code>try_from_raw</code> verifies presented identities and those placeholders never
+  matched. The fix was not a better error message; it was deleting the type that could hold the
+  wrong value.
+</p>
+
+<pre data-lang="rust" data-file="README.md">
+// Before:
+let raw = RawContract::new(types, declarations, actor);
+let contract = Contract::build_raw(raw, &limits)?;
+// After:
+let contract = ContractDraft::new(types, declarations, actor)
+    .build_with_limits(&limits)?;               // .build() for Limits::default()
+// A caller-supplied producer used to travel inside the RawContract; now:
+let contract = ContractDraft::new(types, declarations, actor)
+    .with_producer(producer)
+    .build_with_limits(&limits)?;
+</pre>
+
+<h2>The three positions, side by side</h2>
+
+<table>
+  <thead>
+    <tr><th>Type</th><th>You use it when</th><th>What it does with identities</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><code>ContractDraft</code></td>
+      <td>Authoring a Contract from something other than <code>.did</code> text</td>
+      <td>Has none. <code>build()</code> computes them.</td>
+    </tr>
+    <tr>
+      <td><code>RawContract</code></td>
+      <td>Holding a document you decoded from elsewhere, before checking it</td>
+      <td>Carries whatever the document claimed, unchecked.</td>
+    </tr>
+    <tr>
+      <td><code>Contract</code></td>
+      <td>Everywhere else — the only validated form</td>
+      <td>Verified against recomputation on the way in.</td>
+    </tr>
+  </tbody>
+</table>
+
+<p>
+  Fields on <code>Contract</code> are private and read through accessors —
+  <code>types()</code>, <code>declarations()</code>, <code>actor()</code>,
+  <code>contract_id()</code>, <code>interface_id()</code>, <code>producer()</code>. That is
+  what makes "a <code>Contract</code> value is always valid" enforceable rather than
+  aspirational: there is no way to mutate one into an invalid state after construction.
+</p>
+
+<p>
+  One honest note to close on. The boundary described here is implemented and covered by tests,
+  including the <code>compile_fail</code> doctests on the three Contract-document types. That
+  is not the same as the design decision behind it being fully verified: ADR 0003 is recorded
+  as <em>implemented, verification pending</em>, and of the seven foundation decisions only ADR
+  0002 is marked Verified. <a href="guarantees.html">Guarantees and verification</a> is explicit
+  about which gate proves what, and <a href="decisions.html">design decisions</a> links the ADRs
+  themselves.
+</p>
+
+<h2>Next</h2>
+
+<p>
+  <a href="limits-and-diagnostics.html">Limits, budgets and diagnostics</a> is the other half of
+  accepting untrusted input: the byte ceilings, work counters, deadlines and cancellation that
+  the bounded entry points above actually enforce.
+  <a href="rust-contracts.html">Building and validating Contracts</a> walks the same APIs from
+  the Rust side with more code, and <a href="identities.html">content-addressed
+  identities</a> explains exactly what <code>try_from_raw</code> is comparing.
+</p>

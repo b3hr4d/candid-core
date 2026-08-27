@@ -1,0 +1,564 @@
+<p>
+  <code>candid-core</code> is the command-line front end to the Rust crate. It does two things: it
+  compiles a Candid <code>.did</code> file into a canonical, validated <strong>Contract</strong>
+  document — candid-core's model of an interface, a flat table of type nodes with named declarations,
+  an optional actor, and content-addressed identities computed over it — and it re-validates such a
+  document that arrived from somewhere else. Both outcomes are one pretty-printed JSON document on
+  stdout, so the binary composes with <code>jq</code>, with a build script, or with any language that
+  can read JSON without linking a Candid parser.
+</p>
+
+<p>
+  It is not a second implementation. The binary calls
+  <code>compile_did_file_with_options</code> and <code>Contract::from_json</code> — the same functions
+  described in <a href="rust-compiling.html">Compiling Candid sources</a> — and adds argument parsing,
+  a JSON writer, and the field-name table it attaches when you ask for an envelope. The suite in
+  <a href="https://github.com/b3hr4d/candid-core/blob/main/tests/cli.rs"><code>tests/cli.rs</code></a>
+  runs the real compiled executable and pins the behaviour described below: the argument grammar, the
+  exit statuses, which stream each response uses, the JSON shapes and their stable codes, and both byte
+  bounds at the exact limit and one byte over.
+</p>
+
+<h2>Installing it</h2>
+
+<pre data-lang="bash">
+cargo install candid-core --version 0.1.0-beta.3 --locked
+candid-core compile ./service.did --envelope > ./service.json
+</pre>
+
+<p>
+  The version has to be named. Every published version of <code>candid-core</code> is a prerelease, and
+  an unqualified request never selects one, so a bare <code>cargo install candid-core</code> fails with
+  <code>could not find candid-core in registry crates-io with version *</code>. Spelling the exact
+  requirement — <code>--version '=0.1.0-beta.3'</code> — works the same way and matches the dependency
+  line a library consumer writes, <code>candid-core = "=0.1.0-beta.3"</code>. <code>--locked</code>
+  builds against the lockfile shipped inside the crate archive.
+</p>
+
+<p>
+  The binary target declares <code>required-features = ["filesystem-compiler"]</code>, which is in the
+  default set, so a plain install produces it. If you want the binary and nothing else, this is the
+  feature selection the release verification uses when it installs the CLI from the packaged archive:
+</p>
+
+<pre data-lang="bash">cargo install candid-core --version 0.1.0-beta.3 --locked --no-default-features --features filesystem-compiler</pre>
+
+<p>Working from a clone, the same commands run through Cargo without installing anything:</p>
+
+<pre data-lang="bash">
+cargo run --bin candid-core -- compile ./service.did
+cargo run --bin candid-core -- compile ./service.did --no-source-info
+cargo run --bin candid-core -- compile ./service.did --envelope
+cargo run --bin candid-core -- validate ./contract.json
+</pre>
+
+<callout type="note" title="Turn defaults off and there is no binary">
+  <p>
+    A consumer who takes the crate with <code>default-features = false</code> to get the pure Contract
+    model gets no <code>candid-core</code> executable, because <code>filesystem-compiler</code> is what
+    declares it. That is the intended shape: the model has no filesystem dependency, and the binary is
+    the part that does.
+  </p>
+</callout>
+
+<h2>The grammar</h2>
+
+<p>The binary accepts exactly this, and nothing else:</p>
+
+<pre data-lang="text" data-file="src/bin/candid-core.rs">
+usage: candid-core compile <path> [--no-source-info | --envelope]
+       candid-core validate <path>
+</pre>
+
+<table>
+  <thead>
+    <tr>
+      <th>Invocation</th>
+      <th>What it does</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><code>compile &lt;path&gt;</code></td>
+      <td>
+        Type-checks the <code>.did</code> file, following its imports from the file's own parent
+        directory, and prints <code>{"contract": …, "ok": true, "source_info": …}</code>.
+      </td>
+    </tr>
+    <tr>
+      <td><code>compile &lt;path&gt; --no-source-info</code></td>
+      <td>
+        The same, with the provenance sidecar suppressed. The <code>source_info</code> key stays present
+        and is emitted as exactly <code>null</code>.
+      </td>
+    </tr>
+    <tr>
+      <td><code>compile &lt;path&gt; --envelope</code></td>
+      <td>
+        Prints the <code>ContractEnvelope</code> document itself —
+        <code>{"contract": …, "extensions": {…}}</code>, with no <code>ok</code> wrapper — carrying the
+        field-name table the TypeScript runtime needs.
+      </td>
+    </tr>
+    <tr>
+      <td><code>validate &lt;path&gt;</code></td>
+      <td>
+        Reads a Contract JSON document, re-validates it including recomputing its identities, and prints
+        <code>{"contract": …, "ok": true}</code>. Accepts no flags at all.
+      </td>
+    </tr>
+  </tbody>
+</table>
+
+<p>
+  There are no other commands and no other flags — in particular, no flag for limits. Both commands run
+  under <code>Limits::default()</code>, the frozen <code>interactive_v1</code> profile; custom ceilings
+  are a library capability, passed through the <code>*_with_limits</code> and
+  <code>*_with_context</code> entry points.
+</p>
+
+<h3>Why the two compile flags are mutually exclusive</h3>
+
+<p>
+  <code>--no-source-info</code> throws the provenance sidecar away. The envelope exists to carry
+  <em>field names</em>, and field names live only in that sidecar: a canonical Contract stores record
+  and variant fields by their 32-bit Candid label hash, not by their spelling, because the hash is what
+  the wire format carries. So <code>--envelope</code> asks for something <code>--no-source-info</code>
+  has already discarded. Rather than silently emitting an envelope with an empty name table, the binary
+  treats the combination as a contradiction: in either order,
+  <code>compile x.did --envelope --no-source-info</code> is a usage error.
+</p>
+
+<p>
+  Two more grammar rules bite in practice. Flags go <em>after</em> the path and may appear at most once
+  — <code>compile --envelope ./service.did</code> is a usage error. And any token beginning with
+  <code>-</code> in the path position is treated as an option, never as a path, so a dash-leading file
+  is spelled with a prefix: <code>candid-core compile ./-service.did</code>.
+</p>
+
+<h2>Exit codes and streams</h2>
+
+<p>
+  Three statuses, and they are exhaustive. In the source they are
+  <code>ExitCode::SUCCESS</code>, <code>ExitCode::FAILURE</code> and <code>ExitCode::from(64)</code>.
+</p>
+
+<table>
+  <thead>
+    <tr>
+      <th>Exit</th>
+      <th>Outcome</th>
+      <th>stdout</th>
+      <th>stderr</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><code>0</code></td>
+      <td>Success</td>
+      <td>One pretty-printed JSON document, then a newline</td>
+      <td>Empty</td>
+    </tr>
+    <tr>
+      <td><code>1</code></td>
+      <td>Read, parse, type-check, validation or resource-limit failure</td>
+      <td>One pretty-printed JSON document with <code>"ok": false</code></td>
+      <td>Empty</td>
+    </tr>
+    <tr>
+      <td><code>64</code></td>
+      <td>Usage error</td>
+      <td>Empty</td>
+      <td>Exactly the two-line usage text above</td>
+    </tr>
+  </tbody>
+</table>
+
+<callout type="warn" title="Failure JSON goes to stdout, not stderr">
+  <p>
+    Both the success writer and the error writer use <code>println!</code>. The only thing ever written
+    to stderr is the usage text. A script that pipes stdout into a JSON parser will therefore receive
+    the error document too, and should branch on the exit status or on the <code>ok</code> key — never
+    on which stream produced output.
+  </p>
+</callout>
+
+<p>
+  The usage-error suite is worth knowing about because of how it is built: every file named across its
+  27 rejected argument vectors is a valid, existing one, so a run that reached file processing would
+  have succeeded. Observing exit 64 therefore proves the argument itself was rejected, not that the
+  input was bad.
+</p>
+
+<h2>What compile prints</h2>
+
+<p>
+  Three top-level keys. Object keys come out sorted, because the binary assembles the response as a
+  <code>serde_json</code> value whose maps are ordered — which is why the pinned envelope fixture
+  further down reads alphabetically. For <code>service : {};</code>:
+</p>
+
+<pre data-lang="json">
+{
+  "contract": {
+    "actor": { "kind": "service", "service": 0 },
+    "canonicalization_profile": "candid-core-canon-1",
+    "declarations": [],
+    "format": "candid-core",
+    "format_version": 1,
+    "identities": {
+      "contract": "candid-core:contract:v1:sha256:edfb9052c7234db653686a79e02e317241b4ccfe74e989a2f5735aa2c8a70ba5",
+      "interface": "candid-core:interface:v1:sha256:ea1e1478267a0f0bdffeb8f5acc0ac91c3a496f285c46c10c104fac61698e401"
+    },
+    "producer": {
+      "candid_parser_version": "0.4.0",
+      "candid_version": "0.10.30",
+      "name": "candid-core",
+      "version": "0.1.0-beta.3"
+    },
+    "semantics_profile": "candid-1",
+    "types": [{ "kind": "service", "methods": [] }]
+  },
+  "ok": true,
+  "source_info": { … }
+}
+</pre>
+
+<p>
+  Only the <code>source_info</code> value is elided there; every other value is what the binary prints,
+  pinned by <code>tests/cli.rs</code> against
+  <code>tests/fixtures/conformance/empty_actor.contract.json</code>. Whitespace has been compacted for
+  reading — the real output puts one array element per line. Note that
+  <code>actor.service: 0</code> is an index into <code>types</code>, and that <code>producer</code>
+  records the exact pinned engine versions the document was built with.
+</p>
+
+<p>
+  The elided sidecar carries ten keys: <code>source_info_version</code>, its own
+  <code>contract_id</code> and <code>source_bundle_id</code>, and the arrays <code>sources</code>,
+  <code>imports</code>, <code>declarations</code>, <code>field_labels</code>, <code>methods</code>,
+  <code>function_arguments</code> and <code>actors</code>. It holds the raw text of every source in the
+  bundle, the import edges between them, doc comments, argument names, and how each field label was
+  spelled. It is bound to <code>contract_id</code> but never part of it, so adding, changing or deleting
+  it leaves both semantic identities exactly where they were.
+</p>
+
+<p>
+  <code>--no-source-info</code> keeps the key and sets it to null — a consumer testing for key
+  <em>presence</em> rather than for null gets the wrong answer. The <code>contract</code> value,
+  elided here as <code>{ … }</code>, is unchanged: provenance never enters it.
+</p>
+
+<pre data-lang="json">
+{
+  "contract": { … },
+  "ok": true,
+  "source_info": null
+}
+</pre>
+
+<h2>What compile --envelope prints</h2>
+
+<p>
+  This mode prints a different document: the envelope itself, with no <code>ok</code> wrapper, so the
+  output can be saved whole and handed to <code>@candid-core/schema</code>'s
+  <a href="schema-from-contract.html"><code>schemaFromContract</code></a>. An <em>envelope</em> is a
+  Contract plus a map of namespaced extensions, and extensions live outside the canonical identities by
+  design — attaching one never moves <code>contract_id</code> or <code>interface_id</code>.
+</p>
+
+<p>
+  The only extension the binary emits is the field-name table, under the literal key
+  <code>org.candid-core.field-names/v1</code>. Its value is an array of
+  <code>[container, id, name]</code> triples: the index of the type node containing the field, the
+  32-bit label id, and the spelling — sorted, deduplicated, named labels only. Numeric and positional
+  labels carry no name and are skipped. The following is the complete, byte-pinned output for a
+  two-line input:
+</p>
+
+<pre data-lang="candid" data-file="tests/fixtures/conformance/basic.did">
+type Payload = record { owner: principal; amount: nat };
+service : { transfer: (Payload) -> () };
+</pre>
+
+<pre data-lang="json" data-file="tests/fixtures/envelope/basic.envelope.json">
+{
+  "contract": {
+    "actor": { "kind": "service", "service": 0 },
+    "canonicalization_profile": "candid-core-canon-1",
+    "declarations": [{ "name": "Payload", "type": 2 }],
+    "format": "candid-core",
+    "format_version": 1,
+    "identities": {
+      "contract": "candid-core:contract:v1:sha256:0b553cb65eb436a7ac5d35869d0016d043867bab0a97e844350ae72a5b4aea7d",
+      "interface": "candid-core:interface:v1:sha256:99f400820c0ca2fb7c32cc3ab1df6d6c000bc614cffe0e350b6a9a576da18d48"
+    },
+    "producer": {
+      "candid_parser_version": "0.4.0",
+      "candid_version": "0.10.30",
+      "name": "candid-core",
+      "version": "0.1.0-beta.3"
+    },
+    "semantics_profile": "candid-1",
+    "types": [
+      { "kind": "service", "methods": [{ "function": 1, "id": 3664621355, "name": "transfer" }] },
+      { "args": [2], "kind": "func", "mode": "update", "results": [] },
+      { "fields": [{ "id": 947296307, "type": 3 }, { "id": 3573748184, "type": 4 }], "kind": "record" },
+      { "kind": "primitive", "primitive": "principal" },
+      { "kind": "primitive", "primitive": "nat" }
+    ]
+  },
+  "extensions": {
+    "org.candid-core.field-names/v1": [
+      [2, 947296307, "owner"],
+      [2, 3573748184, "amount"]
+    ]
+  }
+}
+</pre>
+
+<p>
+  Nothing is elided above except whitespace; that file is real output from this command, committed as a
+  fixture and compared against on every run. Read the triples against the graph: type node 2 is the
+  record, and its two field ids map back to <code>owner</code> and <code>amount</code>. The embedded
+  <code>contract</code> is identical to what plain <code>compile</code> emits — the envelope adds
+  side-band data without touching the canonical document.
+</p>
+
+<p>
+  Two details that will save you an afternoon. The extension is always present, even when it is empty:
+  a source with no named field labels still emits
+  <code>"extensions": {"org.candid-core.field-names/v1": []}</code>. And hash-colliding spellings
+  collapse to one entry per <code>(container, id)</code> — <code>cemxzwyk</code> and
+  <code>amxawvks</code> share a Candid label hash, so two structurally identical records deduplicate to
+  one semantic node and the table carries one triple, the same spelling the TypeScript generator
+  renders.
+</p>
+
+<h2>What validate prints</h2>
+
+<p>
+  <code>validate</code> reads a Contract document, parses it under the input byte bound, and revalidates
+  it from scratch: unknown keys are rejected rather than ignored, and the identities are recomputed from
+  the payload rather than believed. Success is two keys, the validated canonical document elided here
+  as <code>{ … }</code>.
+</p>
+
+<pre data-lang="json">
+{
+  "contract": { … },
+  "ok": true
+}
+</pre>
+
+<p>
+  Failure comes in two shapes, and a consumer has to handle both. How far the read got decides which
+  one you see.
+</p>
+
+<pre data-lang="json">
+{
+  "ok": false,
+  "violations": [
+    {
+      "code": "invalid_contract_id_format",
+      "path": "$.identities.contract",
+      "message": "contract identity must use candid-core:contract:v1:sha256:<64 lowercase hex>"
+    }
+  ]
+}
+</pre>
+
+<p>
+  That is the shape when the document parsed but failed validation — or when the read exceeded the input
+  byte bound, which arrives as a single <code>resource_limit_exceeded</code> violation at path
+  <code>$</code>. When the file cannot be read, is not valid UTF-8, or is not syntactically valid JSON,
+  the read never reaches the validator and you get <code>diagnostics</code> instead — the same key
+  <code>compile</code> uses. Only two codes arrive by that route, both at phase <code>load</code>:
+  <code>contract_file_read_error</code> and <code>malformed_contract_json</code>, whose message is the
+  JSON parser's own text.
+</p>
+
+<pre data-lang="json">
+{
+  "ok": false,
+  "diagnostics": [
+    {
+      "code": "malformed_contract_json",
+      "phase": "load",
+      "severity": "error",
+      "message": "expected value at line 1 column 1"
+    }
+  ]
+}
+</pre>
+
+<h2>Reading failures</h2>
+
+<p>
+  The two arrays mean different things. <code>diagnostics</code> items come from reading, parsing or
+  type-checking source and carry <code>code</code>, <code>phase</code>, <code>severity</code> and
+  <code>message</code>, plus <code>span</code>, <code>related</code>, <code>notes</code> and
+  <code>resource_limit</code> where those apply. <code>violations</code> items come from validating an
+  already-parsed document and carry <code>code</code>, <code>path</code> (a JSONPath such as
+  <code>$.identities.contract</code>) and <code>message</code>, plus <code>resource_limit</code> when
+  the failure is a budget — never <code>phase</code> or <code>severity</code>. In both, an absent
+  optional key is omitted rather than emitted as null, codes and paths are the machine-stable surface,
+  and message text is not: match on <code>code</code>, never on prose.
+</p>
+
+<p>
+  A <code>compile</code> failure looks like this — the whole document, <code>span</code> included, is
+  pinned by <code>tests/cli.rs</code> for a bundle whose imported file declares no service:
+</p>
+
+<pre data-lang="json">
+{
+  "ok": false,
+  "diagnostics": [
+    {
+      "code": "did_type_check_error",
+      "phase": "type_check",
+      "severity": "error",
+      "message": "Imported service file \"workspace:/types.did\" has no main service",
+      "span": { "source_name": "workspace:/types.did" }
+    }
+  ]
+}
+</pre>
+
+<p>
+  Stable codes the CLI suite exercises include <code>did_parse_error</code>,
+  <code>did_type_check_error</code>, <code>did_file_read_error</code>,
+  <code>did_invalid_source_id</code>, <code>contract_file_read_error</code>,
+  <code>malformed_contract_json</code>, <code>invalid_contract_id_format</code> and
+  <code>resource_limit_exceeded</code>. Locations always name logical source IDs
+  (<code>workspace:/…</code>) — never the temporary files the compiler materializes for import checking.
+</p>
+
+<p>
+  Both commands bound their reads before decoding, so an oversized file fails with structured metadata
+  rather than allocating without bound. The byte bound takes precedence over UTF-8 and parse errors: a
+  file that is both oversized and invalid UTF-8 reports the limit, not a decode failure.
+</p>
+
+<table>
+  <thead>
+    <tr>
+      <th>Command</th>
+      <th>Bound</th>
+      <th>Resource name</th>
+      <th>Reported as</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><code>compile</code>, per source file</td>
+      <td>1 MiB (<code>max_source_bytes</code>)</td>
+      <td><code>source_bytes</code></td>
+      <td>a <code>diagnostics</code> item</td>
+    </tr>
+    <tr>
+      <td><code>compile</code>, whole import bundle</td>
+      <td>8 MiB (<code>max_bundle_bytes</code>)</td>
+      <td><code>bundle_bytes</code></td>
+      <td>a <code>diagnostics</code> item</td>
+    </tr>
+    <tr>
+      <td><code>validate</code>, the document</td>
+      <td>4 MiB (<code>max_input_bytes</code>)</td>
+      <td><code>input_bytes</code></td>
+      <td>a <code>violations</code> item at path <code>$</code></td>
+    </tr>
+  </tbody>
+</table>
+
+<p>
+  A per-source refusal is an ordinary <code>diagnostics</code> item with the structured triple attached.
+  Its <code>message</code> is elided below, because the wording is not part of the contract — the code
+  and the triple are:
+</p>
+
+<pre data-lang="json">
+{
+  "code": "resource_limit_exceeded",
+  "phase": "load",
+  "severity": "error",
+  "resource_limit": { "resource": "source_bytes", "limit": 1048576, "observed": 1048577 }
+}
+</pre>
+
+<p>
+  The <code>limit</code> and <code>observed</code> values are fixed-width unsigned 64-bit numbers,
+  identical on every platform. The test that pins this writes one file of exactly the limit, which is
+  accepted, and one of limit + 1 that is also invalid UTF-8 and invalid Candid, which is refused with
+  the limit code — proof that the bound fires before decoding or parsing.
+</p>
+
+<h2>Pinning an interface in CI</h2>
+
+<p>
+  Here is the job the binary is actually good at. <code>interface_id</code> covers the wire interface
+  reachable from the actor and nothing else — not declaration names, not field order, not comments — so
+  it moves exactly when a caller would notice, and stays put when a rename or a reformat would not.
+  Check the expected value into the repository next to the <code>.did</code>, and fail the build when the
+  two disagree.
+</p>
+
+<pre data-lang="bash" data-file="ci/check-interface.sh">
+#!/bin/sh
+set -eu
+
+# The interface identity this repository has reviewed and released.
+expected="$(cat ci/interface.id)"
+
+# Both outcomes print JSON on stdout; failure exits 1, so check the status
+# rather than the stream.
+if ! response="$(candid-core compile ./service.did --no-source-info)"; then
+  printf '%s\n' "$response"       # {"ok": false, "diagnostics": [...]}
+  exit 1
+fi
+
+# jq -e exits non-zero when the field is absent — a declaration-only .did has
+# no actor and so no interface identity — so `set -e` fails the build here
+# rather than comparing against an empty string.
+actual="$(printf '%s' "$response" | jq -er '.contract.identities.interface')"
+
+if [ "$actual" != "$expected" ]; then
+  echo "the wire interface changed:"
+  echo "  expected $expected"
+  echo "  actual   $actual"
+  echo "Bump the package version and update ci/interface.id in the same commit."
+  exit 1
+fi
+
+echo "interface unchanged: $actual"
+</pre>
+
+<p>
+  Seed <code>ci/interface.id</code> once with
+  <code>candid-core compile ./service.did --no-source-info | jq -r '.contract.identities.interface' &gt; ci/interface.id</code>,
+  and thereafter the only way to change it is a commit that also changes the recorded value — which is
+  the review moment you wanted. <code>--no-source-info</code> keeps the output small; the identity is
+  the same either way, since the sidecar is not part of it.
+</p>
+
+<callout type="danger" title="An identity is only stable within one release line">
+  <p>
+    Everything here is pre-1.0. Until 1.0, any release may change the public API, the serialized shapes,
+    the canonical bytes, and therefore every identity computed over them. A recorded
+    <code>interface_id</code> is a guard against <em>your</em> interface drifting, not a permanent
+    address across candid-core upgrades — pin the compiler version alongside it, and expect to
+    re-record when you move.
+  </p>
+</callout>
+
+<h2>Next</h2>
+
+<p>
+  <a href="reference-json.html">JSON document formats</a> documents every key in the documents above.
+  <a href="reference-diagnostics.html">Diagnostics reference</a> lists the structured error shape the
+  Rust crate and the TypeScript runtime share. If your project has no Rust toolchain, the WebAssembly
+  build of this same pipeline is described in <a href="cli-npm.html">@candid-core/cli</a> — read the
+  status note at the top of that page first.
+</p>

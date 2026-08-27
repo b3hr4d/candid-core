@@ -1,0 +1,152 @@
+<p>This repository produces one crate on crates.io, one package on npm, and several units that are deliberately unpublishable. All of it is pre-1.0. This page states where each unit is, what changed in each released version, and which parts of the release machinery a consumer should care about — with no forward-looking dates, because none are promised.</p>
+
+<h2>What is published today</h2>
+
+<table>
+  <thead><tr><th>Unit</th><th>Registry</th><th>Status</th></tr></thead>
+  <tbody>
+    <tr><td><code>candid-core</code></td><td>crates.io</td><td><span class="pill ok">Published</span> — latest <code>0.1.0-beta.3</code>. Also on the registry: <code>0.1.0-beta.1</code>, <code>0.1.0-beta.2</code>. None yanked.</td></tr>
+    <tr><td><code>@candid-core/schema</code></td><td>npm</td><td><span class="pill ok">Published</span> — latest <code>0.2.0</code>. Also on the registry: <code>0.0.0-bootstrap</code>, <code>0.1.0</code>, <code>0.1.1</code>.</td></tr>
+    <tr><td><code>@candid-core/cli</code></td><td>npm</td><td><span class="pill warn">Not published</span> — prepared in the repository, buildable from source.</td></tr>
+    <tr><td><code>candid-core-ts</code></td><td>—</td><td><code>publish = false</code> by design. Use it as a path or git dependency from this repository, or not at all.</td></tr>
+    <tr><td><code>candid-core-wasm</code></td><td>—</td><td><code>publish = false</code>. Its own workspace root; its deliverable is the npm CLI package above.</td></tr>
+    <tr><td><code>candid-core-fuzz</code></td><td>—</td><td><code>publish = false</code>. Internal fuzz harness, its own workspace root and lockfile.</td></tr>
+  </tbody>
+</table>
+
+<p>The two dependency lines that exist are these:</p>
+
+<pre data-lang="toml" data-file="README.md">
+# every feature on by default
+candid-core = "=0.1.0-beta.3"
+</pre>
+
+<pre data-lang="bash">
+npm install @candid-core/schema
+</pre>
+
+<callout type="warn" title="A caret requirement selects nothing today">
+  <p>Every published version of <code>candid-core</code> is a prerelease, and Cargo only picks a prerelease when the requirement names one. So <code>candid-core = "0.1"</code> resolves to <em>nothing</em>, and a bare <code>cargo install candid-core</code> fails with <code>could not find candid-core in registry crates-io with version *</code>. Write the exact version: <code>candid-core = "=0.1.0-beta.3"</code>, or <code>cargo install candid-core --version 0.1.0-beta.3 --locked</code> for the binary. Pinning with <code>=</code> is the right choice for a second reason too — with the API and the wire format both unstable, moving to the next prerelease should be something you opt into.</p>
+</callout>
+
+<h3>The unpublished CLI</h3>
+
+<p><code>@candid-core/cli</code> compiles the same pipeline to WebAssembly, so a JavaScript-only project can go from a <code>.did</code> file to a generated module and a Contract envelope with no Rust toolchain. Its manifest declares version <code>0.1.0</code> and the binary name <code>candid-core-cli</code>. That version has never been published: the npm registry has no such package, and the publishing workflow has deliberately not been dispatched, because the first publish of an npm name is permanent and is treated as the owner's explicit act. There is no install line and no <code>npx</code> line to give you. What exists today is a build from source:</p>
+
+<pre data-lang="bash" data-file="crates/candid-core-wasm/npm/package.json">
+# from crates/candid-core-wasm/npm
+npm run build
+# runs: cd .. && wasm-pack build --target web --out-dir npm/wasm --no-pack --release
+</pre>
+
+<p>Its own changelog notes that the prepared version embeds <code>candid-core</code> <code>0.1.0-beta.2</code>, which is not the crate's current version — another reason to treat it as prepared rather than ready. See <a href="cli-npm.html">@candid-core/cli</a> for what it does.</p>
+
+<h2>The pre-1.0 policy, in full</h2>
+
+<p>Both changelogs state it, and it is not boilerplate. <strong>Until 1.0, any release may change the public Rust API, the serialized Contract, Compilation and envelope shapes, the canonical bytes, and therefore every identity computed over them.</strong></p>
+
+<p>Read the last clause carefully, because it is the one with teeth. <code>contract_id</code>, <code>interface_id</code> and <code>source_bundle_id</code> are SHA-256 digests over canonical bytes. If a release changes how those bytes are produced, every identity moves — for inputs that did not change at all. Such a change would be a canonicalization-profile change and would be recorded in the changelog, but a stored identity from one version is not guaranteed to match a recomputation under the next. Treat identities as stable <em>within</em> a pinned version.</p>
+
+<p>The consequences for you: pin an exact version everywhere, in Cargo and in npm. Do not rely on a caret range. If you persist an identity in a database or a signature, record the crate version alongside it. And do not treat the Contract format as a stable v1 — the project explicitly does not promote it to one, and <a href="guarantees.html">the verification ledger</a> explains why.</p>
+
+<h2>Independent versioning</h2>
+
+<p>The Rust crate and the npm package do not share a version number and are released on separate cycles, so the numbers carry no pairing information at all. Because of that, every entry in the npm changelog names the crate version it pairs with:</p>
+
+<table>
+  <thead><tr><th><code>@candid-core/schema</code></th><th>Released</th><th>Pairs with <code>candid-core</code></th></tr></thead>
+  <tbody>
+    <tr><td><code>0.2.0</code></td><td>2026-08-24</td><td><code>0.1.0-beta.3</code></td></tr>
+    <tr><td><code>0.1.1</code></td><td>2026-08-03</td><td><code>0.1.0-beta.2</code></td></tr>
+    <tr><td><code>0.1.0</code></td><td>2026-07-31</td><td><code>0.1.0-beta.2</code></td></tr>
+    <tr><td><code>0.0.0-bootstrap</code></td><td>2026-07-31</td><td>not a usable release</td></tr>
+  </tbody>
+</table>
+
+<p><code>0.0.0-bootstrap</code> exists only because npm cannot attach a trusted publisher to a name that does not yet exist on the registry. It is tagged <code>bootstrap</code> and never <code>latest</code>. Do not install it.</p>
+
+<h2>License, toolchain and targets</h2>
+
+<dl>
+  <dt>License</dt>
+  <dd>Apache-2.0, declared by the root crate, the generator, the wasm crate and both npm manifests. The internal fuzz harness declares no <code>license</code> field of its own; it is never published. The root <code>LICENSE</code> carries the complete text.</dd>
+
+  <dt>Rust edition</dt>
+  <dd>2021, across the root crate, the generator, the wasm crate and the fuzz harness.</dd>
+
+  <dt>Minimum supported Rust version</dt>
+  <dd><code>1.78</code>, declared as <code>rust-version</code> in the root crate's and the generator's manifests. CI runs the locked dependency graph against 1.78, so an incompatible direct or transitive dependency update fails before merge rather than for a consumer.</dd>
+
+  <dt>Rust targets exercised in CI</dt>
+  <dd>Linux, macOS and Windows on current stable; Linux on 1.78 for the MSRV suite; and <code>wasm32-unknown-unknown</code> for the library across every feature configuration meant to work there, with a browser runtime suite on an exact-pinned Chrome for Testing build.</dd>
+
+  <dt><code>@candid-core/schema</code> runtime</dt>
+  <dd>TypeScript ≥ 5.0 (below that it is a <em>parse</em> error, not a type error); <code>moduleResolution</code> of <code>node16</code>, <code>nodenext</code> or <code>bundler</code> — <code>node10</code> cannot resolve the package at all; ESM only, with no CommonJS build; Node ≥ 16 for the seven peer-free subpaths and ≥ 20.19 for <code>./transport-icp</code>. The single peer, <code>@icp-sdk/core</code> ≥ 6, is declared optional and is needed only by that one subpath.</dd>
+</dl>
+
+<h3>What does not work on bare WASM</h3>
+
+<p>Two target facts, both deliberate and both fail-closed rather than surprising.</p>
+
+<ul>
+  <li><strong><code>WorkspaceResolver</code> and <code>compile_did_file</code> are native.</strong> They still <em>compile</em> for <code>wasm32-unknown-unknown</code>, because the filesystem capability crate is declared under <code>cfg(not(target_os = "unknown"))</code> as well as behind its feature — but there is no directory to open there, so <code>WorkspaceResolver::new</code> fails with <code>did_workspace_root_error</code>. A browser host uses <code>MemoryResolver</code> or supplies its own synchronous resolver.</li>
+  <li><strong>Bare <code>wasm32-unknown-unknown</code> has no clock.</strong> Reading it would abort the module, which is exactly the outcome the fail-closed rule exists to prevent, so the crate refuses to read it and reports any configured deadline as already elapsed — you get the ordinary <code>operation_deadline_exceeded</code> result. No deadline configured stays unbounded, and cancellation plus every byte, count, depth and work limit are unaffected. The crate takes no <code>web-time</code>, <code>js-sys</code> or <code>wasm-bindgen</code> production dependency to paper over this.</li>
+</ul>
+
+<h2>What changed in each release</h2>
+
+<h3><code>candid-core</code> on crates.io</h3>
+
+<p><strong><code>0.1.0-beta.1</code></strong> — the first published version. It established the shape rather than changing anything: one published package with four build surfaces (the base Contract model plus <code>compiler</code>, <code>filesystem-compiler</code> and <code>host-value</code>, all on by default); browser-WASM compilation of imported bundles through a resolver; the separation of semantic identities from a detached exact-octet artifact identity; and the rule that all untrusted work is bounded, with <code>Contract</code>, <code>ContractEnvelope</code>, <code>Compilation</code> and <code>HostValue</code> deliberately not implementing <code>Deserialize</code>. The semver gate was absent by necessity — there was no published baseline to compare against.</p>
+
+<p><strong><code>0.1.0-beta.2</code></strong> — release machinery and gates rather than library behaviour. The tag, the crates.io publish and the GitHub release moved to a dispatch-only workflow behind three separately approved protected environments, and this was the first version released through it. <code>cargo semver-checks</code> began comparing both published surfaces against the published baseline. Two documentation entries record measured behaviour that already existed: the effective ceiling on <code>HostValue</code> record width, and the benchmark comparison governance. The repository also became a Cargo workspace, which is invisible in the archive.</p>
+
+<p><strong><code>0.1.0-beta.3</code></strong> — the current version, and the first that carries a fix for a defect in an already-published version. Both type-depth guard walks stopped re-expanding shared subtrees and now charge for the work they do, under a new <code>max_type_preflight_work</code> limit (default 10 000 000) with a matching <code>with_max_type_preflight_work</code> builder. The addition is additive in both senses: the public surface gains two methods and removes nothing, and a configuration that leaves the limit at its profile value still serializes with no such key. The CLI gained <code>compile &lt;path&gt; --envelope</code>, which emits a one-document <code>ContractEnvelope</code> carrying the canonical Contract plus its field-name table — the single document <code>@candid-core/schema</code>'s <code>schemaFromContract</code> consumes.</p>
+
+<callout type="danger" title="0.1.0-beta.1 and 0.1.0-beta.2 carry a reachable defect">
+  <p>Both walks that enforce <code>max_type_depth</code> traversed declaration graphs as trees, re-expanding a subtree once per incoming edge. A sub-kilobyte <code>.did</code> file with shared type aliases produced work doubling per level, and — the part that matters — <em>nothing was charged for it</em>, so no limit ever refused it and the walk returned <code>Ok</code>. It is reachable from the public <code>compile_did</code> entry point under default limits, which means every consumer that compiles <code>.did</code> source it did not write inherited it in both published versions. <code>0.1.0-beta.3</code> fixes it. A published version cannot be corrected in place, only superseded, so upgrade rather than pinning either earlier version.</p>
+</callout>
+
+<h3><code>@candid-core/schema</code> on npm</h3>
+
+<p><strong><code>0.1.0</code></strong> — the first real release: the schema runtime extracted into its own package with a manifest, a build, a packaged-consumer smoke test and publish machinery. Seven subpath exports, ESM-only, published with npm provenance from a protected environment.</p>
+
+<p><strong><code>0.1.1</code></strong> — an audit-fix release; every change is a fail-closed correction found by reviewing the 0.1.0 surface, with the module list, exports map and peer metadata unchanged. A blob's declared length is now checked against the remaining input before any allocation is charged for it; a named declaration targeting the actor-root class node is refused; variant arms are classified structurally so the inferred union matches what the validator and codec actually do; and the <code>AnyFieldSchema</code> bound is carried through the codec, actor and form entry points. If you are on <code>0.1.0</code>, those corrections are the reason to move.</p>
+
+<p><strong><code>0.2.0</code></strong> — the current version, and the one that carries a deliberate <strong>type-level breaking change</strong>: <code>c.principal</code> now types as the structural <code>PrincipalValue</code> (<code>{ toText(): string }</code>) instead of the SDK <code>Principal</code> class, and <code>FuncValue.principal</code> and service schemas moved with it. Runtime behaviour is unchanged — no wire encoding and no validation verdict moved. The break is in the type surface telling the truth: the codec is self-contained and never constructs an SDK class, so a decoded principal has always carried exactly <code>toText()</code>, and the only code the change breaks was already failing at runtime. Encode-side code is untouched, because SDK instances satisfy the structural shape.</p>
+
+<p>The minor bump is what carries that break rather than a patch: under npm's pre-1.0 caret rules a <code>^0.1.1</code> dependency accepts <code>0.1.2</code> and refuses <code>0.2.0</code>, so shipping it as a patch would have upgraded every existing dependent into it unasked. 0.2.0 also fixes a real 0.1.1 defect — the shipped declarations imported <code>@icp-sdk/core</code> outside the transport, so a consumer without the optional peer could hit <code>TS2307</code> deep in <code>node_modules</code>, or silently degrade <code>Principal</code> to <code>any</code> under <code>skipLibCheck</code>. Every subpath except <code>./transport-icp</code> now compiles and runs with no peer installed. Additions in the same release: the new <code>./transport-icp</code> subpath with a tested <code>httpTransport</code>, one-document envelope loading in <code>schemaFromContract</code>, <code>isResultSchema</code> and <code>unwrapResult</code> on <code>./validate</code>, <code>resolveSchema</code> and <code>serviceMethods</code> on the root, and JSDoc on all 28 builder members — which is what a consumer's editor actually reads.</p>
+
+<h2>Release mechanics a consumer should know</h2>
+
+<p>You do not run any of this, but two properties of it change how you should treat a version number.</p>
+
+<p><strong>Publishing is dispatch-only and separately authorized.</strong> The <code>Release</code> workflow triggers on manual dispatch alone, declares <code>permissions: {}</code> at workflow level and elevates per job. A guard job runs before any approval is requested and fails closed on a commit not reachable from the default branch, a version that does not match the manifest, an existing tag, the wrong Cargo version, a missing release note, a packaging violation, or a repackaged archive whose digest differs from the one recorded as evidence. The tag, the publish and the GitHub release then run in three GitHub Environments with required reviewers — three separate human approvals — and a confirm job reads the checksum back from crates.io and compares it again after publication. No long-lived registry credential exists anywhere: both registries are published to through Trusted Publishing, which also means the workflows reachable from a pull request are structurally unable to publish anything.</p>
+
+<p><strong>Publishing is irreversible in both registries, and yanking is not deletion.</strong> A published crates.io version can never be deleted or replaced — the name, the version number and the exact archive bytes are permanent, and there is no force-push equivalent. <code>cargo yank</code> marks a version so that <em>new</em> dependency resolution will not pick it; it does not remove the archive, does not remove it from the index, does not break builds that already have it in a lockfile, and does not stop anyone who pins the version explicitly — which is what every consumer of this prerelease is instructed to do. npm names and versions are equally permanent. The actual fix for a bad release is a follow-up version, which is exactly what <code>0.1.0-beta.3</code> is.</p>
+
+<h2>The two things deliberately not pinned</h2>
+
+<p>Almost everything here is exact-pinned: every production and dev dependency in the manifests and lockfiles, the release and evidence tooling in one file, Node and TypeScript in the npm lockfile, <code>wasm-pack</code>, and the Chrome for Testing build the browser suite runs against.</p>
+
+<p>The exceptions are the <code>stable</code> and <code>nightly</code> toolchain channels used by ordinary CI jobs. Those are <strong>intentionally rolling</strong>, and that is the point: a new compiler release that breaks this crate should turn a check red here, before it reaches a consumer. Pinning them would convert a canary into a snapshot.</p>
+
+<p>Release tooling is the opposite case and is pinned hard, for a concrete reason: <code>cargo package</code> is byte-stable within one Cargo version and not across versions. The same tree at the same commit, packaged by two different Cargo releases, unpacks identically and produces different archive digests. Because <code>cargo publish</code> re-packages rather than uploading an archive you hand it, a rolling <code>stable</code> would let the digest recorded as evidence describe an archive nobody published.</p>
+
+<div class="card-grid">
+  <a class="card" href="packages.html">
+    <span class="card-kicker">Reference</span>
+    <span class="card-title">Packages and crates</span>
+    <p>Every publishable and internal unit, and how to depend on each one.</p>
+  </a>
+  <a class="card" href="guarantees.html">
+    <span class="card-kicker">Project</span>
+    <span class="card-title">Guarantees and verification</span>
+    <p>Which claims have independent evidence behind them, and which do not.</p>
+  </a>
+  <a class="card" href="rust-install.html">
+    <span class="card-kicker">Rust crate</span>
+    <span class="card-title">Install and feature surfaces</span>
+    <p>One package, four build surfaces, and what each pulls into your graph.</p>
+  </a>
+</div>

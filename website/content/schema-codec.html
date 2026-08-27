@@ -1,0 +1,564 @@
+<p>
+  <code>@candid-core/schema/codec</code> turns JavaScript values into Candid wire bytes and back.
+  It is written in TypeScript, has no runtime dependencies, and exports exactly six functions:
+  <code>encode</code>, <code>encodeArgs</code>, <code>decode</code>, <code>decodeArgs</code>,
+  <code>principalTextFromBytes</code> and <code>principalBytesFromText</code>. Everything it needs
+  to know about your data comes from a <em>schema</em> — the plain object a
+  <a href="schema-builders.html"><code>c.*</code> builder</a> returns, the module the
+  <a href="generator.html">generator</a> emits, or a schema
+  <a href="schema-from-contract.html">built at runtime from a Contract document</a>.
+</p>
+
+<p>
+  Nothing here throws. Every call returns a discriminated result you branch on, and every failure
+  carries a machine-readable code and a <code>$</code>-rooted path into the offending value. That
+  holds for hostile bytes and hostile values alike: a getter that throws mid-encode becomes an
+  <code>unreadable_value</code> issue, not an escaping exception.
+</p>
+
+<h2>The four entry points</h2>
+
+<p>
+  A Candid message is an <strong>argument sequence</strong>, not a single value, so
+  <code>encodeArgs</code> and <code>decodeArgs</code> are the primary pair.
+  <code>encode</code> and <code>decode</code> wrap the one-argument case and re-root the issue
+  paths so they read exactly like <a href="schema-validation.html"><code>validate</code></a>'s.
+</p>
+
+<div class="api-entry">
+  <div class="api-head">
+    <span class="api-name">encodeArgs</span>
+    <span class="pill accent">./codec</span>
+  </div>
+  <div class="api-body">
+<pre data-lang="ts" data-file="crates/candid-core-ts/ts/codec.ts">
+export function encodeArgs(
+  schemas: readonly AnyFieldSchema[],
+  values: readonly unknown[],
+  options: CodecOptions = {},
+): EncodeResult
+
+export type EncodeResult =
+  | { readonly ok: true; readonly bytes: Uint8Array }
+  | { readonly ok: false; readonly issues: readonly CodecIssue[] };
+</pre>
+    <p>
+      One schema and one value per argument. Mismatched lengths fail with
+      <code>invalid_length</code> before anything is written.
+    </p>
+  </div>
+</div>
+
+<div class="api-entry">
+  <div class="api-head">
+    <span class="api-name">decodeArgs</span>
+    <span class="pill accent">./codec</span>
+  </div>
+  <div class="api-body">
+<pre data-lang="ts" data-file="crates/candid-core-ts/ts/codec.ts">
+export function decodeArgs(
+  schemas: readonly AnyFieldSchema[],
+  bytes: Uint8Array,
+  options: CodecOptions = {},
+): DecodeResult
+
+export type DecodeResult =
+  | { readonly ok: true; readonly values: readonly unknown[] }
+  | { readonly ok: false; readonly issues: readonly CodecIssue[] };
+</pre>
+    <p>
+      One decoded value per <em>expected</em> argument. Extra trailing wire arguments are skipped;
+      a trailing argument the wire does not carry follows the record-field rule below.
+    </p>
+  </div>
+</div>
+
+<div class="api-entry">
+  <div class="api-head">
+    <span class="api-name">encode / decode</span>
+    <span class="pill accent">./codec</span>
+  </div>
+  <div class="api-body">
+<pre data-lang="ts" data-file="crates/candid-core-ts/ts/codec.ts">
+export function encode<T>(
+  schema: Schema<T>,
+  value: unknown,
+  options: CodecOptions = {},
+): EncodeResult
+
+export function decode<T>(
+  schema: Schema<T>,
+  bytes: Uint8Array,
+  options: CodecOptions = {},
+): { ok: true; value: unknown } | { ok: false; issues: readonly CodecIssue[] }
+</pre>
+    <p>
+      The one-argument convenience wrappers.
+    </p>
+  </div>
+</div>
+
+<callout type="note" title="decode gives you unknown, not T">
+  <p>
+    The type parameter on <code>decode&lt;T&gt;</code> constrains the <em>schema</em>, not the
+    payload: a successful result is <code>{ ok: true; value: unknown }</code>, and
+    <code>decodeArgs</code> returns <code>readonly unknown[]</code>. The bytes came from outside
+    your program, so the runtime does not hand you a static promise about them. Narrow the value
+    yourself, or pass it through <code>validate</code> — the reference-vector suite pins that each
+    decoded value validates <code>ok</code> against the schema it decoded under.
+  </p>
+</callout>
+
+<p>Here is the whole surface in one round trip:</p>
+
+<pre data-lang="ts" data-file="crates/candid-core-ts/ts/README.md">
+import { c, type Infer } from "@candid-core/schema";
+import { validate } from "@candid-core/schema/validate";
+import { encode, decode } from "@candid-core/schema/codec";
+
+const Account = c.record({ owner: c.principal, balance: c.nat });
+type Account = Infer<typeof Account>; // { owner: PrincipalValue; balance: bigint }
+
+const value: Account = { owner: { toText: () => "aaaaa-aa" }, balance: 5n };
+
+validate(Account, value); // { ok: true } | { ok: false, issues }
+const encoded = encode(Account, value); // { ok: true, bytes } | { ok: false, issues }
+if (encoded.ok) {
+  decode(Account, encoded.bytes);
+}
+</pre>
+
+<p>
+  A decoded principal is <code>{ toText(): string }</code> and nothing more — the codec never
+  constructs an SDK class. In the other direction encoding is structural, so an
+  <code>@icp-sdk/core</code> <code>Principal</code> encodes unchanged.
+</p>
+
+<h2>What a Candid message looks like</h2>
+
+<p>
+  You do not need the spec to use the codec, but the four parts explain most of its behaviour.
+  A message is:
+</p>
+
+<ol>
+  <li><strong>The magic</strong> — the four ASCII bytes <code>DIDL</code> (<code>44 49 44 4c</code>).</li>
+  <li>
+    <strong>A type table</strong> — a length-prefixed list of the <em>composite</em> types the
+    message uses. Entries reference each other by index, which is how recursion is expressed, and
+    references may point forward.
+  </li>
+  <li><strong>An argument type list</strong> — one type reference per argument.</li>
+  <li><strong>The values</strong> — all the argument values, concatenated, with no separators.</li>
+</ol>
+
+<p>
+  Only composites get table entries. The eighteen primitives are negative opcodes written inline:
+  <code>null</code> is <code>-1</code>, <code>nat</code> is <code>-3</code>, <code>text</code> is
+  <code>-15</code>, <code>principal</code> is <code>-24</code>. The block <code>-18</code> to
+  <code>-23</code> is the composites — <code>opt</code>, <code>vec</code>, <code>record</code>,
+  <code>variant</code>, <code>func</code>, <code>service</code> — and a primitive opcode appearing
+  in the table, or a composite opcode appearing inline, fails with
+  <code>malformed_type_table</code>.
+</p>
+
+<p>Three shapes have no opcode of their own, so the codec spells them out:</p>
+
+<ul>
+  <li><strong>blob</strong> is emitted as <code>vec nat8</code>;</li>
+  <li><strong>a tuple</strong> is a record whose field ids are exactly <code>0..n-1</code>;</li>
+  <li><strong>unit</strong> is the empty record.</li>
+</ul>
+
+<p>
+  Records and variants identify fields by a 32-bit number, not by name. Schema objects carry
+  readable keys, so both directions derive the number by two rules from
+  <code>@candid-core/schema/labels</code>: a key spelled <code>_N_</code> <em>is</em> the id
+  <code>N</code>, and every other key is the Candid label hash of its UTF-8 bytes,
+  <code>h(name) = fold(h * 223 + byte) mod 2^32</code>. Two keys on one node that derive the same
+  id fail closed with <code>duplicate_field_id</code> rather than one silently winning —
+  <code>c.record({ a: …, _97_: … })</code> is that collision, because
+  <code>candidLabelHash("a")</code> is 97.
+</p>
+
+<p>
+  Emission order is fixed by the format, not by your object: record fields are read and validated
+  in declaration order — so the first issue's path matches what <code>validate</code> reports —
+  and then the buffered bytes are reordered into ascending wire-id order. Service method names go
+  out sorted by raw UTF-8 byte sequence. Identical inputs therefore produce identical bytes:
+  the type table is built in first-visit order over the schema graph, and nothing depends on time,
+  environment, or map iteration order.
+</p>
+
+<h2>Schema-directed decoding</h2>
+
+<p>
+  Decoding is driven by the schema you expect, not by whatever the bytes claim. The message
+  carries its own type description; the decoder checks that description against your expected
+  schema using Candid's coercion relation, and then reads the value bytes as <em>your</em> schema
+  says to read them. That is the difference between a decoded value whose shape you can rely on
+  and one you have to inspect before you can use it.
+</p>
+
+<p>
+  It is also what lets an old client keep working against a canister that has since grown. The
+  coercion rules are the spec's, and the asymmetry between options and variants is deliberate:
+</p>
+
+<ul>
+  <li>
+    <strong>An expected <code>opt</code> absorbs content mismatches to <code>null</code>.</strong>
+    If the wire carries <code>text</code> where your <code>opt</code> wanted a <code>nat</code>,
+    you get <code>null</code>. A bare wire value at an expected <code>opt</code> of its type
+    auto-wraps.
+  </li>
+  <li>
+    <strong>An unknown variant tag is a hard error</strong> (<code>unknown_variant_tag</code>) —
+    unless an enclosing expected <code>opt</code> absorbs it.
+  </li>
+  <li>
+    <strong>A missing non-optional record field is a hard error</strong>
+    (<code>missing_field</code>); a missing field whose expected type is opt-like decodes as
+    <code>null</code>.
+  </li>
+  <li>
+    <strong>Extra wire record fields and extra trailing arguments are skipped</strong> — and
+    charged the same budgets as decoded values.
+  </li>
+</ul>
+
+<p>
+  Each behaviour below is an executed assertion in the coercion-matrix test. The
+  <code>.ok</code> guards the real test needs before reaching <code>.bytes</code> are elided here,
+  and the expected results moved into comments:
+</p>
+
+<pre data-lang="ts" data-file="crates/candid-core-ts/ts/tests/codec.test.ts">
+// A wire nat is accepted at expected int; the reverse hard-errors.
+decode(c.int, encode(c.nat, 5n).bytes);   // { ok: true, value: 5n }
+decode(c.nat, encode(c.int, 5n).bytes);   // type_mismatch
+
+// Extra wire record fields are skipped.
+const wide = encode(c.record({ a: c.bool, b: c.text }), { a: true, b: "x" });
+decode(c.record({ a: c.bool }), wide.bytes);          // { ok: true, value: { a: true } }
+
+// A field the wire does not carry: null if opt-like, hard error otherwise.
+const narrow = encode(c.record({ a: c.bool }), { a: true });
+decode(c.record({ a: c.bool, b: c.opt(c.text) }), narrow.bytes); // { a: true, b: null }
+decode(c.record({ a: c.bool, b: c.text }), narrow.bytes);        // missing_field
+
+// Expected opt absorbs a constituent mismatch; a bare value auto-wraps.
+decode(c.opt(c.nat), encode(c.text, "hi").bytes);  // { ok: true, value: null }
+decode(c.opt(c.text), encode(c.text, "hi").bytes); // { ok: true, value: "hi" }
+
+// Variants trap on an unknown tag — unless an enclosing opt absorbs it.
+const later = encode(c.variant({ ok: c.null, later: c.nat32 }), { tag: "later", value: 7 });
+decode(c.variant({ ok: c.null }), later.bytes);         // unknown_variant_tag
+decode(c.opt(c.variant({ ok: c.null })), later.bytes);  // { ok: true, value: null }
+</pre>
+
+<p>
+  Absorption never hides a broken message. When a constituent mismatch is absorbed, the cursor
+  rewinds and the value is skipped — but malformed bytes and exhausted budgets stay hard failures,
+  and the element charges already spent on the rewound walk are not refunded. Refunding them would
+  let nested options multiply the traversal budget by the absorption depth.
+</p>
+
+<h2>The budgets, and what a caller observes</h2>
+
+<p>
+  <code>CodecOptions</code> is the complete set of bounds, each optional and each defaulting to an
+  exported constant. The same object is accepted by encode and decode.
+</p>
+
+<pre data-lang="ts" data-file="crates/candid-core-ts/ts/codec.ts">
+export interface CodecOptions {
+  /** Input size ceiling for decode, in bytes. */
+  readonly maxBytes?: number;
+  /** Wire type table entry cap, mirroring `Limits::max_type_nodes`. */
+  readonly maxTypeTableEntries?: number;
+  /** Traversal depth cap, mirroring `Limits::max_value_depth`. */
+  readonly maxDepth?: number;
+  /** Traversal element budget, mirroring validate's accounting. */
+  readonly maxElements?: number;
+  /** Byte cap for one unbounded `nat`/`int` encoding. */
+  readonly maxNumericBytes?: number;
+}
+</pre>
+
+<table>
+  <thead>
+    <tr><th>Option</th><th>Default</th><th><code>resource</code> reported</th><th>What it bounds</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><code>maxBytes</code></td>
+      <td><code>10_485_760</code> (10 MiB)</td>
+      <td><code>bytes</code></td>
+      <td>The input length, checked before any parsing begins.</td>
+    </tr>
+    <tr>
+      <td><code>maxTypeTableEntries</code></td>
+      <td><code>100_000</code></td>
+      <td><code>type_table_entries</code></td>
+      <td>The declared type-table size, checked before entries are read.</td>
+    </tr>
+    <tr>
+      <td><code>maxDepth</code></td>
+      <td><code>256</code></td>
+      <td><code>value_depth</code></td>
+      <td>Traversal depth. Every descent, every <code>rec</code> hop, and every skipped nesting level counts.</td>
+    </tr>
+    <tr>
+      <td><code>maxElements</code></td>
+      <td><code>1_000_000</code></td>
+      <td><code>value_elements</code></td>
+      <td>Total elements walked. A blob or <code>vec nat8</code> charges one per byte plus one for the node.</td>
+    </tr>
+    <tr>
+      <td><code>maxNumericBytes</code></td>
+      <td><code>1_048_576</code> (1 MiB)</td>
+      <td><code>numeric_bytes</code></td>
+      <td>The byte length of one unbounded <code>nat</code> or <code>int</code> encoding.</td>
+    </tr>
+  </tbody>
+</table>
+
+<p>
+  When a bound trips, nothing throws and nothing is allocated speculatively. You get
+  <code>{ ok: false, issues }</code> whose first issue has code
+  <code>resource_limit_exceeded</code> and a <code>resource_limit</code> field:
+</p>
+
+<pre data-lang="ts" data-file="crates/candid-core-ts/ts/codec.ts">
+export interface CodecResourceLimitInfo {
+  readonly resource:
+    "bytes" | "type_table_entries" | "value_depth" | "value_elements" | "numeric_bytes";
+  readonly limit: number;
+  readonly observed: number;
+}
+</pre>
+
+<p>
+  That triple is what lets a caller tell "this message is malformed" from "this message is
+  legitimate but larger than the budget I set". Budgets are charged per element <em>actually
+  walked</em>, so a five-byte length prefix claiming 2^28 elements cannot cost you 2^28
+  allocations — the walk stops at your ceiling and reports it.
+</p>
+
+<callout type="warn" title="Skipped data still costs budget">
+  <p>
+    Wire fields your schema ignores, trailing arguments it does not expect, and the rewound walk
+    behind an absorbed <code>opt</code> all charge the element and depth budgets. A large but
+    entirely legitimate blob needs <code>maxElements</code> raised above its byte length: the
+    suite pins a 2,000,000-byte blob decoding at <code>maxElements: length + 1</code> and failing
+    at <code>length</code>.
+  </p>
+</callout>
+
+<p>
+  Decode stops at the first hard error, so its issue list is short — usually one entry. That is a
+  property of the format, not an omission: once a value is misread the byte cursor cannot be
+  resynchronized, so there is nothing truthful left to report. <code>validate</code>, which walks
+  a value structurally, is the API that collects many issues at once.
+</p>
+
+<h2>Strictness where the format is ambiguous</h2>
+
+<h3>Non-minimal LEB128 is rejected</h3>
+
+<p>
+  A number encoded with more continuation bytes than it needs — <code>0x80 0x00</code> for zero —
+  fails with <code>overlong_leb128</code>, in type-table counts and in values alike. Be honest
+  about the standing of this rule: the Candid specification does not state it in so many words.
+  Rejecting it is <em>this implementation's reading</em> of the format as a strict inverse — one
+  byte sequence per value, so that decoding cannot accept two spellings of the same number and
+  re-encoding cannot pick a different one. It was recorded as a deliberate decision, not derived
+  from the text. The consequence to plan for is local: a hand-rolled encoder that pads its LEB128
+  output is refused here, whatever another implementation would make of the same bytes.
+</p>
+
+<h3>float32 is exact-or-refuse</h3>
+
+<p>
+  Encoding <code>0.1</code> at <code>c.float32</code> fails with
+  <code>unrepresentable_float32</code>. It does not store the nearest float32 for you. What that
+  means as a caller: you either pass a value that survives the conversion, or you round it
+  yourself and take responsibility for the loss.
+</p>
+
+<pre data-lang="ts" data-file="crates/candid-core-ts/ts/tests/codec.test.ts">
+encode(c.float32, 0.1);               // unrepresentable_float32
+encode(c.float32, Math.fround(0.1));  // ok
+encode(c.float32, Number.NaN);        // ok
+</pre>
+
+<p>
+  The reason is the round trip. With exact-or-refuse, <code>decode(encode(v))</code> is structural
+  identity for every value the encoder accepts. With silent rounding it would be identity for most
+  values and a quiet approximation for the rest, and you would have no way to tell which.
+</p>
+
+<h3>Text and principals</h3>
+
+<p>
+  Candid text is a sequence of Unicode scalar values, so encode refuses lone surrogates
+  (<code>invalid_text</code>) and decode refuses malformed UTF-8 (<code>invalid_utf8</code>),
+  overlong forms included.
+</p>
+
+<p>
+  Principal text is handled in this module, with no SDK dependency: the canonical form is
+  lowercase base32 of a CRC-32 checksum concatenated with the id bytes, grouped in fives with
+  dashes. <code>principalBytesFromText</code> decodes, then <em>re-renders</em> what it decoded and
+  compares it to the input — so any difference at all returns <code>undefined</code>, and encode
+  turns that into <code>invalid_principal</code>. Uppercase text, wrong dash grouping, a bad
+  checksum and an id longer than the 29-byte maximum all fail the same way. There is no lenient
+  parse.
+</p>
+
+<pre data-lang="ts" data-file="crates/candid-core-ts/ts/tests/codec.test.ts">
+encode(c.principal, { toText: () => "AAAAA-AA" }); // invalid_principal (case)
+encode(c.principal, { toText: () => "aaaaa-ab" }); // invalid_principal (checksum)
+</pre>
+
+<h3>Encode validates as it goes</h3>
+
+<p>
+  <code>encode</code> performs its own complete validation walk rather than trusting a prior
+  <code>validate</code> call — with one difference: it reads each property exactly once, so a
+  hostile getter cannot return a valid value to the checker and a different one to the emitter.
+  The codes and paths it produces match <code>validate</code>'s on the same value, which the suite
+  pins across a matrix of invalid cases.
+</p>
+
+<h2>What the codec does not cover</h2>
+
+<p>Three limits are worth knowing before you point this at arbitrary traffic.</p>
+
+<ul>
+  <li>
+    <strong>Opaque reference values are refused.</strong> A <code>principal</code>,
+    <code>func</code> or <code>service</code> value whose tag byte is <code>0</code> — the opaque
+    reference form — fails with <code>invalid_principal</code>, including when the value is merely
+    being skipped over. Skipping is not a validation exemption.
+  </li>
+  <li>
+    <strong>External reference sequences are refused.</strong> After the value section is read,
+    the input must be exhausted; any bytes remaining fail with <code>trailing_bytes</code>.
+  </li>
+  <li>
+    <strong>Wire <code>future</code> types have no schema counterpart.</strong> They are skippable
+    wherever skipping is legal, but a future value at a position the expected schema actually needs
+    fails with <code>type_mismatch</code>.
+  </li>
+</ul>
+
+<p>
+  <code>func</code> and <code>service</code> values themselves <em>are</em> supported, in the
+  transparent form: a func value encodes and decodes as
+  <code>{ principal, method }</code>, and a service value as the principal of the running service.
+</p>
+
+<callout type="note" title="The scope is the DIDL message">
+  <p>
+    This module makes no claim about any bytes outside the Candid message: agent envelopes, the
+    request or response wrappers of the Internet Computer's HTTP interface, certificates, and
+    reject encodings are all somebody else's format. The
+    <a href="schema-actors.html">actor layer</a> keeps that boundary explicit — a
+    <code>Transport</code> is two methods that move bytes, and the agent on the other side of it
+    never sees a schema.
+  </p>
+</callout>
+
+<h2>Issue codes</h2>
+
+<p>
+  <code>CodecCode</code> is a closed union of 24 members: adding one is an API change. Eleven are
+  shared with <code>validate</code> and mean exactly the same things there —
+  <code>invalid_type</code>, <code>not_integer</code>, <code>out_of_range</code>,
+  <code>missing_field</code>, <code>unexpected_field</code>, <code>unknown_tag</code>,
+  <code>invalid_length</code>, <code>uninhabited_type</code>, <code>unsupported_schema</code>,
+  <code>unreadable_value</code> and <code>resource_limit_exceeded</code>. The other thirteen are
+  wire-specific.
+</p>
+
+<table>
+  <thead>
+    <tr><th>Code</th><th>Fires when</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>invalid_magic</code></td><td>The input does not start with <code>DIDL</code>.</td></tr>
+    <tr><td><code>malformed_type_table</code></td><td>A type index is out of range, or a primitive appears in the table, or a composite appears inline, or a service method does not denote a func type.</td></tr>
+    <tr><td><code>overlong_leb128</code></td><td>A LEB128 or SLEB128 number uses a non-minimal encoding.</td></tr>
+    <tr><td><code>truncated</code></td><td>The input ends mid-value.</td></tr>
+    <tr><td><code>trailing_bytes</code></td><td>Bytes remain after the value section.</td></tr>
+    <tr><td><code>type_mismatch</code></td><td>The wire type is not a subtype of the expected schema, with no enclosing <code>opt</code> to absorb it.</td></tr>
+    <tr><td><code>unknown_variant_tag</code></td><td>The wire carries a variant arm the expected variant does not name.</td></tr>
+    <tr><td><code>invalid_tag_byte</code></td><td>A <code>bool</code>, <code>opt</code>, <code>principal</code>, <code>func</code> or <code>service</code> value starts with a byte other than 0 or 1.</td></tr>
+    <tr><td><code>invalid_utf8</code></td><td>Decoded text or a decoded method name is not well-formed UTF-8.</td></tr>
+    <tr><td><code>invalid_text</code></td><td>A string being encoded contains a lone surrogate.</td></tr>
+    <tr><td><code>invalid_principal</code></td><td>Non-canonical principal text, an over-length id, or an opaque reference form.</td></tr>
+    <tr><td><code>unrepresentable_float32</code></td><td>A <code>float32</code> value is not <code>Math.fround</code>-exact.</td></tr>
+    <tr><td><code>duplicate_field_id</code></td><td>Two keys of one record or variant derive the same wire label id.</td></tr>
+  </tbody>
+</table>
+
+<p>
+  Every issue also carries <code>path</code>, rendered identically to <code>validate</code>'s, so
+  one value produces one path text across the whole runtime. The only addition is the argument
+  root: an args-level walk reports <code>$args[1].owner</code> where the single-value API reports
+  <code>$.owner</code>.
+</p>
+
+<h2>Conformance evidence</h2>
+
+<p>
+  The codec is checked against the upstream <code>candid</code> Rust crate as the reference
+  implementation, and the differential runs in <em>both</em> directions. One test encodes every
+  vector case with <code>candid</code> and pins the hex into
+  <code>tests/goldens/wire/&lt;fixture&gt;.wire.json</code>, which the TypeScript decoder must
+  accept and interpret to a pinned domain value. A second test reads the TypeScript encoder's own
+  checked-in bytes (<code>&lt;fixture&gt;.wire-ts.json</code>), decodes them with
+  <code>candid</code>, and asserts they equal the case's value — so the reference implementation
+  validates our encoder, not only the reverse. The reference type environment is built by
+  <code>candid_parser</code> reading the fixture <code>.did</code> source directly, deliberately
+  not through candid-core's own compiler, so the reference path shares no code with the model under
+  test.
+</p>
+
+<p>
+  Each vector is also decoded twice: once under the generated golden schema, and once under the
+  schema <code>schemaFromContract</code> builds from the same fixture's Contract document. Both
+  must produce the same value and re-encode to byte-identical output.
+</p>
+
+<p>
+  <a href="guarantees.html">Guarantees and verification</a> sets out what each gate actually
+  establishes and what is deliberately not claimed. A gate existing is not the same as a property
+  being proven, and the codec is pre-1.0 like everything else here. The module is
+  <a href="https://github.com/b3hr4d/candid-core/blob/main/crates/candid-core-ts/ts/codec.ts"><code>crates/candid-core-ts/ts/codec.ts</code></a>;
+  its header records each strictness decision and the issue it was decided on, and the vectors
+  live in
+  <a href="https://github.com/b3hr4d/candid-core/blob/main/crates/candid-core-ts/tests/wire_vectors.rs"><code>tests/wire_vectors.rs</code></a>.
+</p>
+
+<h2>Next</h2>
+
+<div class="card-grid">
+  <a class="card" href="schema-validation.html">
+    <span class="card-kicker">Guide</span>
+    <span class="card-title">Validation</span>
+    <p>The eleven shared issue codes, path rendering, and the budgets the codec mirrors.</p>
+  </a>
+  <a class="card" href="schema-actors.html">
+    <span class="card-kicker">Guide</span>
+    <span class="card-title">Typed actors</span>
+    <p>Where these bytes go: a two-method transport with the codec doing all the encoding.</p>
+  </a>
+  <a class="card" href="reference-mapping.html">
+    <span class="card-kicker">Reference</span>
+    <span class="card-title">Candid to TypeScript</span>
+    <p>The complete mapping table, including the cases that deliberately fail closed.</p>
+  </a>
+</div>

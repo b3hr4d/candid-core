@@ -1,0 +1,468 @@
+<p>
+  A <strong>Contract</strong> is the validated, canonically ordered type graph this
+  crate is built around: an arena of type nodes, a table of named declarations, an
+  optional actor, and content-addressed identities computed over its canonical bytes.
+  Compiling <code>.did</code> source is one way to get one. This page covers the
+  other two — authoring a Contract from a graph you built yourself, and accepting a
+  Contract document that arrived from somewhere else.
+</p>
+
+<p>
+  Both live in the base surface. Nothing here needs the
+  <span class="pill accent">compiler</span> feature, so a
+  <code>default-features = false</code> build can author, validate, canonicalize,
+  serialize and content-address Contracts with no Candid engine in its dependency
+  graph at all.
+</p>
+
+<h2>ContractDraft — the producer path</h2>
+
+<p>
+  A draft carries the four things an authoring tool supplies and nothing it must not:
+  the type graph, named declarations, an optional actor, and optional producer
+  metadata. It has <strong>no format markers and no identity fields at all</strong>,
+  so a draft cannot carry a fake, stale or placeholder identity. Building stamps the
+  format constants and calculates fresh identities.
+</p>
+
+<pre data-lang="rust" data-file="src/model/contract.rs">
+pub struct ContractDraft {
+    pub types: Vec<TypeNode>,
+    pub declarations: Vec<Declaration>,
+    pub actor: Option<Actor>,
+    pub producer: Option<ProducerInfo>,
+}
+
+impl ContractDraft {
+    pub fn new(types: Vec<TypeNode>, declarations: Vec<Declaration>, actor: Option<Actor>) -> Self;
+    pub fn with_producer(self, producer: ProducerInfo) -> Self;
+
+    pub fn build(self) -> Result<Contract, ContractValidationError>;
+    pub fn build_with_limits(self, limits: &Limits) -> Result<Contract, ContractValidationError>;
+    pub fn build_with_context(self, context: &RuntimeContext) -> Result<Contract, ContractValidationError>;
+}
+</pre>
+
+<p>
+  <code>build()</code> uses <code>Limits::default()</code>.
+  <code>build_with_limits</code> takes your own policy;
+  <code>build_with_context</code> additionally shares the context's deadline and
+  cancellation token, which is what you want when the build is one step inside a
+  larger bounded operation. All three validate the structure and canonicalize before
+  computing identities, so an invalid draft never yields a Contract.
+</p>
+
+<pre data-lang="rust">
+use candid_core::{
+    Actor, ContractDraft, Declaration, Field, Limits, MethodMode, PrimitiveType,
+    ServiceMethod, TypeNode,
+};
+
+// A record { id: nat64; label: text } and a service with one query method.
+// Every id below is the Candid name hash of the label or method name --
+// fold(\s b -> s * 223 + b) 0 over the UTF-8 bytes, modulo 2^32. Validation
+// recomputes a method's hash from its name, so a wrong id is rejected.
+let types = vec![
+    TypeNode::Primitive { primitive: PrimitiveType::Nat64 },   // 0
+    TypeNode::Primitive { primitive: PrimitiveType::Text },    // 1
+    TypeNode::Record {
+        fields: vec![
+            Field { id: 23_515, ty: 0 },
+            Field { id: 1_873_743_348, ty: 1 },
+        ],
+    },                                                          // 2
+    TypeNode::Func { args: vec![], results: vec![2], mode: MethodMode::Query }, // 3
+    TypeNode::Service {
+        methods: vec![ServiceMethod { name: "read".into(), id: 1_269_254_998, function: 3 }],
+    },                                                          // 4
+];
+
+let contract = ContractDraft::new(
+    types,
+    vec![Declaration { name: "Item".into(), ty: 2 }],
+    Some(Actor::Service { service: 4 }),
+)
+.build_with_limits(&Limits::default())?;
+
+assert!(contract.contract_id().starts_with("candid-core:contract:v1:sha256:"));
+</pre>
+
+<callout type="note" title="Indices are not the ones you wrote">
+  <p>
+    Building canonicalizes, which deterministically re-indexes the arena. The
+    <code>TypeRef</code> values in the resulting Contract are not necessarily the ones
+    you supplied, and the field and method orders are the canonical ones. Read the
+    result through its accessors rather than assuming your own indices survived. The
+    <a href="canonical-bytes.html">canonical bytes</a> page explains what the ordering
+    is and why it exists.
+  </p>
+</callout>
+
+<p>
+  <code>with_producer</code> overrides the <code>ProducerInfo::current</code> default
+  applied at build time. Producer metadata is untrusted and sits outside both
+  semantic identities — two Contracts differing only in producer share the same
+  <code>contract_id</code> and <code>interface_id</code>, even though they are
+  byte-different on the wire. Its bytes are still bounded, by
+  <code>max_producer_bytes</code>.
+</p>
+
+<h2>Reading a Contract</h2>
+
+<p>
+  Every field is private. A <code>Contract</code> value is always valid, and that is
+  only enforceable if nothing can reach in and change one. The full accessor list:
+</p>
+
+<table>
+  <thead>
+    <tr><th>Accessor</th><th>Returns</th><th>What it is</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>types()</code></td><td><code>&amp;[TypeNode]</code></td><td>The arena. Every edge in the graph is a <code>TypeRef</code>, a zero-based index into this slice.</td></tr>
+    <tr><td><code>declarations()</code></td><td><code>&amp;[Declaration]</code></td><td>Named roots — one per <code>type Foo = …</code>. A name table over the graph, not part of the type algebra.</td></tr>
+    <tr><td><code>actor()</code></td><td><code>Option&lt;&amp;Actor&gt;</code></td><td>The root, when the source declared one: <code>Service</code> or <code>Class</code>.</td></tr>
+    <tr><td><code>contract_id()</code></td><td><code>&amp;str</code></td><td>The whole-Contract semantic identity, prefixed <code>candid-core:contract:v1:sha256:</code>.</td></tr>
+    <tr><td><code>interface_id()</code></td><td><code>Option&lt;&amp;str&gt;</code></td><td>The actor-reachable wire semantics only. <code>None</code> for an actorless Contract.</td></tr>
+    <tr><td><code>identities()</code></td><td><code>&amp;ContractIdentities</code></td><td>Both of the above as one struct: <code>{ contract, interface }</code>.</td></tr>
+    <tr><td><code>producer()</code></td><td><code>&amp;ProducerInfo</code></td><td><code>{ name, version, candid_version, candid_parser_version }</code>. Unverified provenance.</td></tr>
+    <tr><td><code>format()</code></td><td><code>&amp;str</code></td><td><code>"candid-core"</code>.</td></tr>
+    <tr><td><code>format_version()</code></td><td><code>u32</code></td><td><code>1</code>.</td></tr>
+    <tr><td><code>semantics_profile()</code></td><td><code>&amp;str</code></td><td><code>"candid-1"</code> — which Candid semantics the graph was projected under.</td></tr>
+    <tr><td><code>canonicalization_profile()</code></td><td><code>&amp;str</code></td><td><code>"candid-core-canon-1"</code> — which byte-level canonicalization produced the identities.</td></tr>
+  </tbody>
+</table>
+
+<p>
+  The three profile-ish markers are versioned independently on purpose: the schema,
+  the Candid semantics and the canonical bytes can each move without dragging the
+  others. See <a href="identities.html">Content-addressed identities</a>.
+</p>
+
+<h2>Accepting a document from somewhere else</h2>
+
+<p>
+  <code>Contract</code> deliberately does <strong>not</strong> implement
+  <code>Deserialize</code>. A trait impl has no argument position for a resource
+  policy, so it could only ever decode under limits the library picked. The serde
+  entry point is <code>RawContract</code>, an unvalidated data-transfer object with
+  exactly the wire shape, and the crossing from one to the other is explicit.
+</p>
+
+<pre data-lang="rust" data-file="src/model/contract.rs">
+pub fn try_from_raw(raw: RawContract) -> Result<Self, ContractValidationError>;
+pub fn try_from_raw_with_limits(raw: RawContract, limits: &Limits) -> Result<Self, ContractValidationError>;
+pub fn try_from_raw_with_context(raw: RawContract, context: &RuntimeContext) -> Result<Self, ContractValidationError>;
+</pre>
+
+<p>
+  These check every structural rule <em>and</em> verify the identities the document
+  supplied against recomputation. A mismatch is an error, not a silent repair: a
+  document whose <code>identities.contract</code> does not hash out is rejected.
+  <code>From&lt;&amp;Contract&gt; for RawContract</code> projects a validated Contract
+  back onto the wire shape in the other direction.
+</p>
+
+<callout type="warn" title="Decoding a RawContract is not a trust boundary">
+  <p>
+    <code>RawContract</code> derives <code>Deserialize</code> with no size bound at
+    all. <code>serde_json::from_str::&lt;RawContract&gt;</code> on untrusted bytes
+    will happily allocate whatever the document describes. Gate the byte length
+    yourself, or — better — use the bounded parse entry points below, which do it for
+    you before <code>serde_json</code> is ever invoked.
+  </p>
+</callout>
+
+<h3>The bounded parse APIs</h3>
+
+<pre data-lang="rust" data-file="src/model/contract.rs">
+Contract::from_json(input: &str)                                  // Limits::default()
+Contract::from_json_with_limits(input: &str, limits: &Limits)
+Contract::from_json_with_context(input: &str, context: &RuntimeContext)
+Contract::from_slice_with_limits(input: &[u8], limits: &Limits)
+Contract::from_slice_with_context(input: &[u8], context: &RuntimeContext)
+// -> Result<Contract, ContractJsonError>
+</pre>
+
+<p>
+  Each of these enforces <code>max_input_bytes</code> against the input length
+  <em>before</em> the document is decoded, reporting resource
+  <code>input_bytes</code> if it is too large — so an oversized document is rejected
+  without being materialized. The gate, the decode and the validation then share one
+  budget, rather than each starting from a fresh allowance.
+</p>
+
+<p>
+  <code>ContractJsonError</code> separates the two failure kinds:
+  <code>MalformedJson(String)</code> for "this is not JSON, or not the right shape",
+  and <code>InvalidContract(ContractValidationError)</code> for "this is a well-formed
+  document that breaks a Contract rule". The same pair of bounded families exists on
+  <code>Compilation</code> and on <code>ContractEnvelope</code>.
+</p>
+
+<pre data-lang="rust" data-file="examples/trust_boundary.rs">
+use candid_core::{compile_did, Contract};
+use std::error::Error;
+
+fn main() -> Result<(), Box<dyn Error>> {
+    let compilation = compile_did("service : { ping: () -> (nat) query };")?;
+    let canonical_json = compilation.contract().to_json_pretty()?;
+    let accepted = Contract::from_json(&canonical_json)?;
+    println!("validated {} type nodes", accepted.types().len());
+
+    // An unknown key in the strict core is rejected, not ignored.
+    let mut injected: serde_json::Value = serde_json::from_str(&canonical_json)?;
+    injected["widget"] = serde_json::json!("date-picker");
+    let rejected = Contract::from_json(&serde_json::to_string(&injected)?).unwrap_err();
+    println!("unknown core metadata rejected: {rejected}");
+
+    // A supplied identity that does not recompute is rejected, not repaired.
+    let mut tampered: serde_json::Value = serde_json::from_str(&canonical_json)?;
+    tampered["identities"]["contract"] = serde_json::json!(
+        "candid-core:contract:v1:sha256:0000000000000000000000000000000000000000000000000000000000000000"
+    );
+    let rejected = Contract::from_json(&serde_json::to_string(&tampered)?).unwrap_err();
+    println!("tampered semantic identity rejected: {rejected}");
+    Ok(())
+}
+</pre>
+
+<pre data-lang="bash">
+cargo run --example trust_boundary
+</pre>
+
+<h2>Validating, canonicalizing and rendering</h2>
+
+<pre data-lang="rust" data-file="src/model/contract.rs">
+contract.validate()                     // and _with_limits / _with_context
+contract.canonicalize()                 // and _with_limits / _with_context
+contract.to_json_pretty()               // and _with_limits / _with_context
+</pre>
+
+<p>
+  <code>validate</code> checks graph structure and verifies the content identities.
+  <code>canonicalize</code> returns a deterministically re-indexed copy with freshly
+  calculated identities, and is idempotent — canonicalizing an already-canonical
+  Contract returns an equal value.
+</p>
+
+<h3>Rendering consumes a second budget</h3>
+
+<p>
+  This is the one behaviour most likely to surprise you.
+  <code>to_json_pretty_with_limits</code> is not a dump of the in-memory value: it
+  revalidates and recanonicalizes first, and then charges the <em>rendered byte
+  length</em> against <code>max_canonicalization_work</code>. So a caller who raised
+  only the structural limit that gated construction — <code>max_string_bytes</code>,
+  say, or <code>max_input_bytes</code> — may still fail to render the result, and the
+  failure names <code>canonicalization_work</code> rather than the limit they raised.
+</p>
+
+<pre data-lang="rust" data-file="examples/bounded_parsing.rs">
+// Serialization consumes a second budget. Whichever structural limit gated
+// construction, rendering additionally charges the emitted byte length
+// against `max_canonicalization_work`, so a caller who raised only
+// `max_input_bytes` to parse a document may still fail to render it.
+let render = raised.clone().with_max_canonicalization_work(16);
+let starved_render = contract.to_json_pretty_with_limits(&render).unwrap_err();
+let metadata = starved_render
+    .violations
+    .iter()
+    .find_map(|violation| violation.resource_limit.as_ref())
+    .ok_or("expected resource metadata")?;
+println!(
+    "render starved: resource={} limit={} observed={}",
+    metadata.resource, metadata.limit, metadata.observed
+);
+</pre>
+
+<p>
+  <code>Compilation::to_json_pretty_with_context</code> differs in one respect: it
+  validates without recanonicalizing, because a <code>Compilation</code>'s Contract is
+  already canonical and its sidecar's type references are indexed against exactly that
+  arena. Rendering a recanonicalized copy could desynchronize the two.
+</p>
+
+<p>
+  For a completely unbounded render of a value you already trust,
+  <code>Serialize</code> is implemented on <code>Contract</code> directly. It consults
+  no limits and revalidates nothing. That path is for values you produced, not values
+  you received.
+</p>
+
+<h2>Detached artifact identities</h2>
+
+<p>
+  <code>contract_id</code> and <code>interface_id</code> hash <em>meaning</em>, so
+  they are unchanged by rewriting <code>producer</code>, reformatting the document,
+  adding an envelope extension, or replacing the provenance sidecar. That is exactly
+  what makes them useful as compatibility keys and exactly what makes them the wrong
+  thing to commit to when the octets themselves are what matter.
+</p>
+
+<pre data-lang="rust" data-file="src/artifact_id.rs">
+pub fn artifact_id_with_limits(
+    kind: ArtifactKind,
+    bytes: &[u8],
+    limits: &Limits,
+) -> Result<String, ContractValidationError>
+
+pub fn artifact_id_with_context(
+    kind: ArtifactKind,
+    bytes: &[u8],
+    context: &RuntimeContext,
+) -> Result<String, ContractValidationError>
+</pre>
+
+<p>
+  These hash the exact octet sequence you hand them, under a domain chosen by
+  <code>kind</code>, and return the digest. Nothing is stored, nothing is serialized
+  back into the artifact, and no decode ever computes one. Two artifact IDs are equal
+  if and only if the kind and the byte sequence were equal, under the SHA-256
+  collision assumption. That is the whole claim: it establishes neither semantic
+  equality, nor structural validity — the bytes are never parsed — nor authenticity.
+  It is a content address, not a credential.
+</p>
+
+<table>
+  <thead>
+    <tr><th><code>ArtifactKind</code></th><th>Document</th><th>What those bytes carry</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><code>ContractJsonV1</code></td>
+      <td>A bare Contract document</td>
+      <td>The Contract alone, <code>producer</code> included. No extensions, no sidecar.</td>
+    </tr>
+    <tr>
+      <td><code>ContractEnvelopeJsonV1</code></td>
+      <td>A <code>ContractEnvelope</code> document</td>
+      <td>A Contract plus its namespaced extension map. No sidecar.</td>
+    </tr>
+    <tr>
+      <td><code>CompilationJsonV1</code></td>
+      <td>A <code>Compilation</code> document</td>
+      <td>A Contract plus its optional <code>SourceInfo</code> sidecar. No extensions.</td>
+    </tr>
+  </tbody>
+</table>
+
+<p>
+  The enum is <code>#[non_exhaustive]</code>, so naming a further kind later is not a
+  breaking change, and the existing domains are frozen. Selecting a kind is
+  <em>all</em> it does — no variant parses or validates, so arbitrary bytes hash
+  as readily under any kind and the resulting ID makes no claim they are a document of
+  that kind.
+</p>
+
+<pre data-lang="rust" data-file="src/artifact_id.rs">
+use candid_core::{artifact_id_with_limits, ArtifactKind, Limits};
+
+let document = br#"{"contract":{}}"#;
+let id = artifact_id_with_limits(
+    ArtifactKind::ContractEnvelopeJsonV1,
+    document,
+    &Limits::default(),
+)?;
+assert!(id.starts_with("candid-core:artifact:contract-envelope-json:v1:sha256:"));
+
+// The same bytes under any other kind are a different identity.
+for other in [ArtifactKind::ContractJsonV1, ArtifactKind::CompilationJsonV1] {
+    let rehashed = artifact_id_with_limits(other, document, &Limits::default())?;
+    assert_ne!(id, rehashed);
+}
+
+// One byte of whitespace is a different artifact.
+let reformatted = artifact_id_with_limits(
+    ArtifactKind::ContractEnvelopeJsonV1,
+    br#"{"contract": {}}"#,
+    &Limits::default(),
+)?;
+assert_ne!(id, reformatted);
+</pre>
+
+<p>
+  Two counters are involved and no others: <code>max_input_bytes</code> gates the
+  slice before any hashing, reported as resource <code>input_bytes</code>; then
+  <code>max_artifact_identity_work</code> is charged one unit per byte plus the fixed
+  domain framing, reported as <code>artifact_identity_work</code>. The
+  <code>_with_context</code> form checks cancellation and the deadline before the
+  first byte and again at every chunk boundary, and fails closed rather than returning
+  a partial digest.
+</p>
+
+<h2>Migrating from the pre-1.0 producer APIs</h2>
+
+<p>
+  <code>RawContract::new</code> and
+  <code>Contract::build_raw</code>/<code>build_raw_with_context</code> were removed in
+  the pre-1.0 API cleanup. A producer-facing constructor that fabricated placeholder
+  zero identities made the intuitive <code>RawContract::new</code> →
+  <code>Contract::try_from_raw</code> pairing fail by construction:
+  <code>try_from_raw</code> verifies supplied identities, and the placeholder ones
+  never verified. <code>ContractDraft</code> has no identity fields at all, so the
+  mistake is now unrepresentable.
+</p>
+
+<pre data-lang="rust" data-file="README.md">
+// Before:
+let raw = RawContract::new(types, declarations, actor);
+let contract = Contract::build_raw(raw, &limits)?;
+// After:
+let contract = ContractDraft::new(types, declarations, actor)
+    .build_with_limits(&limits)?;               // .build() for Limits::default()
+// A caller-supplied producer used to travel inside the RawContract; now:
+let contract = ContractDraft::new(types, declarations, actor)
+    .with_producer(producer)
+    .build_with_limits(&limits)?;
+</pre>
+
+<p>Two smaller changes landed in the same cleanup:</p>
+
+<ul>
+  <li>
+    <code>Limits</code> no longer exposes public fields or exhaustive struct literals.
+    Construction goes through a profile plus <code>with_*</code> builders, and reads
+    go through getters — <code>limits.max_canonicalization_work()</code>, not
+    <code>limits.max_canonicalization_work</code>. See
+    <a href="rust-limits.html">Working with limits</a>.
+  </li>
+  <li>
+    <code>ResourceLimitInfo.limit</code>/<code>.observed</code> and
+    <code>SourceSpan.start_byte</code>/<code>.end_byte</code> changed from
+    platform-width <code>usize</code> to fixed-width <code>u64</code>. The serialized
+    JSON numeric text is unchanged. Serialized <code>Limits</code> documents changed
+    from a bare field map to the versioned portable configuration.
+  </li>
+</ul>
+
+<callout type="danger" title="The Contract format is not a stable v1">
+  <p>
+    Any release before 1.0 may change the public API, the serialized shapes, the
+    canonical bytes, and therefore every identity computed over them. Of the seven
+    foundation architecture decisions, only the versioning-and-canonical-bytes one is
+    marked Verified; the rest are implemented with verification pending. Treat
+    identities as stable within a version, not across versions. See
+    <a href="guarantees.html">Guarantees and verification</a>.
+  </p>
+</callout>
+
+<h2>Next</h2>
+
+<div class="card-grid">
+  <a class="card" href="contract-graph.html">
+    <span class="card-kicker">Concept</span>
+    <span class="card-title">The Contract graph</span>
+    <p>Every node kind, what the arena guarantees, and why fields carry ids rather than names.</p>
+  </a>
+  <a class="card" href="trust-boundary.html">
+    <span class="card-kicker">Concept</span>
+    <span class="card-title">The trust boundary</span>
+    <p>Why raw DTOs and validated types are different types, and where the crossing sits.</p>
+  </a>
+  <a class="card" href="reference-json.html">
+    <span class="card-kicker">Reference</span>
+    <span class="card-title">JSON document formats</span>
+    <p>The Contract, envelope, compilation and limits documents, with real excerpts.</p>
+  </a>
+</div>
