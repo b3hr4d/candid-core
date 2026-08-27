@@ -1,0 +1,387 @@
+<p>
+  <code>candid-core</code> is one crate on crates.io. It reads Candid
+  <code>.did</code> interface source and projects it into a <strong>Contract</strong>:
+  a validated, canonically ordered type graph with named declarations, an optional
+  actor, and content-addressed identities computed over its canonical bytes. What
+  that crate <em>builds</em> is split into an always-present base plus three Cargo
+  features, so a consumer that only wants the data model never compiles a Candid
+  parser and never links a filesystem capability crate.
+</p>
+
+<p>
+  Everything on this page is pre-1.0. The current release is
+  <code>0.1.0-beta.3</code>, and any release before 1.0 may change the public API,
+  the serialized shapes, the canonical bytes, and therefore every identity computed
+  over them. Pin an exact version.
+</p>
+
+<h2>Adding the dependency</h2>
+
+<p>
+  Every published version of <code>candid-core</code> is a prerelease. Cargo only
+  selects a prerelease when the version requirement itself names one, so the usual
+  caret spelling resolves to <em>nothing</em>: <code>candid-core = "0.1"</code> does
+  not match <code>0.1.0-beta.3</code>, and <code>cargo install candid-core</code>
+  fails with a "could not find … with version *" message. Write the exact
+  requirement.
+</p>
+
+<pre data-lang="toml" data-file="Cargo.toml">
+[dependencies]
+# The full surface: compiler, filesystem-compiler and host-value are all
+# enabled by default, so no feature selection is needed.
+candid-core = "=0.1.0-beta.3"
+</pre>
+
+<p>The same thing from the command line:</p>
+
+<pre data-lang="bash">
+cargo add candid-core@=0.1.0-beta.3
+</pre>
+
+<p>
+  Pinning with <code>=</code> is worth doing for a second reason beyond
+  prerelease selection. With both the API and the wire format unstable before 1.0,
+  an automatic move to the next prerelease is a change you should opt into
+  deliberately rather than inherit from a <code>cargo update</code>.
+</p>
+
+<callout type="warn" title="Upgrade rather than pin an earlier beta">
+  <p>
+    <code>0.1.0-beta.1</code> and <code>0.1.0-beta.2</code> walk a declaration graph
+    as a tree, so a small <code>.did</code> file with shared type aliases can drive
+    work that doubles per level — and no limit refused it, because the walk returned
+    <code>Ok</code>. <code>0.1.0-beta.3</code> fixes that and adds
+    <code>max_type_preflight_work</code> so the work is charged. If you compile
+    <code>.did</code> source you did not write, do not pin either earlier version.
+  </p>
+</callout>
+
+<h2>The four build surfaces</h2>
+
+<p>
+  <code>default = ["compiler", "filesystem-compiler", "host-value"]</code>. The base
+  is what remains when <code>default-features = false</code> removes all three.
+</p>
+
+<table>
+  <thead>
+    <tr>
+      <th>Surface</th>
+      <th>What it adds</th>
+      <th>What it pulls into your graph</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><em>(base)</em></td>
+      <td>
+        <code>Contract</code>, <code>ContractDraft</code>, <code>RawContract</code>,
+        <code>ContractEnvelope</code>, validation, canonicalization, the semantic
+        Contract identities, <code>artifact_id_with_limits</code> /
+        <code>ArtifactKind</code>, <code>Limits</code> / <code>RuntimeContext</code> /
+        <code>CancellationToken</code>, <code>Diagnostic</code>
+      </td>
+      <td><code>serde</code>, <code>serde_json</code>, <code>sha2</code>, <code>hex</code></td>
+    </tr>
+    <tr>
+      <td><span class="pill accent">host-value</span></td>
+      <td>
+        <code>HostValue</code>, <code>HostFieldValue</code>,
+        <code>validate_host_value</code>, <code>ContractTypeRef</code> /
+        <code>ContractMethodRef</code>
+      </td>
+      <td><code>ic_principal</code></td>
+    </tr>
+    <tr>
+      <td><span class="pill accent">compiler</span></td>
+      <td>
+        <code>compile_did</code> and its option/context variants,
+        <code>compile_with_resolver</code>, <code>Compilation</code>,
+        <code>CompileOptions</code>, <code>CompileError</code>,
+        <code>SourceId</code> / <code>SourceResolver</code> /
+        <code>ResolvedSource</code> / <code>MemoryResolver</code>, the
+        <code>SourceInfo</code> provenance sidecar
+      </td>
+      <td><code>candid</code>, <code>candid_parser</code></td>
+    </tr>
+    <tr>
+      <td><span class="pill accent">filesystem-compiler</span> (implies <code>compiler</code>)</td>
+      <td>
+        <code>WorkspaceResolver</code>, <code>compile_did_file</code> and its
+        variants, source materialization for
+        <code>candid_parser::check_file</code>, the <code>candid-core</code> binary
+      </td>
+      <td><code>cap-std</code></td>
+    </tr>
+  </tbody>
+</table>
+
+<h3>Base — the pure Contract model</h3>
+
+<p>
+  The base surface can build a Contract from a graph you already hold
+  (<code>ContractDraft</code>), validate one that arrived as JSON
+  (<code>Contract::from_json_with_context</code>), canonicalize it, read its
+  <code>contract_id</code> and <code>interface_id</code>, and hash a serialized
+  document into a detached artifact identity. It cannot parse <code>.did</code> text,
+  because no Candid engine is in the graph at all.
+</p>
+
+<p>
+  <strong>Choose it if</strong> your process receives Contract documents rather than
+  Candid source — a registry that stores them, a service that validates uploads, a
+  build step downstream of someone else's compile. What that removes is a
+  dependency-graph size you can measure: resolved for
+  <code>x86_64-unknown-linux-gnu</code>, the base graph is 22 packages where the
+  default graph is 126. The figures move with the target, because
+  <code>cap-std</code> brings different platform dependencies on Linux, macOS and
+  Windows, so
+  <a href="https://github.com/b3hr4d/candid-core/blob/main/tests/fixtures/packaging/verify_feature_graph.py">verify_feature_graph.py</a>
+  resolves and prints every configuration for the host you run it on.
+</p>
+
+<h3><span class="pill accent">host-value</span> — validating values against a graph</h3>
+
+<p>
+  Adds <code>HostValue</code>, a lossless self-describing JSON encoding for Candid
+  values, and <code>validate_host_value</code>, which checks a value tree against a
+  type node in a Contract's graph. It takes <code>ic_principal</code> directly rather
+  than through <code>candid</code>, which is what keeps the parser stack out of a
+  value-only build.
+</p>
+
+<p>
+  <strong>Choose it if</strong> you accept user-entered or wire-received values and
+  want the interface itself to decide whether they are well-formed. See
+  <a href="rust-host-values.html">Validating host values</a>.
+</p>
+
+<h3><span class="pill accent">compiler</span> — Candid source, no filesystem</h3>
+
+<p>
+  Adds the parsing and type-checking path. Parsing and semantic checking are
+  delegated to the official <code>candid_parser</code> crate rather than
+  reimplemented, so this feature is what brings <code>candid</code> and
+  <code>candid_parser</code> into the graph. It covers self-contained sources
+  through <code>compile_did</code> <em>and</em> multi-file bundles with imports
+  through <code>compile_with_resolver</code>, where the host supplies every source
+  synchronously as data.
+</p>
+
+<p>
+  <strong>Choose it if</strong> you compile Candid source in a place with no
+  filesystem, or with a filesystem you do not want the library to touch: a browser,
+  a sandboxed worker, an editor that already has the buffers in memory, a server
+  accepting pasted source.
+</p>
+
+<h3><span class="pill accent">filesystem-compiler</span> — native files</h3>
+
+<p>
+  Adds <code>WorkspaceResolver</code>, which holds an open <code>cap-std</code>
+  directory capability for one authorized root and opens every path relative to it;
+  <code>compile_did_file</code>, which roots a resolver at the file's own parent
+  directory; and the <code>candid-core</code> binary. It implies
+  <code>compiler</code>, so it is a superset.
+</p>
+
+<p>
+  <strong>Choose it if</strong> you are a native tool that reads <code>.did</code>
+  files off disk, or you want the CLI. See
+  <a href="cli-rust.html">The candid-core binary</a>.
+</p>
+
+<h2>What feature selection does, and does not, do</h2>
+
+<p>
+  Two caveats are worth stating plainly, because both are easy to over-read.
+</p>
+
+<p>
+  <strong>Cargo unifies features across a build.</strong> Feature splitting bounds
+  what a <em>dependency graph</em> must contain — it cannot subtract from a graph
+  that already asked for more. If anything else in your build depends on
+  <code>candid-core</code> with defaults, the whole surface is compiled once for
+  every consumer in that build, including yours. Your
+  <code>default-features = false</code> line is still meaningful: it states what
+  <em>your</em> crate needs, and it is what makes a lean graph possible when nothing
+  else contradicts it. It is not a guarantee about the compiled output of a mixed
+  workspace.
+</p>
+
+<p>
+  <strong>Feature selection does not shrink the download.</strong> Every published
+  source file ships in the <code>.crate</code> archive regardless of features, so a
+  base-only consumer still downloads the <code>compiler</code> sources it will never
+  build. What the archive contains is governed separately, by a positive
+  <code>include</code> allowlist in the manifest — production source, runnable
+  examples, the public <code>docs/</code> set, and the three root documents. Test
+  suites, fixtures, benchmarks, the fuzz crate and CI assets are not published.
+</p>
+
+<p>
+  One thing features do <em>not</em> change: <code>ProducerInfo::current</code>
+  reports the same <code>name</code>, <code>version</code>,
+  <code>candid_version</code> and <code>candid_parser_version</code> in every
+  configuration, because it reads the pinned versions out of the manifest at compile
+  time rather than from a linked crate.
+</p>
+
+<h2>Two configurations worth copying</h2>
+
+<h3>A browser or WASM host that compiles source it already holds</h3>
+
+<pre data-lang="toml" data-file="Cargo.toml">
+[dependencies]
+candid-core = { version = "=0.1.0-beta.3", default-features = false, features = ["compiler"] }
+</pre>
+
+<p>
+  This keeps <code>cap-std</code> out of the graph entirely — and so does the default
+  configuration on that target, because <code>cap-std</code> is declared under
+  <code>cfg(not(target_os = "unknown"))</code> as well as behind the feature. A
+  <code>compiler</code>-only graph resolved for <code>wasm32-unknown-unknown</code> is
+  107 packages. Compile a bundle the host supplies:
+</p>
+
+<pre data-lang="rust" data-file="examples/hermetic_bundle.rs">
+use candid_core::{compile_with_resolver, CompileOptions, MemoryResolver, RuntimeContext};
+
+let mut resolver = MemoryResolver::new();
+resolver.insert(
+    "api/root.did",
+    r#"import "types.did"; service : { read: () -> (Item) query };"#,
+)?;
+resolver.insert(
+    "api/types.did",
+    "type Item = record { id: nat64; label: text };",
+)?;
+
+let compilation = compile_with_resolver(
+    "api/root.did",
+    &resolver,
+    CompileOptions::default(),
+    &RuntimeContext::default(),
+)?;
+println!("contract: {}", compilation.contract().contract_id());
+</pre>
+
+<h3>A pure-model consumer that never sees Candid source</h3>
+
+<pre data-lang="toml" data-file="Cargo.toml">
+[dependencies]
+candid-core = { version = "=0.1.0-beta.3", default-features = false }
+</pre>
+
+<pre data-lang="rust">
+use candid_core::{Contract, ContractJsonError, Limits, RuntimeContext};
+
+fn accept(document: &[u8]) -> Result<Contract, ContractJsonError> {
+    // The byte gate runs before serde_json is invoked, so an oversized
+    // document is rejected without being decoded; the gate, the decode and
+    // validation then share one budget.
+    let context = RuntimeContext::new(Limits::default().with_max_input_bytes(256 * 1024));
+    let contract = Contract::from_slice_with_context(document, &context)?;
+
+    println!("{} type nodes", contract.types().len());
+    println!("contract identity {}", contract.contract_id());
+    Ok(contract)
+}
+</pre>
+
+<p>
+  Add <code>features = ["host-value"]</code> to that line if the same process also
+  validates Candid values against the graph.
+</p>
+
+<callout type="note" title="A missing item is a compile error that names the fix">
+  <p>
+    Items outside the enabled set are absent at compile time rather than present as
+    stubs that fail at run time. If you call <code>compile_did</code> from a
+    base-only build, the error names the missing item and the fix is to turn on the
+    feature it belongs to.
+  </p>
+</callout>
+
+<h2>Toolchain, targets and licence</h2>
+
+<dl>
+  <dt>Minimum supported Rust version</dt>
+  <dd>
+    1.78, declared as <code>rust-version</code> in the manifest. CI runs the locked
+    dependency graph against 1.78.0, so a direct or transitive update that breaks it
+    fails before merge.
+  </dd>
+  <dt>Edition</dt>
+  <dd>2021, across every crate in the repository.</dd>
+  <dt>Licence</dt>
+  <dd>Apache-2.0.</dd>
+  <dt>Native targets exercised in CI</dt>
+  <dd>Linux, macOS and Windows on the rolling stable channel, plus Linux on 1.78.0 for MSRV.</dd>
+  <dt>WebAssembly</dt>
+  <dd>
+    <code>wasm32-unknown-unknown</code>. CI checks the library there in four
+    configurations — base, <code>host-value</code>, <code>compiler</code> and defaults
+    — and lints the <code>compiler</code> one with warnings denied. The browser runtime
+    suite then compiles source and an imported bundle inside headless Chrome and pins
+    the resulting identities, so running there is a runtime claim rather than only a
+    build claim.
+  </dd>
+</dl>
+
+<p>
+  The crate refuses to compile on targets whose pointer width is neither 32 nor 64
+  bits, with a message explaining why: portable wire values are fixed-width
+  <code>u64</code> widened from <code>usize</code>, and the default limit values do
+  not fit a 16-bit <code>usize</code>.
+</p>
+
+<h3>Two things bare wasm32-unknown-unknown cannot do</h3>
+
+<p>
+  The <code>compiler</code> surface needs no filesystem and both builds and runs on
+  that target. Two limitations are stated rather than papered over.
+</p>
+
+<ul>
+  <li>
+    <strong>There is no directory to open.</strong>
+    <code>WorkspaceResolver</code> and <code>compile_did_file</code> still
+    <em>compile</em> for bare WASM, but <code>WorkspaceResolver::new</code> fails
+    there with <code>did_workspace_root_error</code>, and a load would fail with
+    <code>did_file_read_error</code>. Use <code>MemoryResolver</code> or your own
+    <code>SourceResolver</code> instead.
+  </li>
+  <li>
+    <strong>There is no clock.</strong> Cancellation and every quantitative limit
+    behave exactly as they do natively. An explicit
+    <code>Limits::with_deadline_unix_ms</code> cannot be measured, so it fails closed
+    with <code>operation_deadline_exceeded</code> rather than calling an unsupported
+    <code>std::time</code> function and aborting the module;
+    <code>Limits::deadline_exceeded</code> reports the same. No deadline configured
+    stays unbounded, as it is everywhere else. The crate takes no
+    <code>web-time</code>, <code>js-sys</code> or <code>wasm-bindgen</code>
+    production dependency to change that.
+  </li>
+</ul>
+
+<h2>Next</h2>
+
+<div class="card-grid">
+  <a class="card" href="rust-compiling.html">
+    <span class="card-kicker">Rust crate</span>
+    <span class="card-title">Compiling Candid sources</span>
+    <p>The three entry points, their variants, and a runnable example of each.</p>
+  </a>
+  <a class="card" href="rust-contracts.html">
+    <span class="card-kicker">Rust crate</span>
+    <span class="card-title">Building Contracts</span>
+    <p>Producing a Contract with no parser, and validating one that arrived from elsewhere.</p>
+  </a>
+  <a class="card" href="packages.html">
+    <span class="card-kicker">Start here</span>
+    <span class="card-title">Packages and crates</span>
+    <p>Every publishable and internal unit in the repository, and how to depend on it.</p>
+  </a>
+</div>

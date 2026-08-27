@@ -1,0 +1,523 @@
+<p>
+  <code>c</code> is the whole construction surface of
+  <a href="https://www.npmjs.com/package/@candid-core/schema"><code>@candid-core/schema</code></a>.
+  There is no class to instantiate and no registry to populate: every member of <code>c</code>
+  returns plain data. <code>c.record({ owner: c.principal, balance: c.nat })</code> evaluates to
+  <code>{ kind: "record", fields: { … } }</code>, and that object is what the validator, the codec,
+  the actor layer and the form model all walk.
+</p>
+
+<p>
+  It has 28 members — 18 primitive constants and 10 builder functions. The static type of a schema
+  is carried by a phantom property that never exists at runtime, so
+  <code>Infer&lt;typeof X&gt;</code> gives you the TypeScript type without a second declaration.
+  The section on <code>Infer</code> below explains why that inferred type can be trusted rather than
+  merely hoped for.
+</p>
+
+<pre data-lang="ts" data-file="crates/candid-core-ts/ts/schema.ts">
+export interface Schema<in out T> {
+  readonly kind: string;
+  /** Phantom carrier for `T`; never present at runtime. */
+  readonly [phantom]?: (value: T) => T;
+}
+
+export type Infer<S> = S extends Schema<infer T> ? T : never;
+</pre>
+
+<h2>The eighteen primitives</h2>
+
+<p>
+  Each is a constant, not a call: <code>c.nat</code>, not <code>c.nat()</code>. Every one is a
+  <code>PrimitiveSchema&lt;T&gt;</code> whose <code>primitive</code> property names the Candid type
+  — <code>c.nat64.primitive</code> is <code>"nat64"</code>.
+</p>
+
+<table>
+  <thead>
+    <tr><th>Candid</th><th>Builder</th><th>Infers</th><th>Notes</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>null</code></td><td><code>c.null</code></td><td><code>null</code></td><td>The single-valued type. Mostly seen as a variant arm, where it makes the arm a bare tag.</td></tr>
+    <tr><td><code>bool</code></td><td><code>c.bool</code></td><td><code>boolean</code></td><td></td></tr>
+    <tr><td><code>nat</code></td><td><code>c.nat</code></td><td><code>bigint</code></td><td>Unbounded. A <code>number</code> is rejected, not coerced.</td></tr>
+    <tr><td><code>int</code></td><td><code>c.int</code></td><td><code>bigint</code></td><td>Unbounded and signed.</td></tr>
+    <tr><td><code>nat8</code></td><td><code>c.nat8</code></td><td><code>number</code></td><td>Integral, <code>[0, 255]</code>.</td></tr>
+    <tr><td><code>nat16</code></td><td><code>c.nat16</code></td><td><code>number</code></td><td>Integral, <code>[0, 65_535]</code>.</td></tr>
+    <tr><td><code>nat32</code></td><td><code>c.nat32</code></td><td><code>number</code></td><td>Integral, <code>[0, 4_294_967_295]</code> — the widest unsigned width a JavaScript number holds exactly.</td></tr>
+    <tr><td><code>nat64</code></td><td><code>c.nat64</code></td><td><code>bigint</code></td><td><code>[0, 2^64-1]</code>. Past 2^53 a <code>number</code> cannot hold every value.</td></tr>
+    <tr><td><code>int8</code></td><td><code>c.int8</code></td><td><code>number</code></td><td>Integral, <code>[-128, 127]</code>.</td></tr>
+    <tr><td><code>int16</code></td><td><code>c.int16</code></td><td><code>number</code></td><td>Integral, <code>[-32_768, 32_767]</code>.</td></tr>
+    <tr><td><code>int32</code></td><td><code>c.int32</code></td><td><code>number</code></td><td>Integral, <code>[-2_147_483_648, 2_147_483_647]</code>.</td></tr>
+    <tr><td><code>int64</code></td><td><code>c.int64</code></td><td><code>bigint</code></td><td><code>[-2^63, 2^63-1]</code>.</td></tr>
+    <tr><td><code>float32</code></td><td><code>c.float32</code></td><td><code>number</code></td><td>Validation accepts any number; <em>encoding</em> refuses a value that is not <code>Math.fround</code>-exact.</td></tr>
+    <tr><td><code>float64</code></td><td><code>c.float64</code></td><td><code>number</code></td><td>The same double, so every number encodes exactly.</td></tr>
+    <tr><td><code>text</code></td><td><code>c.text</code></td><td><code>string</code></td><td>Validation checks the JavaScript type; encoding refuses a lone surrogate.</td></tr>
+    <tr><td><code>reserved</code></td><td><code>c.reserved</code></td><td><code>unknown</code></td><td>Asserts nothing, so a consumer must narrow before use.</td></tr>
+    <tr><td><code>empty</code></td><td><code>c.empty</code></td><td><code>never</code></td><td>Uninhabited. No value passes; every one fails with <code>uninhabited_type</code>.</td></tr>
+    <tr><td><code>principal</code></td><td><code>c.principal</code></td><td><code>PrincipalValue</code></td><td>The structural <code>{ toText(): string }</code>, not the SDK <code>Principal</code> class.</td></tr>
+  </tbody>
+</table>
+
+<callout type="note" title="bigint and number do not bridge">
+  <p>
+    Passing <code>5</code> where <code>c.nat</code> is declared fails with
+    <code>invalid_type</code> — it is not silently converted to <code>5n</code>. The fixed widths up
+    to 32 bits go the other way: <code>c.nat8</code> wants a <code>number</code>, and a
+    <code>bigint</code> there is an <code>invalid_type</code> too. A lossy bridge would corrupt
+    values past 2^53 without saying so.
+  </p>
+</callout>
+
+<h2>Options: opt, and the three inners that fail closed</h2>
+
+<pre data-lang="ts" data-file="crates/candid-core-ts/ts/schema.ts">
+opt<T>(inner: Schema<T>): OptSchema<T>
+</pre>
+
+<p>
+  <code>opt T</code> renders as <code>T | null</code>. Absence is exactly <code>null</code>, and on
+  a record the property stays <em>present</em> rather than going missing — <code>{ memo: null }</code>
+  validates, <code>{}</code> fails with <code>missing_field</code>.
+</p>
+
+<pre data-lang="ts">
+const Note = c.opt(c.text);
+type Note = Infer<typeof Note>; // string | null
+</pre>
+
+<p>
+  That reading buys ordinary JavaScript ergonomics, and it costs one thing:
+  <code>T | null</code> can carry Candid's optionality only when <code>T</code> itself can never be
+  <code>null</code> in TypeScript. Three inner types break that, and all three are refused rather
+  than collapsed.
+</p>
+
+<table>
+  <thead>
+    <tr><th>Shape</th><th>Why <code>T | null</code> cannot carry it</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><code>opt opt T</code></td>
+      <td>
+        The classic case. Candid distinguishes <code>None</code> from <code>Some(None)</code>;
+        <code>(T | null) | null</code> collapses to <code>T | null</code>, so the two absences
+        become one value and the distinction is lost on the way in and on the way out.
+      </td>
+    </tr>
+    <tr>
+      <td><code>opt null</code></td>
+      <td>
+        The inner type's only value is <code>null</code>, which is also the encoding of absence.
+        <code>null | null</code> is <code>null</code>.
+      </td>
+    </tr>
+    <tr>
+      <td><code>opt reserved</code></td>
+      <td><code>reserved</code> infers <code>unknown</code>, which absorbs <code>null</code> entirely.</td>
+    </tr>
+  </tbody>
+</table>
+
+<p>
+  Both paths that derive schemas refuse. The Rust generator returns
+  <code>TsGenError::UnrepresentableOption</code> with a message naming the declaration and the
+  offending inner:
+</p>
+
+<pre data-lang="text">
+declaration `Outer` wraps `opt` in `opt`: `T | null` cannot distinguish `None` from `Some(None)` there, so generation refuses rather than collapsing the two
+</pre>
+
+<p>
+  The runtime loader refuses the document with an <code>unrepresentable_option</code> issue whose
+  path points at the offending node inside the Contract arena:
+</p>
+
+<pre data-lang="json">
+{
+  "code": "unrepresentable_option",
+  "path": "$.types[3].inner",
+  "message": "opt wraps `opt`: `T | null` cannot distinguish None from Some(None) there"
+}
+</pre>
+
+<p>
+  Contract-side paths are rooted at <code>$.contract</code> instead when the document you passed was
+  an envelope.
+</p>
+
+<p>
+  The check is on the inner <em>node</em>, not its spelling, so routing through a declared alias
+  does not evade it — <code>type Inner = opt nat; type Outer = opt Inner;</code> is refused all the
+  same. Nothing stops you from writing <code>c.opt(c.opt(c.text))</code> by hand, but the type you
+  get back is <code>string | null</code>: the collapse is already in the inferred type, which is
+  precisely why the derived paths refuse to produce it.
+</p>
+
+<h2>Collections: vec, blob and unit</h2>
+
+<pre data-lang="ts" data-file="crates/candid-core-ts/ts/schema.ts">
+vec<T>(inner: Schema<T>): VecSchema<T>
+blob(): BlobSchema
+unit(): UnitSchema
+</pre>
+
+<dl>
+  <dt><code>c.vec(inner)</code> — infers <code>T[]</code></dt>
+  <dd>
+    Validation wants a real array. An array-like object or a bare iterable fails with
+    <code>invalid_type</code>.
+  </dd>
+  <dt><code>c.blob()</code> — infers <code>Uint8Array</code></dt>
+  <dd>
+    The anonymous <code>vec nat8</code>, taken wholesale rather than one element at a time. The
+    check reads the typed-array brand, so a <code>Uint8Array</code> from another realm (a Node
+    <code>Buffer</code> included) passes while a prototype forgery does not.
+  </dd>
+  <dt><code>c.unit()</code> — infers <code>Record&lt;string, never&gt;</code></dt>
+  <dd>
+    The empty Candid record. Not <code>{}</code>, which in TypeScript means "anything non-nullish";
+    an own enumerable string key on the value is an <code>unexpected_field</code>.
+  </dd>
+</dl>
+
+<p>
+  A generated module shows all three next to each other:
+</p>
+
+<pre data-lang="ts" data-file="crates/candid-core-ts/tests/goldens/collections.ts">
+export type Grid = Array<Uint8Array>;
+export const Grid: Schema<Grid> = c.rec(() => c.vec(c.blob()));
+
+export type Unit = Record<string, never>;
+export const Unit: Schema<Unit> = c.rec(() => c.unit());
+</pre>
+
+<h2>record and tuple</h2>
+
+<pre data-lang="ts" data-file="crates/candid-core-ts/ts/schema.ts">
+record<F extends FieldSchemas>(fields: F): RecordSchema<F>
+tuple<const S extends readonly AnyFieldSchema[]>(elements: S): TupleSchema<S>
+</pre>
+
+<p>
+  <code>c.record</code> maps each field through <code>Infer</code>, so
+  <code>c.record({ id: c.nat32, label: c.text })</code> infers
+  <code>{ id: number; label: string }</code>. It is strict in both directions: a missing key is
+  <code>missing_field</code>, an unknown key is <code>unexpected_field</code>, and
+  <code>opt</code> fields are no exception. Presence means an <em>own enumerable</em> property —
+  the projection <code>JSON.stringify</code>, object spread and structured clone all see — so a
+  value that validates never serializes into one that would not.
+</p>
+
+<p>
+  <code>c.tuple</code> is for the records Candid lowers tuple syntax into: field ids exactly
+  <code>0..n-1</code>. It infers a fixed-length JavaScript tuple, and a value of the wrong length
+  fails with <code>invalid_length</code>.
+</p>
+
+<pre data-lang="ts" data-file="crates/candid-core-ts/tests/goldens/collections.ts">
+export type Pair = [bigint, string];
+export const Pair: Schema<Pair> = c.rec(() => c.tuple([c.nat, c.text]));
+</pre>
+
+<callout type="warn" title="c.tuple sets the TypeScript floor at 5.0">
+  <p>
+    The <code>const</code> type parameter is what keeps element order and arity in the inferred type
+    instead of widening them to an array — it is why
+    <code>Infer&lt;typeof Pair&gt;</code> above is <code>[bigint, string]</code>. Const type
+    parameters arrived in TypeScript 5.0, and below it the failure is a <em>parse</em> error rather
+    than a type error: 4.9 stops at
+    <code>error TS1139: Type parameter declaration expected.</code> in
+    <code>dist/schema.d.ts</code> before it type-checks anything. The package's support matrix
+    measures that floor against the packed tarball, not against the manifest.
+  </p>
+</callout>
+
+<h2>variant</h2>
+
+<pre data-lang="ts" data-file="crates/candid-core-ts/ts/schema.ts">
+variant<A extends FieldSchemas>(arms: A): VariantSchema<A>
+</pre>
+
+<p>
+  A variant infers a discriminated union on <code>tag</code>. An arm whose payload is
+  <code>null</code> is a bare <code>{ tag }</code> — Candid's <code>ok</code> and
+  <code>ok : null</code> are the same arm, so <code>value: null</code> on every tag-only arm would
+  be noise. Every other arm carries <code>{ tag, value }</code>. A tag that is not an arm fails with
+  <code>unknown_tag</code>.
+</p>
+
+<pre data-lang="ts" data-file="crates/candid-core-ts/tests/goldens/variants.ts">
+export type Status = { tag: "ok" } | { tag: "busy"; value: number } | { tag: "failed"; value: string };
+export const Status: Schema<Status> = c.rec(() => c.variant({ ok: c.null, busy: c.nat32, failed: c.text }));
+</pre>
+
+<p>
+  The classification is made by the payload <em>node</em>, and the type-level rule matches what the
+  emitter, the validator and the codec do at runtime, in this order:
+</p>
+
+<ol>
+  <li>
+    A payload whose domain is <code>never</code> — <code>c.empty</code>, or an empty variant —
+    carries <code>value</code>. The node is not <code>null</code>, so the runtime demands the field
+    even though nothing can inhabit it.
+  </li>
+  <li>
+    An <code>opt</code>-kind payload always carries <code>value</code>. <code>c.opt(c.empty)</code>
+    infers <code>null</code> without being the <code>null</code> primitive.
+  </li>
+  <li>Otherwise it is a bare tag exactly when its domain is <code>null</code>.</li>
+  <li>Everything else carries <code>value</code>.</li>
+</ol>
+
+<p>
+  Getting this wrong is a compile error, not a runtime surprise. Writing
+  <code>{ tag: "ok", value: null }</code> for a tag-only arm fails validation with
+  <code>unexpected_field</code> at <code>$.value</code>; omitting <code>value</code> on a payload
+  arm fails <code>missing_field</code> at the same path.
+</p>
+
+<h2>References: func, service and principal</h2>
+
+<pre data-lang="ts" data-file="crates/candid-core-ts/ts/schema.ts">
+func(
+  args: readonly AnyFieldSchema[],
+  results: readonly AnyFieldSchema[],
+  mode: MethodMode,
+): FuncSchema
+
+service(methods: { readonly [name: string]: AnySchema }): ServiceSchema
+</pre>
+
+<p>
+  A Candid <code>func</code> <em>value</em> is a reference, not a closure — an address you can put
+  in a record and send over the wire. So <code>c.func(...)</code> infers <code>FuncValue</code>,
+  which is <code>{ principal: PrincipalValue; method: string }</code>, and the signature lives in
+  the node instead of in the type. <code>MethodMode</code> is a closed union:
+  <code>"update"</code>, <code>"query"</code>, <code>"composite_query"</code>,
+  <code>"oneway"</code>; an unannotated Candid method is <code>"update"</code>, made explicit.
+</p>
+
+<p>
+  A <code>service</code> <em>value</em> is the principal of a running service, so
+  <code>c.service(...)</code> infers <code>PrincipalValue</code>. The method table it carries is
+  what <code>createActor</code> walks. Both appear in a generated module as ordinary declarations:
+</p>
+
+<pre data-lang="ts" data-file="crates/candid-core-ts/tests/goldens/deferred.ts">
+export type Callback = { principal: PrincipalValue; method: string };
+export const Callback: Schema<Callback> = c.rec(() => c.func([c.nat], [c.text], "query"));
+
+export type Registry = PrincipalValue;
+export const Registry: Schema<Registry> = c.rec(() => c.service({ register: c.func([c.text], [c.nat], "update") }));
+</pre>
+
+<p>
+  <code>c.principal</code> is the primitive for a bare principal value, listed in the table above.
+  Its type is structural — <code>{ toText(): string }</code> — which is the honest type of what the
+  codec delivers, and it accepts an <code>@icp-sdk/core</code> <code>Principal</code> on input
+  because validation and encoding are structural too.
+</p>
+
+<h2>rec: the lazy indirection</h2>
+
+<pre data-lang="ts" data-file="crates/candid-core-ts/ts/schema.ts">
+rec<T>(body: () => Schema<T>): RecSchema<T>
+</pre>
+
+<p>
+  <code>c.rec</code> defers construction into a thunk resolved on demand. It adds a hop, not a
+  shape: the domain type is the body's, unchanged. That is what lets a schema refer to itself, and
+  what lets the generator emit declarations in canonical name-sorted order without a forward
+  reference hitting a temporal dead zone at module initialization.
+</p>
+
+<pre data-lang="ts" data-file="crates/candid-core-ts/ts/schema.ts">
+type List = { head: bigint; tail: List | null };
+const List: Schema<List> = c.rec(() => c.record({ head: c.nat, tail: c.opt(List) }));
+</pre>
+
+<p>
+  The explicit <code>Schema&lt;List&gt;</code> annotation is not decoration here. It is what breaks
+  the circular inference — without it, the type of <code>List</code> would depend on itself — and it
+  is the equality the compiler then proves about the builder.
+</p>
+
+<p>
+  Each hop costs one traversal step against a walk's depth and element budgets, which is what makes
+  a mis-built self-referential chain terminate rather than hang.
+</p>
+
+<h2>Infer, and the invariance proof</h2>
+
+<p>
+  <code>Infer&lt;typeof X&gt;</code> reads the domain type back out of a schema, so you write the
+  schema once and name the type without a second declaration:
+</p>
+
+<pre data-lang="ts" data-file="crates/candid-core-ts/ts/README.md">
+const Account = c.record({ owner: c.principal, balance: c.nat });
+type Account = Infer<typeof Account>; // { owner: PrincipalValue; balance: bigint }
+</pre>
+
+<p>
+  Generated modules go the other way round. They emit the alias first, in full, so a human can read
+  it — and then annotate the builder with it:
+</p>
+
+<pre data-lang="ts" data-file="crates/candid-core-ts/tests/goldens/ledger.ts">
+export type Tokens = { e8s: bigint };
+export const Tokens: Schema<Tokens> = c.rec(() => c.record({ e8s: c.nat64 }));
+</pre>
+
+<p>
+  That second line is the load-bearing one, and the reason is a single pair of variance annotations
+  on the interface: <code>Schema&lt;in out T&gt;</code>. <code>in out</code> makes
+  <code>Schema</code> <strong>invariant</strong> in <code>T</code>, so
+  <code>Schema&lt;A&gt;</code> is assignable to <code>Schema&lt;B&gt;</code> only when
+  <code>A</code> and <code>B</code> are the same type — assignable in <em>both</em> directions, not
+  merely compatible in one.
+</p>
+
+<p>
+  The consequence is that the annotation is a proof obligation. The builder expression infers some
+  type; the annotation states another; <code>tsc</code> checks them against each other in both
+  directions. If the emitter or the runtime ever mapped <code>nat64</code> to something other than
+  <code>bigint</code>, that line would stop compiling. There is no way for the type a developer
+  reads and the schema the codec executes to drift apart while the file still type-checks.
+</p>
+
+<h3>What a mismatch looks like</h3>
+
+<p>
+  Suppose the alias claimed <code>number</code> where the builder says <code>c.nat64</code>:
+</p>
+
+<pre data-lang="ts">
+type Tokens = { e8s: number };
+// The builder infers { e8s: bigint }; the alias says { e8s: number }.
+// tsc rejects the assignment — the schema and the type disagree.
+const Tokens: Schema<Tokens> = c.rec(() => c.record({ e8s: c.nat64 }));
+</pre>
+
+<p>
+  That one would fail under ordinary assignability too, because <code>bigint</code> is not
+  assignable to <code>number</code>. Invariance earns its keep on the cases that are compatible in
+  one direction — a widened alias. <code>never</code> <em>is</em> assignable to
+  <code>unknown</code>, so a covariant check would wave this through; invariance does not:
+</p>
+
+<pre data-lang="ts" data-file="crates/candid-core-ts/ts/tests/schema-types.test.ts">
+type WidenedField = { f: unknown; g: bigint };
+// @ts-expect-error the alias widens never to unknown
+export const widenedField: Schema<WidenedField> = c.rec(() => c.record({ f: c.empty, g: c.nat }));
+
+type ExtraField = { f: never; g: bigint; h: string };
+// @ts-expect-error the alias adds a field the builder does not infer
+export const extraField: Schema<ExtraField> = c.rec(() => c.record({ f: c.empty, g: c.nat }));
+</pre>
+
+<p>
+  Those <code>@ts-expect-error</code> lines are themselves the test. Each marks an assignment the
+  gate must refuse; if the gate ever weakened, the suppressed error would disappear and
+  <code>tsc</code> would report the unused directive, turning the harness red. The same file carries
+  positive probes for the classifications the gate must <em>accept</em>. Ten golden modules sit
+  inside the same <code>strict</code> type-check project, so every mapping those fixtures exercise
+  is re-checked on every run.
+</p>
+
+<h3>AnySchema and AnyFieldSchema</h3>
+
+<p>
+  Invariance has one practical cost: a bound of <code>Schema&lt;unknown&gt;</code> would reject
+  every concrete schema. So code that holds schemas without knowing what they describe uses
+  <code>AnySchema</code> — <code>Schema&lt;any&gt;</code> — as the variance wildcard in constraint
+  position, where it never leaks into an inferred output type.
+</p>
+
+<pre data-lang="ts" data-file="crates/candid-core-ts/ts/schema.ts">
+export type AnySchema = Schema<any>;
+export type AnyFieldSchema = AnySchema | Schema<never>;
+export type FieldSchemas = Record<string, AnyFieldSchema>;
+</pre>
+
+<p>
+  <code>any</code> is assignable to every type except <code>never</code>, so
+  <code>AnySchema</code> alone would reject <code>c.empty</code> and every empty variant.
+  <code>AnyFieldSchema</code> re-admits them. The widening lives on the composite bounds rather than
+  on <code>Schema</code> itself, which is exactly what keeps the equality proof at full strength.
+</p>
+
+<h2>Reading a schema back</h2>
+
+<p>
+  Two functions ship alongside the builders for consumers that walk a schema.
+</p>
+
+<div class="api-entry">
+  <div class="api-head">
+    <span class="api-name">resolveSchema</span>
+  </div>
+  <div class="api-body">
+    <pre data-lang="ts">export function resolveSchema(schema: AnyFieldSchema): ResolvedNode</pre>
+    <p>
+      Follows <code>body()</code> through <code>rec</code> indirections until a non-<code>rec</code>
+      node appears. Bounded at 256 hops, after which it throws <code>TypeError</code> rather than
+      hanging; it also throws for anything that is not a schema object, and for a <code>kind</code>
+      this package does not define.
+    </p>
+  </div>
+</div>
+
+<div class="api-entry">
+  <div class="api-head">
+    <span class="api-name">serviceMethods</span>
+  </div>
+  <div class="api-body">
+    <pre data-lang="ts">export function serviceMethods(service: AnyFieldSchema): ReadonlyMap<string, ServiceMethod></pre>
+    <p>
+      The method table of a service schema, keyed by name in declaration order. A
+      <code>ReadonlyMap</code> rather than an object, so a method named <code>__proto__</code> is an
+      ordinary entry. It is the same walk the actor factory performs, so what the table says and
+      what an actor dispatches cannot disagree.
+    </p>
+    <pre data-lang="ts">const table = serviceMethods(c.service({ fee: c.func([], [c.nat], "query") }));
+table.get("fee")?.mode; // "query"</pre>
+  </div>
+</div>
+
+<callout type="tip" title="A schema reached by name is almost always a rec">
+  <p>
+    Every generated declaration is wrapped in <code>c.rec</code>, and schemas built from a Contract
+    document at runtime add a hop at every edge. So reading <code>.kind</code> off a named schema
+    gives you <code>"rec"</code> and tells you nothing about the type. The introspection tests pin
+    this on the ledger golden: <code>(ledger.Account as { kind: string }).kind</code> is
+    <code>"rec"</code>, while <code>resolveSchema(ledger.Account).kind</code> is
+    <code>"record"</code>. Chains of two or more hops are ordinary — a declaration whose body is
+    another declaration — so resolve rather than unwrapping once.
+  </p>
+</callout>
+
+<h2>Where to go next</h2>
+
+<div class="card-grid">
+  <a class="card" href="schema-validation.html">
+    <span class="card-kicker">Guide</span>
+    <span class="card-title">Validation</span>
+    <p>What each issue code means, the <code>$</code>-rooted path grammar, and the traversal budgets.</p>
+  </a>
+  <a class="card" href="reference-mapping.html">
+    <span class="card-kicker">Reference</span>
+    <span class="card-title">Candid ↔ TypeScript</span>
+    <p>The complete mapping table, including every case that deliberately fails closed.</p>
+  </a>
+  <a class="card" href="generator.html">
+    <span class="card-kicker">Guide</span>
+    <span class="card-title">The code generator</span>
+    <p>How a Contract graph becomes the annotated module this page's examples come from.</p>
+  </a>
+</div>

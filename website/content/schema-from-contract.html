@@ -1,0 +1,537 @@
+<p>
+  <a href="generator.html">The code generator</a> turns a Contract into a TypeScript module at
+  build time. That is the right shape when you have the <code>.did</code> file in your repository.
+  It is the wrong shape when you do not know the interface until the program is running — a
+  canister explorer, a wallet that must render an arbitrary call, an agent tool handed a canister
+  id by a user.
+</p>
+
+<p>
+  <code>@candid-core/schema/contract</code> covers that case. <code>schemaFromContract</code> takes
+  a canonical <strong>Contract</strong> document — the JSON the <code>candid-core</code> compiler
+  prints from a <code>.did</code> file — and returns the same <code>c.*</code> schema objects the
+  generator would have emitted, built at runtime, with no code generation step and no
+  <code>eval</code>. Every mapping decision the generator makes is applied here too, and a
+  cross-check test holds the two paths to identical verdicts.
+</p>
+
+<h2>The signature</h2>
+
+<div class="api-entry">
+  <div class="api-head">
+    <span class="api-name">schemaFromContract</span>
+    <span class="pill accent">./contract</span>
+  </div>
+  <div class="api-body">
+<pre data-lang="ts" data-file="crates/candid-core-ts/ts/contract.ts">
+export function schemaFromContract(
+  contract: unknown,
+  options: ContractSchemaOptions = {},
+): SchemaFromContractResult
+</pre>
+    <p>
+      The first parameter is <code>unknown</code> on purpose: the document is untrusted input, and
+      accepting a typed parameter would imply a check that has not happened yet.
+    </p>
+  </div>
+</div>
+
+<pre data-lang="ts" data-file="crates/candid-core-ts/ts/contract.ts">
+export interface ContractSchemaOptions {
+  /**
+   * The field-name table. When the document is an envelope, an explicit table
+   * here wins over the envelope-carried `FIELD_NAMES_EXTENSION` table — the
+   * envelope's is then not consulted at all.
+   */
+  readonly names?: readonly FieldNameEntry[];
+  /** Arena size cap, mirroring `Limits::max_type_nodes`. */
+  readonly maxTypeNodes?: number;
+  /** Total field cap across all nodes, mirroring `Limits::max_fields`. */
+  readonly maxFields?: number;
+  /** Declaration count cap, mirroring `Limits::max_declarations`. */
+  readonly maxDeclarations?: number;
+}
+
+export type FieldNameEntry = readonly [container: number, id: number, name: string];
+
+export type SchemaFromContractResult =
+  | {
+      readonly ok: true;
+      readonly schemas: { readonly [name: string]: AnySchema };
+      /** The actor interface as a service schema, when the document has one. */
+      readonly actor?: AnySchema;
+    }
+  | { readonly ok: false; readonly issues: readonly ContractIssue[] };
+</pre>
+
+<p>
+  On success you get one schema per declaration, keyed by declaration name and built in declaration
+  order, plus <code>actor</code> when the <code>.did</code> file declared a service. The map is
+  built with <code>Object.create(null)</code>, so a declaration or field legitimately named
+  <code>__proto__</code> is an ordinary own key rather than a prototype write.
+</p>
+
+<h2>The input: a Contract document and a name table</h2>
+
+<p>
+  A <a href="contract-graph.html">Contract</a> is a flat, index-addressed JSON document. The
+  <code>types</code> array is the <em>arena</em>: every type node is one entry, and every reference
+  between types is an integer index into it. <code>declarations</code> names some of those nodes.
+  <code>actor</code>, when present, points at the service. Because references are indices, a
+  recursive type is a node whose index chain loops — there is no nesting and no cycle in the JSON
+  itself.
+</p>
+
+<p>
+  This is a checked-in golden, with only <code>identities</code> and <code>producer</code> removed
+  and the objects folded onto single lines:
+</p>
+
+<pre data-lang="json" data-file="crates/candid-core-ts/tests/goldens/collections.contract.json">
+{
+  "canonicalization_profile": "candid-core-canon-1",
+  "declarations": [
+    { "name": "Grid", "type": 7 },
+    { "name": "Item", "type": 3 },
+    { "name": "Items", "type": 8 },
+    { "name": "MaybeItem", "type": 2 },
+    { "name": "Note", "type": 0 },
+    { "name": "Pair", "type": 10 },
+    { "name": "Unit", "type": 9 }
+  ],
+  "format": "candid-core",
+  "format_version": 1,
+  "semantics_profile": "candid-1",
+  "types": [
+    { "inner": 1, "kind": "opt" },
+    { "kind": "primitive", "primitive": "text" },
+    { "inner": 3, "kind": "opt" },
+    { "fields": [
+        { "id": 23515, "type": 4 },
+        { "id": 1873743348, "type": 1 },
+        { "id": 3979722638, "type": 5 }
+      ], "kind": "record" },
+    { "kind": "primitive", "primitive": "nat32" },
+    { "inner": 6, "kind": "vec" },
+    { "kind": "primitive", "primitive": "nat8" },
+    { "inner": 5, "kind": "vec" },
+    { "inner": 3, "kind": "vec" },
+    { "fields": [], "kind": "record" },
+    { "fields": [{ "id": 0, "type": 11 }, { "id": 1, "type": 1 }], "kind": "record" },
+    { "kind": "primitive", "primitive": "nat" }
+  ]
+}
+</pre>
+
+<p>
+  Read a few of those nodes and the mapping rules below become concrete. Node 5 is a
+  <code>vec</code> over node 6 (<code>nat8</code>), and no declaration names node 6, so node 5 is
+  a <code>blob</code> — which is why
+  <code>Item</code>'s <code>payload</code> is a <code>Uint8Array</code> and <code>Grid</code>
+  (node 7, a <code>vec</code> of node 5) is <code>Array&lt;Uint8Array&gt;</code>. Node 9 is the
+  empty record, so <code>Unit</code> is the unit schema. Node 10's field ids are exactly
+  <code>0</code> and <code>1</code>, so <code>Pair</code> is a tuple, not a record.
+</p>
+
+<p>
+  Note what is <em>not</em> in there: field names. A semantic Contract stores authoritative label
+  <strong>ids</strong> — the 32-bit numbers Candid actually puts on the wire — because the names are
+  source text, not semantics. Node 3's fields are <code>23515</code>, <code>1873743348</code> and
+  <code>3979722638</code>, not <code>id</code>, <code>label</code> and <code>payload</code>. Names
+  travel beside the document, as <code>[container, id, name]</code> triples:
+</p>
+
+<pre data-lang="json" data-file="crates/candid-core-ts/tests/goldens/collections.names.json">
+[
+  [3, 23515, "id"],
+  [3, 1873743348, "label"],
+  [3, 3979722638, "payload"]
+]
+</pre>
+
+<p>Four markers must match exactly, or the document is refused outright:</p>
+
+<table>
+  <thead>
+    <tr><th>Key</th><th>Required value</th><th>Code if it differs</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>format</code></td><td><code>"candid-core"</code></td><td><code>unsupported_contract_format</code></td></tr>
+    <tr><td><code>format_version</code></td><td><code>1</code></td><td><code>unsupported_format_version</code></td></tr>
+    <tr><td><code>semantics_profile</code></td><td><code>"candid-1"</code></td><td><code>unsupported_semantics_profile</code></td></tr>
+    <tr><td><code>canonicalization_profile</code></td><td><code>"candid-core-canon-1"</code></td><td><code>unsupported_canonicalization_profile</code></td></tr>
+  </tbody>
+</table>
+
+<p>
+  A document claiming a different profile is not half-read on the assumption that it is close
+  enough. A future format revision has to be adopted deliberately.
+</p>
+
+<h3>One document instead of two</h3>
+
+<p>
+  <code>candid-core compile &lt;path&gt; --envelope</code> prints a <code>ContractEnvelope</code>
+  instead: <code>{ contract, extensions }</code>, where the
+  <code>org.candid-core.field-names/v1</code> extension carries the name table.
+  <code>schemaFromContract</code> accepts that shape directly and consumes the table, so one
+  self-describing file replaces the pair. It detects an envelope by the presence of a
+  <code>contract</code> key, which no canonical Contract document has.
+</p>
+
+<p>
+  Extensions live outside the canonical hashes by design, so carrying names never moves a
+  <code>contract_id</code> or an <code>interface_id</code>. See
+  <a href="identities.html">content-addressed identities</a> for why that separation matters.
+</p>
+
+<callout type="warn" title="A successful load is not provenance">
+  <p>
+    A canonical Contract carries <code>identities.contract</code>, a
+    <code>candid-core:contract:v1:sha256:…</code> string. <code>schemaFromContract</code> does
+    <strong>not</strong> verify it. Checking it needs the canonicalization procedure, which lives
+    in the Rust crate — and an unkeyed content id does not authenticate itself in any case. Treat a
+    successful load as "this document is well-formed", never as "this document came from where it
+    says".
+  </p>
+</callout>
+
+<h2>Why the name table is hash-enforced</h2>
+
+<p>
+  Every entry must be the Candid preimage of its own id:
+  <code>candidLabelHash(name) === id</code>, checked at load time, on caller-supplied and
+  envelope-carried tables alike. A table that fails it is refused with
+  <code>invalid_name_table</code>, naming what the string actually hashes to.
+</p>
+
+<p>
+  This is not bookkeeping. The <a href="schema-codec.html">codec</a> derives each field's
+  <em>wire</em> id from its rendered schema key — a key spelled <code>_N_</code> is the id
+  <code>N</code>, and every other key is hashed. So if a table claimed the name
+  <code>"owner"</code> for an id that is really the hash of <code>"operator"</code>, the built
+  schema would carry the key <code>owner</code>, the codec would hash that key back to a
+  <em>different</em> number, and the message would name a field the canister never declared. The
+  interface would silently mean something other than what the Contract says. Hash enforcement makes
+  a lying table fail closed instead.
+</p>
+
+<p>
+  Names shaped like <code>_N_</code> are refused for the same reason: erased to a schema key, a
+  source name spelled <code>_5_</code> is indistinguishable from the numeric rendering of id 5,
+  and the two derive different wire ids.
+</p>
+
+<p>
+  Passing no table at all is legal. Every field then renders as <code>_&lt;id&gt;_</code>, which is
+  also what <code>candid-core compile --no-source-info</code> leaves you with. The schemas are
+  correct and encode to identical bytes — only the readable keys are gone.
+</p>
+
+<h2>The mapping decisions</h2>
+
+<p>
+  These are the same owner-reviewed decisions the generator applies, and the cross-check test is
+  what keeps them from drifting apart.
+</p>
+
+<dl>
+  <dt>Anonymous <code>vec nat8</code> becomes <code>blob</code></dt>
+  <dd>
+    A <code>vec</code> whose inner node is <code>nat8</code> becomes <code>c.blob()</code>, so the
+    value is a <code>Uint8Array</code> — provided no declaration names that inner node. The test is
+    on the inner node, not on the <code>vec</code> itself. If a declaration does name the inner
+    node, the Contract is treating it as a deliberate abstraction and it keeps its name — the
+    result is <code>c.vec(…)</code> and an array.
+  </dd>
+
+  <dt>Tuple-shaped records become tuples</dt>
+  <dd>
+    A record whose field ids are exactly <code>0..n-1</code> becomes <code>c.tuple([…])</code>. An
+    empty record becomes <code>c.unit()</code>. Everything else becomes <code>c.record({…})</code>
+    with keys from the name table, falling back to <code>_&lt;id&gt;_</code>.
+  </dd>
+
+  <dt>Collapsing options are rejected</dt>
+  <dd>
+    An <code>opt</code> whose inner node is <code>opt</code>, <code>null</code> or
+    <code>reserved</code> is refused with <code>unrepresentable_option</code> before anything is
+    built. The decoded shape of <code>opt T</code> is <code>T | null</code>, which cannot
+    distinguish <code>None</code> from <code>Some(None)</code>. The check is on the arena
+    <em>node</em>, so <code>type Inner = opt nat; type Outer = opt Inner</code> collapses the same
+    way — an alias is not indirection in the arena.
+  </dd>
+
+  <dt>Reference types build like everything else</dt>
+  <dd>
+    A <code>func</code> node becomes <code>c.func(args, results, mode)</code> and describes
+    <code>{ principal, method }</code> values. A <code>service</code> node becomes
+    <code>c.service({…})</code>, keyed by the method names the document itself carries, and
+    describes principal values.
+  </dd>
+
+  <dt>The actor, and the class rule</dt>
+  <dd>
+    <code>actor</code> is returned as a service schema. A <code>class</code> actor is unwrapped to
+    its running service — init arguments are install-time metadata a call surface never consumes.
+    A class node anywhere else is refused, mirroring two of candid-core's own rules:
+    <code>class_not_first_class_type</code>, so no type edge may target a class, and
+    <code>class_not_actor_root</code>, so a named declaration must never target one either — even
+    when that class <em>is</em> the actor root.
+  </dd>
+
+  <dt>Declaration names need not be TypeScript identifiers</dt>
+  <dd>
+    This is the one deliberate divergence. The generator emits source text and must refuse a
+    declaration called <code>delete</code>; this loader builds a map, where any string is a valid
+    key.
+  </dd>
+</dl>
+
+<h2>A worked example</h2>
+
+<p>
+  The <code>collections</code> fixture above is a real compiler output, checked into the repository
+  as a golden. Here is the whole flow that produces it and uses it.
+</p>
+
+<ol class="steps">
+  <li>
+    <h3>Install the runtime</h3>
+    <pre data-lang="bash">npm install @candid-core/schema</pre>
+    <p>
+      No other dependency is needed. The <code>@icp-sdk/core</code> peer is optional and used only
+      by the <code>./transport-icp</code> subpath.
+    </p>
+  </li>
+  <li>
+    <h3>Compile the .did file</h3>
+    <pre data-lang="bash">cargo install candid-core --version 0.1.0-beta.3 --locked
+candid-core compile ./collections.did > ./compiled.json</pre>
+    <p>
+      <code>candid-core</code> is pre-1.0 with only prereleases on crates.io, so the version has to
+      be explicit — a bare <code>cargo install candid-core</code> resolves to nothing. Plain
+      <code>compile</code> prints <code>{ ok, contract, source_info }</code>: the Contract document,
+      plus the provenance sidecar that carries the field names.
+    </p>
+  </li>
+  <li>
+    <h3>Split out the Contract and the name table</h3>
+<pre data-lang="ts">
+import { readFileSync } from "node:fs";
+import { schemaFromContract, type FieldNameEntry } from "@candid-core/schema/contract";
+import { validate } from "@candid-core/schema/validate";
+
+interface LabelProvenance {
+  container: number;
+  id: number;
+  label: { kind: "named"; name: string } | { kind: "numeric" | "positional" };
+}
+
+const compiled = JSON.parse(readFileSync("./compiled.json", "utf8")) as {
+  contract: unknown;
+  source_info: { field_labels: LabelProvenance[] };
+};
+
+// Only named labels carry text; numeric and positional ones keep `_id_`.
+const names: FieldNameEntry[] = compiled.source_info.field_labels
+  .filter((entry) => entry.label.kind === "named")
+  .map((entry): FieldNameEntry => [
+    entry.container,
+    entry.id,
+    (entry.label as { name: string }).name,
+  ]);
+</pre>
+    <p>
+      These are the triples shown earlier as <code>collections.names.json</code>. The table the
+      loader keeps is one name per <code>(container, id)</code>, last entry winning — so if two
+      entries address the same pair, the later one decides the key. <code>--envelope</code> emits a
+      sorted, deduplicated table instead, which is what the generator's own name tables use.
+    </p>
+  </li>
+  <li>
+    <h3>Build the schemas and validate a value</h3>
+<pre data-lang="ts">
+const built = schemaFromContract(compiled.contract, { names });
+if (!built.ok) {
+  console.error(built.issues); // [{ code, path, message, resource_limit? }]
+  process.exit(1);
+}
+
+const Item = built.schemas.Item;
+
+validate(Item, { id: 7, label: "seven", payload: Uint8Array.from([7]) });
+// { ok: true }
+
+validate(Item, { id: 7, label: "seven" });
+// { ok: false, issues: [{ code: "missing_field", path: "$.payload", … }] }
+
+validate(Item, { id: 7, label: "seven", payload: [7] });
+// { ok: false, issues: [{ code: "invalid_type", path: "$.payload", … }] } — blob wants a Uint8Array
+</pre>
+    <p>
+      <code>built.schemas.Item</code> is an ordinary schema. It goes into
+      <a href="schema-codec.html"><code>encode</code>/<code>decode</code></a>, into
+      <a href="schema-actors.html"><code>createActor</code></a>, and into the
+      <a href="schema-forms.html">form model</a> exactly like a generated one.
+    </p>
+  </li>
+</ol>
+
+<p>
+  With <code>candid-core compile ./collections.did --envelope &gt; ./service.json</code>, steps two
+  and three collapse into one read and the <code>names</code> option goes away entirely:
+</p>
+
+<pre data-lang="ts" data-file="crates/candid-core-ts/ts/README.md">
+const built = schemaFromContract(JSON.parse(readFileSync("./service.json", "utf8")));
+
+built.schemas.Account; // one Schema per declaration, in declaration order
+built.actor; // the service schema, when the document has one
+</pre>
+
+<p>
+  An explicit <code>names</code> option always wins over an envelope-carried table, and when it
+  does, the envelope's table is not consulted at all — so a lying envelope cannot fail a build that
+  supplies its own valid names.
+</p>
+
+<h2>Bounds and failure</h2>
+
+<p>
+  The document is data from outside, so the loader is bounded the same way the rest of the project
+  is. All checks run in one pass over the arena before anything is built, and then every edge
+  becomes a lazy memoized <code>c.rec</code> thunk — construction depth stays constant even for an
+  adversarially deep type graph.
+</p>
+
+<table>
+  <thead>
+    <tr><th>Option</th><th>Default</th><th>Mirrors</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>maxTypeNodes</code></td><td><code>100_000</code></td><td><code>Limits::max_type_nodes</code></td></tr>
+    <tr><td><code>maxFields</code></td><td><code>500_000</code></td><td><code>Limits::max_fields</code></td></tr>
+    <tr><td><code>maxDeclarations</code></td><td><code>100_000</code></td><td><code>Limits::max_declarations</code></td></tr>
+    <tr><td>(name table entries)</td><td><code>500_000</code></td><td>caller-side; shares the field cap's magnitude</td></tr>
+  </tbody>
+</table>
+
+<p>
+  Nothing throws — not even when the document itself fights inspection with accessors or Proxy
+  traps, which become an <code>invalid_contract_document</code> issue at the choke point.
+  <code>ContractIssueCode</code> is a closed union of 15 members; several deliberately reuse the
+  codes candid-core's own Rust validator produces for the same condition, so the two loaders refuse
+  the same documents under the same names.
+</p>
+
+<table>
+  <thead>
+    <tr><th>Code</th><th>Refused because</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>invalid_contract_document</code></td><td>Malformed shape, an unknown node kind, an unknown primitive name, or a structurally invalid reference.</td></tr>
+    <tr><td><code>unsupported_contract_format</code>, <code>unsupported_format_version</code>, <code>unsupported_semantics_profile</code>, <code>unsupported_canonicalization_profile</code></td><td>One of the four markers does not match.</td></tr>
+    <tr><td><code>dangling_type_ref</code></td><td>A type reference points outside the arena.</td></tr>
+    <tr><td><code>unrepresentable_option</code></td><td><code>opt opt</code>, <code>opt null</code> or <code>opt reserved</code>.</td></tr>
+    <tr><td><code>unsupported_construct</code></td><td>A <code>class</code> node nests inside a supported type.</td></tr>
+    <tr><td><code>duplicate_field_id</code>, <code>duplicate_field_name</code></td><td>Two fields of one node share an id, or two ids render to the same key.</td></tr>
+    <tr><td><code>empty_declaration_name</code>, <code>duplicate_declaration_name</code></td><td>A declaration has no name, or two share one.</td></tr>
+    <tr><td><code>invalid_name_table</code></td><td>An entry is not <code>[container, id, name]</code>, is <code>_N_</code>-shaped, or does not hash to its id.</td></tr>
+    <tr><td><code>invalid_extension_name</code></td><td>An envelope extension key is not a reverse-domain name followed by <code>/v&lt;integer&gt;</code>.</td></tr>
+    <tr><td><code>resource_limit_exceeded</code></td><td>One of the caps above tripped; the issue carries <code>{ resource, limit, observed }</code>.</td></tr>
+  </tbody>
+</table>
+
+<h2>When to build at runtime, and when not to</h2>
+
+<p><strong>Prefer <code>schemaFromContract</code> when the interface is a runtime input.</strong></p>
+
+<ul>
+  <li>A canister explorer or dashboard where the user supplies the canister id.</li>
+  <li>A wallet or signer that must render an arbitrary call for approval.</li>
+  <li>An agent tool that receives an interface as data and has to act on it.</li>
+  <li>A JavaScript-only deployment where adding a build step is not on the table.</li>
+</ul>
+
+<p><strong>Prefer the generator when you have the <code>.did</code> file at build time.</strong></p>
+
+<ul>
+  <li>
+    You want static types. <code>built.schemas.Item</code> is <code>AnySchema</code> — the map's
+    keys are not known to the compiler, and a typo is a runtime <code>undefined</code>. A generated
+    module gives you <code>Item</code> as a named export with a reviewed type alias beside it, and
+    <code>tsc</code> itself proves the two agree.
+  </li>
+  <li>
+    You want the interface pinned in review. A generated module is a diffable artefact; a document
+    fetched at runtime is not.
+  </li>
+  <li>
+    You are near the traversal depth limit. A dynamically built schema carries one extra
+    <code>rec</code> hop per arena edge, so a deeply nested value can trip
+    <code>value_depth</code> under the dynamic schema and not under the generated one.
+  </li>
+</ul>
+
+<h2>The cross-check that ties the two together</h2>
+
+<p>
+  The claim "the same schemas the generator would have emitted" is a test, not a hope. For every
+  golden fixture, the suite builds the schema set both ways — from the checked-in Contract document
+  and from the generated module — and asserts by deep equality on the whole <code>validate</code>
+  result that they agree on every sample value: same verdict, same issue codes, same paths, same
+  messages. Both documents are emitted from the same fixture, so the two schemas under comparison
+  share one source of truth.
+</p>
+
+<pre data-lang="ts" data-file="crates/candid-core-ts/ts/tests/crosscheck.test.ts">
+const built = schemaFromContract(contract, { names });
+
+for (const [declaration, samples] of Object.entries(fixture.samples)) {
+  const generated = fixture.module[declaration] as AnySchema;
+  const dynamic = built.schemas[declaration];
+  for (const sample of samples) {
+    assert.deepStrictEqual(validate(dynamic, sample), validate(generated, sample));
+  }
+}
+</pre>
+
+<p>
+  Two further checks extend it. The envelope path is held to the two-file path's verdicts, so
+  reading names out of an extension cannot diverge from being handed them. And in the
+  <a href="schema-codec.html">codec</a> suite, every reference wire vector is decoded twice — once
+  under the generated schema and once under the dynamic one — and both must produce the same value
+  and re-encode to byte-identical output. The cross-check's own samples deliberately stay far from
+  the depth limit, because of the extra <code>rec</code> hop noted above: near-limit values would
+  diverge on the resource issue alone.
+</p>
+
+<p>
+  What those gates establish, and what they do not, is set out on
+  <a href="guarantees.html">Guarantees and verification</a>. The Contract format is not a stable
+  v1: any pre-1.0 release may change the serialized shapes, and therefore every identity computed
+  over them. The loader is
+  <a href="https://github.com/b3hr4d/candid-core/blob/main/crates/candid-core-ts/ts/contract.ts"><code>crates/candid-core-ts/ts/contract.ts</code></a>,
+  and its header records each mapping decision against the issue that settled it.
+</p>
+
+<h2>Next</h2>
+
+<div class="card-grid">
+  <a class="card" href="generator.html">
+    <span class="card-kicker">Guide</span>
+    <span class="card-title">The code generator</span>
+    <p>The other half of the pair: a Contract graph as a module <code>tsc</code> proves correct.</p>
+  </a>
+  <a class="card" href="contract-graph.html">
+    <span class="card-kicker">Concept</span>
+    <span class="card-title">The Contract graph</span>
+    <p>What the arena, declarations and actor are, and why references are integers.</p>
+  </a>
+  <a class="card" href="cli-rust.html">
+    <span class="card-kicker">Reference</span>
+    <span class="card-title">The candid-core binary</span>
+    <p><code>compile</code>, <code>--envelope</code>, <code>--no-source-info</code> and <code>validate</code>.</p>
+  </a>
+</div>

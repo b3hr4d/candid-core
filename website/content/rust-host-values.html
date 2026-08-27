@@ -1,0 +1,437 @@
+<p>A <strong>host value</strong> is one concrete Candid value, held in a form
+that keeps its exact bits: the <code>HostValue</code> type, gated behind the
+<span class="pill accent">host-value</span> Cargo feature, which is in the
+default set. Turning it on adds exactly one crate to your dependency graph,
+<code>ic_principal</code>, for checking canonical principal text. No Candid
+parser is needed to build or validate values.</p>
+
+<p>This page is the mechanics: how to build a value, how to point at a type
+inside a <a href="contract-graph.html">Contract</a>, how to run
+<code>validate_host_value</code> and read what comes back, and how to decode a
+value that arrived as JSON from somewhere you do not control. For why the
+encoding looks the way it does, read <a href="host-values.html">Host
+values</a> first.</p>
+
+<pre data-lang="toml">[dependencies]
+candid-core = "=0.1.0-beta.3"</pre>
+
+<p>The crate is a prerelease, so the requirement has to be exact. A caret
+requirement never selects a prerelease. Everything below also needs the
+<span class="pill accent">compiler</span> feature, because the examples
+compile a <code>.did</code> source to get a Contract to validate against; both
+features are on by default.</p>
+
+<h2>Constructing a value</h2>
+
+<h3>Scalars</h3>
+
+<p>Scalars whose representation cannot be wrong are plain constructors:
+<code>HostValue::null()</code>, <code>boolean(bool)</code>,
+<code>nat8(u8)</code>, <code>nat16(u16)</code>, <code>nat32(u32)</code>,
+<code>int8(i8)</code>, <code>int16(i16)</code>, <code>int32(i32)</code>,
+<code>text(impl Into&lt;String&gt;)</code> and <code>reserved()</code>. The
+Rust type already constrains them.</p>
+
+<p>The rest take a string and return a <code>Result</code>, because there is
+exactly one accepted spelling and the constructor is where a wrong one is
+caught:</p>
+
+<pre data-lang="rust">use candid_core::{HostValue, Limits};
+
+// Unbounded integers, as canonical decimal text.
+let big = HostValue::nat("340282366920938463463374607431768211456")?;
+let negative = HostValue::int("-1")?;
+assert!(HostValue::nat("01").is_err());        // leading zero
+assert!(HostValue::int("-0").is_err());        // negative zero
+
+// 64-bit integers: canonical digits *and* in range.
+let max = HostValue::nat64("18446744073709551615")?;
+assert!(HostValue::nat64("18446744073709551616").is_err());
+
+// Floats as raw IEEE-754 bits: 8 lowercase hex digits, or 16.
+let nan = HostValue::float64("7ff8000000000001")?;
+assert!(HostValue::float32("DEADBEEF").is_err());   // uppercase
+assert!(HostValue::float64("7ff800000000001").is_err()); // 15 digits
+
+// Principals are parsed and re-rendered; only the canonical form survives.
+let owner = HostValue::principal("aaaaa-aa")?;
+assert!(HostValue::principal("AAAAA-AA").is_err());
+
+let reference = HostValue::service("aaaaa-aa")?;
+let callback = HostValue::func("aaaaa-aa", "go")?;</pre>
+
+<p>A failed constructor returns
+<code>HostValueJsonError::Malformed</code> carrying a message rooted at
+<code>$</code>, for example <code>$: non-canonical nat</code>.</p>
+
+<h3>Containers take limits</h3>
+
+<p>The four container constructors are fallible and each takes the caller's
+limits:</p>
+
+<pre data-lang="rust">pub fn opt(value: Option<Self>, limits: &Limits) -> Result<Self, HostValueJsonError>
+pub fn vector(values: Vec<Self>, limits: &Limits) -> Result<Self, HostValueJsonError>
+pub fn record(fields: Vec<HostFieldValue>, limits: &Limits) -> Result<Self, HostValueJsonError>
+pub fn variant(id: u32, value: Self, limits: &Limits) -> Result<Self, HostValueJsonError></pre>
+
+<p>A fallible builder is unusual. <code>HostValue</code>
+is recursive, and <code>Drop</code>, <code>Clone</code>,
+<code>PartialEq</code>, <code>Debug</code> and <code>Serialize</code> all walk
+one stack frame per level. A value deep enough to exhaust the stack aborts the
+process, and the first four of those have no way to report a problem.
+Construction is the only chokepoint that covers all five, so it is where the
+policy is applied. Each value caches its own measured extent: how deep it
+nests, and how many nodes it holds. A constructor therefore checks
+<code>max_value_depth</code> (default 256) and
+<code>max_value_elements</code> (default 1 000 000) against the children's
+already-known extents rather than re-walking the tree.</p>
+
+<p>Breaching either bound returns
+<code>HostValueJsonError::ValueLimit</code> naming
+<code>value_depth</code> or <code>value_elements</code>, with the limit, the
+observed figure, and the path <code>$</code>.</p>
+
+<h3>Field IDs</h3>
+
+<p>A record field is a <code>HostFieldValue</code>, and it is addressed by its
+32-bit Candid ID, not by a name:</p>
+
+<pre data-lang="rust">pub fn new(id: u32, value: HostValue) -> Self</pre>
+
+<p>This one is infallible on purpose: a field carries no bound of its own, and
+the enclosing <code>HostValue::record</code> call measures the combined
+extent. <code>id()</code> and <code>value()</code> read it back.</p>
+
+<p>The crate does not export the Candid name hash. It is
+<code>pub(crate)</code>, used internally to assign each service method's ID
+when a source is lowered and to check that a presented ID matches its name. So
+you get field IDs from one of two places: read them straight off the Contract's
+<code>TypeNode::Record { fields }</code>, or compute them with
+<code>candid_parser::candid::idl_hash</code>, which is what this repository's
+own examples and tests do. <code>candid_parser</code> enters this crate's graph
+only with the <span class="pill accent">compiler</span> feature (and, separately,
+as a dev-dependency for the test suites), so a consumer building only
+<code>host-value</code> would have to add it deliberately or take the IDs from
+the graph.</p>
+
+<h2>Binding a selector to a Contract</h2>
+
+<p>Validation needs to know <em>which type in which interface</em>. That pair
+is a selector, and <code>Contract</code> mints them:</p>
+
+<div class="api-entry">
+  <div class="api-head">
+    <span class="api-name">Contract::bind_type</span>
+    <span class="pill accent">host-value</span>
+  </div>
+  <div class="api-body">
+    <pre data-lang="rust">pub fn bind_type(&self, type_ref: TypeRef) -> Result<ContractTypeRef, HostValueValidationError></pre>
+    <p>Turns a bare arena index into <code>{contract_id, type_ref}</code>,
+    rejecting an index outside the <code>types</code> array up front with
+    <code>value_type_ref_out_of_bounds</code>.</p>
+  </div>
+</div>
+
+<div class="api-entry">
+  <div class="api-head">
+    <span class="api-name">Contract::bind_method</span>
+    <span class="pill accent">host-value</span>
+  </div>
+  <div class="api-body">
+    <pre data-lang="rust">pub fn bind_method(&self, method: impl Into<String>) -> Result<ContractMethodRef, HostValueValidationError></pre>
+    <p>Resolves a method name through the actor, either a <code>service</code>
+    or a <code>class</code>'s service, and returns
+    <code>{contract_id, method_name}</code>. An actorless Contract fails with
+    <code>actorless_contract</code>, an unknown name with
+    <code>unknown_method</code>.</p>
+  </div>
+</div>
+
+<p>Both selectors serialize with exactly those key names and reject unknown
+ones, so they are safe to persist. The <code>contract_id</code> half is what
+makes storing one safe: if the interface changes, its identity changes, and a
+stale selector is rejected instead of silently pointing at whatever now sits
+at that index.</p>
+
+<callout type="note" title="bind_method does not feed validate_host_value">
+  <p><code>validate_host_value</code> takes a <code>ContractTypeRef</code>.
+  <code>ContractMethodRef</code> is the persistable selector shape the planned
+  HostValue-to-Candid-binary bridge will take; that encode/decode step is not
+  part of this release. To check a method's arguments today, resolve the
+  method's <code>func</code> node yourself and <code>bind_type</code> its
+  argument type.</p>
+</callout>
+
+<h2>Validating against the graph</h2>
+
+<p>There are two entry points, and only two. No
+<code>validate_host_value_with_limits</code> exists, because the plain
+function already takes limits.</p>
+
+<pre data-lang="rust">pub fn validate_host_value(
+    contract: &Contract,
+    selector: &ContractTypeRef,
+    value: &HostValue,
+    limits: &Limits,
+) -> Result<(), HostValueValidationError>
+
+pub fn validate_host_value_with_context(
+    contract: &Contract,
+    selector: &ContractTypeRef,
+    value: &HostValue,
+    context: &RuntimeContext,
+) -> Result<(), HostValueValidationError></pre>
+
+<p>The first builds a fresh <code>RuntimeContext</code> from your limits and
+calls the second. Use the <code>_with_context</code> form when you already own
+a budget. A <code>RuntimeContext</code> carries the limits, including
+<code>deadline_unix_ms</code>, plus a cancellation token, so a long walk can
+be interrupted and reports <code>operation_deadline_exceeded</code> or
+<code>operation_cancelled</code> rather than running to completion.</p>
+
+<h3>Reading the verdict</h3>
+
+<p>Success is <code>Ok(())</code>. Failure is a
+<code>HostValueValidationError</code> holding
+<code>violations: Vec&lt;HostValueViolation&gt;</code>, where
+<code>HostValueViolation</code> is an alias of the crate-wide
+<code>Diagnostic</code>. Value violations always carry <code>path</code> and
+never carry <code>phase</code> or <code>severity</code>, so the shape you
+actually see is <code>{code, path, message, resource_limit?}</code>. Paths are
+rooted at <code>$</code> and address the value, not the type:
+<code>$.fields[3573748184]</code>, <code>$.values[7]</code>,
+<code>$.value</code>.</p>
+
+<table>
+  <thead><tr><th>Code</th><th>What it means</th></tr></thead>
+  <tbody>
+    <tr><td><code>value_contract_id_mismatch</code></td><td>The selector names a different Contract.</td></tr>
+    <tr><td><code>value_type_ref_out_of_bounds</code></td><td>The selector's index is outside this Contract's arena.</td></tr>
+    <tr><td><code>host_value_kind_mismatch</code></td><td>The value's kind does not pair with the type node at this position.</td></tr>
+    <tr><td><code>duplicate_host_field</code></td><td>The same record field ID appears more than once in the value.</td></tr>
+    <tr><td><code>record_field_set_mismatch</code></td><td>The field IDs present do not match the type's, exactly. Both sorted sets are in the message.</td></tr>
+    <tr><td><code>unknown_variant_id</code></td><td>The variant's tag is not an arm of the expected type.</td></tr>
+    <tr><td><code>invalid_principal</code></td><td>Principal text is unparseable, or parses but is not canonical.</td></tr>
+    <tr><td><code>empty_function_method</code></td><td>A <code>func</code> value carries an empty method name.</td></tr>
+    <tr><td><code>empty_has_no_value</code></td><td>The type at this position is Candid's uninhabited <code>empty</code>, which has no value.</td></tr>
+    <tr><td><code>class_has_no_host_value</code></td><td>The type at this position is a service constructor, which is not a first-class value.</td></tr>
+    <tr><td><code>resource_limit_exceeded</code></td><td>A budget ran out. Carries <code>{resource, limit, observed}</code>.</td></tr>
+    <tr><td><code>operation_deadline_exceeded</code></td><td>The context's deadline elapsed mid-walk.</td></tr>
+    <tr><td><code>operation_cancelled</code></td><td>The caller tripped the context's cancellation token.</td></tr>
+  </tbody>
+</table>
+
+<h2>A complete program</h2>
+
+<p>This is the example the repository ships, verbatim. It compiles a two-field
+record, finds its declaration, binds a selector, builds a value whose
+<code>nat</code> is larger than a <code>u128</code> and whose
+<code>float64</code> is a specific NaN payload, validates it, and prints the
+tagged JSON.</p>
+
+<pre data-lang="rust" data-file="examples/host_value_validation.rs">use candid_core::{compile_did, validate_host_value, HostFieldValue, HostValue, Limits};
+use std::error::Error;
+
+fn main() -> Result<(), Box<dyn Error>> {
+    let compilation = compile_did(
+        r#"
+        type Measurement = record { count: nat; reading: float64 };
+        service : { submit: (Measurement) -> () };
+        "#,
+    )?;
+    let contract = compilation.contract();
+    let measurement = contract
+        .declarations()
+        .iter()
+        .find(|declaration| declaration.name == "Measurement")
+        .ok_or("missing Measurement declaration")?;
+    let selector = contract.bind_type(measurement.ty)?;
+    let value = HostValue::record(
+        vec![
+            HostFieldValue::new(
+                candid_parser::candid::idl_hash("count"),
+                HostValue::nat("340282366920938463463374607431768211456")?,
+            ),
+            HostFieldValue::new(
+                candid_parser::candid::idl_hash("reading"),
+                // A NaN payload preserved exactly as IEEE-754 bits.
+                HostValue::float64("7ff8000000000001")?,
+            ),
+        ],
+        &Limits::default(),
+    )?;
+
+    validate_host_value(contract, &selector, &value, &Limits::default())?;
+    println!(
+        "selector: {} / type {}",
+        selector.contract_id, selector.type_ref
+    );
+    println!("{}", serde_json::to_string_pretty(&value)?);
+    Ok(())
+}</pre>
+
+<pre data-lang="bash">cargo run --example host_value_validation</pre>
+
+<p>A <code>Declaration</code> is a <code>{name, ty}</code> pair, a name table
+pointing into the arena, serialized with the JSON key
+<code>"type"</code>. The two field IDs printed in the output are 1248019663
+for <code>count</code> and 48364364 for <code>reading</code>. Nothing in the
+Contract stores those spellings; if you want them travelling alongside the
+interface, that is what the envelope's
+<code>org.candid-core.field-names/v1</code> extension is for.</p>
+
+<h2>When validation fails</h2>
+
+<p>The next program is built from two tests in
+<code>tests/host_value_conformance.rs</code> and shows both failure shapes. The
+first is a value that is perfectly well formed and still does not fit the
+type. <code>nat</code> and <code>nat8</code> are different types, and nothing
+widens. The second is a value the type accepts but the caller's policy does
+not.</p>
+
+<pre data-lang="rust">use candid_core::{compile_did, validate_host_value, Contract, HostValue, Limits};
+use std::error::Error;
+
+fn declaration(contract: &Contract, name: &str) -> Option<u32> {
+    contract
+        .declarations()
+        .iter()
+        .find(|declaration| declaration.name == name)
+        .map(|declaration| declaration.ty)
+}
+
+fn main() -> Result<(), Box<dyn Error>> {
+    let compilation = compile_did("type Small = nat8; type Items = vec nat; service : {};")?;
+    let contract = compilation.contract();
+
+    // 1. A locally valid value that does not fit the type.
+    let small = contract.bind_type(declaration(contract, "Small").ok_or("missing Small")?)?;
+    let one = HostValue::from_json_with_limits(
+        r#"{ "kind": "nat", "value": "1" }"#,
+        &Limits::default(),
+    )?;
+
+    let error = validate_host_value(contract, &small, &one, &Limits::default())
+        .expect_err("a nat is not a nat8");
+    for violation in &error.violations {
+        println!(
+            "{} at {}: {}",
+            violation.code,
+            violation.path.as_deref().unwrap_or("$"),
+            violation.message
+        );
+    }
+    // host_value_kind_mismatch at $: expected primitive Nat8, found nat or a
+    // non-canonical representation
+
+    // 2. A value the type accepts, under a policy that does not.
+    let items = contract.bind_type(declaration(contract, "Items").ok_or("missing Items")?)?;
+    let hundred = HostValue::vector(
+        (0..100)
+            .map(|_| HostValue::nat("1"))
+            .collect::<Result<Vec<_>, _>>()?,
+        &Limits::default(),
+    )?;
+
+    let limits = Limits::default().with_max_value_elements(10);
+    let error =
+        validate_host_value(contract, &items, &hundred, &limits).expect_err("101 elements > 10");
+    let violation = &error.violations[0];
+    let info = violation
+        .resource_limit
+        .as_ref()
+        .ok_or("a resource failure carries its metadata")?;
+    println!(
+        "{} at {}: {} observed {}, limit {}",
+        violation.code,
+        violation.path.as_deref().unwrap_or("$"),
+        info.resource,
+        info.observed,
+        info.limit
+    );
+    // resource_limit_exceeded at $: value_elements observed 101, limit 10
+    Ok(())
+}</pre>
+
+<p>Two details in the second half matter. The observed
+count is <strong>101</strong>, not 11: before recursing into a container the
+validator adds the whole child count to what it has already consumed and
+compares once, so the failure names the real size rather than the point at
+which counting stopped. And the reported path is <code>$</code>, the root,
+because that is where the over-large container sits.</p>
+
+<callout type="tip" title="Wide records are bounded by the work counter">
+  <p>Record validation scans field IDs pairwise instead of building an index,
+  charging one unit of <code>max_canonicalization_work</code> per comparison
+  across three scans, roughly 1.5<em>n</em><sup>2</sup> units for an <em>n</em>-field
+  record. At the default of 10 000 000 that binds a single record at 2 581
+  fields; 2 582 fails closed with <code>resource_limit_exceeded</code> naming
+  <code>canonicalization_work</code>. Neither <code>max_fields</code> nor
+  <code>max_value_elements</code> is the binding limit there. The counter is
+  per operation and shared with Contract canonicalization, so several wide
+  records in one tree accumulate against it.</p>
+</callout>
+
+<h2>Decoding JSON from outside</h2>
+
+<p><code>HostValue</code> deliberately does not implement
+<code>Deserialize</code>: <code>serde_json::from_str::&lt;HostValue&gt;(…)</code>
+does not compile. A trait impl has no argument position for a resource policy,
+so it could only ever decode under limits the library picked. The bounded
+paths are:</p>
+
+<pre data-lang="rust">pub fn from_json_with_limits(input: &str, limits: &Limits) -> Result<Self, HostValueJsonError>
+pub fn from_json_with_context(input: &str, context: &RuntimeContext) -> Result<Self, HostValueJsonError></pre>
+
+<p>They check the input length, run a constant-stack scan of the raw bytes for
+over-nested JSON, hand the text to <code>serde_json</code> as a private raw
+DTO, and only then check canonical scalar forms level by level. A
+<code>HostValue</code> therefore cannot exist without having passed all of
+that.</p>
+
+<callout type="warn" title="The byte gate is max_value_bytes, not max_input_bytes">
+  <p>Every other bounded parse in the crate checks
+  <code>max_input_bytes</code> before decoding. This one checks
+  <code>max_value_bytes</code>, 16 MiB by default, and reports
+  <code>HostValueJsonError::Limit</code>, which carries a <code>limit</code>
+  and an <code>observed</code> but <strong>no resource name</strong>. Lowering
+  <code>max_input_bytes</code> alone does nothing to bound HostValue
+  decoding; lower <code>max_value_bytes</code> too.</p>
+</callout>
+
+<table>
+  <thead><tr><th><code>HostValueJsonError</code></th><th>Fields</th><th>Raised by</th></tr></thead>
+  <tbody>
+    <tr><td><code>Malformed</code></td><td><code>String</code></td><td>Bad JSON, an unknown key, or a non-canonical scalar, including from the Rust constructors.</td></tr>
+    <tr><td><code>Limit</code></td><td><code>limit</code>, <code>observed</code></td><td>The whole-document <code>max_value_bytes</code> gate. No resource name.</td></tr>
+    <tr><td><code>ValueLimit</code></td><td><code>resource</code>, <code>limit</code>, <code>observed</code>, <code>path</code></td><td>A named budget: <code>value_nesting</code>, <code>value_depth</code>, <code>value_elements</code>, <code>value_bytes</code> or <code>canonicalization_work</code>.</td></tr>
+    <tr><td><code>Deadline</code></td><td><code>path</code></td><td>The context's deadline elapsed mid-decode.</td></tr>
+    <tr><td><code>Cancelled</code></td><td><code>path</code></td><td>The caller tripped the context's cancellation token.</td></tr>
+  </tbody>
+</table>
+
+<p><code>value_nesting</code> and <code>value_depth</code> count in different
+units. <code>max_value_nesting</code> (default 64) counts
+<code>{</code> and <code>[</code> in the text, before <code>serde_json</code>
+runs; <code>max_value_depth</code> (default 256) counts semantic container
+levels afterwards. One <code>vec</code> level costs two JSON containers and one
+<code>record</code> level costs three, so a rejection names one or the other,
+never both. Raising <code>max_value_nesting</code> above 128 has no effect:
+<code>serde_json</code>'s own fixed 128-frame ceiling sits underneath and is
+deliberately left in place.</p>
+
+<p>Serialization is ordinary. <code>HostValue</code> implements
+<code>Serialize</code>, so
+<code>serde_json::to_string(&amp;value)</code> gives you the tagged document
+back, and decoding that text returns an equal value.</p>
+
+<h2>Next</h2>
+
+<p>The <a href="rust-limits.html">limits page</a> covers profiles, builders,
+deadlines and cancellation in full, and
+<a href="reference-limits.html">Limits reference</a> lists every default. For
+the same values on the other side of the boundary, see
+<a href="schema-from-contract.html">Schemas at runtime</a>, which builds
+TypeScript schemas from a Contract or envelope document and consumes the
+field-name extension described in <a href="host-values.html">Host
+values</a>.</p>

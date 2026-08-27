@@ -1,0 +1,250 @@
+{
+  "title": "candid-core",
+  "description": "One canonical, validated, content-addressed model of a Candid interface — and the Rust and TypeScript tooling built on top of it.",
+  "repo": "https://github.com/b3hr4d/candid-core",
+  "sections": [
+    {
+      "title": "Start here",
+      "pages": [
+        {
+          "slug": "index",
+          "title": "candid-core",
+          "nav": "Home",
+          "layout": "landing"
+        },
+        {
+          "slug": "what-is-candid-core",
+          "title": "What is candid-core?",
+          "nav": "What is candid-core?",
+          "lead": "The problem it solves, in the language of a .did file you already have."
+        },
+        {
+          "slug": "quickstart-typescript",
+          "title": "Quickstart: TypeScript",
+          "nav": "Quickstart · TypeScript",
+          "lead": "From a .did file to typed, validated canister calls — with no Rust toolchain."
+        },
+        {
+          "slug": "quickstart-rust",
+          "title": "Quickstart: Rust",
+          "nav": "Quickstart · Rust",
+          "lead": "Compile a Candid interface into a validated Contract graph and read its identities."
+        },
+        {
+          "slug": "packages",
+          "title": "Packages and crates",
+          "nav": "Packages and crates",
+          "lead": "Every publishable and internal unit in the repository, what it is for, and how to depend on it.",
+          "wide": true
+        }
+      ]
+    },
+    {
+      "title": "Concepts",
+      "pages": [
+        {
+          "slug": "contract-graph",
+          "title": "The Contract graph",
+          "lead": "The data model everything else is built on: a validated, arena-based type graph with declarations and an optional actor."
+        },
+        {
+          "slug": "identities",
+          "title": "Content-addressed identities",
+          "lead": "Three identities travel inside a Contract and one is computed on demand. What each one means, and what moves it."
+        },
+        {
+          "slug": "canonical-bytes",
+          "title": "Canonical bytes",
+          "lead": "Why a byte-exact encoding exists, and what it guarantees across languages, machines, and releases."
+        },
+        {
+          "slug": "source-resolution",
+          "title": "Sources, imports and provenance",
+          "lead": "How multi-file DID bundles are resolved hermetically, and how the result is re-derivable rather than trusted."
+        },
+        {
+          "slug": "limits-and-diagnostics",
+          "title": "Limits, budgets and diagnostics",
+          "lead": "Every entry point is bounded, cancellable and structured. This is what makes untrusted .did input safe to accept."
+        },
+        {
+          "slug": "host-values",
+          "title": "Host values",
+          "lead": "A lossless, self-describing JSON encoding for Candid values — and validation directed by the Contract graph."
+        },
+        {
+          "slug": "trust-boundary",
+          "title": "The trust boundary",
+          "lead": "Raw DTOs and validated types are different types on purpose. Where the boundary sits and why."
+        }
+      ]
+    },
+    {
+      "title": "Rust crate",
+      "pages": [
+        {
+          "slug": "rust-install",
+          "title": "Install and feature surfaces",
+          "nav": "Install and features",
+          "lead": "One package, four build surfaces. Which one you need, and what each pulls into your dependency graph."
+        },
+        {
+          "slug": "rust-compiling",
+          "title": "Compiling Candid sources",
+          "nav": "Compiling sources",
+          "lead": "compile_did, compile_with_resolver and compile_did_file — the three entry points and when to use each."
+        },
+        {
+          "slug": "rust-contracts",
+          "title": "Building and validating Contracts",
+          "nav": "Building Contracts",
+          "lead": "Producing a Contract without a parser, and validating one that arrived from somewhere else."
+        },
+        {
+          "slug": "rust-limits",
+          "title": "Working with limits",
+          "nav": "Working with limits",
+          "lead": "Profiles, builders, deadlines, cancellation and the portable serialized configuration."
+        },
+        {
+          "slug": "rust-host-values",
+          "title": "Validating host values",
+          "nav": "Validating host values",
+          "lead": "Constructing HostValue trees under limits and checking them against a Contract's type graph."
+        },
+        {
+          "slug": "rust-examples",
+          "title": "Worked examples",
+          "nav": "Worked examples",
+          "lead": "The six runnable programs in examples/, what each demonstrates, and the exact command to run it."
+        }
+      ]
+    },
+    {
+      "title": "Command line",
+      "pages": [
+        {
+          "slug": "cli-rust",
+          "title": "The candid-core binary",
+          "nav": "candid-core (Rust)",
+          "lead": "Compile a .did file to a canonical Contract document, an envelope, or validate one."
+        },
+        {
+          "slug": "cli-npm",
+          "title": "@candid-core/cli",
+          "nav": "@candid-core/cli (npm)",
+          "lead": "The same compiler as WebAssembly: a JavaScript-only on-ramp for Node and the browser."
+        }
+      ]
+    },
+    {
+      "title": "TypeScript",
+      "pages": [
+        {
+          "slug": "ts-overview",
+          "title": "TypeScript overview",
+          "nav": "Overview",
+          "lead": "How the generator, the schema runtime, the codec and the actor layer fit together."
+        },
+        {
+          "slug": "schema-builders",
+          "title": "Schema builders and inference",
+          "nav": "Builders and inference",
+          "lead": "Every combinator on c, and how a schema and its TypeScript type stay provably in step."
+        },
+        {
+          "slug": "schema-validation",
+          "title": "Validation",
+          "nav": "Validation",
+          "lead": "Structural validation with path-addressed issues, bounded traversal, and no exceptions for control flow."
+        },
+        {
+          "slug": "schema-codec",
+          "title": "The binary codec",
+          "nav": "Binary codec",
+          "lead": "Schema-directed Candid encoding and decoding in TypeScript, fail-closed on every input."
+        },
+        {
+          "slug": "schema-actors",
+          "title": "Typed actors",
+          "nav": "Typed actors",
+          "lead": "Calling a canister over a two-method byte-pipe transport, with the codec doing all the encoding."
+        },
+        {
+          "slug": "schema-forms",
+          "title": "Form metadata",
+          "nav": "Form metadata",
+          "lead": "UI-agnostic descriptions of a schema, so a form can be driven by the interface itself."
+        },
+        {
+          "slug": "schema-from-contract",
+          "title": "Schemas from a Contract document",
+          "nav": "Schemas at runtime",
+          "lead": "Building the same schemas dynamically from canonical Contract JSON, with no code generation step."
+        },
+        {
+          "slug": "generator",
+          "title": "The code generator",
+          "nav": "Code generator",
+          "lead": "candid-core-ts: how a Contract graph becomes a TypeScript module that tsc itself proves correct."
+        }
+      ]
+    },
+    {
+      "title": "Reference",
+      "pages": [
+        {
+          "slug": "reference-mapping",
+          "title": "Candid to TypeScript mapping",
+          "nav": "Candid ↔ TypeScript",
+          "lead": "The complete type mapping table, including the cases that deliberately fail closed.",
+          "wide": true
+        },
+        {
+          "slug": "reference-limits",
+          "title": "Limits reference",
+          "nav": "Limits",
+          "lead": "Every limit in LimitsProfile::InteractiveV1, its default value, and what it bounds.",
+          "wide": true
+        },
+        {
+          "slug": "reference-json",
+          "title": "JSON document formats",
+          "nav": "JSON formats",
+          "lead": "The Contract, envelope, compilation, host value and limits documents, with real excerpts.",
+          "wide": true
+        },
+        {
+          "slug": "reference-diagnostics",
+          "title": "Diagnostics reference",
+          "nav": "Diagnostics",
+          "lead": "The structured error shape shared by the Rust crate and the TypeScript runtime.",
+          "wide": true
+        }
+      ]
+    },
+    {
+      "title": "Project",
+      "pages": [
+        {
+          "slug": "guarantees",
+          "title": "Guarantees and verification",
+          "nav": "Guarantees",
+          "lead": "What is actually proven, by which gate, and what is explicitly not claimed."
+        },
+        {
+          "slug": "decisions",
+          "title": "Design decisions",
+          "nav": "Design decisions",
+          "lead": "The architecture decision records, each in one plain-English line, with links to the full text."
+        },
+        {
+          "slug": "status",
+          "title": "Status, versions and releases",
+          "nav": "Status and releases",
+          "lead": "Where each package is in its life cycle, what is stable, and what is still moving."
+        }
+      ]
+    }
+  ]
+}

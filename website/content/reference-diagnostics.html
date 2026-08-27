@@ -1,0 +1,588 @@
+<p>
+  Compilation, Contract validation, provenance validation and host-value validation all fail the same
+  way: with a list of structured items rather than a string. One serializable type,
+  <code>Diagnostic</code>, backs all four. The outer error types stay domain-specific for Rust
+  ergonomics — <code>CompileError.diagnostics</code>,
+  <code>ContractValidationError.violations</code>,
+  <code>HostValueValidationError.violations</code> — but the items are the same algebra, and
+  <code>ContractViolation</code> and <code>HostValueViolation</code> are type aliases for
+  <code>Diagnostic</code>. The TypeScript runtime deliberately reproduces the same serialized item
+  shape, so a consumer that already reads candid-core violations reads those too.
+</p>
+
+<p>
+  Three failures sit outside that shape, all of them at a decode boundary before validation begins,
+  and each is named below: JSON that is not well formed at all
+  (<code>ContractJsonError::MalformedJson</code>, which carries the serde message as a plain string),
+  host value JSON decoding, and a rejected portable limits configuration.
+</p>
+
+<callout type="warn" title="The stability boundary, stated once">
+  <p>
+    <strong><code>code</code>, the structured <code>path</code>, and the
+    <code>{resource, limit, observed}</code> triple are the machine interface and are stable.
+    <code>message</code> text is not a stable interface and may be reworded at any time.</strong> If
+    you are writing code that reacts to a failure, match on <code>code</code>, read <code>path</code>
+    and read <code>resource_limit</code>. Never parse a message, and never assert on one in a test you
+    intend to keep.
+  </p>
+</callout>
+
+<h2>The fields of a diagnostic</h2>
+
+<pre data-lang="rust" data-file="src/diagnostics.rs">
+pub struct Diagnostic {
+    pub code: String,
+    pub phase: Option<DiagnosticPhase>,
+    pub severity: Option<Severity>,
+    pub path: Option<String>,
+    pub message: String,
+    pub span: Option<SourceSpan>,
+    pub related: Vec<RelatedLocation>,
+    pub notes: Vec<String>,
+    pub resource_limit: Option<ResourceLimitInfo>,
+}
+</pre>
+
+<table>
+  <thead>
+    <tr><th>Field</th><th>Present when</th><th>What it carries</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><code>code</code></td><td>always</td>
+      <td>A stable snake_case identifier. The thing to match on.</td>
+    </tr>
+    <tr>
+      <td><code>message</code></td><td>always</td>
+      <td>Human-readable text. Not stable; display it, do not parse it.</td>
+    </tr>
+    <tr>
+      <td><code>phase</code></td><td>compile-domain items only</td>
+      <td><code>"parse"</code>, <code>"type_check"</code>, <code>"load"</code> or <code>"lower"</code>.</td>
+    </tr>
+    <tr>
+      <td><code>severity</code></td><td>compile-domain items only</td>
+      <td><code>"error"</code> — the enum has exactly one variant today.</td>
+    </tr>
+    <tr>
+      <td><code>path</code></td><td>every validation violation; compile items converted from one</td>
+      <td>A <code>$</code>-rooted structured path: <code>$.types[3]</code>,
+      <code>$.identities.contract</code>, <code>$.declarations[0].name</code>,
+      <code>$.value.value.value</code>.</td>
+    </tr>
+    <tr>
+      <td><code>span</code></td><td>optional</td>
+      <td>A source location, in one of exactly two forms — see below.</td>
+    </tr>
+    <tr>
+      <td><code>related</code></td><td>optional, ordered</td>
+      <td>Secondary locations, in the order the underlying tool reported them after the primary one. Each is <code>{ message, span? }</code>.</td>
+    </tr>
+    <tr>
+      <td><code>notes</code></td><td>optional, ordered</td>
+      <td>Free-text notes, for example a parser's expected-token list.</td>
+    </tr>
+    <tr>
+      <td><code>resource_limit</code></td><td>only on <code>resource_limit_exceeded</code></td>
+      <td><code>{ resource, limit, observed }</code>.</td>
+    </tr>
+  </tbody>
+</table>
+
+<p>
+  Every optional field is omitted from JSON when absent, so each domain has a predictable serialized
+  shape: a compile diagnostic is
+  <code>{code, phase, severity, message, span?, related?, notes?, resource_limit?}</code>, and a
+  validation violation built in the validation domain is
+  <code>{code, path, message, resource_limit?}</code> — it can also carry <code>span</code>,
+  <code>related</code> and <code>notes</code> when it arrived by conversion from a compile diagnostic,
+  which is lossless for those fields. All the item types deserialize with unknown keys rejected.
+</p>
+
+<h3>Spans: exact, or source-scoped</h3>
+
+<p>
+  A <code>SourceSpan</code> carries <code>source_name</code>, <code>start_byte</code> and
+  <code>end_byte</code>. One rule governs the combinations: the two offsets are set together or not
+  at all, and a span must name a source, carry offsets, or both. Deserialization rejects a half-span
+  (one offset without the other) and a fully empty span, which leaves three legal forms and two kinds.
+</p>
+
+<pre data-lang="json">
+{ "source_name": "memory:/lib.did", "start_byte": 3, "end_byte": 4 }
+{ "source_name": "memory:/lib.did" }
+{ "start_byte": 3, "end_byte": 4 }
+</pre>
+
+<p>
+  The first and third are <strong>exact</strong>: offsets that are genuinely valid for the source's
+  original text. The source name is optional there — <code>compile_did</code> omits it on a type-check
+  failure, where the offsets index the one source it was handed. The second is
+  <strong>source-scoped</strong>: it names a logical source and withholds
+  offsets. That form exists because the native compiler backend type-checks by materializing
+  pretty-printed copies of sources into a private temp directory, and offsets against that rewritten
+  text would be wrong for the user's file. They are withheld rather than published as if exact. Not
+  leaking the temp directory, the numeric materialized file name, or a rewritten offset dressed up as
+  an original one is the design intent, and the test suite asserts it case by case — see
+  <code>tests/diagnostics_contract.rs</code> and <code>tests/browser_wasm.rs</code> — rather than by a
+  proof over all inputs.
+</p>
+
+<p>
+  <code>start_byte</code> and <code>end_byte</code> are fixed-width <code>u64</code> on the wire, so
+  the same span serializes to the same numeric text on every platform. A consumer that indexes text
+  with them must narrow with a checked conversion.
+</p>
+
+<h3>ResourceLimitInfo</h3>
+
+<pre data-lang="rust" data-file="src/diagnostics.rs">
+pub struct ResourceLimitInfo {
+    pub resource: String,
+    pub limit: u64,
+    pub observed: u64,
+}
+</pre>
+
+<p>
+  Attached to every <code>resource_limit_exceeded</code> failure and to nothing else. <code>limit</code>
+  and <code>observed</code> are fixed-width <code>u64</code> for the same platform-neutrality reason.
+  The <code>resource</code> string is <em>not</em> the <code>Limits</code> field name: the field
+  <code>max_input_bytes</code> reports as <code>input_bytes</code>, <code>max_value_depth</code> as
+  <code>value_depth</code>. Some resources are charged by more than one limit, and
+  <code>extension_bytes</code> has no field of its own — it is charged against
+  <code>max_value_bytes</code>. Match the <code>resource</code> string as data; do not assume a
+  <code>max_&lt;resource&gt;</code> field exists. The
+  <a href="reference-limits.html">Limits reference</a> maps every one.
+</p>
+
+<p>
+  The triple survives every domain crossing verbatim. When a Contract validation failure converts into
+  a compile diagnostic during lowering, or a compile diagnostic converts into a violation during
+  provenance rederivation, the code, path, span, related locations, notes and resource metadata all
+  travel item by item. No path in the crate reduces a resource failure to message text.
+</p>
+
+<pre data-lang="json">
+{
+  "code": "resource_limit_exceeded",
+  "path": "$.value.value.value.value",
+  "message": "value depth exceeds limit 3",
+  "resource_limit": { "resource": "value_depth", "limit": 3, "observed": 4 }
+}
+</pre>
+
+<p>The same failure in the compile domain gains <code>phase</code> and <code>severity</code>:</p>
+
+<pre data-lang="json">
+{
+  "code": "resource_limit_exceeded",
+  "phase": "lower",
+  "severity": "error",
+  "path": "$",
+  "message": "$: resource canonicalization_work exceeded limit 1; observed 2",
+  "resource_limit": { "resource": "canonicalization_work", "limit": 1, "observed": 2 }
+}
+</pre>
+
+<h2>The stable code list</h2>
+
+<p>
+  Every code below is a literal string in the repository's own source. They are grouped by where they
+  come from, not by how they are spelled.
+</p>
+
+<h3>Operational: budget, cancellation, deadline</h3>
+
+<p>These three cover every budget failure, in every domain.</p>
+
+<table>
+  <thead>
+    <tr><th>Code</th><th>Triggered by</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>resource_limit_exceeded</code></td><td>A limit was reached. The only code that carries a <code>resource_limit</code> triple.</td></tr>
+    <tr><td><code>operation_cancelled</code></td><td>The caller's <code>CancellationToken</code> was cancelled and the operation reached its next checkpoint.</td></tr>
+    <tr><td><code>operation_deadline_exceeded</code></td><td>The configured deadline elapsed. Also what a clockless target reports for any explicit deadline, because a deadline must never silently become unbounded.</td></tr>
+  </tbody>
+</table>
+
+<h3>Contract document: markers, identities, declarations</h3>
+
+<table>
+  <thead>
+    <tr><th>Code</th><th>Path</th><th>Triggered by</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>unsupported_contract_format</code></td><td><code>$.format</code></td><td><code>format</code> is not <code>"candid-core"</code>.</td></tr>
+    <tr><td><code>unsupported_format_version</code></td><td><code>$.format_version</code></td><td><code>format_version</code> is not <code>1</code>.</td></tr>
+    <tr><td><code>unsupported_semantics_profile</code></td><td><code>$.semantics_profile</code></td><td>Not <code>"candid-1"</code>.</td></tr>
+    <tr><td><code>unsupported_canonicalization_profile</code></td><td><code>$.canonicalization_profile</code></td><td>Not <code>"candid-core-canon-1"</code>.</td></tr>
+    <tr><td><code>invalid_contract_id_format</code></td><td><code>$.identities.contract</code></td><td>Not <code>candid-core:contract:v1:sha256:</code> followed by 64 lowercase hex characters.</td></tr>
+    <tr><td><code>invalid_interface_id_format</code></td><td><code>$.identities.interface</code></td><td>The same test against the <code>candid-core:interface:v1</code> domain.</td></tr>
+    <tr><td><code>contract_id_mismatch</code></td><td><code>$.identities.contract</code></td><td>The declared identity does not equal what recanonicalization computes.</td></tr>
+    <tr><td><code>interface_id_mismatch</code></td><td><code>$.identities.interface</code></td><td>The same, for the actor-reachable interface identity.</td></tr>
+    <tr><td><code>actorless_contract_has_interface_id</code></td><td><code>$.identities.interface</code></td><td>A Contract with no actor declares one anyway.</td></tr>
+    <tr><td><code>actor_contract_missing_interface_id</code></td><td><code>$.identities.interface</code></td><td>A Contract with an actor omits it.</td></tr>
+    <tr><td><code>invalid_producer</code></td><td><code>$.producer</code></td><td>Producer name or version is empty.</td></tr>
+    <tr><td><code>empty_declaration_name</code></td><td><code>$.declarations[i].name</code></td><td>A declaration name is the empty string.</td></tr>
+    <tr><td><code>duplicate_declaration_name</code></td><td><code>$.declarations[i].name</code></td><td>Two declarations share a name.</td></tr>
+  </tbody>
+</table>
+
+<h3>Contract type graph</h3>
+
+<table>
+  <thead>
+    <tr><th>Code</th><th>Triggered by</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>dangling_type_ref</code></td><td>A type reference points outside the arena.</td></tr>
+    <tr><td><code>duplicate_field_id</code></td><td>A record or variant lists one Candid label id twice.</td></tr>
+    <tr><td><code>oneway_has_results</code></td><td>A <code>oneway</code> function declares results.</td></tr>
+    <tr><td><code>empty_method_name</code></td><td>A service method name is the empty string.</td></tr>
+    <tr><td><code>duplicate_method_name</code></td><td>One service lists a method name twice.</td></tr>
+    <tr><td><code>method_id_mismatch</code></td><td>A method's <code>id</code> is not the Candid hash of its <code>name</code>.</td></tr>
+    <tr><td><code>service_method_not_function</code></td><td>A method's <code>function</code> reference does not point at a <code>func</code> node.</td></tr>
+    <tr><td><code>class_service_not_service</code></td><td>A class's <code>service</code> reference does not point at a <code>service</code> node.</td></tr>
+    <tr><td><code>actor_service_not_service</code></td><td><code>{"kind":"service"}</code> actor whose target is not a service node.</td></tr>
+    <tr><td><code>actor_class_not_class</code></td><td><code>{"kind":"class"}</code> actor whose target is not a class node.</td></tr>
+    <tr><td><code>class_not_actor_root</code></td><td>A class node appears anywhere but as the top-level actor — including as the target of a named declaration.</td></tr>
+    <tr><td><code>class_not_first_class_type</code></td><td>A class is reached through an ordinary Candid type edge.</td></tr>
+    <tr><td><code>rootless_type_arena</code></td><td>A non-empty <code>types</code> array with no actor and no declaration to root it.</td></tr>
+    <tr><td><code>orphan_type_node</code></td><td>A node unreachable from any actor or declaration root.</td></tr>
+  </tbody>
+</table>
+
+<h3>Envelope and serialization</h3>
+
+<table>
+  <thead>
+    <tr><th>Code</th><th>Path</th><th>Triggered by</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>invalid_extension_name</code></td><td><code>$.extensions</code></td><td>An extension key is not a reverse-domain name followed by <code>/v&lt;integer&gt;</code>. Enforced on insert and again on decode.</td></tr>
+    <tr><td><code>contract_json_serialization_failed</code></td><td><code>$</code></td><td>Rendering a validated document back to JSON failed.</td></tr>
+  </tbody>
+</table>
+
+<h3>Provenance sidecar</h3>
+
+<p>
+  These fire when a <code>SourceInfo</code> arrives from outside and is checked against a
+  recompilation of its own embedded sources.
+</p>
+
+<table>
+  <thead>
+    <tr><th>Code</th><th>Path</th><th>Triggered by</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>unsupported_source_info_version</code></td><td><code>$.source_info_version</code></td><td>Not <code>1</code>.</td></tr>
+    <tr><td><code>source_contract_id_mismatch</code></td><td><code>$.contract_id</code></td><td>The sidecar names a different Contract than the one it was presented with.</td></tr>
+    <tr><td><code>source_contract_rederivation_mismatch</code></td><td><code>$.contract_id</code></td><td>The embedded source bundle does not recompile to the bound Contract.</td></tr>
+    <tr><td><code>source_info_rederivation_missing</code></td><td><code>$</code></td><td>Recompiling the embedded bundle produced no provenance to compare against.</td></tr>
+    <tr><td><code>source_bundle_id_mismatch</code></td><td><code>$.source_bundle_id</code></td><td>The declared bundle identity does not survive recomputation.</td></tr>
+    <tr><td><code>non_canonical_source_bundle</code></td><td><code>$</code></td><td><code>sources</code> and <code>imports</code> are not canonically sorted.</td></tr>
+    <tr><td><code>source_info_provenance_mismatch</code></td><td>the offending entry</td><td>A presented provenance field disagrees with the rederived one.</td></tr>
+    <tr><td><code>invalid_source_id</code></td><td><code>$.sources[i].name</code></td><td>A logical source id is empty or repeated.</td></tr>
+    <tr><td><code>import_source_missing</code></td><td><code>$.imports[i]</code></td><td>An import edge names a <code>from</code> or <code>to</code> source that is not in the bundle.</td></tr>
+    <tr><td><code>ambiguous_source_import</code></td><td><code>$.imports[i]</code></td><td>One source's import spelling resolves to two different targets.</td></tr>
+    <tr><td><code>source_type_ref_out_of_bounds</code></td><td><code>$.&lt;collection&gt;[i]</code></td><td>A provenance entry references a node outside the Contract arena.</td></tr>
+    <tr><td><code>source_origin_missing</code></td><td><code>$.&lt;collection&gt;[i]</code></td><td>An entry names a source that is not in the bundle.</td></tr>
+    <tr><td><code>empty_source_occurrence_path</code></td><td><code>$.&lt;collection&gt;[i].path</code></td><td>An occurrence path is the empty string.</td></tr>
+    <tr><td><code>source_field_target_mismatch</code></td><td><code>$.field_labels[i]</code></td><td>Field provenance does not target an existing aggregate field id.</td></tr>
+    <tr><td><code>source_method_target_mismatch</code></td><td><code>$.methods[i]</code></td><td>Method provenance does not target an existing service method.</td></tr>
+    <tr><td><code>source_function_target_mismatch</code></td><td><code>$.function_arguments[i]</code></td><td>Function provenance does not target a function node.</td></tr>
+    <tr><td><code>source_function_position_out_of_bounds</code></td><td><code>$.function_arguments[i].position</code></td><td>The argument position is past the function's arity.</td></tr>
+    <tr><td><code>source_bundle_entry_missing</code></td><td><code>$.sources</code></td><td>The bundle has no unique entry source.</td></tr>
+    <tr><td><code>source_bundle_entry_ambiguous</code></td><td><code>$.sources</code></td><td>The bundle has more than one possible entry source.</td></tr>
+  </tbody>
+</table>
+
+<h3>Compilation</h3>
+
+<p>
+  Compile items always carry <code>phase</code> and <code>severity</code>. Four codes are the generic
+  per-phase fallback; the rest are specific.
+</p>
+
+<table>
+  <thead>
+    <tr><th>Code</th><th>Phase</th><th>Triggered by</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>did_parse_error</code></td><td><code>parse</code></td><td>The Candid parser rejected the text. Carries an exact span when the offsets index the original source; the materialized-bundle path withholds them, as the span rules above describe.</td></tr>
+    <tr><td><code>did_type_check_error</code></td><td><code>type_check</code></td><td>The source parses but does not type-check.</td></tr>
+    <tr><td><code>did_load_error</code></td><td><code>load</code></td><td>A load-phase failure with no more specific code.</td></tr>
+    <tr><td><code>contract_lowering_error</code></td><td><code>lower</code></td><td>An unstructured invariant failure while lowering the checked AST into the arena.</td></tr>
+    <tr><td><code>did_import_cycle</code></td><td><code>load</code></td><td>Import resolution reached a source already on the stack.</td></tr>
+    <tr><td><code>did_import_requires_file</code></td><td><code>load</code></td><td><code>compile_did</code> was given a source containing imports. Supply the bundle through a resolver, or use <code>compile_did_file</code>. The import list arrives in <code>notes</code>.</td></tr>
+    <tr><td><code>did_invalid_source_id</code></td><td><code>load</code></td><td>A resolver returned a non-canonical source id, or a path had no UTF-8 file name.</td></tr>
+    <tr><td><code>did_resolver_identity_mismatch</code></td><td><code>load</code></td><td>A resolver identified one source and then loaded another.</td></tr>
+    <tr><td><code>did_materialize_error</code></td><td><code>load</code></td><td>The native backend could not materialize the resolved bundle for type checking.</td></tr>
+  </tbody>
+</table>
+
+<h3>Resolvers</h3>
+
+<p>
+  A resolver's <code>ResolveError</code> reaches the caller as a <code>load</code>-phase compile
+  diagnostic carrying these codes.
+</p>
+
+<table>
+  <thead>
+    <tr><th>Code</th><th>Triggered by</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>did_source_not_found</code></td><td>The requested source is not in the bundle.</td></tr>
+    <tr><td><code>did_source_scheme_mismatch</code></td><td>A source id uses the wrong scheme — <code>MemoryResolver</code> requires <code>memory:/</code>, <code>WorkspaceResolver</code> requires <code>workspace:/</code>.</td></tr>
+    <tr><td><code>did_source_digest_mismatch</code></td><td>A resolved source's declared digest does not match its bytes.</td></tr>
+    <tr><td><code>did_workspace_root_error</code></td><td>The workspace root could not be opened, or filesystem resolution is unavailable on this target.</td></tr>
+    <tr><td><code>did_file_read_error</code></td><td>A workspace file could not be read.</td></tr>
+  </tbody>
+</table>
+
+<h3>Host values</h3>
+
+<p>
+  Value violations always carry <code>path</code> and never carry <code>phase</code> or
+  <code>severity</code>, so they serialize as
+  <code>{code, path, message, resource_limit?}</code>.
+</p>
+
+<table>
+  <thead>
+    <tr><th>Code</th><th>Triggered by</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>value_contract_id_mismatch</code></td><td>The selector names a different Contract than the one supplied. A stored selector cannot be silently re-pointed at a changed interface.</td></tr>
+    <tr><td><code>value_type_ref_out_of_bounds</code></td><td>The selector's type index is outside the arena. Also what <code>bind_type</code> refuses with.</td></tr>
+    <tr><td><code>host_value_kind_mismatch</code></td><td>The value's kind does not line up with the type node at this position. There is no widening: <code>nat</code> and <code>nat8</code> are different types.</td></tr>
+    <tr><td><code>duplicate_host_field</code></td><td>A record value lists one field id twice.</td></tr>
+    <tr><td><code>record_field_set_mismatch</code></td><td>The value's field ids are not exactly the type's. Nothing is filled in or ignored — an <code>opt</code> field must still be present, spelled as an <code>opt</code> whose <code>value</code> is null.</td></tr>
+    <tr><td><code>unknown_variant_id</code></td><td>The variant's <code>id</code> is not an arm of the expected type.</td></tr>
+    <tr><td><code>empty_function_method</code></td><td>A <code>func</code> value carries an empty <code>method</code> name.</td></tr>
+    <tr><td><code>invalid_principal</code></td><td>Principal text is not canonical. Applies to the <code>principal</code>, <code>service</code> and <code>func</code> kinds alike.</td></tr>
+    <tr><td><code>empty_has_no_value</code></td><td>Any value presented against Candid's uninhabited <code>empty</code>.</td></tr>
+    <tr><td><code>class_has_no_host_value</code></td><td>Any value presented against a <code>class</code> node — a service constructor is not a first-class value.</td></tr>
+    <tr><td><code>actorless_contract</code></td><td><code>bind_method</code> on a Contract with no actor.</td></tr>
+    <tr><td><code>unknown_method</code></td><td><code>bind_method</code> with a name the actor service does not expose.</td></tr>
+  </tbody>
+</table>
+
+<callout type="note" title="Host value JSON decoding has its own error enum">
+  <p>
+    <code>HostValue::from_json_with_limits</code> reports a <code>HostValueJsonError</code> enum rather
+    than a diagnostic collection: <code>Malformed</code>, <code>Limit</code> (the whole-document byte
+    gate, which carries no resource name), <code>ValueLimit</code> (which does),
+    <code>Deadline</code> and <code>Cancelled</code>. Everything past decoding — that is,
+    <code>validate_host_value</code> — is back in the shared shape above.
+  </p>
+</callout>
+
+<h3>Not diagnostics: the limits configuration errors</h3>
+
+<p>
+  A rejected portable limits configuration returns a <code>LimitsConfigError</code>, which carries
+  <code>code()</code>, <code>path()</code> and <code>message()</code> and displays as
+  <code>{code} at {path}: {message}</code>. It is a separate type, but the same stability rule applies
+  to its three codes: <code>unsupported_limits_version</code> at <code>$.version</code>,
+  <code>unsupported_limits_profile</code> at <code>$.profile</code>, and
+  <code>limit_override_unrepresentable</code> at <code>$.overrides.&lt;field&gt;</code>.
+</p>
+
+<h3>Emitted only by the command-line binary</h3>
+
+<table>
+  <thead>
+    <tr><th>Code</th><th>Triggered by</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>malformed_contract_json</code></td><td><code>candid-core validate</code> was given something that is not a well-formed Contract document at all. Phase <code>load</code>.</td></tr>
+    <tr><td><code>contract_file_read_error</code></td><td>The file could not be read, or was not valid UTF-8. Phase <code>load</code>.</td></tr>
+  </tbody>
+</table>
+
+<h2>Reading a failure in Rust</h2>
+
+<pre data-lang="rust">
+use candid_core::{Contract, Limits, RuntimeContext};
+
+let context = RuntimeContext::new(Limits::default().with_max_input_bytes(64));
+match Contract::from_slice_with_context(document, &context) {
+    Ok(contract) => println!("{}", contract.contract_id()),
+    Err(candid_core::ContractJsonError::MalformedJson(message)) => {
+        eprintln!("not a Contract document: {message}");
+    }
+    Err(candid_core::ContractJsonError::InvalidContract(error)) => {
+        for violation in &error.violations {
+            // `code` and `path` are the stable surface; `message` is not.
+            eprint!("{} at {}", violation.code, violation.path.as_deref().unwrap_or("$"));
+            if let Some(info) = &violation.resource_limit {
+                eprint!(" [{} limit {} observed {}]", info.resource, info.limit, info.observed);
+            }
+            eprintln!();
+        }
+    }
+}
+</pre>
+
+<callout type="note" title="A violation list is never empty">
+  <p>
+    Violations are collected up to <code>max_diagnostics</code> (100 by default). When more are
+    observed than fit, the last retained slot is <em>replaced</em> by a
+    <code>resource_limit_exceeded</code> sentinel at path <code>$</code> naming the resource
+    <code>diagnostics</code>, with the true count as <code>observed</code>. At a cap of zero that
+    sentinel is the single item, so a caller can always rely on <code>violations[0]</code> existing.
+    The flip side: with <code>max_diagnostics = 1</code> and two violations you get only the sentinel,
+    and the one real violation you had room for is gone.
+  </p>
+</callout>
+
+<h2>The TypeScript side</h2>
+
+<p>
+  <code>@candid-core/schema</code> reproduces the same serialized item shape on purpose. Its issue
+  interfaces carry exactly <code>{ code, path, message, resource_limit? }</code>, its codes are stable
+  snake_case strings, and its paths are <code>$</code>-rooted with <code>.name</code> for
+  ASCII-identifier-shaped keys and <code>["…"]</code> or <code>[3]</code> otherwise — the same
+  <code>$.declarations[3].name</code> style candid-core emits.
+</p>
+
+<pre data-lang="ts" data-file="crates/candid-core-ts/ts/validate.ts">
+export interface ValidationIssue {
+  readonly code: ValidationCode;
+  /** `$`-rooted path to the offending value, candid-core style. */
+  readonly path: string;
+  readonly message: string;
+  readonly resource_limit?: ResourceLimitInfo;
+}
+
+export type ValidateResult =
+  { readonly ok: true } | { readonly ok: false; readonly issues: readonly ValidationIssue[] };
+</pre>
+
+<h3>Where the two agree</h3>
+
+<ul>
+  <li>The item shape, key for key, including the optional <code>resource_limit</code> triple.</li>
+  <li><code>$</code>-rooted structured paths, and the same stability boundary: codes and paths are the interface, message text is not.</li>
+  <li>
+    <code>resource_limit_exceeded</code> is spelled identically and carries the same
+    <code>{resource, limit, observed}</code>, with <code>value_depth</code> and
+    <code>value_elements</code> as shared resource names.
+  </li>
+  <li>
+    Ten codes in the runtime's Contract loader are the Rust ones verbatim:
+    <code>unsupported_contract_format</code>, <code>unsupported_format_version</code>,
+    <code>unsupported_semantics_profile</code>, <code>unsupported_canonicalization_profile</code>,
+    <code>dangling_type_ref</code>, <code>duplicate_field_id</code>,
+    <code>empty_declaration_name</code>, <code>duplicate_declaration_name</code>,
+    <code>invalid_extension_name</code>, <code>resource_limit_exceeded</code>.
+  </li>
+  <li>Both fail closed and neither repairs input.</li>
+</ul>
+
+<h3>Where they differ</h3>
+
+<ul>
+  <li>
+    <strong>No <code>phase</code>, <code>severity</code>, <code>span</code>, <code>related</code> or
+    <code>notes</code>.</strong> The runtime has no compiler and no source text, so an issue is the
+    four-key form and nothing more.
+  </li>
+  <li>
+    <strong>Codes are closed TypeScript unions.</strong> <code>ValidationCode</code>,
+    <code>CodecCode</code> and <code>ContractIssueCode</code> are union types, so adding a code is an
+    API change you see at compile time. Rust codes are plain strings.
+  </li>
+  <li>
+    <strong>No exceptions for control flow.</strong> <code>validate</code>, <code>encode</code>,
+    <code>decode</code> and <code>schemaFromContract</code> return
+    <code>{ ok: true, … } | { ok: false, issues }</code> and never throw on the value or document they
+    are given — a value that fights inspection with a throwing accessor or a hostile Proxy produces a
+    terminal <code>unreadable_value</code> issue instead. Data never throws. Passing the wrong
+    <em>schema</em> does: <code>resolveSchema</code>, <code>serviceMethods</code>,
+    <code>unwrapResult</code>, <code>createActor</code> and the form-model builders raise a
+    <code>TypeError</code> eagerly, which is a programmer error rather than a failure mode. A typed
+    actor call is the one data path that rejects instead of returning: its promise rejects with an
+    <code>ActorError</code> carrying the codec's <code>issues</code> array.
+  </li>
+  <li>
+    <strong>No sentinel on the issue cap.</strong> Rust replaces the last slot with a
+    <code>resource_limit_exceeded</code> sentinel; the TypeScript walk's <code>maxIssues</code>
+    (default 100) stops collecting, and the result is still not-ok.
+  </li>
+  <li>
+    <strong>Some resource names have no Rust counterpart</strong> — the codec's <code>bytes</code>,
+    <code>type_table_entries</code> and <code>numeric_bytes</code>, and the loader's
+    <code>name_table_entries</code>, which bounds a caller-supplied field-name table that has no
+    candid-core equivalent.
+  </li>
+</ul>
+
+<h3>The three TypeScript code sets</h3>
+
+<table>
+  <thead>
+    <tr><th>Module</th><th>Codes</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><code>@candid-core/schema/validate</code></td>
+      <td><code>invalid_type</code>, <code>not_integer</code>, <code>out_of_range</code>, <code>missing_field</code>, <code>unexpected_field</code>, <code>unknown_tag</code>, <code>invalid_length</code>, <code>uninhabited_type</code>, <code>unsupported_schema</code>, <code>unreadable_value</code>, <code>resource_limit_exceeded</code></td>
+    </tr>
+    <tr>
+      <td><code>@candid-core/schema/codec</code></td>
+      <td>all eleven above, produced by the encode walk, plus <code>duplicate_field_id</code>, <code>unrepresentable_float32</code>, <code>invalid_text</code>, <code>invalid_principal</code>, <code>invalid_magic</code>, <code>malformed_type_table</code>, <code>overlong_leb128</code>, <code>invalid_utf8</code>, <code>invalid_tag_byte</code>, <code>truncated</code>, <code>trailing_bytes</code>, <code>type_mismatch</code>, <code>unknown_variant_tag</code></td>
+    </tr>
+    <tr>
+      <td><code>@candid-core/schema/contract</code></td>
+      <td><code>invalid_contract_document</code>, <code>unsupported_contract_format</code>, <code>unsupported_format_version</code>, <code>unsupported_semantics_profile</code>, <code>unsupported_canonicalization_profile</code>, <code>dangling_type_ref</code>, <code>unrepresentable_option</code>, <code>unsupported_construct</code>, <code>duplicate_field_id</code>, <code>duplicate_field_name</code>, <code>empty_declaration_name</code>, <code>duplicate_declaration_name</code>, <code>invalid_name_table</code>, <code>invalid_extension_name</code>, <code>resource_limit_exceeded</code></td>
+    </tr>
+  </tbody>
+</table>
+
+<p>
+  <code>unrepresentable_option</code> is the runtime's counterpart to the generator's
+  <code>TsGenError::UnrepresentableOption</code>: the same <code>opt opt</code> /
+  <code>opt null</code> / <code>opt reserved</code> refusal, applied to a document at load time
+  instead of to a Contract at generation time. See
+  <a href="reference-mapping.html">Candid to TypeScript mapping</a>.
+</p>
+
+<pre data-lang="ts">
+import { validate } from "@candid-core/schema/validate";
+import { Account } from "./ledger.ts";
+
+const result = validate(Account, incoming);
+if (!result.ok) {
+  for (const issue of result.issues) {
+    // Same rule as in Rust: match `code`, read `path`, display `message`.
+    console.error(`${issue.code} at ${issue.path}`, issue.resource_limit ?? "");
+  }
+}
+</pre>
+
+<h2>Next</h2>
+
+<div class="card-grid">
+  <a class="card" href="limits-and-diagnostics.html">
+    <span class="card-kicker">Concept</span>
+    <span class="card-title">Limits, budgets and diagnostics</span>
+    <p>Why every entry point is bounded, and how a budget produces these items.</p>
+  </a>
+  <a class="card" href="schema-validation.html">
+    <span class="card-kicker">TypeScript</span>
+    <span class="card-title">Validation</span>
+    <p>Path-addressed issues, bounded traversal, and no exceptions for control flow.</p>
+  </a>
+  <a class="card" href="reference-json.html">
+    <span class="card-kicker">Reference</span>
+    <span class="card-title">JSON formats</span>
+    <p>The documents these codes are emitted about.</p>
+  </a>
+</div>

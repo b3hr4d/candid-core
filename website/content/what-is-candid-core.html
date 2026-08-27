@@ -1,0 +1,469 @@
+<p>
+  A Candid interface description — a <code>.did</code> file — is the contract between a
+  canister and everything that calls it. It is also, to every tool in the chain, a string. Two
+  strings can describe exactly the same callable interface while differing in type names, field
+  order, method order, comments and whitespace, and nothing in the ordinary Candid toolchain
+  gives you a stable name for the thing they both describe.
+</p>
+
+<p>
+  candid-core parses that string once, through the official <code>candid_parser</code>, and
+  projects the checked result into a <strong>Contract</strong>: a validated data structure with
+  one exact byte encoding and a SHA-256 identity over it. Parsing DID text stays inside the Rust
+  boundary, behind the <code>compiler</code> feature; downstream of that single parse — the
+  TypeScript schema runtime, the code generator, any other host language — nothing reads the
+  source again, only the Contract.
+</p>
+
+<h2>A .did file is text, and text is a poor name for an interface</h2>
+
+<p>Here are two interfaces, the two halves of a program that ships in the repository.</p>
+
+<pre data-lang="candid" data-file="examples/semantic_equivalence.rs">
+type Payload = record { owner: principal; amount: nat };
+service : {
+  z: (Payload) -> () query;
+  a: (Payload) -> () query;
+};
+</pre>
+
+<pre data-lang="candid" data-file="examples/semantic_equivalence.rs">
+// Different name, documentation, field order, and method order.
+type Transfer = record { amount: nat; owner: principal };
+service : {
+  a: (Transfer) -> () query;
+  z: (Transfer) -> () query;
+};
+</pre>
+
+<p>
+  A line-based diff reports four changes: a renamed type, reordered fields, reordered methods,
+  an added comment. None of them is visible on the wire, and a client compiled against the
+  first file calls the second unaltered. The diff told you something changed and nothing about
+  whether it mattered.
+</p>
+
+<p>Compile both and two identities separate the two questions.</p>
+
+<pre data-lang="rust" data-file="examples/semantic_equivalence.rs">
+let first = compile_did(/* the first source above */)?;
+let second = compile_did(/* the second source above */)?;
+
+assert_eq!(
+    first.contract().interface_id(),
+    second.contract().interface_id()
+);
+assert_ne!(
+    first.source_info().unwrap().source_bundle_id(),
+    second.source_info().unwrap().source_bundle_id()
+);
+</pre>
+
+<p>
+  Run it yourself with <code>cargo run --example semantic_equivalence</code>. Those two
+  assertions are the shape of every answer on this page: <em>did the meaning change?</em>
+  becomes a comparison of two fixed-length strings, and <em>did the text change?</em> stays a
+  separate question with its own separate name.
+</p>
+
+<h2>Every consumer re-implements Candid, and they disagree</h2>
+
+<p>
+  Anything that acts on a <code>.did</code> file has to do the same work first: resolve type
+  aliases, decide when two structurally identical definitions are the same type, follow
+  recursive definitions without expanding them forever, compute the 32-bit label hash Candid
+  puts on the wire in place of every record field and method name, keep function modes straight
+  (<code>query</code>, <code>oneway</code>, plain update), and handle a service class —
+  <code>service : (nat) -> { … }</code> — where the actor is a constructor rather than a
+  service.
+</p>
+
+<p>
+  The label hash shows how small these rules are and how easy they are to get almost right.
+  Candid identifies a record field or a method on the wire by a number derived from the name's
+  UTF-8 bytes:
+</p>
+
+<pre data-lang="text" data-file="src/name_hash.rs">
+h = 0
+for each UTF-8 byte b of the name:
+    h = (h * 223 + b) mod 2^32
+</pre>
+
+<p>
+  So <code>ping</code> is <code>1247277682</code>. The fold is over bytes, not characters, so a
+  two-byte character contributes twice; the arithmetic wraps by definition rather than
+  overflowing; and distinct names can land on one number — the repository pins the colliding pair
+  <code>jhwlzguu</code> and <code>jsyrjsvk</code> — so it is the ID, not the spelling, that the
+  wire carries, and validation rejects an aggregate whose two fields share one
+  (<code>duplicate_field_id</code>). Get any of that subtly wrong and nothing fails to compile.
+  The bindings still build, the call still goes out, and a value lands in the wrong field or an
+  absent option is read as present.
+</p>
+
+<p>
+  candid-core's rule is that exactly one component may parse DID text or apply Candid type
+  rules: the Rust boundary, and only when the <code>compiler</code> feature is enabled.
+  <code>candid_parser</code> is authoritative for what the source means, and the builder only
+  projects that checked result into the graph — it reimplements no part of alias resolution,
+  recursive-type checking, service-class constructors, or method-mode checking. TypeScript and
+  every other host consumes already validated Contract JSON and is explicitly not allowed to grow
+  a second hand-written parser.
+</p>
+
+<p>
+  One Candid rule is the deliberate exception. The name hash above is implemented in the crate
+  itself, in <code>src/name_hash.rs</code>, and in the base feature set rather than behind
+  <code>compiler</code> — Contract validation has to be able to check every method ID without
+  linking a Candid source engine at all. Its tests compare it against
+  <code>candid_parser::candid::idl_hash</code> so the two cannot drift apart silently. Record and
+  variant field IDs are taken from the parser's own labels.
+</p>
+
+<h2>And a parser with no budget does whatever the input asks</h2>
+
+<p>
+  The moment the <code>.did</code> source comes from somewhere you do not control — a paste
+  into a UI, an agent, a registry entry, a canister that serves its own interface — "parse it
+  and see" becomes an availability decision. Valid structure is not the same as bounded cost.
+</p>
+
+<p>
+  candid-core's own first two prereleases got this wrong, which is the most honest example
+  available. Both <code>0.1.0-beta.1</code> and <code>0.1.0-beta.2</code> walked the
+  declaration reference graph as a tree, re-expanding a shared subtree once per incoming edge —
+  node visits doubling per level, from a source under a kilobyte, reachable from the public
+  <code>compile_did</code> entry point under default limits. Nothing was charged for the work
+  and no refusal came: the walk returned <code>Ok</code>. <code>0.1.0-beta.3</code>
+  deduplicates expansion states, charges each one against a new counter, and fails closed.
+</p>
+
+<p>
+  What that fix restored is the structural rule. Every parse, compile, validate and canonicalize
+  path runs under a <code>Limits</code> policy — byte ceilings, node and field counts, depth
+  bounds, work budgets and an optional deadline. The plain entry points such as
+  <code>compile_did</code> apply <code>Limits::default()</code>; the <code>_with_context</code>
+  variants take a <code>RuntimeContext</code>, which carries your own <code>Limits</code>
+  together with a cancellation token. Graph and import algorithms use explicit work queues rather
+  than call-stack recursion, so a deep hostile input is refused instead of overflowing the stack.
+  Exhaustion yields a
+  <code>resource_limit_exceeded</code> diagnostic carrying the exact
+  <code>{resource, limit, observed}</code> triple, and no partially validated Contract is ever
+  returned. See <a href="limits-and-diagnostics.html">limits, budgets and diagnostics</a>.
+</p>
+
+<h2>The idea: compile once, into a Contract</h2>
+
+<p>A Contract is what candid-core hands you instead of the source. Four things happen, in order.</p>
+
+<ol>
+  <li>
+    <strong>Parse.</strong> <code>candid_parser</code> reads the source and type-checks the
+    program. <code>compile_did</code> takes one self-contained source;
+    <code>compile_with_resolver</code> and <code>compile_did_file</code> follow
+    <code>import</code> edges through a resolver instead.
+  </li>
+  <li>
+    <strong>Project.</strong> The checked result becomes a flat array called the
+    <em>arena</em>: every type is one node in it, and every reference between types is an
+    integer index — a <code>TypeRef</code>, a <code>u32</code>. Nothing refers to a type by
+    name and nothing nests, so a record field holding <code>3</code> means "see
+    <code>types[3]</code>", and recursive and mutually recursive types become ordinary cycles in
+    the arena rather than expansions that never terminate.
+  </li>
+  <li>
+    <strong>Validate.</strong> A fixed checklist: every reference in range and pointing at the
+    required kind of node, field IDs unique per aggregate, each method's ID equal to Candid's
+    hash of its name, <code>oneway</code> functions with no results, a <code>class</code> node
+    only ever as the top-level actor, every node reachable from a root. Failures come back as a
+    list of coded violations rather than an exception.
+  </li>
+  <li>
+    <strong>Canonicalize and name.</strong> Structurally equivalent nodes collapse into one,
+    survivors are renumbered by a fixed traversal, unordered collections sort by a fixed key,
+    and a JSON writer that emits no whitespace and sorts object keys produces the bytes.
+    SHA-256 over them, under a domain prefix, is the identity. The recipe is a written
+    specification with a frozen name, <code>candid-core-canon-1</code>, so an implementation in
+    another language reproduces the same octets — see
+    <a href="canonical-bytes.html">canonical bytes</a>.
+  </li>
+</ol>
+
+<p>
+  The vocabulary is small. <strong>types</strong> is the arena.
+  <strong>declarations</strong> is a name table of <code>{ name, type }</code> pairs pointing
+  into it, one per <code>type Foo = …</code> in the source, and not part of the type system.
+  The <strong>actor</strong> is the optional root — <code>{"kind":"service","service":N}</code>
+  or, for a service class, <code>{"kind":"class","class":N}</code>. A <code>.did</code> that
+  declares only types has no actor at all.
+</p>
+
+<p>Here is a whole Contract for a four-line interface, with the <code>producer</code> block elided and each node folded onto one line:</p>
+
+<pre data-lang="json" data-file="crates/candid-core-ts/tests/goldens/deferred.contract.json">
+{
+  "actor": { "kind": "service", "service": 0 },
+  "canonicalization_profile": "candid-core-canon-1",
+  "declarations": [
+    { "name": "Callback", "type": 4 },
+    { "name": "Kept",     "type": 2 },
+    { "name": "Registry", "type": 6 }
+  ],
+  "format": "candid-core",
+  "format_version": 1,
+  "identities": {
+    "contract": "candid-core:contract:v1:sha256:63572a1640102e56d6c7297c49a89b2dce6bf9d2f298a408500fd9c5a6796ebe",
+    "interface": "candid-core:interface:v1:sha256:7c4fb1c9212d86346ea255ad6ff1a346819b720df79076b3a6de584759534f9e"
+  },
+  "producer": { … },
+  "semantics_profile": "candid-1",
+  "types": [
+    { "kind": "service", "methods": [ { "function": 1, "id": 1247277682, "name": "ping" } ] },
+    { "args": [], "kind": "func", "mode": "update", "results": [] },
+    { "fields": [ { "id": 834174833, "type": 3 } ], "kind": "record" },
+    { "kind": "primitive", "primitive": "nat" },
+    { "args": [3], "kind": "func", "mode": "query", "results": [5] },
+    { "kind": "primitive", "primitive": "text" },
+    { "kind": "service", "methods": [ { "function": 7, "id": 3500123747, "name": "register" } ] },
+    { "args": [5], "kind": "func", "mode": "update", "results": [3] }
+  ]
+}
+</pre>
+
+<p>
+  The source was four lines: a <code>func</code> type, a <code>service</code> type, a record,
+  and <code>service : { ping : () -> () }</code>. Four things are worth reading out of it.
+</p>
+
+<ul>
+  <li>
+    The actor points at <code>types[0]</code>, whose one method points at <code>types[1]</code>.
+    Re-indexing traverses from the actor first, which is why the service it uses is index
+    <code>0</code>.
+  </li>
+  <li>
+    <code>ping</code> keeps its text name — you need it to address the canister — beside the
+    wire ID <code>1247277682</code> Candid actually sends. <code>"mode": "update"</code> is
+    explicit although the source wrote no annotation: the Contract states defaults rather than
+    leaving each consumer to supply them.
+  </li>
+  <li>
+    <code>Registry</code> is declared but the actor never reaches it, so it sits at index
+    <code>6</code>: inside <code>contract_id</code>, outside <code>interface_id</code>.
+  </li>
+  <li>
+    Three version markers travel with every document — <code>format_version</code>,
+    <code>semantics_profile</code>, <code>canonicalization_profile</code> — because the JSON
+    shape, the Candid type rules and the byte-level canonicalization change for different
+    reasons. An unknown value in any of them fails closed.
+  </li>
+</ul>
+
+<p>
+  Nothing about that document is specific to Rust. It is JSON any language reads with an
+  ordinary parser, which is the whole point of doing the parsing once.
+</p>
+
+<h3>Aliases and duplicates collapse on the way in</h3>
+
+<p>Canonicalization is not only sorting: structurally equivalent nodes are merged, so four declarations here become two nodes.</p>
+
+<pre data-lang="candid" data-file="crates/candid-core-ts/tests/fixtures/recursion.did">
+type List = opt record { head : nat; tail : List };
+type Even = record { next : opt Odd };
+type Odd = record { next : opt Even };
+type ListAlias = List;
+</pre>
+
+<pre data-lang="ts" data-file="crates/candid-core-ts/tests/goldens/recursion.ts">
+// Generated by candid-core-ts from a candid-core Contract. Do not edit.
+import { c, type Schema } from "@candid-core/schema";
+
+export type Even = { next: Even | null };
+export const Even: Schema<Even> = c.rec(() => c.record({ next: c.opt(Even) }));
+
+export type List = { head: bigint; tail: List } | null;
+export const List: Schema<List> = c.rec(() => c.opt(c.record({ head: c.nat, tail: List })));
+
+export type ListAlias = List;
+export const ListAlias: Schema<ListAlias> = c.rec(() => List);
+
+export type Odd = Even;
+export const Odd: Schema<Odd> = c.rec(() => Even);
+</pre>
+
+<p>
+  <code>List</code> and <code>ListAlias</code> resolve to the same node; <code>Even</code> and
+  <code>Odd</code>, mutually recursive with identical structure, are one node that references
+  itself. Both facts survive into the generated TypeScript, which writes
+  <code>export type Odd = Even</code>. The recursion is a cycle, not an expansion, so it stays
+  finite.
+</p>
+
+<h3>Four identities, four different questions</h3>
+
+<table>
+  <thead>
+    <tr><th>Identity</th><th>Answers</th><th>Moves when</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><code>interface_id</code></td>
+      <td>Can my client still call this canister?</td>
+      <td>The actor-reachable type graph changes. Absent entirely when the <code>.did</code> declares no service.</td>
+    </tr>
+    <tr>
+      <td><code>contract_id</code></td>
+      <td>Is this the same complete semantic Contract, declaration names included?</td>
+      <td>Any part of the canonical payload changes, including a declaration name or an actor-unreachable declared type.</td>
+    </tr>
+    <tr>
+      <td><code>source_bundle_id</code></td>
+      <td>Did the source files change?</td>
+      <td>Any source byte or import edge changes. A comment edit and a reformat both move it, deliberately.</td>
+    </tr>
+    <tr>
+      <td><code>artifact_id</code></td>
+      <td>Is this the exact document I stored or signed?</td>
+      <td>Any byte of the serialized document changes — <code>producer</code> metadata and envelope extensions included.</td>
+    </tr>
+  </tbody>
+</table>
+
+<p>
+  The first three travel inside the documents they describe, and decoding recomputes and
+  compares them, so a tampered identity is rejected rather than believed. The fourth is
+  detached: returned to the caller, never written into the document it names. None of them
+  authenticates anything on its own — they are content addresses, and signing one commits to
+  exactly what its row covers and to nothing else.
+  <a href="identities.html">Content-addressed identities</a> works through each in full.
+</p>
+
+<h2>What that buys you</h2>
+
+<div class="card-grid">
+  <a class="card" href="identities.html">
+    <span class="card-kicker">Concept</span>
+    <span class="card-title">Gate a breaking change in CI</span>
+    <p>Compile both revisions and compare one <code>interface_id</code> string; a renamed type alias or a reordered field does not move it, a removed method does.</p>
+  </a>
+  <a class="card" href="generator.html">
+    <span class="card-kicker">TypeScript</span>
+    <span class="card-title">Types the compiler proves</span>
+    <p>Each declaration emits an alias plus a builder annotated <code>Schema&lt;X&gt;</code>; because <code>Schema</code> is invariant, the module compiles only if the two agree in both directions.</p>
+  </a>
+  <a class="card" href="schema-codec.html">
+    <span class="card-kicker">TypeScript</span>
+    <span class="card-title">Candid bytes without Rust</span>
+    <p>A binary codec written in TypeScript with no runtime dependencies and no WebAssembly, checked in both directions against the reference implementation's own wire vectors.</p>
+  </a>
+  <a class="card" href="schema-validation.html">
+    <span class="card-kicker">TypeScript</span>
+    <span class="card-title">Check a value before it reaches the wire</span>
+    <p>Structural validation that returns a verdict with path-addressed issues instead of throwing, so a rejection is data your caller can render.</p>
+  </a>
+  <a class="card" href="schema-from-contract.html">
+    <span class="card-kicker">TypeScript</span>
+    <span class="card-title">Handle an interface you first see at run time</span>
+    <p><code>schemaFromContract</code> builds the same schemas from a canonical Contract document, with no code-generation step in between.</p>
+  </a>
+  <a class="card" href="schema-forms.html">
+    <span class="card-kicker">TypeScript</span>
+    <span class="card-title">Drive a form from the interface</span>
+    <p><code>formModel</code> turns a schema into a UI-agnostic tree of controls, so the form follows the interface rather than being written a second time by hand.</p>
+  </a>
+  <a class="card" href="limits-and-diagnostics.html">
+    <span class="card-kicker">Concept</span>
+    <span class="card-title">Accept .did source you did not write</span>
+    <p>Every entry point runs under a resource policy and refuses with <code>{resource, limit, observed}</code> rather than allocating or recursing without bound.</p>
+  </a>
+  <a class="card" href="trust-boundary.html">
+    <span class="card-kicker">Concept</span>
+    <span class="card-title">Refuse a document that was edited</span>
+    <p>Decoding recomputes the embedded identities and compares them, and an unknown key anywhere in the semantic core is rejected outright.</p>
+  </a>
+</div>
+
+<h2>Who this is for, and who it is not for</h2>
+
+<p>
+  It is for you if you compare, cache, pin or gate on Candid interfaces; if you accept
+  <code>.did</code> source you did not write; if you want TypeScript types checked against a
+  runtime schema by the compiler instead of by a comment; or if you need Candid encoding and
+  decoding in a browser with no Rust in the build.
+</p>
+
+<p>It is not for you, at least not yet, in four specific cases.</p>
+
+<ul>
+  <li>
+    <strong>You want a drop-in replacement for the agent-js runtime.</strong> It is not one.
+    <code>@candid-core/schema</code> deliberately produces modern domain shapes —
+    <code>opt T</code> is <code>T | null</code>, variants are <code>{ tag, value }</code>
+    unions, anonymous <code>vec nat8</code> is <code>Uint8Array</code>, <code>nat</code> /
+    <code>int</code> and the 64-bit integers are <code>bigint</code> — not the
+    <code>[] | [T]</code> options and single-key variant objects agent-js produces.
+    Compatibility with agent-js value shapes is an explicit non-goal, so using these types
+    against an existing agent needs a conversion at the boundary.
+  </li>
+  <li>
+    <strong>You need the Rust crate to encode and decode Candid binary.</strong> It does not.
+    That is a named non-goal of the current Rust slice; the codec lives in the TypeScript
+    package today.
+  </li>
+  <li>
+    <strong>You want <code>.did</code> to TypeScript with no Rust toolchain at all.</strong>
+    That path is <code>@candid-core/cli</code>, which compiles the same pipeline to
+    WebAssembly. It is prepared in the repository and not published to npm — see
+    <a href="cli-npm.html">@candid-core/cli</a> for what exists and how to build it.
+  </li>
+  <li>
+    <strong>You need a stable format.</strong> The Contract format is explicitly not a stable
+    v1. Of the seven foundation decisions, one — independently versioning schema, Candid
+    semantics and canonical bytes — is marked Verified with a recorded run of an independent
+    reference implementation; the other six are implemented with verification pending.
+    <a href="guarantees.html">Guarantees and verification</a> and
+    <a href="decisions.html">design decisions</a> say which is which.
+  </li>
+</ul>
+
+<callout type="warn" title="Pre-1.0, and pinned exactly">
+  <p>
+    Until 1.0, any release may change the public Rust API, the serialized Contract, envelope and
+    compilation shapes, the canonical bytes, and therefore every identity computed over them.
+    Every published version of the crate is a prerelease, and a caret requirement never selects
+    a prerelease — <code>candid-core = "0.1"</code> resolves to nothing at all. Name the version
+    exactly, as below.
+  </p>
+</callout>
+
+<pre data-lang="toml" data-file="Cargo.toml">
+[dependencies]
+candid-core = "=0.1.0-beta.3"
+</pre>
+
+<p>
+  The npm package versions independently of the crate and installs normally with
+  <code>npm install @candid-core/schema</code>. <a href="status.html">Status, versions and
+  releases</a> has the current state of each unit.
+</p>
+
+<h2>Next</h2>
+
+<div class="card-grid">
+  <a class="card" href="quickstart-typescript.html">
+    <span class="card-kicker">Start here</span>
+    <span class="card-title">Quickstart: TypeScript</span>
+    <p>From a <code>.did</code> file to typed, validated canister calls, with no Rust toolchain.</p>
+  </a>
+  <a class="card" href="quickstart-rust.html">
+    <span class="card-kicker">Start here</span>
+    <span class="card-title">Quickstart: Rust</span>
+    <p>Compile an interface into a validated Contract graph and read its identities.</p>
+  </a>
+  <a class="card" href="packages.html">
+    <span class="card-kicker">Start here</span>
+    <span class="card-title">Packages and crates</span>
+    <p>Every publishable and internal unit, what it is for, and how to depend on it.</p>
+  </a>
+</div>

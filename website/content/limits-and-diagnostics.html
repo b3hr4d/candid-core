@@ -1,0 +1,423 @@
+<p>
+  A <code>.did</code> file is source text, and a tool that reads one is usually reading bytes it
+  did not write: pasted into an editor, fetched from a canister, produced by an agent, or pulled
+  from a remote registry. Valid Candid structure is not the same as safe cost. A source can be
+  perfectly well formed and still be shaped so that reading it exhausts memory, spins the CPU, or
+  overflows the call stack.
+</p>
+
+<p>
+  candid-core answers that in one place rather than leaving it to each caller. Every public entry
+  point that touches untrusted bytes (parse, compile, validate, canonicalize, hash) runs under a
+  resource policy — one you pass in, or <code>Limits::default()</code> for the no-argument
+  conveniences — spends one budget while it works, and, when that budget runs out, returns a
+  structured diagnostic naming the resource, the limit, and the value it observed. The rule is recorded in
+  <a href="https://github.com/b3hr4d/candid-core/blob/main/docs/adrs/0005-resource-limits.md">ADR
+  0005</a>: bound all untrusted work, avoid recursive execution, fail closed.
+</p>
+
+<h2>Three failure modes, one answer</h2>
+
+<p>Three distinct things can go wrong, and each is bounded separately.</p>
+
+<dl>
+  <dt>Unbounded time</dt>
+  <dd>
+    A graph algorithm whose cost is quadratic or worse in something the author of the input chooses
+    freely. A DAG of shared type aliases re-expanded once per incoming edge costs
+    <em>O(2<sup>n</sup>)</em> node visits from a 932-byte source. Bounded by counted work units and
+    by an optional deadline.
+  </dd>
+  <dt>Unbounded allocation</dt>
+  <dd>
+    A document that is small on the wire but expands into a large in-memory structure: a million
+    fields, a megabyte of names, a deduplication memo holding one entry per traversal state. Bounded
+    by byte gates applied <em>before</em> decoding, and by counts on every collection the graph
+    holds.
+  </dd>
+  <dt>Unbounded recursion</dt>
+  <dd>
+    A few kilobytes of <code>opt opt opt …</code> that drives a recursive parser off the end of the
+    call stack. Graph and import algorithms use explicit work queues instead of call-stack recursion,
+    and nesting is counted lexically in the raw text before any recursive third-party parser is
+    invoked at all, so depth is a budget decision rather than a crash.
+  </dd>
+</dl>
+
+<p>
+  In all three cases the intended outcome is the same: a structured error value, returned normally
+  rather than a panic or an unbounded run, and a failed operation never returns a partially
+  validated Contract — the crate's validated in-memory model of an interface. That is the designed
+  behaviour rather than a proven property: ADR 0005 is recorded as
+  <em>Implemented, verification pending</em>, and the crate itself names one way a host can still
+  lose the structured refusal — an allocator that gives out before a counter does aborts instead.
+  See <code>max_type_preflight_work</code> on the <a href="reference-limits.html">limits
+  reference</a>.
+</p>
+
+<h2>Limits: the policy object</h2>
+
+<p>
+  <code>Limits</code> is a plain value carrying 27 numeric bounds plus one optional deadline. Its
+  fields are private, so there is no struct literal: you start from a named profile and chain
+  <code>with_*</code> builders, and you read values back through getters.
+</p>
+
+<pre data-lang="rust" data-file="src/limits.rs">
+use candid_core::{Limits, LimitsProfile};
+
+let limits = LimitsProfile::InteractiveV1
+    .limits()
+    .with_max_input_bytes(64 * 1024)
+    .with_deadline_unix_ms(Some(2_000_000_000_000));
+assert_eq!(limits.max_input_bytes(), 64 * 1024);
+</pre>
+
+<p>
+  <code>LimitsProfile</code> is a named, versioned set of frozen default numbers.
+  <code>InteractiveV1</code> is the only released profile, and <code>Limits::default()</code> is
+  exactly <code>LimitsProfile::InteractiveV1.limits()</code>. "Frozen" is a real promise: those
+  numbers never change. A future retuning ships as a new enum variant with a new wire name rather
+  than as an edit to an existing one, which is what lets a serialized policy name its profile
+  instead of copying 27 platform-dependent values.
+</p>
+
+<p>
+  Two consequences follow. <strong>Limits never participate in Contract identity</strong>, so
+  raising one for a trusted workload cannot change any hash the crate computes. And <strong>every
+  limit accepts <code>0</code></strong>: a zero limit is a defined, fail-closed policy rather than a
+  rejected configuration, refusing any input that consumes that resource at all. The complete list
+  of defaults is on the <a href="reference-limits.html">limits reference</a>.
+</p>
+
+<h2>RuntimeContext, cancellation and deadlines</h2>
+
+<p>
+  <code>RuntimeContext</code> is a <code>Limits</code> policy plus the host-local controls for one
+  operation — today, a cancellation token. Anything taking a <code>&amp;RuntimeContext</code> can be
+  cancelled; anything taking a bare <code>&amp;Limits</code> can only be bounded and deadlined. The
+  <code>limits</code> field is public but the token is not, so a struct literal deliberately fails
+  to compile and a future control can be added without breaking callers.
+</p>
+
+<pre data-lang="rust">
+use candid_core::{CancellationToken, Limits, RuntimeContext};
+
+let token = CancellationToken::new();
+let context = RuntimeContext::new(Limits::default()).with_cancellation(token.clone());
+
+// … hand `context` to a long compilation on a worker thread, then:
+token.cancel();
+</pre>
+
+<p>
+  A <code>CancellationToken</code> is a cloneable flag backed by one shared atomic; cancelling any
+  clone cancels them all. It is cooperative, not preemptive: nothing is killed mid-instruction, and
+  the operation notices at its next checkpoint and returns the <code>operation_cancelled</code> code
+  for its domain. The token is never serialized. A <code>RuntimeContext</code> serializes as
+  <code>{"limits": …}</code> and nothing else, and a context decoded from JSON comes back with a
+  fresh, uncancelled token.
+</p>
+
+<p>
+  A deadline is set as <code>Limits::with_deadline_unix_ms(Some(unix_ms))</code>. It is
+  <em>configured</em> in wall-clock milliseconds but <em>enforced</em> against a monotonic clock: the
+  budget converts the remaining duration into a monotonic instant once, when the operation begins,
+  so a clock adjustment mid-flight cannot lengthen or shorten an operation already running. Any
+  deadline at or before the current time, <code>Some(0)</code> included, makes every bounded
+  operation fail closed with <code>operation_deadline_exceeded</code> before it does any work. If the
+  platform cannot represent the remaining duration monotonically, the code treats the deadline as
+  already reached, because an explicit deadline must never silently become unbounded.
+</p>
+
+<callout type="note" title="Bare wasm32-unknown-unknown has no clock">
+  <p>
+    On that target <code>SystemTime::now</code> and <code>Instant::now</code> <em>panic</em> rather
+    than returning an error, so a deadline cannot be measured and a failed measurement cannot be
+    reported. Reading the clock anyway would abort the module, the one outcome the fail-closed rule
+    exists to prevent. The budget therefore records only <em>whether</em> a deadline was configured
+    and reports any such deadline as already elapsed, reaching you through the ordinary
+    <code>operation_deadline_exceeded</code> result. <code>None</code> stays unbounded exactly as it
+    does natively, and cancellation and every quantitative limit are unaffected. A host that needs a
+    real browser deadline should drive a <code>CancellationToken</code> from its own timer; the crate
+    takes no <code>web-time</code>, <code>js-sys</code> or <code>wasm-bindgen</code> production
+    dependency.
+  </p>
+</callout>
+
+<h2>One shared budget per operation</h2>
+
+<p>
+  Each context-aware public operation creates exactly one internal budget, and every stage draws on
+  that same instance: the byte gate, JSON decode, source loading, the depth preflight walks,
+  lowering, validation, canonicalization, provenance checks. No stage gets a fresh allowance at its
+  boundary. The budget holds the limits, the monotonic deadline snapshot, the cancellation token,
+  and a map of per-resource running totals.
+</p>
+
+<p>It meters two different kinds of thing, and the distinction is deliberate.</p>
+
+<ul>
+  <li>
+    <strong>Charged</strong> resources accumulate. Work units are charged, so a second charge of 2
+    against a limit of 3 fails reporting an observed value of 4.
+  </li>
+  <li>
+    <strong>Observed</strong> resources record a high-water mark and take the maximum. Retained
+    artifacts such as the input document or the type-node count are observed, so a later stage
+    revalidating the same artifact does not count it twice.
+  </li>
+</ul>
+
+<p>
+  "Shared" has a practical consequence: <strong>raising the structural limit that let you build
+  something does not by itself make that thing renderable.</strong> The
+  <code>to_json_pretty_with_limits</code> serializers validate before rendering and then charge the
+  emitted byte length against <code>max_canonicalization_work</code>, on top of whatever
+  construction already spent from the same counter. You can parse a document successfully and then
+  fail to print it back out.
+</p>
+
+<p>
+  One budget per <em>operation</em>, not per context: <code>RuntimeContext</code> builds a fresh
+  budget on every entry point call. Reusing a context reuses the policy and the cancellation token,
+  never a running allowance.
+</p>
+
+<h2>Lexical nesting versus semantic depth</h2>
+
+<p>
+  Two pairs of limits look redundant and are not. For DID source,
+  <code>max_source_nesting</code> scans the token stream of the raw text and counts open delimiters
+  plus any run of <code>opt</code>/<code>vec</code> constructors, before the recursive upstream
+  parser is ever invoked; <code>max_type_depth</code> counts the checked semantic type depth
+  afterwards. For host values, the crate's self-describing JSON encoding of Candid values,
+  <code>max_value_nesting</code> counts JSON <code>{</code> and <code>[</code> containers in a
+  constant-stack pre-scan before <code>serde_json</code> runs, while <code>max_value_depth</code>
+  counts semantic value depth after decoding.
+</p>
+
+<p>
+  They are separate because the units do not convert. One <code>vec</code> level costs two JSON
+  containers; one <code>record</code> level costs three. A single limit could not report an honest
+  <code>observed</code> value for both, and reporting a dishonest one would send you to adjust the
+  wrong knob. So a document rejected by the pre-scan always reports <code>value_nesting</code>,
+  never <code>value_depth</code>. The lexical check is also what keeps the rejection a budget
+  decision rather than a stack-exhaustion abort: rejecting costs constant stack, so no input can
+  force a crash by being deeper than the limit.
+</p>
+
+<h2>What a failure looks like</h2>
+
+<p>
+  Every failure domain in the crate (compilation, Contract validation, provenance validation, host
+  value validation) produces items of one serializable type, <code>Diagnostic</code>. The outer
+  collections stay domain-specific for Rust ergonomics (<code>CompileError.diagnostics</code>,
+  <code>ContractValidationError.violations</code>,
+  <code>HostValueValidationError.violations</code>), but the items are identical.
+</p>
+
+<pre data-lang="rust" data-file="src/diagnostics.rs">
+pub struct Diagnostic {
+    pub code: String,
+    pub phase: Option<DiagnosticPhase>,
+    pub severity: Option<Severity>,
+    pub path: Option<String>,
+    pub message: String,
+    pub span: Option<SourceSpan>,
+    pub related: Vec<RelatedLocation>,
+    pub notes: Vec<String>,
+    pub resource_limit: Option<ResourceLimitInfo>,
+}
+
+pub struct ResourceLimitInfo {
+    pub resource: String,
+    pub limit: u64,
+    pub observed: u64,
+}
+</pre>
+
+<p>
+  Domains differ only in which optional fields they fill in. Compile diagnostics always carry
+  <code>phase</code> (<code>parse</code>, <code>type_check</code>, <code>load</code> or
+  <code>lower</code>) and <code>severity</code> (<code>error</code> is the only variant today).
+  Validation violations always carry <code>path</code>, the <code>$.…</code> semantic or value path,
+  and never carry <code>phase</code> or <code>severity</code>. Absent fields are omitted from JSON
+  entirely, so each domain's serialized shape stays minimal.
+</p>
+
+<p>
+  <code>ResourceLimitInfo</code> is the part that makes a resource failure actionable. Its
+  <code>limit</code> and <code>observed</code> are fixed-width <code>u64</code>, not platform
+  <code>usize</code>, so the same failure serializes to the same numeric text on a 32-bit browser
+  target and a 64-bit server. Every conversion between domains preserves the triple verbatim; no
+  path in the crate is allowed to reduce a resource failure to message text.
+</p>
+
+<p>
+  <code>SourceSpan</code> comes in exactly two forms. An <strong>exact</strong> span carries
+  <code>start_byte</code>/<code>end_byte</code> offsets genuinely valid for the named source's
+  original text. A <strong>source-scoped</strong> location names a logical source with no offsets at
+  all, which is what a backend reports when it type-checked against rewritten text whose offsets
+  would point at the wrong characters in your file. Half-spans and empty spans are rejected on
+  decode.
+</p>
+
+<h3>The diagnostics cap and its sentinel</h3>
+
+<p>
+  Contract structure validation collects its violations up to <code>max_diagnostics</code>
+  (default 100); compile diagnostics come from the upstream checker and are not capped by it. When
+  more violations are observed than fit, the last retained slot is <em>replaced</em> by a <code>resource_limit_exceeded</code>
+  violation at path <code>$</code> whose triple names resource <code>diagnostics</code>, the cap as
+  <code>limit</code>, and the true observed count as <code>observed</code>. Later observations update
+  that same sentinel in place, so the collection never grows past the cap.
+</p>
+
+<p>
+  A cap of <code>0</code> pins the guarantee. It can hold no real violation, so the sentinel becomes
+  the single retained item, which means <strong>an invalid input never yields an empty error
+  collection</strong> and you can always rely on <code>violations[0]</code> existing.
+</p>
+
+<pre data-lang="json">
+[
+  {
+    "code": "resource_limit_exceeded",
+    "path": "$",
+    "message": "resource diagnostics exceeded limit 0; observed at least 1",
+    "resource_limit": { "resource": "diagnostics", "limit": 0, "observed": 1 }
+  }
+]
+</pre>
+
+<p>
+  Because the sentinel overwrites rather than appends, a cap of 1 with two violations leaves you the
+  sentinel and nothing else. Set the cap high enough to keep the diagnostics you want to display.
+</p>
+
+<callout type="warn" title="Codes are the interface; message text is not">
+  <p>
+    <code>code</code>, the structured <code>path</code>, and the <code>resource_limit</code> triple
+    are the stable, machine-matchable surface. Human-readable <code>message</code> text is
+    explicitly <strong>not</strong> a stable interface and may be reworded in any release. If you are
+    writing code that reacts to a failure, match on <code>code</code> and read
+    <code>resource_limit</code>. No consumer should regex a message. The same applies to the
+    resource string itself: match it as data, because a resource name is not always the limit field
+    name minus its <code>max_</code> prefix.
+  </p>
+</callout>
+
+<h2>A limit tripping, end to end</h2>
+
+<p>
+  <code>examples/bounded_parsing.rs</code> is a runnable program that trips two different limits on
+  purpose. Run it with:
+</p>
+
+<pre data-lang="bash">cargo run --example bounded_parsing</pre>
+
+<p>
+  It first compiles a one-method service, renders the Contract to JSON, then tries to read that JSON
+  back under a policy that allows 64 bytes of input:
+</p>
+
+<pre data-lang="rust" data-file="examples/bounded_parsing.rs">
+// The byte gate runs before serde_json is invoked, so an oversized document
+// is rejected without being decoded. This bounds peak allocation against
+// the chosen ceiling; it does not reject element-by-element during decode.
+let context = RuntimeContext::new(Limits::default().with_max_input_bytes(64));
+let rejected =
+    Contract::from_slice_with_context(contract_json.as_bytes(), &context).unwrap_err();
+println!("oversized Contract rejected: {}", resource_limit(&rejected));
+</pre>
+
+<p>
+  The failure names <code>input_bytes</code>, with <code>limit</code> 64 and <code>observed</code>
+  set to the document's real byte length. The document is never decoded: the gate fires first, which
+  is what bounds peak allocation rather than merely detecting the problem afterwards. The
+  <code>resource_limit</code> helper in the same file does the only thing a caller should do, which
+  is find the first violation carrying <code>resource_limit</code> and read the triple off it.
+</p>
+
+<p>
+  The program then raises <code>max_input_bytes</code> enough to parse both documents, and starves
+  the render instead:
+</p>
+
+<pre data-lang="rust" data-file="examples/bounded_parsing.rs">
+let render = raised.clone().with_max_canonicalization_work(16);
+let starved_render = contract.to_json_pretty_with_limits(&render).unwrap_err();
+let metadata = starved_render
+    .violations
+    .iter()
+    .find_map(|violation| violation.resource_limit.as_ref())
+    .ok_or("expected resource metadata")?;
+println!(
+    "render starved: resource={} limit={} observed={}",
+    metadata.resource, metadata.limit, metadata.observed
+);
+</pre>
+
+<p>
+  That is the shared budget made visible: the policy that successfully parsed the document still
+  cannot print it, because rendering charges the emitted bytes against a counter the caller left
+  low.
+</p>
+
+<p>
+  The serialized item is the same shape in the compile domain, with <code>phase</code> and
+  <code>severity</code> added. Starving <code>max_canonicalization_work</code> down to 1 and
+  compiling the empty service <code>service : {};</code> produces exactly this, pinned by
+  <code>tests/diagnostics_contract.rs</code>:
+</p>
+
+<pre data-lang="json">
+[
+  {
+    "code": "resource_limit_exceeded",
+    "phase": "lower",
+    "severity": "error",
+    "path": "$",
+    "message": "$: resource canonicalization_work exceeded limit 1; observed 2",
+    "resource_limit": { "resource": "canonicalization_work", "limit": 1, "observed": 2 }
+  }
+]
+</pre>
+
+<p>
+  The structured violation crossed a domain boundary, from Contract validation into a compile
+  diagnostic, item by item — keeping its <code>path</code> and its triple rather than being
+  flattened into a message string.
+</p>
+
+<h2>Where the bounds are enforced</h2>
+
+<p>
+  Bounds are not a wrapper you can forget to apply. <code>Contract</code>,
+  <code>ContractEnvelope</code>, <code>Compilation</code> and <code>HostValue</code> deliberately do
+  not implement serde's <code>Deserialize</code> at all, because a trait implementation has no
+  argument position for a resource policy and could only ever decode under limits the library chose
+  rather than the ones you chose. Untrusted bytes go through <code>from_json_with_limits</code>,
+  <code>from_slice_with_context</code> and their siblings; the no-argument conveniences such as
+  <code>Contract::from_json</code> run the same bounded path under <code>Limits::default()</code>,
+  as does the <code>candid-core</code> binary, which has no flags for changing it.
+</p>
+
+<div class="card-grid">
+  <a class="card" href="reference-limits.html">
+    <span class="card-kicker">Reference</span>
+    <span class="card-title">Limits reference</span>
+    <p>All 27 limits, their default values, and the portable serialized configuration.</p>
+  </a>
+  <a class="card" href="rust-limits.html">
+    <span class="card-kicker">Rust crate</span>
+    <span class="card-title">Working with limits</span>
+    <p>Profiles, builders, deadlines and cancellation from Rust.</p>
+  </a>
+  <a class="card" href="reference-diagnostics.html">
+    <span class="card-kicker">Reference</span>
+    <span class="card-title">Diagnostics reference</span>
+    <p>The structured error shape shared by the Rust crate and the TypeScript runtime.</p>
+  </a>
+</div>

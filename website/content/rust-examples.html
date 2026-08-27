@@ -1,0 +1,329 @@
+<p>
+  The repository ships six small Rust programs under <code>examples/</code>. Each is a single file with
+  a <code>main</code>, each drives the crate through its public API, and together they cover the
+  ideas you need before writing anything of your own: the <strong>Contract</strong> — candid-core's
+  canonical, validated model of a Candid interface, held as a flat table of type nodes with named
+  declarations and an optional actor — the content-addressed identities computed over it, the resolver
+  that supplies imported sources, host values, and the limits that bound every untrusted read.
+</p>
+
+<p>
+  Prefer these over any snippet you find elsewhere, including the ones on this site. The
+  <a href="https://github.com/b3hr4d/candid-core/blob/main/.github/workflows/msrv.yml">Verify</a>
+  workflow builds and lints all six on every pull request and every push to <code>main</code>:
+  <code>cargo test --all-targets --locked</code> and
+  <code>cargo clippy --all-targets --all-features --locked -- -D warnings</code> on Linux, macOS and
+  Windows under current stable, the same test command again at the declared 1.78 minimum supported Rust
+  version, and the whole feature matrix on top. <code>--all-targets</code> includes examples, so one
+  that drifted out of step with the API stops that workflow rather than reaching you.
+</p>
+
+<h2>Running them</h2>
+
+<pre data-lang="bash">
+git clone https://github.com/b3hr4d/candid-core
+cd candid-core
+
+cargo run --example contract_walkthrough
+cargo run --example semantic_equivalence
+cargo run --example trust_boundary
+cargo run --example hermetic_bundle
+cargo run --example host_value_validation
+cargo run --example bounded_parsing
+</pre>
+
+<p>
+  No <code>--features</code> flag appears there because everything the examples need is on by default:
+  <code>default = ["compiler", "filesystem-compiler", "host-value"]</code>. Each example still declares
+  its own <code>required-features</code> in <code>Cargo.toml</code>, so under a reduced feature set
+  Cargo reports the example as skipped rather than failing to compile.
+</p>
+
+<table>
+  <thead>
+    <tr>
+      <th>Example</th>
+      <th>Needs</th>
+      <th>The idea it carries</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><code>contract_walkthrough</code></td>
+      <td><span class="pill accent">compiler</span></td>
+      <td>Source in, a graph you can walk out</td>
+    </tr>
+    <tr>
+      <td><code>semantic_equivalence</code></td>
+      <td><span class="pill accent">compiler</span></td>
+      <td>Meaning and source bytes are identified separately</td>
+    </tr>
+    <tr>
+      <td><code>trust_boundary</code></td>
+      <td><span class="pill accent">compiler</span></td>
+      <td>A document that arrives from elsewhere is revalidated, not believed</td>
+    </tr>
+    <tr>
+      <td><code>hermetic_bundle</code></td>
+      <td><span class="pill accent">compiler</span></td>
+      <td>Imports resolved from data the host holds, with no filesystem</td>
+    </tr>
+    <tr>
+      <td><code>host_value_validation</code></td>
+      <td><span class="pill accent">compiler</span> <span class="pill accent">host-value</span></td>
+      <td>A Candid value checked against a node in the graph, losslessly</td>
+    </tr>
+    <tr>
+      <td><code>bounded_parsing</code></td>
+      <td><span class="pill accent">compiler</span></td>
+      <td>Untrusted bytes decoded under a policy you choose</td>
+    </tr>
+  </tbody>
+</table>
+
+<p>They are listed above, and explained below, in the order that reads as a learning path.</p>
+
+<h2>contract_walkthrough: source in, a graph out</h2>
+
+<p>
+  The shortest path from Candid text to something you can traverse. It compiles one self-contained
+  source string with <code>compile_did</code>, prints the identities, and then walks from the actor to
+  each method's function node. Its input is deliberately recursive —
+  <code>type List = opt record { head: nat; tail: List }</code> — which stays finite in the Contract
+  because <code>tail</code> is an integer index back into the same type table rather than a nested
+  value.
+</p>
+
+<pre data-lang="bash">cargo run --example contract_walkthrough</pre>
+
+<pre data-lang="rust" data-file="examples/contract_walkthrough.rs">
+let contract = compilation.contract();
+println!("contract identity: {}", contract.contract_id());
+println!("interface identity: {:?}", contract.interface_id());
+println!("canonical type nodes: {}", contract.types().len());
+
+let Some(Actor::Service { service }) = contract.actor() else {
+    return Err("walkthrough expected a service actor".into());
+};
+let TypeNode::Service { methods } = &contract.types()[*service as usize] else {
+    return Err("actor did not reference a service node".into());
+};
+</pre>
+
+<p>
+  That is the whole traversal idiom. <code>contract.actor()</code> hands you the actor, whose
+  <code>service</code> field is an index; <code>contract.types()[i]</code> resolves it, and each
+  method's <code>function</code> field is another index into the same table. The program ends by
+  printing the canonical Contract JSON, so you can read the document the rest of the toolchain
+  consumes.
+</p>
+
+<h2>semantic_equivalence: meaning versus source bytes</h2>
+
+<p>
+  Two sources describe the same wire interface while differing in type name, comment, field order and
+  method order. The example compiles both and asserts what the two identities each claim:
+  <code>interface_id</code> covers the type graph reachable from the actor, so it is identical, while
+  <code>source_bundle_id</code> covers raw source files and import edges, so it is not.
+</p>
+
+<pre data-lang="bash">cargo run --example semantic_equivalence</pre>
+
+<pre data-lang="rust" data-file="examples/semantic_equivalence.rs">
+let second = compile_did(
+    r#"
+    // Different name, documentation, field order, and method order.
+    type Transfer = record { amount: nat; owner: principal };
+    service : {
+      a: (Transfer) -> () query;
+      z: (Transfer) -> () query;
+    };
+    "#,
+)?;
+
+// … the first source declares `Payload` with the fields and methods swapped …
+
+assert_eq!(
+    first.contract().interface_id(),
+    second.contract().interface_id()
+);
+assert_ne!(
+    first.source_info().unwrap().source_bundle_id(),
+    second.source_info().unwrap().source_bundle_id()
+);
+</pre>
+
+<p>
+  This is the practical rule for caching. Key on <code>source_bundle_id</code> when you are asking
+  "have I already compiled these exact bytes"; compare <code>interface_id</code> when you are asking
+  "is this the same interface a caller sees". <a href="identities.html">Content-addressed identities</a>
+  sets out what each one covers and what it deliberately excludes.
+</p>
+
+<h2>trust_boundary: what validation refuses</h2>
+
+<p>
+  Compile a Contract, serialize it, then hand two edited copies back to <code>Contract::from_json</code>
+  — the same validation the <a href="cli-rust.html"><code>candid-core validate</code></a> subcommand
+  runs. Both edits are rejected, for two different reasons worth knowing.
+</p>
+
+<pre data-lang="bash">cargo run --example trust_boundary</pre>
+
+<pre data-lang="rust" data-file="examples/trust_boundary.rs">
+let mut injected: serde_json::Value = serde_json::from_str(&canonical_json)?;
+injected["widget"] = serde_json::json!("date-picker");
+let rejected = Contract::from_json(&serde_json::to_string(&injected)?).unwrap_err();
+println!("unknown core metadata rejected: {rejected}");
+
+let mut tampered: serde_json::Value = serde_json::from_str(&canonical_json)?;
+tampered["identities"]["contract"] = serde_json::json!(
+    "candid-core:contract:v1:sha256:0000000000000000000000000000000000000000000000000000000000000000"
+);
+let rejected = Contract::from_json(&serde_json::to_string(&tampered)?).unwrap_err();
+</pre>
+
+<p>
+  An unknown top-level key is refused rather than ignored, so nobody can smuggle side-band data into
+  the canonical document — that is what the envelope's <code>extensions</code> map exists for. And a
+  well-formed but wrong <code>contract_id</code> is refused because validation recomputes the identity
+  from the payload instead of believing the one written in the file. Neither failure is a panic, and
+  the two arrive by different routes: the unknown key fails at decode, as
+  <code>ContractJsonError::MalformedJson</code>, while the wrong identity gets far enough to fail
+  validation, as <code>ContractJsonError::InvalidContract</code> carrying path-addressed violations.
+  The <a href="cli-rust.html">binary's</a> two failure keys, <code>diagnostics</code> and
+  <code>violations</code>, are that same split seen from outside.
+</p>
+
+<h2>hermetic_bundle: imports without a filesystem</h2>
+
+<p>
+  A two-file bundle with an import edge between them, compiled without touching a disk. The host holds
+  every source itself and hands the compiler one immutable logical bundle through a
+  <code>MemoryResolver</code>; a <em>resolver</em> is the capability the compiler uses to see any source
+  beyond the one you passed in, and it is the only authority in play.
+</p>
+
+<pre data-lang="bash">cargo run --example hermetic_bundle</pre>
+
+<pre data-lang="rust" data-file="examples/hermetic_bundle.rs">
+let mut resolver = MemoryResolver::new();
+resolver.insert(
+    "api/root.did",
+    r#"import "types.did"; service : { read: () -> (Item) query };"#,
+)?;
+resolver.insert(
+    "api/types.did",
+    "type Item = record { id: nat64; label: text };",
+)?;
+
+let compilation = compile_with_resolver(
+    "api/root.did",
+    &resolver,
+    CompileOptions::default(),
+    &RuntimeContext::default(),
+)?;
+</pre>
+
+<p>
+  The bare names are normalized to logical source IDs — <code>memory:/api/root.did</code> and
+  <code>memory:/api/types.did</code> — and the import <code>"types.did"</code> resolves relative to the
+  importing source's directory, which is why both files live under <code>api/</code>. Because nothing
+  is read from or written to disk, this example needs only the <code>compiler</code> feature, and it is
+  the same code path a browser build runs. <a href="source-resolution.html">Sources, imports and
+  provenance</a> covers resolvers in full.
+</p>
+
+<h2>host_value_validation: a value against the graph</h2>
+
+<p>
+  A <em>host value</em> is candid-core's lossless, self-describing representation of a Candid value for
+  host languages. This example builds one and checks it against a type node in the Contract graph,
+  choosing two cases that most encodings damage: a <code>nat</code> above the <code>u128</code> range
+  and a NaN with a payload.
+</p>
+
+<pre data-lang="bash">cargo run --example host_value_validation</pre>
+
+<pre data-lang="rust" data-file="examples/host_value_validation.rs">
+let selector = contract.bind_type(measurement.ty)?;
+let value = HostValue::record(
+    vec![
+        HostFieldValue::new(
+            candid_parser::candid::idl_hash("count"),
+            HostValue::nat("340282366920938463463374607431768211456")?,
+        ),
+        HostFieldValue::new(
+            candid_parser::candid::idl_hash("reading"),
+            // A NaN payload preserved exactly as IEEE-754 bits.
+            HostValue::float64("7ff8000000000001")?,
+        ),
+    ],
+    &Limits::default(),
+)?;
+
+validate_host_value(contract, &selector, &value, &Limits::default())?;
+</pre>
+
+<p>
+  A <code>nat</code> travels as a decimal string and a <code>float64</code> as its exact IEEE-754 hex
+  bits, so both values survive a round trip unchanged. Fields are addressed by their Candid label hash,
+  not by name, because that hash is what the wire format actually carries.
+  <code>contract.bind_type(…)</code> turns a bare index into a selector that carries the contract
+  identity with it, so a value cannot be validated against a type from a different Contract by accident.
+</p>
+
+<callout type="warn" title="One import in this example is not candid-core's">
+  <p>
+    <code>candid_parser::candid::idl_hash</code> computes the label ids. That resolves inside this
+    repository because <code>candid_parser</code> is a dev-dependency and examples link
+    dev-dependencies. candid-core keeps its own name-hash module private and exports no hashing
+    function, so copying this file into your own crate means taking <code>candid_parser</code> as your
+    own dependency.
+  </p>
+</callout>
+
+<h2>bounded_parsing: untrusted bytes under a policy</h2>
+
+<p>
+  The last one is the one to read before you accept a document you did not produce. It decodes a
+  Contract and a Compilation through the bounded entry points, first under a ceiling too small to admit
+  them and then under one that is large enough.
+</p>
+
+<pre data-lang="bash">cargo run --example bounded_parsing</pre>
+
+<pre data-lang="rust" data-file="examples/bounded_parsing.rs">
+// The byte gate runs before serde_json is invoked, so an oversized document
+// is rejected without being decoded. This bounds peak allocation against
+// the chosen ceiling; it does not reject element-by-element during decode.
+let context = RuntimeContext::new(Limits::default().with_max_input_bytes(64));
+let rejected =
+    Contract::from_slice_with_context(contract_json.as_bytes(), &context).unwrap_err();
+println!("oversized Contract rejected: {}", resource_limit(&rejected));
+
+// … raised limits admit both documents …
+
+let render = raised.clone().with_max_canonicalization_work(16);
+let starved_render = contract.to_json_pretty_with_limits(&render).unwrap_err();
+</pre>
+
+<p>
+  Two things come out of this. The byte gate fires before the JSON parser is reached, so a refusal
+  arrives as a <code>resource_limit_exceeded</code> violation carrying
+  <code>{resource, limit, observed}</code> rather than as an out-of-memory abort. And the second half is
+  the non-obvious part: raising <code>max_input_bytes</code> far enough to <em>parse</em> a document does
+  not mean you can <em>render</em> it back out, because serialization charges the emitted byte length
+  against a separate <code>max_canonicalization_work</code> budget. Two budgets, two decisions. See
+  <a href="limits-and-diagnostics.html">Limits, budgets and diagnostics</a>.
+</p>
+
+<h2>Next</h2>
+
+<p>
+  If you have run all six, the natural next steps are
+  <a href="rust-compiling.html">Compiling Candid sources</a> for the full set of entry points,
+  <a href="rust-limits.html">Working with limits</a> for the profiles and builders behind
+  <code>bounded_parsing</code>, and <a href="cli-rust.html">the candid-core binary</a> if what you
+  actually want is a JSON document on stdout rather than a Rust API.
+</p>

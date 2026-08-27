@@ -29,3 +29,7 @@ __pycache__/
 /crates/candid-core-wasm/target/
 /crates/candid-core-wasm/npm/wasm/
 /crates/candid-core-wasm/npm/node_modules/
+
+# The documentation site is generated from website/content; the build output
+# is not committed. Build it with `node website/build.mjs`.
+/website/dist/

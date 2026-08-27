@@ -1,0 +1,502 @@
+<p>
+  Every Candid type has exactly one TypeScript rendering in this project, and every rendering has a
+  matching runtime <em>schema</em> — an inert data object built from the <code>c</code> combinators
+  that validation, the binary codec, typed actors and form metadata all walk. This page is the
+  complete table of both, plus the handful of shapes that refuse to generate rather than lose
+  information.
+</p>
+
+<p>
+  Two independent implementations apply this mapping and must agree. The Rust generator
+  <code>candid-core-ts</code> emits a TypeScript module ahead of time; the npm runtime's
+  <code>schemaFromContract</code> builds the same schemas at load time from a canonical Contract JSON
+  document. A <em>Contract</em> is candid-core's validated model of a <code>.did</code> file: a flat
+  array of type nodes addressed by index, a list of named declarations pointing into it, and an
+  optional actor. Both sides read that graph, so the rows below describe both — see
+  <a href="generator.html">The code generator</a> and
+  <a href="schema-from-contract.html">Schemas from a Contract document</a> for the two entry points.
+</p>
+
+<callout type="note" title="Pre-1.0">
+  <p>
+    The Rust crate is <code>0.1.0-beta.3</code> and the Contract format is not a stable v1. The
+    mapping below is where the reviewed decisions live — the generator's golden files pin it
+    byte-for-byte — but a pre-1.0 release may still change it.
+  </p>
+</callout>
+
+<h2>How to read the tables</h2>
+
+<ul>
+  <li>
+    <strong>Contract node</strong> is the node <code>kind</code> as it appears in the Contract JSON
+    document. There are eight kinds and no more: <code>primitive</code>, <code>opt</code>,
+    <code>vec</code>, <code>record</code>, <code>variant</code>, <code>func</code>,
+    <code>service</code>, <code>class</code>. There is no <code>blob</code> node, no
+    <code>tuple</code> node and no <code>result</code> node — those are Candid conveniences the
+    graph never encodes, and recognising them is what several rows below do.
+  </li>
+  <li>
+    <strong>TypeScript type</strong> is the right-hand side of the emitted
+    <code>export type X = …</code> alias.
+  </li>
+  <li>
+    <strong>Builder</strong> is the expression emitted for
+    <code>export const X: Schema&lt;X&gt; = c.rec(() =&gt; …)</code>. Every declaration is wrapped in
+    <code>c.rec</code>: declarations are emitted in canonical name order rather than dependency
+    order, and the lazy thunk is what makes a forward reference safe at module initialisation.
+  </li>
+  <li>
+    <code>Schema&lt;in out T&gt;</code> is <strong>invariant</strong>, so annotating each builder with
+    the alias just emitted makes <code>tsc</code> prove the two are the same type in both directions.
+    That type-check is the equality gate, not a convention.
+  </li>
+</ul>
+
+<h2>The eighteen primitives</h2>
+
+<p>
+  All eighteen are present in the Contract as
+  <code>{"kind":"primitive","primitive":"&lt;name&gt;"}</code> with the name in snake_case. The width
+  split is the point: <code>nat</code>, <code>int</code>, <code>nat64</code> and <code>int64</code>
+  are <code>bigint</code> because a JavaScript <code>number</code> silently corrupts integers past
+  2^53, while every width that fits a double exactly stays a <code>number</code>.
+</p>
+
+<table>
+  <thead>
+    <tr><th>Candid</th><th>Contract node</th><th>TypeScript</th><th>Builder</th><th>Notes</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>null</code></td><td><code>primitive: "null"</code></td><td><code>null</code></td><td><code>c.null</code></td><td>The single-valued type. Literal <code>null</code> only; <code>undefined</code> is not a Candid value.</td></tr>
+    <tr><td><code>bool</code></td><td><code>primitive: "bool"</code></td><td><code>boolean</code></td><td><code>c.bool</code></td><td></td></tr>
+    <tr><td><code>nat</code></td><td><code>primitive: "nat"</code></td><td><code>bigint</code></td><td><code>c.nat</code></td><td>Unbounded. A <code>number</code> is rejected, never coerced.</td></tr>
+    <tr><td><code>int</code></td><td><code>primitive: "int"</code></td><td><code>bigint</code></td><td><code>c.int</code></td><td>Unbounded, signed.</td></tr>
+    <tr><td><code>nat8</code></td><td><code>primitive: "nat8"</code></td><td><code>number</code></td><td><code>c.nat8</code></td><td>Integral, <code>[0, 255]</code>.</td></tr>
+    <tr><td><code>nat16</code></td><td><code>primitive: "nat16"</code></td><td><code>number</code></td><td><code>c.nat16</code></td><td>Integral, <code>[0, 65_535]</code>.</td></tr>
+    <tr><td><code>nat32</code></td><td><code>primitive: "nat32"</code></td><td><code>number</code></td><td><code>c.nat32</code></td><td>Integral, <code>[0, 4_294_967_295]</code> — the widest unsigned width a double holds exactly.</td></tr>
+    <tr><td><code>nat64</code></td><td><code>primitive: "nat64"</code></td><td><code>bigint</code></td><td><code>c.nat64</code></td><td><code>[0, 2^64-1]</code>.</td></tr>
+    <tr><td><code>int8</code></td><td><code>primitive: "int8"</code></td><td><code>number</code></td><td><code>c.int8</code></td><td>Integral, <code>[-128, 127]</code>.</td></tr>
+    <tr><td><code>int16</code></td><td><code>primitive: "int16"</code></td><td><code>number</code></td><td><code>c.int16</code></td><td>Integral, <code>[-32_768, 32_767]</code>.</td></tr>
+    <tr><td><code>int32</code></td><td><code>primitive: "int32"</code></td><td><code>number</code></td><td><code>c.int32</code></td><td>Integral, <code>[-2_147_483_648, 2_147_483_647]</code>.</td></tr>
+    <tr><td><code>int64</code></td><td><code>primitive: "int64"</code></td><td><code>bigint</code></td><td><code>c.int64</code></td><td><code>[-2^63, 2^63-1]</code>.</td></tr>
+    <tr><td><code>float32</code></td><td><code>primitive: "float32"</code></td><td><code>number</code></td><td><code>c.float32</code></td><td>Validation accepts any number, NaN and infinities included. Encoding is exact-or-refuse: a value that is not <code>Math.fround</code>-exact fails with <code>unrepresentable_float32</code> rather than rounding.</td></tr>
+    <tr><td><code>float64</code></td><td><code>primitive: "float64"</code></td><td><code>number</code></td><td><code>c.float64</code></td><td>The same double, so every number encodes exactly.</td></tr>
+    <tr><td><code>text</code></td><td><code>primitive: "text"</code></td><td><code>string</code></td><td><code>c.text</code></td><td>Candid text is Unicode scalar values, so encoding refuses a lone surrogate with <code>invalid_text</code>.</td></tr>
+    <tr><td><code>reserved</code></td><td><code>primitive: "reserved"</code></td><td><code>unknown</code></td><td><code>c.reserved</code></td><td>Accepts anything, asserts nothing — so a consumer must narrow before use.</td></tr>
+    <tr><td><code>empty</code></td><td><code>primitive: "empty"</code></td><td><code>never</code></td><td><code>c.empty</code></td><td>Uninhabited on both sides. Every value fails with <code>uninhabited_type</code>.</td></tr>
+    <tr><td><code>principal</code></td><td><code>primitive: "principal"</code></td><td><code>PrincipalValue</code></td><td><code>c.principal</code></td><td>The structural interface <code>{ toText(): string }</code>, not the SDK class. Decoded values carry only that surface; an SDK <code>Principal</code> instance satisfies it and encodes unchanged.</td></tr>
+  </tbody>
+</table>
+
+<p>
+  <code>PrincipalValue</code> is imported <code>import type</code> and only when the contract actually
+  uses a principal, so it never implies a runtime dependency. The module specifier is
+  <code>TsOptions::principal_import</code>, defaulting to <code>"@candid-core/schema"</code> — the
+  same package the generated file already imports <code>c</code> and <code>Schema</code> from.
+</p>
+
+<h2>Composite and reference types</h2>
+
+<table>
+  <thead>
+    <tr><th>Candid</th><th>Contract node</th><th>TypeScript</th><th>Builder</th><th>Notes</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><code>opt T</code></td>
+      <td><code>{"kind":"opt","inner":N}</code></td>
+      <td><code>T | null</code></td>
+      <td><code>c.opt(T)</code></td>
+      <td>Absence is exactly <code>null</code>, and on a record the property stays <em>present</em>. Three inner shapes fail closed — see below.</td>
+    </tr>
+    <tr>
+      <td><code>vec T</code></td>
+      <td><code>{"kind":"vec","inner":N}</code></td>
+      <td><code>Array&lt;T&gt;</code></td>
+      <td><code>c.vec(T)</code></td>
+      <td>Validation wants a real array; an array-like or bare iterable fails with <code>invalid_type</code>.</td>
+    </tr>
+    <tr>
+      <td><code>blob</code>, anonymous <code>vec nat8</code></td>
+      <td><code>{"kind":"vec","inner":&lt;nat8&gt;}</code></td>
+      <td><code>Uint8Array</code></td>
+      <td><code>c.blob()</code></td>
+      <td>Only when the element node is <em>not</em> itself a declaration. <code>type Byte = nat8; type Bytes = vec Byte;</code> keeps the name and renders <code>Array&lt;Byte&gt;</code> / <code>c.vec(Byte)</code>.</td>
+    </tr>
+    <tr>
+      <td><code>record { a : T; b : U }</code></td>
+      <td><code>{"kind":"record","fields":[…]}</code></td>
+      <td><code>{ a: T; b: U }</code></td>
+      <td><code>c.record({ a: T, b: U })</code></td>
+      <td>Field order is the Contract's canonical order — ascending Candid label id, not source order.</td>
+    </tr>
+    <tr>
+      <td><code>record {}</code></td>
+      <td><code>{"kind":"record","fields":[]}</code></td>
+      <td><code>Record&lt;string, never&gt;</code></td>
+      <td><code>c.unit()</code></td>
+      <td><code>{}</code> means "anything non-nullish" in TypeScript; an empty Candid record is a unit value, and this is its honest type.</td>
+    </tr>
+    <tr>
+      <td><code>record { nat; text }</code> (tuple syntax)</td>
+      <td><code>record</code> whose field ids are exactly <code>0..n</code></td>
+      <td><code>[bigint, string]</code></td>
+      <td><code>c.tuple([c.nat, c.text])</code></td>
+      <td>Candid lowers tuple syntax to sequential numeric labels; a record with exactly that id sequence is rendered as a TypeScript tuple, with no field keys.</td>
+    </tr>
+    <tr>
+      <td><code>variant { ok; busy : nat32 }</code></td>
+      <td><code>{"kind":"variant","fields":[…]}</code></td>
+      <td><code>{ tag: "ok" } | { tag: "busy"; value: number }</code></td>
+      <td><code>c.variant({ ok: c.null, busy: c.nat32 })</code></td>
+      <td>A discriminated union. <code>value</code> is omitted for a <code>null</code> payload, because Candid's bare <code>ok</code> and <code>ok : null</code> are the same arm.</td>
+    </tr>
+    <tr>
+      <td><code>variant {}</code></td>
+      <td><code>{"kind":"variant","fields":[]}</code></td>
+      <td><code>never</code></td>
+      <td><code>c.variant({})</code></td>
+      <td>A variant with no arms is uninhabited.</td>
+    </tr>
+    <tr>
+      <td><code>func (nat) -&gt; (text) query</code></td>
+      <td><code>{"kind":"func","args":[…],"results":[…],"mode":"query"}</code></td>
+      <td><code>{ principal: PrincipalValue; method: string }</code></td>
+      <td><code>c.func([c.nat], [c.text], "query")</code></td>
+      <td>A <code>func</code> <em>value</em> is an address, not a callable. The signature lives in the builder. Modes are <code>"update"</code>, <code>"query"</code>, <code>"composite_query"</code>, <code>"oneway"</code>; an unannotated Candid method is explicitly <code>"update"</code> in the Contract.</td>
+    </tr>
+    <tr>
+      <td><code>service { register : (text) -&gt; (nat) }</code></td>
+      <td><code>{"kind":"service","methods":[…]}</code></td>
+      <td><code>PrincipalValue</code></td>
+      <td><code>c.service({ register: c.func([c.text], [c.nat], "update") })</code></td>
+      <td>A <code>service</code> <em>value</em> is the principal of a running service. The method table lives in the builder.</td>
+    </tr>
+    <tr>
+      <td><code>service : (nat) -&gt; { … }</code> (class)</td>
+      <td><code>{"kind":"class","init":[…],"service":N}</code></td>
+      <td>— (unwrapped at actor position)</td>
+      <td>the wrapped service's builder</td>
+      <td>A class denotes its running service. At actor position it unwraps and the module gains a note that init args are install-time metadata not exposed. A class reached through a value edge fails closed with <code>UnsupportedConstruct</code>.</td>
+    </tr>
+    <tr>
+      <td>a declared name, including recursively</td>
+      <td>any node that has a declaration</td>
+      <td>the declaration's first name</td>
+      <td>the declaration's first name</td>
+      <td>What terminates cycles: every Candid cycle passes through a declaration, and a declared node renders as its name instead of being expanded. When two declarations name one node, the later emits as a plain alias of the first.</td>
+    </tr>
+  </tbody>
+</table>
+
+<h3>The actor surface</h3>
+
+<p>
+  When the Contract has an actor — the <code>service : { … }</code> at the bottom of a
+  <code>.did</code> — the module emits two more exports:
+  <code>export const actor: Schema&lt;PrincipalValue&gt;</code>, the service schema, and
+  <code>export type Actor</code>, one async method per service method. Parameters are positional and
+  named <code>arg0</code>, <code>arg1</code>, …; the reply convention is zero results ⇒
+  <code>Promise&lt;void&gt;</code>, one ⇒ <code>Promise&lt;T&gt;</code>, several ⇒
+  <code>Promise&lt;[A, B]&gt;</code>. <code>createActor&lt;Actor&gt;(actor, canisterId, transport)</code>
+  turns that pair into a live typed client — see <a href="schema-actors.html">Typed actors</a>.
+</p>
+
+<h3>Field names are an input</h3>
+
+<p>
+  A Contract stores only the authoritative numeric Candid label id, never the spelling: the id is
+  either written literally (<code>5 : nat</code>) or derived as
+  <code>h = 0; for each UTF-8 byte b: h = (h * 223 + b) mod 2^32</code>. The generator therefore
+  takes names as caller-supplied data through <code>TsNames</code>. With no table, every record field
+  and variant arm renders by the ecosystem's <code>_N_</code> convention — underscore, the decimal id,
+  underscore — so <code>record { id : nat32 }</code> becomes <code>{ _23515_: number }</code>. Service
+  <em>method</em> names are the exception: they are kept in the graph, because you cannot invoke a
+  method by hash.
+</p>
+
+<h2>A whole file, before and after</h2>
+
+<p>
+  These are the generator's checked-in fixtures and goldens. The first golden is the whole file; the
+  two after it drop the generated header and import lines to keep the comparison short. Note that
+  output is sorted by declaration name, not source order.
+</p>
+
+<pre data-lang="candid" data-file="crates/candid-core-ts/tests/fixtures/collections.did">
+type Unit = record {};
+type Pair = record { nat; text };
+type Item = record { id : nat32; label : text; payload : blob };
+type MaybeItem = opt Item;
+type Note = opt text;
+type Items = vec Item;
+type Grid = vec vec nat8;
+</pre>
+
+<pre data-lang="ts" data-file="crates/candid-core-ts/tests/goldens/collections.ts">
+// Generated by candid-core-ts from a candid-core Contract. Do not edit.
+import { c, type Schema } from "@candid-core/schema";
+
+export type Grid = Array<Uint8Array>;
+export const Grid: Schema<Grid> = c.rec(() => c.vec(c.blob()));
+
+export type Item = { id: number; label: string; payload: Uint8Array };
+export const Item: Schema<Item> = c.rec(() => c.record({ id: c.nat32, label: c.text, payload: c.blob() }));
+
+export type Items = Array<Item>;
+export const Items: Schema<Items> = c.rec(() => c.vec(Item));
+
+export type MaybeItem = Item | null;
+export const MaybeItem: Schema<MaybeItem> = c.rec(() => c.opt(Item));
+
+export type Note = string | null;
+export const Note: Schema<Note> = c.rec(() => c.opt(c.text));
+
+export type Pair = [bigint, string];
+export const Pair: Schema<Pair> = c.rec(() => c.tuple([c.nat, c.text]));
+
+export type Unit = Record<string, never>;
+export const Unit: Schema<Unit> = c.rec(() => c.unit());
+</pre>
+
+<p>
+  Six rules in one file: <code>blob</code> and the inner <code>vec nat8</code> of <code>Grid</code>
+  become <code>Uint8Array</code>; the tuple-syntax record becomes a TypeScript tuple; <code>opt</code>
+  becomes <code>| null</code>; <code>Items</code> references the declared <code>Item</code> by name
+  rather than re-expanding it; the empty record becomes <code>Record&lt;string, never&gt;</code>.
+</p>
+
+<p>Variants, including a self-referential one:</p>
+
+<pre data-lang="candid" data-file="crates/candid-core-ts/tests/fixtures/variants.did">
+type Status = variant { ok; busy : nat32; failed : text };
+type Numbered = variant { 0 : null; 5 : nat };
+type Tree = variant { leaf : nat; node : record { left : Tree; right : Tree } };
+</pre>
+
+<pre data-lang="ts" data-file="crates/candid-core-ts/tests/goldens/variants.ts">
+export type Numbered = { tag: "_0_" } | { tag: "_5_"; value: bigint };
+export const Numbered: Schema<Numbered> = c.rec(() => c.variant({ _0_: c.null, _5_: c.nat }));
+
+export type Status = { tag: "ok" } | { tag: "busy"; value: number } | { tag: "failed"; value: string };
+export const Status: Schema<Status> = c.rec(() => c.variant({ ok: c.null, busy: c.nat32, failed: c.text }));
+
+export type Tree = { tag: "leaf"; value: bigint } | { tag: "node"; value: { left: Tree; right: Tree } };
+export const Tree: Schema<Tree> = c.rec(() => c.variant({ leaf: c.nat, node: c.record({ left: Tree, right: Tree }) }));
+</pre>
+
+<p>
+  <code>ok</code> has a <code>null</code> payload, so its arm is the bare <code>{ tag: "ok" }</code>.
+  <code>Numbered</code> shows the <code>_N_</code> convention for explicitly numeric Candid labels,
+  which carry no name at all. <code>Tree</code> is self-referential in both the alias and the builder,
+  which is safe because <code>c.rec</code> defers the thunk.
+</p>
+
+<p>Reference types and the actor surface:</p>
+
+<pre data-lang="candid" data-file="crates/candid-core-ts/tests/fixtures/deferred.did">
+type Callback = func (nat) -> (text) query;
+type Registry = service { register : (text) -> (nat) };
+type Kept = record { value : nat };
+service : { ping : () -> () }
+</pre>
+
+<pre data-lang="ts" data-file="crates/candid-core-ts/tests/goldens/deferred.ts">
+export type Callback = { principal: PrincipalValue; method: string };
+export const Callback: Schema<Callback> = c.rec(() => c.func([c.nat], [c.text], "query"));
+
+export type Kept = { value: bigint };
+export const Kept: Schema<Kept> = c.rec(() => c.record({ value: c.nat }));
+
+export type Registry = PrincipalValue;
+export const Registry: Schema<Registry> = c.rec(() => c.service({ register: c.func([c.text], [c.nat], "update") }));
+
+export const actor: Schema<PrincipalValue> = c.rec(() => c.service({ ping: c.func([], [], "update") }));
+export type Actor = {
+  ping: () => Promise<void>;
+};
+</pre>
+
+<h2>The cases that fail closed</h2>
+
+<p>
+  <code>T | null</code> is the honest reading of <code>opt T</code> only when <code>T</code> itself can
+  never be <code>null</code> in TypeScript. Three inner shapes break that, and rather than collapse
+  Candid's <code>None</code> into <code>Some(None)</code>, generation refuses. The check is on the
+  inner <em>node</em>, not its spelling, so an <code>opt</code> reached through a declared alias
+  collapses just as surely and is refused just the same.
+</p>
+
+<table>
+  <thead>
+    <tr><th>Source</th><th><code>inner</code></th><th>Why <code>T | null</code> cannot carry it</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>type DoubleOpt = opt opt nat;</code></td><td><code>"opt"</code></td><td>The classic <code>None</code> versus <code>Some(None)</code>: both would be <code>null</code>.</td></tr>
+    <tr><td><code>type OptNull = opt null;</code></td><td><code>"null"</code></td><td>The payload's only value is already <code>null</code>.</td></tr>
+    <tr><td><code>type OptReserved = opt reserved;</code></td><td><code>"reserved"</code></td><td><code>unknown</code> absorbs <code>null</code> entirely.</td></tr>
+    <tr><td><code>type Inner = opt nat;</code> then <code>type Outer = opt Inner;</code></td><td><code>"opt"</code></td><td>Same as the first row — the alias changes the spelling, not the node.</td></tr>
+  </tbody>
+</table>
+
+<p>All four are valid Candid and compile to a Contract without complaint. It is generation that stops.</p>
+
+<h3>What the caller observes</h3>
+
+<p>
+  In Rust, <code>generate_module</code> returns
+  <code>Err(TsGenError::UnrepresentableOption { declaration, inner })</code>. No error path emits
+  placeholder TypeScript, so you get either a module that compiles or an error naming what could not
+  be represented. Its <code>Display</code> text is exactly:
+</p>
+
+<pre data-lang="text">
+declaration `DoubleOpt` wraps `opt` in `opt`: `T | null` cannot distinguish `None` from `Some(None)` there, so generation refuses rather than collapsing the two
+</pre>
+
+<p>
+  In TypeScript, <code>schemaFromContract</code> refuses the same document with a
+  <code>ContractIssue</code> whose <code>code</code> is <code>"unrepresentable_option"</code>, at the
+  path of the offending node's <code>inner</code> edge, with the message
+  <code>opt wraps `opt`: `T | null` cannot distinguish None from Some(None) there</code>. See
+  <a href="reference-diagnostics.html">Diagnostics reference</a> for the full code list.
+</p>
+
+<callout type="warn" title="One further variant-arm refusal">
+  <p>
+    A variant arm whose payload is a <em>declared</em> <code>opt</code> of an uninhabited type — a
+    declared <code>opt empty</code>, or <code>opt</code> of an empty variant — is also refused, with
+    <code>TsGenError::AmbiguousVariantArm</code>. Through a reference its static type is identical to
+    an alias of <code>null</code>, which the type-level classifier must read as a bare tag, while the
+    emitter and the runtime classify it as carrying a value; no type-level rule satisfies both. The
+    anonymous form still works: <code>variant { a : opt empty }</code> renders
+    <code>{ tag: "a"; value: never | null }</code> with builder <code>c.opt(c.empty)</code>.
+  </p>
+</callout>
+
+<h3>Three more refusals, on names rather than shapes</h3>
+
+<p>
+  Generation also stops on a name it cannot emit safely. These are the remaining
+  <code>TsGenError</code> variants a well-formed Contract can reach:
+</p>
+
+<dl>
+  <dt><code>InvalidDeclarationName</code></dt>
+  <dd>A declaration name that is not a valid TypeScript type identifier.</dd>
+  <dt><code>ReservedDeclarationName</code></dt>
+  <dd>
+    A declaration named after a binding the generated module itself references — the imports
+    (<code>c</code>, <code>Schema</code>, <code>PrincipalValue</code>), the ambient types its
+    lowerings emit (<code>Array</code>, <code>Record</code>, <code>Uint8Array</code>,
+    <code>Promise</code>), or the actor surface's own names (<code>actor</code>,
+    <code>Actor</code>). All nine are refused unconditionally, so adding a field to a contract
+    cannot start breaking a declaration name that worked before.
+  </dd>
+  <dt><code>ReservedFieldName</code></dt>
+  <dd>
+    A supplied field or arm name shaped like the <code>_N_</code> id rendering. Erased to a schema
+    key it is indistinguishable from the rendering of numeric label id N, and the codec derives wire
+    ids from keys, so such a name would send id N instead of the name's hash. The runtime's Contract
+    loader refuses the same shape in a name table.
+  </dd>
+</dl>
+
+<h2>Divergence from agent-js shapes</h2>
+
+<p>
+  These types describe the domain, not the transport. That is a deliberate decision recorded on the
+  project's issue tracker: compatibility with the value shapes the agent-js runtime produces is an
+  <strong>explicit non-goal</strong>. If you are moving code from bindings generated by
+  <code>@icp-sdk/bindgen</code>, the following is what changes at every touch point.
+</p>
+
+<table>
+  <thead>
+    <tr><th>The same Candid</th><th>Wire-shaped binding</th><th>candid-core-ts</th><th>What your code stops doing</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><code>record { memo : opt text }</code></td>
+      <td><code>{ memo: [] | [string] }</code></td>
+      <td><code>{ memo: string | null }</code></td>
+      <td>No array unwrapping. <code>value.memo[0]</code> becomes <code>value.memo</code>, and the empty array becomes <code>null</code>. The property is always present either way.</td>
+    </tr>
+    <tr>
+      <td><code>variant { ok : nat; err : text }</code></td>
+      <td>a single-key object, one key per arm</td>
+      <td><code>{ tag: "ok"; value: bigint } | { tag: "err"; value: string }</code></td>
+      <td>No probing for which key exists. <code>switch (value.tag)</code> narrows the union, and TypeScript checks exhaustiveness for you.</td>
+    </tr>
+    <tr>
+      <td><code>record { payload : blob }</code></td>
+      <td>a byte sequence, spelled per generator</td>
+      <td><code>{ payload: Uint8Array }</code></td>
+      <td>Nothing is accepted but a real <code>Uint8Array</code>. If your existing values are plain arrays of numbers, wrap them once at the boundary.</td>
+    </tr>
+  </tbody>
+</table>
+
+<p>
+  The two shapes in the middle column that this repository states it verified against
+  <code>@icp-sdk/bindgen</code> 0.4.0 are the <code>[] | [T]</code> optional and the single-key variant
+  object. The blob row states only what candid-core-ts commits to; check your own generator's output
+  for its byte-vector spelling.
+</p>
+
+<p>
+  <strong>Feeding these types to a classic agent needs a boundary conversion</strong>, and this project
+  does not supply one — it is recorded as future work. The supported path instead is the generated
+  <code>actor</code> schema plus <code>createActor</code> over a two-method byte-pipe transport, where
+  the package's own codec does all the encoding and never hands a schema to an agent. In a value's
+  lifetime the domain shape is what your application code sees, and the wire shape never appears at
+  all.
+</p>
+
+<pre data-lang="ts">
+import { createActor } from "@candid-core/schema/actor";
+import { actor, type Actor, type TransferArg } from "./ledger.ts";
+
+const ledger = createActor<Actor>(actor, "ryjl3-tyaaa-aaaaa-aaaba-cai", transport);
+
+const arg: TransferArg = {
+  to: { owner: recipient, subaccount: null },   // Account; opt blob absent
+  fee: null,                                    // opt Tokens, absent
+  memo: null,                                   // opt blob, absent
+  from_subaccount: null,
+  created_at_time: null,
+  amount: { e8s: 100_000_000n },
+};
+
+const result = await ledger.transfer(arg);
+if (result.tag === "ok") {
+  console.log("block index", result.value);
+}
+</pre>
+
+<p>
+  The type names in that snippet come from the generator's <code>ledger</code> golden, whose fixture
+  (<code>crates/candid-core-ts/tests/fixtures/ledger.did</code>) is byte-identical to the ledger
+  interface in the repository's benchmark corpus, <code>benches/corpus/ledger.did</code>.
+</p>
+
+<h2>Next</h2>
+
+<div class="card-grid">
+  <a class="card" href="generator.html">
+    <span class="card-kicker">TypeScript</span>
+    <span class="card-title">The code generator</span>
+    <p>How a Contract graph becomes a module tsc itself proves correct.</p>
+  </a>
+  <a class="card" href="schema-builders.html">
+    <span class="card-kicker">TypeScript</span>
+    <span class="card-title">Builders and inference</span>
+    <p>Every combinator on <code>c</code>, and how a schema and its type stay in step.</p>
+  </a>
+  <a class="card" href="reference-diagnostics.html">
+    <span class="card-kicker">Reference</span>
+    <span class="card-title">Diagnostics</span>
+    <p>The structured error shape and the stable code list.</p>
+  </a>
+</div>

@@ -1,0 +1,435 @@
+<p>
+  Every public entry point in <code>candid-core</code> — every compile, parse,
+  validation, canonicalization, render and identity computation — runs under an
+  explicit resource policy. That policy is a <code>Limits</code> value you pass in,
+  not a global setting, not an environment variable, and not something the library
+  decides for you. It is what makes pointing this crate at a <code>.did</code> file
+  or a Contract document you did not write a bounded operation rather than an act of
+  faith.
+</p>
+
+<p>
+  A <code>Limits</code> carries 27 numeric limits plus one optional deadline. A
+  <code>RuntimeContext</code> wraps it together with a cancellation token. Limits are
+  <span class="pill">base surface</span> — no Cargo feature needed — and they never
+  participate in any Contract identity, so raising one changes what you accept, never
+  what you compute. This page is how to build and use them; the
+  <a href="reference-limits.html">limits reference</a> has the full table of what each
+  one bounds and its default value.
+</p>
+
+<h2>Building a Limits</h2>
+
+<p>
+  Every field is private, and there is no struct literal. That is deliberate: adding a
+  limit later must not be a breaking change, and it cannot be one if no caller can
+  write an exhaustive literal. You start from a named profile and override individual
+  fields with chainable <code>with_*</code> builders.
+</p>
+
+<pre data-lang="rust" data-file="src/limits.rs">
+use candid_core::{Limits, LimitsProfile};
+
+let limits = LimitsProfile::InteractiveV1
+    .limits()
+    .with_max_input_bytes(64 * 1024)
+    .with_deadline_unix_ms(Some(2_000_000_000_000));
+assert_eq!(limits.max_input_bytes(), 64 * 1024);
+</pre>
+
+<p>
+  <code>Limits::default()</code> is exactly
+  <code>LimitsProfile::InteractiveV1.limits()</code>, so
+  <code>Limits::default().with_max_input_bytes(512)</code> is the same thing said
+  shorter. There is one getter per limit, named exactly after the field, and one
+  builder per limit, named <code>with_&lt;field&gt;</code>:
+</p>
+
+<pre data-lang="rust">
+let limits = Limits::default().with_max_canonicalization_work(2_000_000);
+let ceiling: usize = limits.max_canonicalization_work();   // getter, not a field
+let profile = limits.profile();                            // LimitsProfile::InteractiveV1
+</pre>
+
+<p>
+  <code>profile()</code> reports the baseline the limits started from, not the final
+  values — overriding a field does not change it. <code>LimitsProfile</code> is
+  <code>#[non_exhaustive]</code> and <code>InteractiveV1</code> is the only released
+  variant. Its numbers are frozen forever: a future tuning becomes a new variant, so
+  a stored configuration naming <code>interactive_v1</code> means the same policy in
+  every later build.
+</p>
+
+<callout type="note" title="Zero is a policy, not a rejected configuration">
+  <p>
+    Every limit accepts <code>0</code>, and it means fail closed. A zero byte, count
+    or work limit rejects any input that consumes the resource at all.
+    <code>with_max_diagnostics(0)</code> is the one special case: it retains exactly
+    one out-of-band <code>resource_limit_exceeded</code> sentinel violation, so an
+    invalid input never yields an empty error collection.
+  </p>
+</callout>
+
+<h2>RuntimeContext</h2>
+
+<p>
+  Most entry points come in three shapes: a bare one using
+  <code>Limits::default()</code>, a <code>_with_limits</code> one, and a
+  <code>_with_context</code> one. The context form is the widest, because a
+  <code>RuntimeContext</code> is a <code>Limits</code> plus the cooperative controls
+  that need a place to live.
+</p>
+
+<pre data-lang="rust" data-file="src/limits.rs">
+pub struct RuntimeContext {
+    pub limits: Limits,
+    // cancellation: private
+}
+
+impl RuntimeContext {
+    pub fn new(limits: Limits) -> Self;                              // fresh, uncancelled token
+    pub fn with_cancellation(self, cancellation: CancellationToken) -> Self;
+    pub fn cancellation_token(&self) -> CancellationToken;           // a clone of the context's token
+}
+</pre>
+
+<p>
+  <code>limits</code> is public; the cancellation token is not, so a struct literal
+  does not compile and adding a control later does not reopen exhaustive literals.
+  <code>RuntimeContext::default()</code> is
+  <code>RuntimeContext::new(Limits::default())</code>. Compilation entry points take
+  only the context form when they take a policy at all — there is no
+  <code>compile_did_with_limits</code>, because a caller setting limits on an
+  operation that can run long should also get the deadline and the token.
+</p>
+
+<h2>Cancellation</h2>
+
+<p>
+  <code>CancellationToken</code> is a cloneable flag. Clones share one atomic, so
+  cancelling any clone cancels them all — that is how you hold a handle on one thread
+  and cancel work running on another.
+</p>
+
+<pre data-lang="rust" data-file="src/limits.rs">
+impl CancellationToken {
+    pub fn new() -> Self;
+    pub fn cancel(&self);
+    pub fn is_cancelled(&self) -> bool;
+}
+</pre>
+
+<pre data-lang="rust">
+use candid_core::{compile_did_with_context, CancellationToken, CompileOptions, Limits, RuntimeContext};
+
+let source = "service : { ping: () -> (nat) query };";
+
+let token = CancellationToken::new();
+let context = RuntimeContext::new(Limits::default()).with_cancellation(token.clone());
+
+// Hand the clone to whatever decides to give up: a request-cancelled callback,
+// a UI stop button, a supervisor timer. Cancelling any clone cancels them all.
+let stopper = token.clone();
+std::thread::spawn(move || {
+    // ... later ...
+    stopper.cancel();
+});
+
+match compile_did_with_context(source, CompileOptions::default(), &context) {
+    Ok(compilation) => println!("compiled {}", compilation.contract().contract_id()),
+    Err(error) => {
+        let cancelled = error
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "operation_cancelled");
+        if cancelled {
+            eprintln!("compile abandoned on request");
+        }
+    }
+}
+</pre>
+
+<p>
+  Cancellation is <strong>cooperative</strong>. Nothing is interrupted mid-instruction;
+  the internal budget checks the flag at every checkpoint, and a cancelled operation
+  fails closed with the code <code>operation_cancelled</code> rather than returning a
+  partial result. A custom <code>SourceResolver</code> that does long-running work
+  should override <code>load_with_context</code> and checkpoint internally, so a
+  cancellation raised during a slow load is observed rather than waited out — the
+  default implementation only checkpoints before and after your <code>load</code>.
+</p>
+
+<h2>Deadlines</h2>
+
+<p>
+  A deadline is configured as a Unix timestamp in milliseconds, and
+  <code>None</code> — the profile default — means unbounded.
+</p>
+
+<pre data-lang="rust">
+use candid_core::{Limits, RuntimeContext};
+use std::time::{SystemTime, UNIX_EPOCH};
+
+let now_ms = SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis() as u64;
+let limits = Limits::default().with_deadline_unix_ms(Some(now_ms + 250));
+let context = RuntimeContext::new(limits);
+</pre>
+
+<p>
+  It is <em>configured</em> in wall-clock terms but <em>enforced</em> against a
+  monotonic clock: the deadline is snapshotted once when an operation's budget is
+  created, so a system clock adjustment cannot extend or shorten an operation
+  mid-flight. An elapsed deadline fails closed with
+  <code>operation_deadline_exceeded</code>, and
+  <code>Limits::deadline_exceeded()</code> lets you ask directly. A deadline at or
+  before the current time — <code>Some(0)</code> included — makes every bounded
+  operation fail before performing work.
+</p>
+
+<callout type="warn" title="On bare wasm32-unknown-unknown, any explicit deadline fails closed">
+  <p>
+    That target supplies no clock at all, and the standard clock functions panic there
+    rather than returning an error. An explicit deadline must not silently become
+    unbounded and must not abort the module, so it is reported as already elapsed and
+    reaches you as the same <code>operation_deadline_exceeded</code> an elapsed native
+    deadline produces. <code>None</code> stays unbounded exactly as it does natively,
+    and neither cancellation nor any quantitative limit is affected.
+  </p>
+</callout>
+
+<h2>The portable serialized configuration</h2>
+
+<p>
+  A <code>Limits</code> does not serialize as a bare field map. It serializes as a
+  versioned configuration document that names the profile it started from and lists
+  only the fields that differ from that profile's frozen baseline.
+</p>
+
+<pre data-lang="json">
+{"version":1,"profile":"interactive_v1","overrides":{}}
+</pre>
+
+<p>
+  That is exactly how <code>Limits::default()</code> serializes.
+  <code>version</code> pins the schema (<code>LIMITS_CONFIG_VERSION</code>, currently
+  <code>1</code>); <code>profile</code> names the baseline; <code>overrides</code>
+  carries the explicit differences as fixed-width <code>u64</code> values, so the same
+  document configures identical policy on every supported 32- and 64-bit host. An
+  override equal to the baseline is normalized away — the profile numbers are frozen,
+  so omission and an equal explicit value are the same policy forever.
+</p>
+
+<pre data-lang="rust">
+use candid_core::{Limits, RuntimeContext};
+
+// Write it out — e.g. into a project config file, or across a process boundary.
+let limits = Limits::default()
+    .with_max_input_bytes(65_536)
+    .with_max_sources(32);
+let document = serde_json::to_string(&limits)?;
+// {"version":1,"profile":"interactive_v1","overrides":{"max_input_bytes":65536,"max_sources":32}}
+
+// Read it back.
+let restored: Limits = serde_json::from_str(&document)?;
+assert_eq!(restored, limits);
+
+// A RuntimeContext serializes as {"limits": <that document>}; the cancellation
+// token is host-local bookkeeping and is never serialized.
+let context: RuntimeContext = serde_json::from_str(r#"{"limits":{"version":1,"profile":"interactive_v1","overrides":{}}}"#)?;
+</pre>
+
+<p>
+  Adding a new limit does not bump <code>version</code>. Fields are private precisely
+  so that adding one is not a breaking change, and an older document carries no
+  override for it.
+</p>
+
+<h3>Rejections are structured</h3>
+
+<p>
+  Unknown top-level fields, unknown override fields, unsupported versions and unknown
+  profiles are all rejected rather than ignored, and an override that does not fit the
+  host's <code>usize</code> is rejected rather than truncated or wrapped. Convert
+  explicitly with <code>TryFrom&lt;LimitsConfig&gt;</code> when you need the structured
+  <code>LimitsConfigError</code> instead of a serde error string; it has
+  <code>code()</code>, <code>path()</code> and <code>message()</code> accessors and
+  displays as <code>{code} at {path}: {message}</code>.
+</p>
+
+<table>
+  <thead>
+    <tr><th>Code</th><th>Path</th><th>Condition</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>unsupported_limits_version</code></td><td><code>$.version</code></td><td>The version is not <code>1</code>.</td></tr>
+    <tr><td><code>unsupported_limits_profile</code></td><td><code>$.profile</code></td><td>The profile name is unknown to this build.</td></tr>
+    <tr><td><code>limit_override_unrepresentable</code></td><td><code>$.overrides.&lt;field&gt;</code></td><td>The override exceeds this platform's <code>usize::MAX</code>.</td></tr>
+  </tbody>
+</table>
+
+<h2>A worked example: tighten a limit and read the failure</h2>
+
+<p>
+  Tighten <code>max_source_bytes</code>, compile a source that exceeds it, and handle
+  the structured result. Nothing here inspects a message string — the
+  <code>code</code>, the <code>phase</code> and the
+  <code>{resource, limit, observed}</code> triple are the stable surface; message text
+  is not.
+</p>
+
+<pre data-lang="rust">
+use candid_core::{compile_did_with_context, CompileOptions, Limits, RuntimeContext};
+use std::error::Error;
+
+fn main() -> Result<(), Box<dyn Error>> {
+    let source = "service : { ping: () -> (nat) query };";
+
+    // A policy far tighter than the 1 MiB default, to make the failure certain.
+    let context = RuntimeContext::new(Limits::default().with_max_source_bytes(8));
+
+    let error = match compile_did_with_context(source, CompileOptions::default(), &context) {
+        Ok(_) => return Err("expected the tightened limit to reject this source".into()),
+        Err(error) => error,
+    };
+
+    let diagnostic = error
+        .diagnostics
+        .first()
+        .ok_or("a CompileError always carries at least one diagnostic")?;
+    assert_eq!(diagnostic.code, "resource_limit_exceeded");
+
+    match &diagnostic.resource_limit {
+        Some(info) => println!(
+            "rejected in phase {:?}: resource={} limit={} observed={}",
+            diagnostic.phase, info.resource, info.limit, info.observed
+        ),
+        None => println!("rejected in phase {:?}: {}", diagnostic.phase, diagnostic.code),
+    }
+
+    // Raising the one limit that fired is enough here, because nothing else was
+    // exhausted.
+    let context = RuntimeContext::new(Limits::default());
+    let compilation = compile_did_with_context(source, CompileOptions::default(), &context)?;
+    println!("accepted: {}", compilation.contract().contract_id());
+    Ok(())
+}
+</pre>
+
+<p>
+  That reports resource <code>source_bytes</code> in phase <code>Load</code>. The
+  resource name is usually the limit's own name without its
+  <code>max_</code> prefix, which is how you map a failure back to the builder that
+  raises it: <code>source_bytes</code> to <code>with_max_source_bytes</code>,
+  <code>input_bytes</code> to <code>with_max_input_bytes</code>,
+  <code>import_depth</code> to <code>with_max_import_depth</code>. A few counters
+  report a narrower name than the limit they charge against — the provenance
+  sidecar's string budget reports <code>source_string_bytes</code> while charging
+  <code>max_string_bytes</code>, and an envelope extension reports
+  <code>extension_bytes</code> while charging <code>max_value_bytes</code> — so read
+  the resource as "which counter fired", not as a literal builder name.
+</p>
+
+<h3>Three ways a bounded operation fails closed</h3>
+
+<table>
+  <thead>
+    <tr><th>Code</th><th>Meaning</th><th>Extra data</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><code>resource_limit_exceeded</code></td>
+      <td>A counter ran out.</td>
+      <td>A <code>ResourceLimitInfo { resource, limit, observed }</code>, both numbers fixed-width <code>u64</code>.</td>
+    </tr>
+    <tr>
+      <td><code>operation_cancelled</code></td>
+      <td>The cancellation token was set.</td>
+      <td>None.</td>
+    </tr>
+    <tr>
+      <td><code>operation_deadline_exceeded</code></td>
+      <td>The deadline elapsed, or could not be measured.</td>
+      <td>None.</td>
+    </tr>
+  </tbody>
+</table>
+
+<p>
+  All three reach a compile as <code>CompileError.diagnostics</code> and reach the
+  model APIs as <code>ContractValidationError.violations</code>, where each item is
+  the same <code>Diagnostic</code> type. Full field list in
+  <a href="reference-diagnostics.html">the diagnostics reference</a>.
+</p>
+
+<callout type="tip" title="Raising one limit may not be enough to render the result">
+  <p>
+    Validation happens before rendering, and the rendered length is charged against
+    <code>max_canonicalization_work</code> on top of whatever gated construction. So a
+    caller who raised <code>max_input_bytes</code> to parse a large document may still
+    fail to serialize it, with a failure naming
+    <code>canonicalization_work</code> rather than the limit they raised.
+    <code>examples/bounded_parsing.rs</code> demonstrates both halves; see
+    <a href="rust-contracts.html">Building and validating Contracts</a>.
+  </p>
+</callout>
+
+<pre data-lang="bash">
+cargo run --example bounded_parsing
+</pre>
+
+<h2>Choosing values</h2>
+
+<p>
+  The defaults are named <code>InteractiveV1</code> because that is what they are
+  tuned for: parsing and validating untrusted documents in an editor, a CLI, or an
+  agent context on an ordinary desktop host. They are a starting point, not a
+  recommendation for every deployment.
+</p>
+
+<ul>
+  <li>
+    <strong>Accepting uploads from strangers?</strong> Tighten
+    <code>max_input_bytes</code>, <code>max_source_bytes</code> and
+    <code>max_bundle_bytes</code> to what your product actually needs, and set a
+    deadline. Those are the knobs that bound peak allocation and wall-time exposure.
+  </li>
+  <li>
+    <strong>Processing your own large generated interfaces?</strong> Raise the
+    structural limits that fire — and expect to raise
+    <code>max_canonicalization_work</code> alongside them if you also render the
+    result.
+  </li>
+  <li>
+    <strong>Running on a small stack?</strong>
+    <code>max_source_nesting</code> and <code>max_value_nesting</code> bound lexical
+    nesting <em>before</em> a recursive decoder runs. Rejecting costs constant stack;
+    accepting still recurses. Note that raising <code>max_value_nesting</code> above
+    128 has no effect, because <code>serde_json</code> applies a fixed 128-frame
+    recursion ceiling underneath that this crate deliberately does not disable.
+  </li>
+</ul>
+
+<p>
+  The complete table — all 27 limits, their default values and what each one bounds —
+  is on <a href="reference-limits.html">the limits reference page</a>.
+</p>
+
+<h2>Next</h2>
+
+<div class="card-grid">
+  <a class="card" href="reference-limits.html">
+    <span class="card-kicker">Reference</span>
+    <span class="card-title">Limits reference</span>
+    <p>Every limit in <code>InteractiveV1</code>, its default, and what it bounds.</p>
+  </a>
+  <a class="card" href="limits-and-diagnostics.html">
+    <span class="card-kicker">Concept</span>
+    <span class="card-title">Limits, budgets and diagnostics</span>
+    <p>Why every entry point is bounded, and what a shared budget actually shares.</p>
+  </a>
+  <a class="card" href="rust-compiling.html">
+    <span class="card-kicker">Rust crate</span>
+    <span class="card-title">Compiling Candid sources</span>
+    <p>The entry points that take the <code>RuntimeContext</code> built here.</p>
+  </a>
+</div>

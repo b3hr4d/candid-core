@@ -1,0 +1,516 @@
+<p>
+  <code>Limits</code> carries 27 numeric bounds plus one optional deadline. The values below are the
+  frozen defaults of <code>LimitsProfile::InteractiveV1</code>, which is what
+  <code>Limits::default()</code> returns and what every no-argument convenience in the crate runs
+  under. Those numbers never change: a future retuning ships as a new profile variant with a new wire
+  name rather than as an edit to this one. The single source of truth is the
+  <code>limit_fields!</code> block in
+  <a href="https://github.com/b3hr4d/candid-core/blob/main/src/limits.rs">src/limits.rs</a>.
+</p>
+
+<p>
+  Every limit has a getter named exactly after the field (<code>limits.max_input_bytes()</code>) and a
+  chainable builder (<code>.with_max_input_bytes(n)</code>). Fields are private, so there is no struct
+  literal and adding a limit is never a breaking change. Every limit accepts <code>0</code> as a
+  defined fail-closed policy. For what all of this is <em>for</em>, read
+  <a href="limits-and-diagnostics.html">Limits, budgets and diagnostics</a> first.
+</p>
+
+<h2>Reading the tables</h2>
+
+<ul>
+  <li>
+    <strong>Reported as</strong> is the <code>resource</code> string that appears in a
+    <code>resource_limit_exceeded</code> diagnostic's <code>{resource, limit, observed}</code>
+    triple. It is usually the field name minus its <code>max_</code> prefix, but not always: several
+    limits are charged under more than one resource name, and <code>extension_bytes</code> has no
+    field of its own. Match the resource string as data; do not assume a
+    <code>max_&lt;resource&gt;</code> field exists.
+  </li>
+  <li>
+    <strong>Surface</strong> names the Cargo feature under which the limit is enforced.
+    <span class="pill">base</span> means it applies with <code>default-features = false</code>;
+    <span class="pill accent">compiler</span> and <span class="pill accent">host-value</span> mean
+    the code that charges it is behind that feature. See
+    <a href="rust-install.html">Install and feature surfaces</a>.
+  </li>
+</ul>
+
+<h2>Input and source bytes</h2>
+
+<table>
+  <thead>
+    <tr><th>Limit</th><th>Default</th><th>Reported as</th><th>What it bounds</th><th>Surface</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><code>max_input_bytes</code></td>
+      <td>4 MiB (4 194 304)</td>
+      <td><code>input_bytes</code></td>
+      <td>Bytes accepted by a bounded parse entry point <em>before</em> the document is decoded. Also gates the slice passed to <code>artifact_id_with_limits</code>.</td>
+      <td><span class="pill">base</span></td>
+    </tr>
+    <tr>
+      <td><code>max_source_bytes</code></td>
+      <td>1 MiB (1 048 576)</td>
+      <td><code>source_bytes</code></td>
+      <td>A single resolved DID source.</td>
+      <td><span class="pill accent">compiler</span></td>
+    </tr>
+    <tr>
+      <td><code>max_bundle_bytes</code></td>
+      <td>8 MiB (8 388 608)</td>
+      <td><code>bundle_bytes</code></td>
+      <td>Aggregate bytes across every source in a resolved bundle.</td>
+      <td><span class="pill accent">compiler</span></td>
+    </tr>
+  </tbody>
+</table>
+
+<callout type="note" title="Host value JSON is the one exception to the byte gate">
+  <p>
+    <code>HostValue::from_json_with_limits</code> and <code>from_json_with_context</code> gate on
+    <code>max_value_bytes</code>, not <code>max_input_bytes</code>, and report
+    <code>HostValueJsonError::Limit</code>, which carries no <code>resource</code> name. Lowering
+    <code>max_input_bytes</code> alone does not bound host value decoding — lower
+    <code>max_value_bytes</code> too.
+  </p>
+</callout>
+
+<h2>Bundle and import shape</h2>
+
+<table>
+  <thead>
+    <tr><th>Limit</th><th>Default</th><th>Reported as</th><th>What it bounds</th><th>Surface</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><code>max_sources</code></td>
+      <td>256</td>
+      <td><code>sources</code>, <code>source_actors</code></td>
+      <td>Number of sources in a resolved bundle, and the actor entries a provenance sidecar records.</td>
+      <td><span class="pill accent">compiler</span></td>
+    </tr>
+    <tr>
+      <td><code>max_source_id_bytes</code></td>
+      <td>1024</td>
+      <td><code>source_id_bytes</code></td>
+      <td>A single logical source ID (its name or path), individually — on both the resolver and the embedded-sidecar paths. Without it, one entry could carry a megabyte-long path under the cumulative <code>max_string_bytes</code> alone.</td>
+      <td><span class="pill accent">compiler</span></td>
+    </tr>
+    <tr>
+      <td><code>max_import_depth</code></td>
+      <td>64</td>
+      <td><code>import_depth</code></td>
+      <td>Import chain depth during source resolution.</td>
+      <td><span class="pill accent">compiler</span></td>
+    </tr>
+    <tr>
+      <td><code>max_import_edges</code></td>
+      <td>1024</td>
+      <td><code>import_edges</code></td>
+      <td>Import edges across a resolved bundle.</td>
+      <td><span class="pill accent">compiler</span></td>
+    </tr>
+  </tbody>
+</table>
+
+<h2>Graph size and depth</h2>
+
+<table>
+  <thead>
+    <tr><th>Limit</th><th>Default</th><th>Reported as</th><th>What it bounds</th><th>Surface</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><code>max_source_nesting</code></td>
+      <td>256</td>
+      <td><code>source_nesting</code></td>
+      <td><em>Lexical</em> nesting: open delimiters plus a run of <code>opt</code>/<code>vec</code> constructors, counted over a token scan before the recursive upstream parser is invoked.</td>
+      <td><span class="pill accent">compiler</span></td>
+    </tr>
+    <tr>
+      <td><code>max_type_depth</code></td>
+      <td>256</td>
+      <td><code>type_depth</code></td>
+      <td><em>Semantic</em> type nesting lowered from a checked Candid program.</td>
+      <td><span class="pill accent">compiler</span></td>
+    </tr>
+    <tr>
+      <td><code>max_type_nodes</code></td>
+      <td>100 000</td>
+      <td><code>type_nodes</code></td>
+      <td>Type nodes in a Contract arena.</td>
+      <td><span class="pill">base</span></td>
+    </tr>
+    <tr>
+      <td><code>max_graph_edges</code></td>
+      <td>1 000 000</td>
+      <td><code>graph_edges</code></td>
+      <td>Edges in a Contract type graph.</td>
+      <td><span class="pill">base</span></td>
+    </tr>
+    <tr>
+      <td><code>max_declarations</code></td>
+      <td>100 000</td>
+      <td><code>declarations</code>, <code>source_declarations</code></td>
+      <td>Named declarations in a Contract, and declaration entries in a provenance sidecar.</td>
+      <td><span class="pill">base</span> · <span class="pill accent">compiler</span></td>
+    </tr>
+    <tr>
+      <td><code>max_fields</code></td>
+      <td>500 000</td>
+      <td><code>fields</code>, <code>source_field_labels</code></td>
+      <td>Aggregate record and variant fields across a Contract, and field-label entries in a sidecar. <strong>Not</strong> what bounds a single wide record at validation time — see below.</td>
+      <td><span class="pill">base</span> · <span class="pill accent">compiler</span></td>
+    </tr>
+    <tr>
+      <td><code>max_methods</code></td>
+      <td>100 000</td>
+      <td><code>methods</code>, <code>source_methods</code></td>
+      <td>Aggregate service methods across a Contract, and method entries in a sidecar.</td>
+      <td><span class="pill">base</span> · <span class="pill accent">compiler</span></td>
+    </tr>
+    <tr>
+      <td><code>max_function_values</code></td>
+      <td>500 000</td>
+      <td><code>function_values</code>, <code>source_function_arguments</code></td>
+      <td>Aggregate function arguments and results across a Contract, and argument entries in a sidecar.</td>
+      <td><span class="pill">base</span> · <span class="pill accent">compiler</span></td>
+    </tr>
+    <tr>
+      <td><code>max_string_bytes</code></td>
+      <td>1 MiB (1 048 576)</td>
+      <td><code>string_bytes</code>, <code>source_string_bytes</code></td>
+      <td>Aggregate string bytes across declaration and method names. The same number bounds a provenance sidecar's own strings — source names, import paths, declaration and method names, and documentation text — reported as <code>source_string_bytes</code>. The sidecar's documentation-entry count is checked against that same resource first, as a lower bound over records, before the byte pass walks every entry.</td>
+      <td><span class="pill">base</span> · <span class="pill accent">compiler</span></td>
+    </tr>
+    <tr>
+      <td><code>max_producer_bytes</code></td>
+      <td>4096</td>
+      <td><code>producer_bytes</code></td>
+      <td>Aggregate bytes across the four <code>ProducerInfo</code> strings. Producer metadata is untrusted, caller-supplied provenance and never influences a semantic identity hash; this bounds what it may contribute to a validated Contract.</td>
+      <td><span class="pill">base</span></td>
+    </tr>
+  </tbody>
+</table>
+
+<h2>Host value size</h2>
+
+<table>
+  <thead>
+    <tr><th>Limit</th><th>Default</th><th>Reported as</th><th>What it bounds</th><th>Surface</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><code>max_value_nesting</code></td>
+      <td>64</td>
+      <td><code>value_nesting</code></td>
+      <td><em>Lexical</em> JSON container nesting (<code>{</code> and <code>[</code>), checked by a constant-stack pre-scan before the recursive <code>serde_json</code> decoder runs.</td>
+      <td><span class="pill accent">host-value</span></td>
+    </tr>
+    <tr>
+      <td><code>max_value_depth</code></td>
+      <td>256</td>
+      <td><code>value_depth</code></td>
+      <td><em>Semantic</em> host value nesting, after decoding. Also bounds construction through <code>HostValue::opt</code>, <code>vector</code>, <code>record</code> and <code>variant</code>.</td>
+      <td><span class="pill accent">host-value</span></td>
+    </tr>
+    <tr>
+      <td><code>max_value_elements</code></td>
+      <td>1 000 000</td>
+      <td><code>value_elements</code></td>
+      <td>Aggregate host value elements per document. The binding limit for wide vectors and for element counts accumulated across a value tree.</td>
+      <td><span class="pill accent">host-value</span></td>
+    </tr>
+    <tr>
+      <td><code>max_value_bytes</code></td>
+      <td>16 MiB (16 777 216)</td>
+      <td><code>value_bytes</code>, <code>extension_bytes</code></td>
+      <td>Aggregate host value text and blob bytes per document, and the byte gate for host value JSON decoding. The same number bounds the <code>extensions</code> map of a <code>ContractEnvelope</code>, reported as <code>extension_bytes</code>.</td>
+      <td><span class="pill accent">host-value</span> · <span class="pill">base</span></td>
+    </tr>
+  </tbody>
+</table>
+
+<h2>Work counters</h2>
+
+<p>
+  A work unit is an abstract cost counter for operations whose expense is not a simple byte or item
+  count. The five counters are deliberately not pooled, so one phase of a compilation cannot starve
+  the next on a shared total.
+</p>
+
+<table>
+  <thead>
+    <tr><th>Limit</th><th>Default</th><th>Reported as</th><th>What it charges</th><th>Surface</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><code>max_canonicalization_work</code></td>
+      <td>10 000 000</td>
+      <td><code>canonicalization_work</code></td>
+      <td>Graph nodes and edges visited, signature and string bytes produced, comparison bounds for sorted collections, reindexing and rewriting, canonical bytes serialized and hashed — and the length of any JSON the crate renders. Host value record and variant validation charge the same counter, one unit per field or tag comparison.</td>
+      <td><span class="pill">base</span> · <span class="pill accent">host-value</span></td>
+    </tr>
+    <tr>
+      <td><code>max_provenance_work</code></td>
+      <td>10 000 000</td>
+      <td><code>provenance_work</code></td>
+      <td>Building and querying the field-ID and method-name indexes used to resolve every provenance target in a source sidecar, plus every membership test.</td>
+      <td><span class="pill accent">compiler</span></td>
+    </tr>
+    <tr>
+      <td><code>max_source_identity_work</code></td>
+      <td>400 000 000</td>
+      <td><code>source_identity_work</code></td>
+      <td>Serializing and hashing the source-bundle identity (<code>candid-core:source-bundle:v1</code>). One unit per serialized payload byte in a counting pass, then two more per byte to materialize and hash the canonical bytes.</td>
+      <td><span class="pill accent">compiler</span></td>
+    </tr>
+    <tr>
+      <td><code>max_artifact_identity_work</code></td>
+      <td>10 000 000</td>
+      <td><code>artifact_identity_work</code></td>
+      <td>Hashing a detached artifact, at exactly <code>bytes.len() + domain.len() + 1</code> units. There is no length field and no second kind label in the preimage, so that constant is the whole overhead.</td>
+      <td><span class="pill">base</span></td>
+    </tr>
+    <tr>
+      <td><code>max_type_preflight_work</code></td>
+      <td>10 000 000</td>
+      <td><code>type_preflight_work</code></td>
+      <td>The two iterative walks that guard <code>max_type_depth</code>: one unit per visited syntax node or expansion state, plus one per recursive name tracked on the state's path.</td>
+      <td><span class="pill accent">compiler</span></td>
+    </tr>
+  </tbody>
+</table>
+
+<p>
+  Two of those defaults are derived rather than guessed.
+  <code>max_source_identity_work</code> at 400 000 000 covers the worst case the default byte limits
+  admit: JSON string escaping expands one byte to at most six, so a compile pass costs about 213
+  million units and the two passes of a presented-sidecar validation about 341 million together.
+  <code>max_artifact_identity_work</code> at 10 000 000 covers a 4 MiB artifact, the largest the
+  default byte gate admits, under the longest frozen domain tag
+  <code>candid-core:artifact:contract-envelope-json:v1</code> at 46 bytes: 4 194 351 units.
+</p>
+
+<h2>Diagnostics</h2>
+
+<table>
+  <thead>
+    <tr><th>Limit</th><th>Default</th><th>Reported as</th><th>What it bounds</th><th>Surface</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><code>max_diagnostics</code></td>
+      <td>100</td>
+      <td><code>diagnostics</code></td>
+      <td>Retained violations per Contract structure validation failure — the collector behind <code>ContractValidationError</code>. When more are observed than fit, the last retained slot is replaced by a <code>resource_limit_exceeded</code> sentinel at path <code>$</code> carrying the true observed count, updated in place on every later observation. A cap of <code>0</code> retains exactly that one sentinel, so an invalid input never yields an empty error collection. Compile diagnostics come from the upstream checker and are not capped by this limit.</td>
+      <td><span class="pill">base</span></td>
+    </tr>
+  </tbody>
+</table>
+
+<h2>The deadline</h2>
+
+<p>
+  <code>deadline_unix_ms</code> is the one field that is not a <code>usize</code> count. It is an
+  <code>Option&lt;u64&gt;</code> Unix timestamp in milliseconds, defaulting to <code>None</code>, set
+  with <code>with_deadline_unix_ms(Some(ms))</code> and cleared with <code>None</code>. Any value at
+  or before the current time, <code>Some(0)</code> included, makes every bounded operation fail
+  closed with <code>operation_deadline_exceeded</code> before doing work. It is configured in
+  wall-clock time and enforced against a monotonic clock snapshotted when the operation begins.
+  <code>Limits::deadline_exceeded()</code> reports whether it has elapsed.
+</p>
+
+<h2>The portable serialized configuration</h2>
+
+<p>
+  <code>Limits</code> never serializes as a bare field map. It serializes as a versioned document
+  that names its frozen baseline and carries only the fields you actually changed:
+</p>
+
+<pre data-lang="json">
+{
+  "version": 1,
+  "profile": "interactive_v1",
+  "overrides": {
+    "max_input_bytes": 512,
+    "max_diagnostics": 0,
+    "deadline_unix_ms": 2000000000000
+  }
+}
+</pre>
+
+<p>
+  That document is the exact serialization of
+  <code>Limits::default().with_max_input_bytes(512).with_max_diagnostics(0).with_deadline_unix_ms(Some(2_000_000_000_000))</code>,
+  and it round-trips back to the same value. <code>Limits::default()</code> itself serializes to
+  exactly:
+</p>
+
+<pre data-lang="json">{"version":1,"profile":"interactive_v1","overrides":{}}</pre>
+
+<p>The rules the format enforces:</p>
+
+<ul>
+  <li>
+    <strong><code>version</code> pins the schema.</strong> <code>LIMITS_CONFIG_VERSION</code> is
+    <code>1</code>. A different version is rejected with <code>unsupported_limits_version</code> at
+    <code>$.version</code>.
+  </li>
+  <li>
+    <strong><code>profile</code> names the frozen baseline.</strong>
+    <code>"interactive_v1"</code> is the only released wire name. An unknown one is rejected with
+    <code>unsupported_limits_profile</code> at <code>$.profile</code>.
+  </li>
+  <li>
+    <strong>Override values are fixed-width <code>u64</code>.</strong> They narrow to the host's
+    <code>usize</code> through one checked conversion at the configuration boundary: never
+    truncated, never wrapped. A value the platform cannot represent is rejected with
+    <code>limit_override_unrepresentable</code> at <code>$.overrides.&lt;field&gt;</code>. Because the
+    profile carries the defaults by name, one document configures identical policy on a 32-bit and a
+    64-bit host.
+  </li>
+  <li>
+    <strong>Only overrides that differ from the profile are serialized.</strong> An override set
+    explicitly back to its profile value normalizes away, so omission and an equal explicit value are
+    the same policy forever. A missing <code>overrides</code> object means no overrides.
+  </li>
+  <li>
+    <strong>An explicit <code>null</code> is rejected.</strong> Absence is the only spelling of "use
+    the profile value". <code>{"overrides": {"max_input_bytes": null}}</code> is a decode error, not a
+    second way to say nothing.
+  </li>
+  <li>
+    <strong>Unknown keys are rejected</strong>, both at the top level and inside
+    <code>overrides</code>.
+  </li>
+</ul>
+
+<p>
+  <code>RuntimeContext</code> serializes as <code>{"limits": …}</code> and nothing else. A document
+  that also carries a <code>"cancellation"</code> key is rejected; the token is host-local
+  bookkeeping and never travels.
+</p>
+
+<h3>Decoding a configuration with a structured error</h3>
+
+<p>
+  Deserializing straight into <code>Limits</code> wraps a rejection in a serde error string. Decode
+  to <code>LimitsConfig</code> first and convert with <code>TryFrom</code> when you want the
+  <code>code</code>, <code>path</code> and <code>message</code> programmatically.
+</p>
+
+<pre data-lang="rust">
+use candid_core::{Limits, LimitsConfig};
+
+let config: LimitsConfig = serde_json::from_str(document)?;
+let limits = Limits::try_from(config).map_err(|error| {
+    // code() == "unsupported_limits_version", path() == "$.version".
+    // Display renders as:
+    //   unsupported_limits_version at $.version: unsupported limits config
+    //   version 2; this build supports version 1
+    eprintln!("{}: {}", error.code(), error.path());
+    error
+})?;
+</pre>
+
+<callout type="warn" title="A newer limit key is rejected by an older build, on purpose">
+  <p>
+    New limits are added as additive override keys without bumping
+    <code>LIMITS_CONFIG_VERSION</code>, because <code>Limits</code> fields are private and adding one
+    breaks nothing. A document that leaves a new limit at its profile value therefore carries no key
+    for it and is compatible in both directions. A document that <em>does</em> carry, say,
+    <code>max_type_preflight_work</code> is readable by this build and newer ones and rejected by a
+    build predating the key. That is the intended failure: silently ignoring an unknown limit
+    override would apply a policy the document did not ask for.
+  </p>
+</callout>
+
+<h2>Interactions worth knowing before you tune</h2>
+
+<h3><code>max_canonicalization_work</code> binds a record at 2 581 fields</h3>
+
+<p>
+  Host value record validation is deliberately allocation-free: instead of building a field-ID index
+  it scans pairwise and charges one <code>canonicalization_work</code> unit per comparison. Three
+  such scans run per record (duplicate detection, field-set agreement, per-field lookup), so cost is
+  roughly <code>1.5n²</code> units for an <em>n</em>-field record. At the default 10 000 000 that
+  puts the ceiling at <strong>2 581 fields</strong>: a 2 582-field record fails closed naming
+  <code>canonicalization_work</code>, not <code>fields</code> and not
+  <code>value_elements</code>.
+</p>
+
+<p>
+  That is three orders of magnitude below the 500 000 fields <code>max_fields</code> permits and the
+  1 000 000 elements <code>max_value_elements</code> permits. Neither of those is the binding limit
+  for a wide record. Raise the work counter to validate wider ones, and note the cost grows
+  quadratically. The counter is per operation and shared with Contract canonicalization, so several
+  moderately wide records in one value tree accumulate against the same budget.
+</p>
+
+<h3>Raising <code>max_value_nesting</code> above 128 does nothing</h3>
+
+<p>
+  <code>serde_json</code> applies a fixed 128-frame recursion ceiling that this crate deliberately
+  does not disable. The default of 64 sits below it so the crate's own constant-stack pre-scan is
+  always the check that fires, giving you a <code>value_nesting</code> triple instead of an opaque
+  serde string. Set the limit above 128 and documents nested deeper are rejected by the decoder as
+  malformed instead. A host on an ordinary 8 MiB stack can raise it to 128 without approaching either
+  bound.
+</p>
+
+<h3>Raise <code>max_input_bytes</code> and <code>max_artifact_identity_work</code> together</h3>
+
+<p>
+  Artifact hashing costs exactly <code>bytes.len() + domain.len() + 1</code> units. Raise the byte
+  gate above the artifact work limit without raising the work limit and over-sized artifacts start
+  failing on <code>artifact_identity_work</code> instead of <code>input_bytes</code>, a failure that
+  names the wrong knob. The two defaults are consistent for every declared
+  <code>ArtifactKind</code>, and a test asserts that.
+</p>
+
+<h3><code>max_type_preflight_work</code> is a memory knob as well as a time knob</h3>
+
+<p>
+  The type-depth guard walks deduplicate expansion states into a memo retained for the duration of
+  the walk, where the tree walks they replaced held only a stack. So the counter bounds heap as well
+  as work, at a measured rate of about 19 bytes of peak live heap per unit. The 10 000 000 default
+  therefore authorizes roughly 190 MB before the counter refuses, which is more than a small 32-bit
+  <code>wasm32</code> heap can serve; a host whose allocator gives out before the counter does gets
+  an allocation abort instead of the clean structured refusal. A browser or other constrained host
+  should lower this to around 1 000 000 (about 19 MB), which still clears every realistic contract
+  by a wide margin. Rejecting costs no memory, so no input can force an abort by being
+  <em>larger</em> than the configured bound, only by being accepted under a bound the host cannot
+  honour.
+</p>
+
+<h3>The <code>candid-core</code> binary has no flags for limits</h3>
+
+<p>
+  <code>candid-core compile</code> and <code>candid-core validate</code> bound their reads under
+  <code>Limits::default()</code>, and there is no option to change that. Pass a custom policy through
+  the library APIs instead. <code>compile</code> bounds each source by <code>max_source_bytes</code>
+  and the bundle by <code>max_bundle_bytes</code>, failing in the <code>diagnostics</code> shape;
+  <code>validate</code> bounds the document by <code>max_input_bytes</code>, failing in the
+  <code>violations</code> shape.
+</p>
+
+<div class="card-grid">
+  <a class="card" href="limits-and-diagnostics.html">
+    <span class="card-kicker">Concept</span>
+    <span class="card-title">Limits, budgets and diagnostics</span>
+    <p>Why every entry point is bounded, and what the caller observes when one trips.</p>
+  </a>
+  <a class="card" href="rust-limits.html">
+    <span class="card-kicker">Rust crate</span>
+    <span class="card-title">Working with limits</span>
+    <p>Profiles, builders, deadlines and cancellation in practice.</p>
+  </a>
+  <a class="card" href="reference-json.html">
+    <span class="card-kicker">Reference</span>
+    <span class="card-title">JSON document formats</span>
+    <p>The Contract, envelope, compilation, host value and limits documents.</p>
+  </a>
+</div>

@@ -1,0 +1,324 @@
+<p>A <a href="contract-graph.html">Contract</a> tells you what shape a canister's
+arguments must have. A <strong>host value</strong> is the other half: one
+concrete argument, written down in a form that a host program can hold, store,
+send over a network and hand back without changing it. In this project a host
+value is a <code>HostValue</code>, a closed algebra of 23 kinds with a
+portable JSON encoding, gated behind the
+<span class="pill accent">host-value</span> Cargo feature, which is on by
+default.</p>
+
+<p>Two separate questions live on this page, and the crate keeps them
+separate. <em>Is this a well-formed value at all?</em> is answered at the JSON
+boundary, without any Contract. <em>Does this value fit the type at this
+position in this interface?</em> is answered by
+<code>validate_host_value</code>, which walks the Contract's type graph. A
+value can pass the first and fail the second. A <code>nat</code> is a
+perfectly good value and still not a <code>nat8</code>.</p>
+
+<h2>Why plain JSON cannot carry a Candid value</h2>
+
+<p>The obvious design is to encode a Candid value as the JSON that "looks
+like" it: a <code>nat</code> as a number, a record as an object keyed by field
+name, an absent <code>opt</code> as a missing key. Every one of those choices
+loses information, and the loss is silent.</p>
+
+<ul>
+  <li><strong>Integers overflow the JSON number.</strong> Candid's
+    <code>nat</code> and <code>int</code> are unbounded, and
+    <code>nat64</code>/<code>int64</code> reach 18 446 744 073 709 551 615 and
+    -9 223 372 036 854 775 808. A JSON number is a double in most parsers, so
+    it represents integers exactly only up to 2<sup>53</sup>. Anything above
+    that is rounded on the way through <code>JSON.parse</code>, and nothing
+    tells you it happened.</li>
+  <li><strong>Floats lose their bits.</strong> JSON has no spelling for NaN
+    or for an infinity at all, and a NaN's payload bits are gone long before
+    that. A signed zero does have a JSON spelling, but it survives a round trip
+    only if nothing in the chain normalises the sign away.</li>
+  <li><strong><code>opt null</code> and <code>null</code> are different
+    values.</strong> Candid's <code>null</code> type has one value. The type
+    <code>opt null</code> has two: the absent one, and the present one whose
+    payload is <code>null</code>. Collapse those into a bare JSON
+    <code>null</code> and you can no longer tell an absent option from an
+    option holding <code>null</code>, or either from a missing field.</li>
+  <li><strong>A variant needs its tag.</strong> Which arm was selected is part
+    of the value, not something to guess from the payload's shape. Two arms
+    can carry the same type.</li>
+  <li><strong>A principal is not a string.</strong> In the type system
+    <code>principal</code> is its own primitive, distinct from
+    <code>text</code>. <code>service</code> and <code>func</code> references
+    are not primitives at all — each is its own kind of type node — and neither
+    is a string either.</li>
+  <li><strong>Record fields are numbers on the wire.</strong> Candid addresses
+    a record field or variant arm by a 32-bit ID: a numeric label is used as
+    written, and a named label is hashed with
+    <code>h = 0</code>, then <code>h = h * 223 + b</code> for each UTF-8 byte, modulo 2<sup>32</sup>.
+    <code>owner</code> is 947296307. The Contract stores the ID, because that
+    is what the wire carries.</li>
+</ul>
+
+<p>Every tool that invents its own JSON shape bakes one of these coercions
+into everything built on top of it. So <code>HostValue</code> takes the other
+route. Each value states its own Candid type in a <code>kind</code> field and
+keeps its exact bits. The encoding is verbose on purpose. A friendlier,
+lossy view can always be layered on top, but not the other way round.</p>
+
+<h2>The tagged encoding, kind by kind</h2>
+
+<h3>Scalars</h3>
+
+<table>
+  <thead>
+    <tr><th>Candid type</th><th><code>kind</code></th><th>Payload</th><th>Example</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>null</code></td><td><code>null</code></td><td>none</td><td><code>{"kind":"null"}</code></td></tr>
+    <tr><td><code>bool</code></td><td><code>bool</code></td><td><code>value</code>, a JSON boolean</td><td><code>{"kind":"bool","value":true}</code></td></tr>
+    <tr><td><code>nat</code></td><td><code>nat</code></td><td><code>value</code>, a decimal string</td><td><code>{"kind":"nat","value":"340282366920938463463374607431768211456"}</code></td></tr>
+    <tr><td><code>int</code></td><td><code>int</code></td><td><code>value</code>, a decimal string</td><td><code>{"kind":"int","value":"-1"}</code></td></tr>
+    <tr><td><code>nat8</code> <code>nat16</code> <code>nat32</code></td><td>same names</td><td><code>value</code>, a JSON number</td><td><code>{"kind":"nat32","value":4294967295}</code></td></tr>
+    <tr><td><code>nat64</code></td><td><code>nat64</code></td><td><code>value</code>, a decimal string</td><td><code>{"kind":"nat64","value":"18446744073709551615"}</code></td></tr>
+    <tr><td><code>int8</code> <code>int16</code> <code>int32</code></td><td>same names</td><td><code>value</code>, a JSON number</td><td><code>{"kind":"int16","value":-32768}</code></td></tr>
+    <tr><td><code>int64</code></td><td><code>int64</code></td><td><code>value</code>, a decimal string</td><td><code>{"kind":"int64","value":"-9223372036854775808"}</code></td></tr>
+    <tr><td><code>float32</code></td><td><code>float32</code></td><td><code>bits</code>, exactly 8 lowercase hex digits</td><td><code>{"kind":"float32","bits":"deadbeef"}</code></td></tr>
+    <tr><td><code>float64</code></td><td><code>float64</code></td><td><code>bits</code>, exactly 16 lowercase hex digits</td><td><code>{"kind":"float64","bits":"7ff8000000000001"}</code></td></tr>
+    <tr><td><code>text</code></td><td><code>text</code></td><td><code>value</code>, a JSON string</td><td><code>{"kind":"text","value":"hello"}</code></td></tr>
+    <tr><td><code>reserved</code></td><td><code>reserved</code></td><td>none</td><td><code>{"kind":"reserved"}</code></td></tr>
+    <tr><td><code>principal</code></td><td><code>principal</code></td><td><code>value</code>, canonical textual form</td><td><code>{"kind":"principal","value":"aaaaa-aa"}</code></td></tr>
+  </tbody>
+</table>
+
+<p>The split between JSON numbers and decimal strings is not a matter of
+taste. <code>nat8</code>, <code>nat16</code>, <code>nat32</code> and their
+signed counterparts fit a double exactly, so they travel as numbers;
+<code>nat64</code> and <code>int64</code> do not, so they travel as strings, as
+do the two unbounded kinds. Floats
+travel as their raw IEEE-754 bits, which is what lets a NaN payload, an
+infinity and a signed zero survive the trip.
+<code>{"kind":"float64","bits":"7ff8000000000001"}</code> is a specific NaN,
+not "a NaN".</p>
+
+<h3>Containers</h3>
+
+<pre data-lang="json">{ "kind": "opt", "value": null }
+{ "kind": "opt", "value": { "kind": "null" } }
+{ "kind": "vec", "values": [ { "kind": "nat8", "value": 1 }, { "kind": "nat8", "value": 2 } ] }
+{ "kind": "record", "fields": [ { "id": 947296307, "value": { "kind": "principal", "value": "aaaaa-aa" } },
+                                { "id": 3573748184, "value": { "kind": "nat", "value": "42" } } ] }
+{ "kind": "variant", "id": 24860, "value": { "kind": "text", "value": "ok" } }
+{ "kind": "service", "principal": "aaaaa-aa" }
+{ "kind": "func", "principal": "aaaaa-aa", "method": "go" }</pre>
+
+<p>The first two lines are the point of the whole design: an absent
+<code>opt</code> and an <code>opt</code> holding <code>null</code> are two
+different documents. A record's <code>fields</code> is an array of
+<code>{id, value}</code> pairs, never an object keyed by name, because the ID
+is the authoritative thing and the spelling is not. <code>24860</code> is the
+hash of <code>ok</code>, and <code>947296307</code> and
+<code>3573748184</code> are <code>owner</code> and <code>amount</code>.</p>
+
+<h3>What has no encoding</h3>
+
+<p>Candid's <code>empty</code> type is uninhabited, so there is no
+<code>HostValue</code> for it; presenting any value against an
+<code>empty</code> position fails with <code>empty_has_no_value</code>. A
+service constructor (<code>service : (nat) -> { … }</code>, a
+<code>class</code> node in the graph) is not a first-class value either, and
+fails with <code>class_has_no_host_value</code>.</p>
+
+<p>Three familiar Candid spellings are also absent, deliberately.
+<code>blob</code> is <code>vec nat8</code>, a tuple is a record with the
+numeric labels 0, 1, 2…, and the conventional <code>Result</code> is an
+ordinary variant. They are views layered on top, so a nicer view can never
+change what goes on the wire underneath.</p>
+
+<h3>One spelling per value</h3>
+
+<p>For each scalar kind exactly one encoding is accepted, and everything else
+is rejected rather than repaired. A <code>nat</code> may not carry a leading
+zero; an <code>int</code> may not be <code>-0</code>; float bits must be
+exactly 8 or 16 characters drawn from <code>0-9</code> and
+<code>a-f</code>; a <code>nat64</code> whose digits are canonical but whose
+value does not fit 64 bits is still rejected; and a principal is parsed and
+then re-rendered, so <code>"AAAAA-AA"</code> and a de-hyphenated spelling both
+fail even though they parse. An unknown JSON key anywhere is a failure too.
+Nothing is normalised on your behalf.</p>
+
+<p>Record field order is the one thing left free. The decoder keeps the order
+it was given rather than sorting, so two documents listing the same fields in
+different orders both decode, both validate against the same type, and still
+compare unequal as <code>HostValue</code>s. If you need one byte-exact form for
+a value, impose the field order yourself before encoding.</p>
+
+<h2>Validation directed by the Contract</h2>
+
+<p>Once a value is well formed, checking it against an interface is a separate
+step:</p>
+
+<pre data-lang="rust">pub fn validate_host_value(
+    contract: &Contract,
+    selector: &ContractTypeRef,
+    value: &HostValue,
+    limits: &Limits,
+) -> Result<(), HostValueValidationError></pre>
+
+<p>The <em>selector</em> is a <code>{contract_id, type_ref}</code> pair minted
+by <code>Contract::bind_type</code>. <code>type_ref</code> is an index into
+the Contract's flat <code>types</code> array; <code>contract_id</code> records
+which Contract that index belongs to. Validation refuses immediately if the
+selector names a different Contract (<code>value_contract_id_mismatch</code>)
+or an index outside the arena
+(<code>value_type_ref_out_of_bounds</code>). That is what makes a stored
+selector safe to keep: when the interface changes, its <code>contract_id</code>
+changes, and the stale selector is caught instead of silently pointing at
+whatever now sits at that index.</p>
+
+<p>From there the walk pairs a type node with a value node at every step. A
+<code>vec</code> type recurses into its <code>inner</code> for each element; a
+record recurses per field ID; a variant looks its tag up in the type's field
+table. Any pair that does not line up is a
+<code>host_value_kind_mismatch</code>. Because the walk reads only the
+Contract, a host can validate values without linking a Candid parser at all.
+The <code>host-value</code> feature adds exactly one dependency,
+<code>ic_principal</code>, for canonical principal text.</p>
+
+<p>The validator does nothing helpful behind your back. A record's field set
+must match exactly: same count, same IDs, or
+<code>record_field_set_mismatch</code> listing both sorted sets. A record with
+an <code>opt</code> field still needs that field <em>present</em>, spelled as
+an <code>opt</code> whose <code>value</code> is <code>null</code>. There is no
+UI defaulting, no string-to-number coercion and no tuple guessing anywhere in
+the core validator.</p>
+
+<callout type="note" title="Not a wire encoder yet">
+  <p>Encoding a validated host value into a Candid binary message is not part
+  of this release. <code>validate_host_value</code> checks a value against a
+  type; the binary bridge that would take a
+  <code>{contract_id, method_name}</code> selector and reuse this validator is
+  recorded as the next slice. The crate is <code>0.1.0-beta.3</code>, and the
+  Contract format is not a stable v1, so the serialized shapes on this page may
+  still move.</p>
+</callout>
+
+<h2>ContractEnvelope: where the field names live</h2>
+
+<p>The canonical Contract stores only field IDs, and it rejects unknown JSON
+keys, so there is nowhere inside it to put a form hint or a table of label
+spellings. <code>ContractEnvelope</code> is the sanctioned place for that
+data: a validated Contract plus a map of namespaced extensions, serialized as
+<code>{"contract": …, "extensions": {…}}</code> with <code>extensions</code>
+omitted when empty. It belongs to the base feature set, so it is available
+even with <code>default-features = false</code>.</p>
+
+<p>An extension name fails closed. It must be a reverse-domain namespace
+(dot-separated segments of lowercase letters, digits and hyphens), then
+<code>/v</code> and an integer with no leading zero. <code>"widget"</code>,
+<code>"unversioned"</code> and <code>"com.example.form/v01"</code> are all
+refused with <code>invalid_extension_name</code>, on insert and again on
+decode. Two ecosystems therefore cannot collide on a bare key.</p>
+
+<p>This repository emits exactly one extension,
+<code>org.candid-core.field-names/v1</code>, from
+<code>candid-core compile &lt;path&gt; --envelope</code>. Its value is an array
+of <code>[container, id, name]</code> triples for labels that had a name in
+the source, sorted and deduplicated:</p>
+
+<pre data-lang="json" data-file="tests/fixtures/envelope/basic.envelope.json">{
+  "contract": {
+    "actor": { "kind": "service", "service": 0 },
+    "canonicalization_profile": "candid-core-canon-1",
+    "declarations": [{ "name": "Payload", "type": 2 }],
+    "format": "candid-core",
+    "format_version": 1,
+    "identities": {
+      "contract": "candid-core:contract:v1:sha256:0b553cb65eb436a7ac5d35869d0016d043867bab0a97e844350ae72a5b4aea7d",
+      "interface": "candid-core:interface:v1:sha256:99f400820c0ca2fb7c32cc3ab1df6d6c000bc614cffe0e350b6a9a576da18d48"
+    },
+    "semantics_profile": "candid-1",
+    "types": [
+      { "kind": "service", "methods": [{ "function": 1, "id": 3664621355, "name": "transfer" }] },
+      { "args": [2], "kind": "func", "mode": "update", "results": [] },
+      { "fields": [{ "id": 947296307, "type": 3 }, { "id": 3573748184, "type": 4 }], "kind": "record" },
+      { "kind": "primitive", "primitive": "principal" },
+      { "kind": "primitive", "primitive": "nat" }
+    ]
+  },
+  "extensions": {
+    "org.candid-core.field-names/v1": [
+      [2, 947296307, "owner"],
+      [2, 3573748184, "amount"]
+    ]
+  }
+}</pre>
+
+<p>Node 2 is the record, so the two triples say that its fields are spelled
+<code>owner</code> and <code>amount</code>. The <code>producer</code> block is
+elided above for length; it is present in the fixture. The TypeScript runtime
+exports the same key as <code>FIELD_NAMES_EXTENSION</code> and its
+<code>schemaFromContract</code> accepts this whole document, so one file
+carries both the interface and its names. See
+<a href="schema-from-contract.html">Schemas at runtime</a>.</p>
+
+<callout type="warn" title="Extensions do not move the semantic identities">
+  <p><code>contract_id</code> and <code>interface_id</code> are computed over
+  the Contract alone, so adding, editing or removing an extension leaves both
+  unchanged. Only an artifact identity over the envelope's exact bytes covers
+  extension data. If you need a commitment that includes your extension, that
+  is the identity to use. See
+  <a href="identities.html">Content-addressed identities</a>.</p>
+</callout>
+
+<h2>Bounded on both sides</h2>
+
+<p><code>HostValue</code> is the crate's one recursive value type, and every
+operation on it walks one stack frame per level: decoding, cloning, comparing,
+formatting, dropping, serializing. A value deep enough to exhaust
+the stack aborts the process rather than returning an error, and
+<code>Drop</code>, <code>Clone</code>, <code>PartialEq</code> and
+<code>Debug</code> have nowhere to report a failure. So the crate applies the
+bound where a failure can still be reported, at the two entry points.</p>
+
+<p><strong>Decoding</strong> goes through
+<code>HostValue::from_json_with_limits</code>. There is no
+<code>Deserialize</code> impl. A trait impl has no argument slot for a
+resource policy, so it could only ever decode under limits the library chose.
+The function checks the input length against <code>max_value_bytes</code>,
+then runs a constant-stack, string-aware scan of the raw bytes counting
+<code>{</code> and <code>[</code> against <code>max_value_nesting</code>
+(default 64), and only then hands the text to <code>serde_json</code>.
+<code>serde_json</code>'s own fixed 128-frame ceiling is left in place
+underneath as a second line of defence, which is why raising
+<code>max_value_nesting</code> above 128 has no effect.</p>
+
+<p><strong>Construction</strong> is bounded by <code>max_value_depth</code>
+(default 256) and <code>max_value_elements</code> (default 1 000 000).
+<code>HostValue::opt</code>, <code>vector</code>, <code>record</code> and
+<code>variant</code> each take a <code>&amp;Limits</code> and return a
+<code>Result</code>. A fallible builder is unusual. Refusing to build the
+value is the only chokepoint that covers all five recursive operations at
+once.</p>
+
+<p>The two nesting limits count in different units and never agree. One
+<code>vec</code> level costs two JSON containers and one <code>record</code>
+level costs three, so a rejection names either <code>value_nesting</code> or
+<code>value_depth</code>, never both. The full list of value limits and their
+defaults is on the <a href="reference-limits.html">Limits reference</a>.</p>
+
+<h2>Next</h2>
+
+<div class="card-grid">
+  <a class="card" href="rust-host-values.html">
+    <span class="card-kicker">Rust</span>
+    <span class="card-title">Validating host values</span>
+    <p>Building trees under limits, binding a selector, and reading the verdict, with runnable code.</p>
+  </a>
+  <a class="card" href="contract-graph.html">
+    <span class="card-kicker">Concept</span>
+    <span class="card-title">The Contract graph</span>
+    <p>The arena of type nodes that validation walks, and what a <code>TypeRef</code> actually is.</p>
+  </a>
+  <a class="card" href="reference-json.html">
+    <span class="card-kicker">Reference</span>
+    <span class="card-title">JSON document formats</span>
+    <p>The Contract, envelope, compilation, host value and limits documents side by side.</p>
+  </a>
+</div>

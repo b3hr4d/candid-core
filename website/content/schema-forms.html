@@ -1,0 +1,377 @@
+<p>
+  A canister method takes an argument of a declared Candid type, and sooner or later somebody has to
+  type that argument into a screen. The type already says everything a form needs to know: which
+  fields exist, in what order, what each one accepts, which are optional, which choices a variant
+  offers. The <code>./forms</code> subpath of
+  <a href="https://www.npmjs.com/package/@candid-core/schema"><code>@candid-core/schema</code></a>
+  turns a schema into that description, as data.
+</p>
+
+<p>
+  <strong>Form metadata is a UI-agnostic description of a schema that a renderer can walk.</strong>
+  It names a control per node — <code>text</code>, <code>checkbox</code>, <code>bigint</code>,
+  <code>choice</code> — with the constraints and labels that go with it, and a
+  <code>$</code>-rooted path identifying where the node sits. It contains no components, no DOM, and
+  no reference to any framework. Bindings consume the model; they are not part of it.
+</p>
+
+<pre data-lang="ts">import { c } from "@candid-core/schema";
+import { formModel, formNodeAt, type FormNode } from "@candid-core/schema/forms";</pre>
+
+<h2>The two functions</h2>
+
+<div class="api-entry">
+  <div class="api-head">
+    <span class="api-name">formModel</span>
+    <span class="pill">./forms</span>
+  </div>
+  <div class="api-body">
+    <pre data-lang="ts" data-file="crates/candid-core-ts/ts/forms.ts">export function formModel(schema: AnyFieldSchema): FormNode</pre>
+    <p>
+      Build the model for a schema. The root's path is <code>$</code>. A foreign object, or a schema
+      kind this walk has no control for, is a programmer error and throws <code>TypeError</code>. A
+      <code>rec</code> is not followed here — it becomes a <code>lazy</code> node — so a chain that
+      never terminates throws only where something expands it: <code>formNodeAt</code>, your own
+      loop, or the arm resolution a <code>variant</code> does eagerly to classify tag-only arms.
+    </p>
+  </div>
+</div>
+
+<div class="api-entry">
+  <div class="api-head">
+    <span class="api-name">formNodeAt</span>
+    <span class="pill">./forms</span>
+  </div>
+  <div class="api-body">
+    <pre data-lang="ts" data-file="crates/candid-core-ts/ts/forms.ts">export function formNodeAt(root: FormNode, path: string): FormNode | undefined</pre>
+    <p>
+      The node a path addresses, expanding lazy nodes along the way.
+      <code>undefined</code> when the path addresses nothing this model describes — an unknown key,
+      a malformed path. The paths it accepts are exactly
+      <a href="schema-validation.html">the validator's</a>, which is the point of the function.
+    </p>
+  </div>
+</div>
+
+<h2>What a node carries</h2>
+
+<p>
+  A <code>FormNode</code> is <code>FormCommon &amp; FormControl</code>: where it sits, plus how to
+  edit what is there.
+</p>
+
+<pre data-lang="ts" data-file="crates/candid-core-ts/ts/forms.ts">
+export interface FormCommon {
+  /** `$`-rooted path in `validate`'s grammar. */
+  readonly path: string;
+  /** The rendered label (field key or arm tag); absent at the root. */
+  readonly label?: string;
+  /** The numeric Candid id when `label` is the `_id_` rendering. */
+  readonly numericId?: number;
+}
+
+export type FormNode = FormCommon & FormControl;
+</pre>
+
+<p>
+  <code>path</code> is the address, and it is what makes the model useful beyond drawing: it is a
+  stable key for the value you are editing, for a per-field error, and for focus management.
+  <code>label</code> is the rendered field key or arm tag — the name table the schema was built with
+  has already been applied, so it is the name a user should see. <code>numericId</code> appears only
+  when the Candid field had no source name and the key is the <code>_N_</code> rendering of its
+  numeric label id; a UI can then present unnamed fields however it likes instead of showing
+  <code>_5_</code>.
+</p>
+
+<h3>The seventeen controls</h3>
+
+<table>
+  <thead>
+    <tr><th>Control</th><th>Extra fields</th><th>From</th><th>What a UI does with it</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>text</code></td><td>—</td><td><code>text</code></td><td>A single-line string input.</td></tr>
+    <tr><td><code>checkbox</code></td><td>—</td><td><code>bool</code></td><td>A boolean toggle.</td></tr>
+    <tr><td><code>integer</code></td><td><code>min: number</code>, <code>max: number</code></td><td><code>nat8</code>…<code>int32</code></td><td>A number input; the bounds are number-safe, so they can go straight onto the element.</td></tr>
+    <tr><td><code>bigint</code></td><td><code>min?: bigint</code>, <code>max?: bigint</code></td><td><code>nat</code>, <code>int</code>, <code>nat64</code>, <code>int64</code></td><td>A <em>text</em> input parsed to <code>BigInt</code>. Flagged separately so a UI never routes these through a <code>number</code> input and loses precision past 2<sup>53</sup>. <code>c.int</code> carries neither bound; <code>c.nat</code> carries only <code>min: 0n</code>.</td></tr>
+    <tr><td><code>float</code></td><td><code>bits: 32 | 64</code></td><td><code>float32</code>, <code>float64</code></td><td>A decimal input. The width matters because a 32-bit float that is not exactly representable is refused at encode time.</td></tr>
+    <tr><td><code>principal</code></td><td>—</td><td><code>principal</code></td><td>A textual principal input, usually with its own format check.</td></tr>
+    <tr><td><code>constant</code></td><td>—</td><td><code>null</code>, <code>reserved</code></td><td>Nothing to edit. Render a label, or nothing at all.</td></tr>
+    <tr><td><code>uninhabited</code></td><td>—</td><td><code>empty</code></td><td>No value exists. A UI must not offer an input; anything typed here would fail.</td></tr>
+    <tr><td><code>optional</code></td><td><code>inner(): FormNode</code></td><td><code>opt</code></td><td>A presence toggle plus the inner editor. Off means <code>null</code> — the key stays present.</td></tr>
+    <tr><td><code>list</code></td><td><code>item(index): FormNode</code></td><td><code>vec</code></td><td>Rows with add and remove. There is no length in the model: you call <code>item(i)</code> for as many rows as your value has.</td></tr>
+    <tr><td><code>bytes</code></td><td>—</td><td><code>blob</code></td><td>A file picker or a hex/base64 field producing a <code>Uint8Array</code>.</td></tr>
+    <tr><td><code>group</code></td><td><code>fieldLabels: readonly string[]</code>, <code>fields: readonly (() =&gt; FormNode)[]</code></td><td><code>record</code>, <code>unit</code></td><td>A fieldset. The two arrays are parallel and in the schema's own field order; <code>c.unit()</code> gives both empty.</td></tr>
+    <tr><td><code>tuple</code></td><td><code>length: number</code>, <code>element(index): FormNode</code></td><td><code>tuple</code></td><td>A fixed row of <code>length</code> editors — unlike a list, the count is not the user's to change.</td></tr>
+    <tr><td><code>choice</code></td><td><code>arms: readonly FormArm[]</code></td><td><code>variant</code></td><td>A radio group or select over the arm tags, plus the payload editor for the selected arm.</td></tr>
+    <tr><td><code>funcReference</code></td><td>—</td><td><code>func</code></td><td>A <code>{ principal, method }</code> pair: two inputs.</td></tr>
+    <tr><td><code>serviceReference</code></td><td>—</td><td><code>service</code></td><td>A principal, naming a running service.</td></tr>
+    <tr><td><code>lazy</code></td><td><code>expand(): FormNode</code></td><td><code>rec</code></td><td>Not a control. Call <code>expand()</code> to get the real one — see below.</td></tr>
+  </tbody>
+</table>
+
+<p>An arm of a <code>choice</code> is its own small record:</p>
+
+<pre data-lang="ts" data-file="crates/candid-core-ts/ts/forms.ts">
+export interface FormArm {
+  readonly tag: string;
+  readonly numericId?: number;
+  /** A tag-only arm (`null` payload) needs no payload editor. */
+  readonly tagOnly: boolean;
+  /** The payload editor for `{ tag, value }` arms; undefined when tagOnly. */
+  payload(): FormNode | undefined;
+}
+</pre>
+
+<p>
+  <code>tagOnly</code> is the distinction a variant UI has to get right. An arm with a
+  <code>null</code> payload is a bare <code>{ tag }</code> value, so selecting it must not produce a
+  <code>value</code> key at all — the validator rejects one. Every other arm needs its editor, and
+  <code>payload()</code> builds it on demand at the path <code>&lt;parent&gt;.value</code>.
+</p>
+
+<h2>A worked example</h2>
+
+<pre data-lang="ts">const Account = c.record({
+  owner: c.principal,
+  subaccount: c.opt(c.blob()),
+});
+
+const model = formModel(Account);
+if (model.control !== "group") throw new Error("expected a group");
+
+model.fieldLabels;      // ["owner", "subaccount"]
+model.fields[0]();      // { path: "$.owner", label: "owner", control: "principal" }
+
+const subaccount = model.fields[1]();
+// { path: "$.subaccount", label: "subaccount", control: "optional", inner: ƒ }
+if (subaccount.control === "optional") {
+  subaccount.inner();   // { path: "$.subaccount", control: "bytes" }
+}</pre>
+
+<p>
+  Three details are worth pausing on. The children are <em>thunks</em>: <code>fields</code> holds
+  functions, not nodes, so nothing below the level you asked for is built. The optional node and its
+  inner node share the path <code>$.subaccount</code>, because the presence toggle and the value
+  edit the same place — <code>opt T</code> is <code>T | null</code> with the property present, so
+  switching the toggle off writes <code>null</code> rather than deleting the key. And the inner node
+  has no <code>label</code>: the label belongs to the field, and repeating it would make a renderer
+  draw it twice.
+</p>
+
+<p>
+  Because thunks and <code>bigint</code> bounds are not JSON values, the model is not something you
+  can hand to <code>JSON.stringify</code> directly. A small projection is all it takes when you want
+  the shape on paper:
+</p>
+
+<pre data-lang="ts">function outline(node: FormNode): Record<string, unknown> {
+  const base = { path: node.path, label: node.label, control: node.control };
+  if (node.control === "group") return { ...base, fields: node.fields.map((f) => outline(f())) };
+  if (node.control === "optional") return { ...base, inner: outline(node.inner()) };
+  return base;
+}
+
+console.log(JSON.stringify(outline(model), null, 2));</pre>
+
+<pre data-lang="json">{
+  "path": "$",
+  "control": "group",
+  "fields": [
+    {
+      "path": "$.owner",
+      "label": "owner",
+      "control": "principal"
+    },
+    {
+      "path": "$.subaccount",
+      "label": "subaccount",
+      "control": "optional",
+      "inner": {
+        "path": "$.subaccount",
+        "control": "bytes"
+      }
+    }
+  ]
+}</pre>
+
+<p>
+  Numeric bounds ride along on the nodes that have them. A <code>nat64</code> field gives you the
+  exact range, as <code>bigint</code>s:
+</p>
+
+<pre data-lang="ts">const Tokens = c.record({ e8s: c.nat64 });
+const tokens = formModel(Tokens);
+if (tokens.control === "group") {
+  tokens.fields[0]();
+  // { path: "$.e8s", label: "e8s", control: "bigint",
+  //   min: 0n, max: 18446744073709551615n }
+}</pre>
+
+<h2>Driving a renderer</h2>
+
+<p>
+  A renderer is a recursion over the model, guided by the value being edited. The model decides
+  <em>what</em> to draw; the value decides <em>how far</em> — how many list rows, which arm of a
+  choice, whether an optional is switched on. The helpers below (<code>heading</code>,
+  <code>toggle</code>, <code>select</code>, <code>input</code>) are yours; nothing in the package
+  supplies them.
+</p>
+
+<pre data-lang="ts">function unwrap(node: FormNode): FormNode {
+  let current = node;
+  while (current.control === "lazy") current = current.expand();
+  return current;
+}
+
+function render(parent: HTMLElement, node: FormNode, value: unknown): void {
+  const current = unwrap(node);
+
+  switch (current.control) {
+    case "group": {
+      const record = (value ?? {}) as Record<string, unknown>;
+      for (let i = 0; i < current.fieldLabels.length; i += 1) {
+        const label = current.fieldLabels[i];
+        parent.append(heading(label));
+        render(parent, current.fields[i](), record[label]);
+      }
+      return;
+    }
+    case "list": {
+      const rows = Array.isArray(value) ? value : [];
+      for (let i = 0; i < rows.length; i += 1) render(parent, current.item(i), rows[i]);
+      return;
+    }
+    case "optional": {
+      parent.append(toggle(current.path, value !== null));
+      if (value !== null) render(parent, current.inner(), value);
+      return;
+    }
+    case "choice": {
+      const tag = (value as { tag?: string } | null)?.tag;
+      parent.append(select(current.path, current.arms.map((arm) => arm.tag), tag));
+      const payload = current.arms.find((arm) => arm.tag === tag)?.payload();
+      if (payload) render(parent, payload, (value as { value?: unknown }).value);
+      return;
+    }
+    default:
+      parent.append(input(current.path, current.control, current));
+  }
+}</pre>
+
+<p>
+  Every branch keys its widget on <code>current.path</code>, which is what makes the next section
+  work. The <code>default</code> arm covers the leaf controls: your <code>input</code> helper reads
+  <code>control</code> to pick an element and reads <code>min</code>, <code>max</code> or
+  <code>bits</code> off the same node when they are there.
+</p>
+
+<h2>Recursion is lazy, deliberately</h2>
+
+<callout type="warn" title="Expect a lazy root">
+  <p>
+    Every generated declaration is wrapped in <code>c.rec</code>, so
+    <code>formModel(Account)</code> on a generated <code>Account</code> returns a <code>lazy</code>
+    node, not the <code>group</code> the record describes. Schemas built from a Contract document at
+    runtime are lazy at <em>every</em> edge. Expand in a loop, not with a single
+    <code>expand()</code> — chains of two or more hops are ordinary, because a declaration's body
+    can be another declaration.
+  </p>
+</callout>
+
+<p>
+  The laziness is load-bearing rather than an artefact. Consider
+  <code>type List = opt record { head : nat; tail : List }</code>. Its fully expanded form model is
+  infinite, so the model cannot be built eagerly and expansion has to be the caller's move. Driving
+  the recursion from the value, as the renderer above does, is what terminates it: you expand one
+  <code>tail</code> for each element the user has actually added.
+</p>
+
+<p>
+  <code>formNodeAt</code> is the one function that expands on your behalf, because a path names a
+  node that is reachable by definition. Its unwrapping is bounded: a <code>rec</code> chain that
+  runs past 256 hops throws <code>TypeError</code> rather than hanging.
+</p>
+
+<h2>Issue paths address form nodes</h2>
+
+<p>
+  Node paths use exactly the grammar <a href="schema-validation.html">validation issues</a> use, and
+  that is not a coincidence — it is the reason both modules render paths the same way. So a
+  validation failure resolves to the control the user typed into, with no bookkeeping of your own:
+</p>
+
+<pre data-lang="ts">import { validate } from "@candid-core/schema/validate";
+
+const result = validate(Tokens, { e8s: -1n });
+if (!result.ok) {
+  for (const issue of result.issues) {
+    const node = formNodeAt(formModel(Tokens), issue.path);
+    // issue.path is "$.e8s"; node.control is "bigint", node.label is "e8s"
+    showError(node?.path ?? issue.path, issue.message);
+  }
+}</pre>
+
+<p>
+  Record, tuple, list, optional and func-reference paths resolve directly. A variant is the one case
+  with a caveat: the model does not know which arm the user picked, so <code>.tag</code> and
+  <code>.value</code> resolve to the choice node re-pathed to match the issue (or, for
+  <code>.value</code>, straight to the payload editor when exactly one arm has one), and a deeper
+  segment resolves through the arms only when exactly one arm's shape describes it. When more than
+  one arm could match, you get <code>undefined</code> — an honest answer rather than a guess.
+  Quoted keys travel the same grammar, so an issue at
+  <code>$["has space"]</code> addresses its node too.
+</p>
+
+<h2>What this module does not do</h2>
+
+<ul>
+  <li>
+    <strong>It does not render.</strong> There are no components, no DOM calls, no CSS, and no
+    opinion about layout. It emits a description; you draw it.
+  </li>
+  <li>
+    <strong>It does not validate.</strong> <code>min</code>, <code>max</code> and
+    <code>bits</code> are hints for choosing and configuring a widget. They mirror what
+    <a href="schema-validation.html"><code>validate</code></a> enforces, but the form model enforces
+    nothing — run <code>validate</code> before you submit, and treat its issues as the authority.
+  </li>
+  <li>
+    <strong>It knows nothing about any UI framework.</strong> No React, no Vue, no Svelte, no
+    signals, no store. The whole subpath imports two things: the schema core and the label helpers.
+  </li>
+  <li>
+    <strong>It does not hold your value.</strong> The model describes the type, not the data. State
+    management, dirty tracking and submission are entirely yours; the model's contribution is that
+    every node hands you a stable <code>path</code> to key that state on.
+  </li>
+</ul>
+
+<callout type="note" title="Contract-driven forms, without a build step">
+  <p>
+    Nothing here requires generated code. Load a canonical Contract document with
+    <a href="schema-from-contract.html"><code>./contract</code></a>, hand the resulting schema to
+    <code>formModel</code>, and you have a form for an interface the application never compiled
+    against. The nodes will be lazy at every edge — expand in a loop, as above.
+  </p>
+</callout>
+
+<h2>Where to go next</h2>
+
+<div class="card-grid">
+  <a class="card" href="schema-validation.html">
+    <span class="card-kicker">Guide</span>
+    <span class="card-title">Validation</span>
+    <p>The issue codes and the path grammar this model shares, and the bounds on every walk.</p>
+  </a>
+  <a class="card" href="schema-from-contract.html">
+    <span class="card-kicker">Guide</span>
+    <span class="card-title">Schemas at runtime</span>
+    <p>Build the schema a form model needs from Contract JSON, with no code generation step.</p>
+  </a>
+  <a class="card" href="schema-builders.html">
+    <span class="card-kicker">Reference</span>
+    <span class="card-title">Builders and inference</span>
+    <p>Every combinator on <code>c</code> — the source of every control in the table above.</p>
+  </a>
+</div>

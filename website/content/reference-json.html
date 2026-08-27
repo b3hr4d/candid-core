@@ -1,0 +1,616 @@
+<p>
+  Five JSON documents travel between candid-core and everything else: the <strong>Contract</strong>
+  (the canonical interface graph), the <strong>ContractEnvelope</strong> (a Contract plus namespaced
+  side-band metadata), the <strong>Compilation</strong> (a Contract plus its provenance sidecar), the
+  <strong>host value</strong> encoding (one Candid value, losslessly tagged), and the
+  <strong>portable limits configuration</strong>. This page gives the shape of each, with real
+  excerpts from the repository's own fixtures.
+</p>
+
+<p>
+  Everything here is plain JSON that any language can read with a stock parser. The byte-exact
+  encoding rules that make an identity reproducible — key ordering, number spelling, escape set — are
+  a separate specification; this page points at it rather than restating it.
+</p>
+
+<h2>Rules every document shares</h2>
+
+<ul>
+  <li>
+    <strong>Unknown keys are rejected, everywhere in the semantic core.</strong> Every model type
+    carries <code>#[serde(deny_unknown_fields)]</code>. You cannot attach a UI hint, a default or a
+    workflow flag to a Contract document — an extra top-level key is a decode error. Namespaced
+    <code>extensions</code> on a <code>ContractEnvelope</code> are the sanctioned place for that data,
+    and they sit outside the canonical identities by design.
+  </li>
+  <li>
+    <strong>Absence is an omitted key, not <code>null</code>.</strong> An actorless Contract has no
+    <code>actor</code> property at all; an explicit <code>"actor": null</code> is a decode error, not
+    a second spelling of absence. The same holds for <code>identities.interface</code> and an
+    envelope's empty <code>extensions</code> map.
+  </li>
+  <li>
+    <strong>Version markers must match exactly.</strong> Unknown values fail closed rather than being
+    ignored or upgraded.
+  </li>
+  <li>
+    <strong>There is no <code>Deserialize</code> impl for the validated types.</strong>
+    <code>Contract</code>, <code>ContractEnvelope</code>, <code>Compilation</code> and
+    <code>HostValue</code> deliberately do not implement it: a trait impl has no argument position for
+    a resource policy, so it could only ever decode under limits the library picked. Untrusted bytes
+    go through a bounded entry point such as <code>Contract::from_json_with_context</code>. See
+    <a href="trust-boundary.html">The trust boundary</a>.
+  </li>
+</ul>
+
+<h2>The Contract document</h2>
+
+<p>
+  Here is a complete Contract, unabbreviated, for a two-line <code>.did</code> file. The source is
+  <code>type Payload = record { owner: principal; amount: nat };</code> followed by
+  <code>service : { transfer: (Payload) -&gt; () };</code>.
+</p>
+
+<pre data-lang="json" data-file="tests/fixtures/conformance/basic.contract.json">
+{
+  "format": "candid-core",
+  "format_version": 1,
+  "semantics_profile": "candid-1",
+  "canonicalization_profile": "candid-core-canon-1",
+  "identities": {
+    "contract": "candid-core:contract:v1:sha256:0b553cb65eb436a7ac5d35869d0016d043867bab0a97e844350ae72a5b4aea7d",
+    "interface": "candid-core:interface:v1:sha256:99f400820c0ca2fb7c32cc3ab1df6d6c000bc614cffe0e350b6a9a576da18d48"
+  },
+  "producer": {
+    "name": "candid-core",
+    "version": "0.1.0-beta.3",
+    "candid_version": "0.10.30",
+    "candid_parser_version": "0.4.0"
+  },
+  "types": [
+    { "kind": "service", "methods": [
+      { "name": "transfer", "id": 3664621355, "function": 1 }
+    ] },
+    { "kind": "func", "args": [2], "results": [], "mode": "update" },
+    { "kind": "record", "fields": [
+      { "id": 947296307, "type": 3 },
+      { "id": 3573748184, "type": 4 }
+    ] },
+    { "kind": "primitive", "primitive": "principal" },
+    { "kind": "primitive", "primitive": "nat" }
+  ],
+  "declarations": [
+    { "name": "Payload", "type": 2 }
+  ],
+  "actor": { "kind": "service", "service": 0 }
+}
+</pre>
+
+<p>
+  Four things to read off it. <code>types</code> is flat — the record is <code>types[2]</code> and its
+  members are the numbers 3 and 4, not nested objects. The field <em>names</em> are gone:
+  947296307 and 3573748184 are the Candid label ids for <code>owner</code> and <code>amount</code>.
+  The method keeps its text name as well as its id, because you cannot invoke a canister method by
+  hash. And the <code>func</code> node says <code>"mode": "update"</code> even though the source wrote
+  no annotation — the Contract makes the default explicit.
+</p>
+
+<table>
+  <thead>
+    <tr><th>Key</th><th>Type</th><th>Required</th><th>What it is</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>format</code></td><td>string</td><td>yes</td><td>Always <code>"candid-core"</code>.</td></tr>
+    <tr><td><code>format_version</code></td><td>integer</td><td>yes</td><td>Always <code>1</code>.</td></tr>
+    <tr><td><code>semantics_profile</code></td><td>string</td><td>yes</td><td>Always <code>"candid-1"</code> — which Candid type rules apply.</td></tr>
+    <tr><td><code>canonicalization_profile</code></td><td>string</td><td>yes</td><td>Always <code>"candid-core-canon-1"</code> — which byte-level canonical algorithm produced the identities.</td></tr>
+    <tr><td><code>identities</code></td><td>object</td><td>yes</td><td><code>contract</code> always; <code>interface</code> only when there is an actor.</td></tr>
+    <tr><td><code>producer</code></td><td>object</td><td>yes</td><td>Four string keys: <code>name</code>, <code>version</code>, <code>candid_version</code>, <code>candid_parser_version</code>. Untrusted metadata, and in neither semantic identity.</td></tr>
+    <tr><td><code>types</code></td><td>array</td><td>yes</td><td>The arena. Every edge in the model is a zero-based index into it.</td></tr>
+    <tr><td><code>declarations</code></td><td>array</td><td>defaults to <code>[]</code></td><td><code>{ name, type }</code> pairs — a name table over the arena, not part of the type algebra.</td></tr>
+    <tr><td><code>actor</code></td><td>object</td><td>omitted when absent</td><td><code>{"kind":"service","service":N}</code> or <code>{"kind":"class","class":N}</code>.</td></tr>
+  </tbody>
+</table>
+
+<h3>The eight node kinds</h3>
+
+<pre data-lang="json">
+{ "kind": "primitive", "primitive": "nat8" }
+{ "kind": "opt",       "inner": 3 }
+{ "kind": "vec",       "inner": 3 }
+{ "kind": "record",    "fields":  [ { "id": 23515, "type": 2 } ] }
+{ "kind": "variant",   "fields":  [ { "id": 24860, "type": 2 } ] }
+{ "kind": "func",      "args": [2], "results": [3], "mode": "query" }
+{ "kind": "service",   "methods": [ { "name": "ping", "id": 1247277682, "function": 1 } ] }
+{ "kind": "class",     "init": [1], "service": 2 }
+</pre>
+
+<p>
+  <code>primitive</code> takes one of the eighteen snake_case names. <code>mode</code> is
+  <code>"update"</code>, <code>"query"</code>, <code>"composite_query"</code> or
+  <code>"oneway"</code>. Record and variant fields carry <code>id</code> and <code>type</code> and no
+  name; service methods carry <code>name</code>, <code>id</code> and <code>function</code>. There is
+  no <code>blob</code>, <code>tuple</code> or <code>result</code> kind —
+  <a href="reference-mapping.html">Candid to TypeScript mapping</a> shows how those are recognised as
+  derived views.
+</p>
+
+<h3>Omitted, never emitted as null</h3>
+
+<ul>
+  <li>
+    <code>actor</code> — an absent actor is an absent key. Decoding
+    <code>"actor": null</code> is an error, and the identity payload hashes the document that way too.
+  </li>
+  <li>
+    <code>identities.interface</code> — absent exactly when the actor is. Validation enforces both
+    directions: an actorless Contract carrying one fails with
+    <code>actorless_contract_has_interface_id</code>, and an actor Contract missing one fails with
+    <code>actor_contract_missing_interface_id</code>. Do not write consumer code that assumes it is
+    always there.
+  </li>
+</ul>
+
+<p>A declaration-only Contract, in full, looks like this — note both omissions:</p>
+
+<pre data-lang="json" data-file="tests/fixtures/conformance/actorless.contract.json">
+{
+  "format": "candid-core",
+  "format_version": 1,
+  "semantics_profile": "candid-1",
+  "canonicalization_profile": "candid-core-canon-1",
+  "identities": { "contract": "candid-core:contract:v1:sha256:d43274872cdb6c503456065d12c26b512ba9e3eac5b0a9533c8f9716293c6e18" },
+  "producer": { "name": "candid-core", "version": "0.1.0-beta.3", "candid_version": "0.10.30", "candid_parser_version": "0.4.0" },
+  "types": [
+    { "kind": "record", "fields": [{ "id": 834174833, "type": 1 }, { "id": 1225398258, "type": 2 }] },
+    { "kind": "primitive", "primitive": "nat" },
+    { "kind": "primitive", "primitive": "text" }
+  ],
+  "declarations": [{ "name": "LibraryValue", "type": 0 }]
+}
+</pre>
+
+<callout type="warn" title="Identities are verified, not trusted">
+  <p>
+    Decoding a Contract recomputes both identities from the canonical form and compares. A document
+    whose <code>identities.contract</code> does not match is rejected with
+    <code>contract_id_mismatch</code> at path <code>$.identities.contract</code> — never silently
+    repaired. If you are <em>authoring</em> a Contract you have no trustworthy identity yet, so use
+    <code>ContractDraft</code>, which has no identity fields to fill in wrongly.
+  </p>
+</callout>
+
+<h2>The ContractEnvelope document</h2>
+
+<p>
+  Exactly two keys: <code>contract</code>, holding a whole Contract document, and
+  <code>extensions</code>, a map of namespaced metadata. The map is omitted entirely when empty.
+  Unknown top-level keys are rejected, the same as in the Contract itself.
+</p>
+
+<pre data-lang="json" data-file="tests/fixtures/envelope/basic.envelope.json">
+{
+  "contract": {
+    "actor": { "kind": "service", "service": 0 },
+    "canonicalization_profile": "candid-core-canon-1",
+    "declarations": [ { "name": "Payload", "type": 2 } ],
+    "format": "candid-core",
+    "format_version": 1,
+    "identities": {
+      "contract": "candid-core:contract:v1:sha256:0b553cb65eb436a7ac5d35869d0016d043867bab0a97e844350ae72a5b4aea7d",
+      "interface": "candid-core:interface:v1:sha256:99f400820c0ca2fb7c32cc3ab1df6d6c000bc614cffe0e350b6a9a576da18d48"
+    },
+    "producer": { "…": "elided here; present in the file" },
+    "semantics_profile": "candid-1",
+    "types": [ "…" ]
+  },
+  "extensions": {
+    "org.candid-core.field-names/v1": [
+      [2, 947296307, "owner"],
+      [2, 3573748184, "amount"]
+    ]
+  }
+}
+</pre>
+
+<p>
+  This is what <code>candid-core compile &lt;path&gt; --envelope</code> prints: the envelope document
+  itself, not an <code>ok</code>-wrapped response, so the output can be saved and handed whole to the
+  TypeScript runtime's <code>schemaFromContract</code>. The <code>producer</code> block and the
+  <code>types</code> array are elided above only for length; the fixture carries both in full.
+</p>
+
+<h3>Extension names fail closed</h3>
+
+<p>
+  A name is a reverse-domain namespace — dot-separated segments of lowercase letters, digits and
+  hyphens — followed by <code>/v</code> and an integer with no leading zero. Anything else is refused
+  with an <code>invalid_extension_name</code> violation at path <code>$.extensions</code>, both on
+  insert and again on decode, so two ecosystems cannot collide on a bare key like
+  <code>"widget"</code>.
+</p>
+
+<table>
+  <thead>
+    <tr><th>Name</th><th>Accepted?</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>org.candid-core.field-names/v1</code></td><td>yes</td></tr>
+    <tr><td><code>com.example.form/v1</code></td><td>yes</td></tr>
+    <tr><td><code>unversioned</code></td><td>no — no namespace, no version</td></tr>
+    <tr><td><code>widget</code></td><td>no</td></tr>
+    <tr><td><code>com.example.form/v01</code></td><td>no — leading zero</td></tr>
+  </tbody>
+</table>
+
+<p>
+  Values are arbitrary JSON, bounded in aggregate — names plus serialized values — by
+  <code>max_value_bytes</code> under the resource name <code>extension_bytes</code>. Adding, editing
+  or removing an extension never moves <code>contract_id</code> or <code>interface_id</code>: both are
+  computed over the Contract alone. Only the artifact identity over the envelope's exact bytes covers
+  extensions, because they are in those bytes.
+</p>
+
+<h3>The field-names extension</h3>
+
+<p>
+  The one extension this repository emits. Its value is an array of
+  <code>[container, id, name]</code> triples: the zero-based index of the containing record or variant
+  node, the Candid label id, and the spelling as written in the source.
+</p>
+
+<pre data-lang="json">
+"org.candid-core.field-names/v1": [
+  [2, 947296307, "owner"],
+  [2, 3573748184, "amount"]
+]
+</pre>
+
+<ul>
+  <li>Named labels only. A numeric label (<code>5 : nat</code>) or a positional one (tuple syntax) carries no name and is skipped, so those fields keep the <code>_N_</code> rendering.</li>
+  <li>Sorted and deduplicated: one name per <code>(container, id)</code>.</li>
+  <li>
+    The TypeScript loader validates the table the way it validates a caller-supplied one: the name
+    must be the Candid preimage of its id, and <code>_N_</code>-shaped names are refused — erased to a
+    schema key they are indistinguishable from the numeric-id rendering, and the codec derives wire
+    ids from keys. A lying table fails closed.
+  </li>
+  <li>
+    The same triples are what <code>TsNames::from_pairs</code> takes in Rust, and what the generator's
+    <code>*.names.json</code> golden files record.
+  </li>
+</ul>
+
+<h2>The Compilation document</h2>
+
+<p>
+  What <code>compile_did</code> and friends produce: <code>contract</code>, plus an optional
+  <code>source_info</code> provenance sidecar holding everything the Contract deliberately drops —
+  raw source text, import edges, doc comments, argument names and the original label spellings. The
+  sidecar is versioned independently of the Contract format — <code>source_info_version</code> must be
+  exactly <code>1</code>, or decoding fails with <code>unsupported_source_info_version</code> — and is
+  bound to a Contract by <code>contract_id</code>; it never affects an identity.
+</p>
+
+<pre data-lang="json" data-file="tests/fixtures/artifact-identity/artifacts/compilation.json">
+{
+  "contract": { "…": "a whole Contract document" },
+  "source_info": {
+    "source_info_version": 1,
+    "contract_id": "candid-core:contract:v1:sha256:5b4d7090e72cefb298b0d5e2941dc2ed1f6ac44957163d75dd406ac5e30c930d",
+    "source_bundle_id": "candid-core:source-bundle:v1:sha256:52cb9ba7ed7105a36de5a5f2665ef82261080406133498ed4aa8b3cac6f9bcca",
+    "sources": [
+      { "name": "memory:/root.did",  "source": "import \"types.did\";\n/// Ledger service.\nservice : { read: (id: nat) -> (Item) query };\n" },
+      { "name": "memory:/types.did", "source": "/// An item.\ntype Item = record { id: nat; label: text };\n" }
+    ],
+    "imports": [
+      { "from": "memory:/root.did", "import": "types.did", "to": "memory:/types.did", "kind": "type" }
+    ],
+    "declarations": [
+      { "source": "memory:/types.did", "name": "Item", "type": 3, "docs": ["/ An item."] }
+    ],
+    "field_labels": [
+      {
+        "origin": { "kind": "declaration", "source": "memory:/types.did", "name": "Item" },
+        "path": "type:Item.fields[0]",
+        "container": 3,
+        "id": 23515,
+        "label": { "kind": "named", "name": "id" }
+      }
+    ],
+    "methods": [
+      {
+        "origin": { "kind": "actor", "source": "memory:/root.did" },
+        "path": "actor.methods[0]",
+        "service": 0,
+        "name": "read"
+      }
+    ],
+    "function_arguments": [
+      {
+        "origin": { "kind": "actor", "source": "memory:/root.did" },
+        "path": "actor.methods[0].function.args[0]",
+        "function": 1,
+        "direction": "argument",
+        "position": 0,
+        "name": "id"
+      }
+    ],
+    "actors": [
+      { "source": "memory:/root.did", "docs": ["/ Ledger service."] }
+    ]
+  }
+}
+</pre>
+
+<p>
+  The <code>contract</code> block and the second <code>field_labels</code> entry are elided; the
+  fixture holds both in full. <code>label.kind</code> is <code>"named"</code>, <code>"numeric"</code>
+  or <code>"positional"</code> — a numeric label and a positional one lower to the same wire id, and
+  only the sidecar can tell them apart. <code>source_info</code> is omitted from the document when a
+  compilation carries none, and the six collections after <code>sources</code> —
+  <code>imports</code>, <code>declarations</code>, <code>field_labels</code>, <code>methods</code>,
+  <code>function_arguments</code>, <code>actors</code> — each default to an empty array when the key
+  is absent.
+</p>
+
+<callout type="note" title="A presented sidecar is not trusted either">
+  <p>
+    Accepting a Compilation document from outside means recompiling its embedded sources and requiring
+    every derived provenance field to match. The bundle must be canonically sorted
+    (<code>non_canonical_source_bundle</code>), its <code>source_bundle_id</code> must survive
+    recomputation (<code>source_bundle_id_mismatch</code>), and rederived provenance must agree
+    (<code>source_info_provenance_mismatch</code>). See
+    <a href="source-resolution.html">Sources, imports and provenance</a>.
+  </p>
+</callout>
+
+<h3>The CLI wrapper is a different shape</h3>
+
+<p>
+  <code>candid-core compile &lt;path&gt;</code> prints an <code>ok</code>-wrapped response rather than
+  the Compilation document, and that wrapper always carries the <code>source_info</code> key — exactly
+  <code>null</code> when <code>--no-source-info</code> suppressed it:
+</p>
+
+<pre data-lang="json">
+{ "ok": true, "contract": { "…": "…" }, "source_info": null }
+</pre>
+
+<p>
+  Failures print <code>{"ok": false, "diagnostics": [...]}</code> or, for Contract validation,
+  <code>{"ok": false, "violations": [...]}</code>, with exit status 1; a usage error exits 64.
+  <a href="cli-rust.html">The candid-core binary</a> has the full grammar.
+</p>
+
+<h2>The host value encoding</h2>
+
+<p>
+  A <em>host value</em> is one Candid value encoded so that nothing is lost on a trip through JSON.
+  Every value states its own Candid type in a <code>kind</code> field, arbitrary-size and 64-bit
+  integers travel as decimal strings, floats travel as raw IEEE-754 bits in hex so NaN payloads and
+  negative zero survive, and record fields are addressed by their 32-bit Candid id rather than a name.
+  There are 23 kinds.
+</p>
+
+<pre data-lang="json">
+{ "kind": "null" }
+{ "kind": "bool", "value": true }
+{ "kind": "nat", "value": "340282366920938463463374607431768211456" }
+{ "kind": "int", "value": "-1" }
+{ "kind": "nat8", "value": 255 }
+{ "kind": "nat16", "value": 65535 }
+{ "kind": "nat32", "value": 4294967295 }
+{ "kind": "nat64", "value": "18446744073709551615" }
+{ "kind": "int8", "value": -128 }
+{ "kind": "int16", "value": -32768 }
+{ "kind": "int32", "value": -2147483648 }
+{ "kind": "int64", "value": "-9223372036854775808" }
+{ "kind": "float32", "bits": "deadbeef" }
+{ "kind": "float64", "bits": "7ff8000000000001" }
+{ "kind": "text", "value": "hello" }
+{ "kind": "reserved" }
+{ "kind": "principal", "value": "aaaaa-aa" }
+{ "kind": "service", "principal": "aaaaa-aa" }
+{ "kind": "func", "principal": "aaaaa-aa", "method": "go" }
+</pre>
+
+<p>The four containers:</p>
+
+<pre data-lang="json">
+{ "kind": "opt",     "value": null }
+{ "kind": "opt",     "value": { "kind": "nat", "value": "1" } }
+{ "kind": "vec",     "values": [ { "kind": "nat8", "value": 1 } ] }
+{ "kind": "record",  "fields": [ { "id": 947296307, "value": { "kind": "principal", "value": "aaaaa-aa" } } ] }
+{ "kind": "variant", "id": 24860, "value": { "kind": "null" } }
+</pre>
+
+<p>
+  Candid's <code>empty</code> has no encoding at all — it is uninhabited, so any value presented
+  against it fails with <code>empty_has_no_value</code>. A <code>class</code> is not a first-class
+  value either and fails with <code>class_has_no_host_value</code>.
+</p>
+
+<h3>One spelling per value</h3>
+
+<p>
+  Each scalar kind has exactly one accepted form, and everything else is rejected rather than
+  normalised — so two documents that mean the same value look the same. All of these fail to decode,
+  and the equivalent Rust constructors fail the same way:
+</p>
+
+<table>
+  <thead>
+    <tr><th>Rejected document</th><th>Why</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>{"kind":"nat","value":"01"}</code></td><td>Leading zero.</td></tr>
+    <tr><td><code>{"kind":"int","value":"-0"}</code></td><td>Negative zero.</td></tr>
+    <tr><td><code>{"kind":"nat64","value":"18446744073709551616"}</code></td><td>Canonical digits, but outside the type's range.</td></tr>
+    <tr><td><code>{"kind":"float32","bits":"DEADBEEF"}</code></td><td>Uppercase hex.</td></tr>
+    <tr><td><code>{"kind":"float64","bits":"7ff800000000001"}</code></td><td>15 hex digits, not 16.</td></tr>
+    <tr><td><code>{"kind":"principal","value":"AAAAA-AA"}</code></td><td>Parses, but does not render back byte-identically.</td></tr>
+    <tr><td><code>{"kind":"service","principal":"aaaaa-aa","extra":true}</code></td><td>Unknown key. The same applies inside a record's <code>fields</code> entries.</td></tr>
+  </tbody>
+</table>
+
+<p>
+  <code>float32</code> bits are exactly 8 lowercase hex characters and <code>float64</code> exactly 16,
+  from the alphabet <code>0</code>–<code>9</code> and <code>a</code>–<code>f</code>. A principal must
+  render back byte-identically from its parsed bytes, so merely parseable is not enough. Unknown keys
+  are rejected at every level, containers included.
+</p>
+
+<callout type="note" title="Byte gate">
+  <p>
+    Host value decoding is bounded by <code>max_value_bytes</code> (16 MiB by default), not
+    <code>max_input_bytes</code> like every other bounded parse in the crate. Lowering
+    <code>max_input_bytes</code> alone does nothing here.
+  </p>
+</callout>
+
+<p>
+  <a href="host-values.html">Host values</a> covers what the encoding is for and how validation against
+  a Contract's type graph works.
+</p>
+
+<h2>The portable limits configuration</h2>
+
+<p>
+  <code>Limits</code> never serialises as a bare field map. It serialises as a schema version, the name
+  of the frozen baseline profile, and only the fields you actually changed — each as a fixed-width
+  <code>u64</code>. Because the profile carries the defaults by name, the same document configures
+  identical policy on a 32-bit and a 64-bit host.
+</p>
+
+<pre data-lang="json">
+{ "version": 1, "profile": "interactive_v1", "overrides": {} }
+</pre>
+
+<p>That document is exactly how <code>Limits::default()</code> serialises. With overrides:</p>
+
+<pre data-lang="json">
+{
+  "version": 1,
+  "profile": "interactive_v1",
+  "overrides": {
+    "max_input_bytes": 512,
+    "max_diagnostics": 0,
+    "deadline_unix_ms": 2000000000000
+  }
+}
+</pre>
+
+<p>
+  A missing <code>overrides</code> object means no overrides. An override explicitly set back to its
+  profile value normalises away, so omission and an equal explicit value are the same policy forever.
+  <code>deadline_unix_ms</code> is an ordinary override key. Every value in
+  <code>LimitsProfile::InteractiveV1</code> is listed on the
+  <a href="reference-limits.html">Limits reference</a>.
+</p>
+
+<p>
+  A <code>RuntimeContext</code> serialises to exactly one key — the cancellation token is host-local
+  bookkeeping and is never written, and a document that carries a <code>"cancellation"</code> key is
+  rejected:
+</p>
+
+<pre data-lang="json">
+{ "limits": { "version": 1, "profile": "interactive_v1", "overrides": {} } }
+</pre>
+
+<h3>How a bad configuration is refused</h3>
+
+<table>
+  <thead>
+    <tr><th>Code</th><th>Path</th><th>Condition</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>unsupported_limits_version</code></td><td><code>$.version</code></td><td><code>version</code> is not <code>1</code>.</td></tr>
+    <tr><td><code>unsupported_limits_profile</code></td><td><code>$.profile</code></td><td>The profile name is not <code>"interactive_v1"</code>.</td></tr>
+    <tr><td><code>limit_override_unrepresentable</code></td><td><code>$.overrides.&lt;field&gt;</code></td><td>The value does not fit this host's <code>usize</code>. Rejected, never truncated or wrapped.</td></tr>
+  </tbody>
+</table>
+
+<p>
+  Decode to <code>LimitsConfig</code> and convert with <code>TryFrom</code> when you want
+  <code>code()</code>, <code>path()</code> and <code>message()</code> programmatically; going straight
+  to <code>Limits</code> through serde wraps the same rendering in a serde error string. Unknown
+  top-level keys, unknown override keys and an explicit <code>null</code> override are all decode
+  errors — absence is the only way to say "use the profile value". A document carrying a limit key a
+  build predates is rejected by that build on purpose: silently ignoring it would apply a policy the
+  document did not ask for.
+</p>
+
+<h2>Identity strings</h2>
+
+<p>Every identity is a single string of the form <code>&lt;domain&gt;:sha256:&lt;64 lowercase hex&gt;</code>. The domain says what kind of thing was hashed, so a digest computed for one purpose can never be mistaken for another's.</p>
+
+<table>
+  <thead>
+    <tr><th>Domain</th><th>Where it appears</th><th>What it covers</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>candid-core:contract:v1</code></td><td><code>identities.contract</code></td><td>The whole canonical Contract, declaration names included. Not <code>producer</code>, not extensions, not source text.</td></tr>
+    <tr><td><code>candid-core:interface:v1</code></td><td><code>identities.interface</code></td><td>Only the part of the canonical graph reachable from the actor, plus the two profile markers.</td></tr>
+    <tr><td><code>candid-core:source-bundle:v1</code></td><td><code>source_info.source_bundle_id</code></td><td>The raw source files and their import edges — so a comment edit moves it.</td></tr>
+    <tr><td><code>candid-core:artifact:contract-json:v1</code></td><td>returned by <code>artifact_id_*</code></td><td>The exact octets of a saved Contract document.</td></tr>
+    <tr><td><code>candid-core:artifact:contract-envelope-json:v1</code></td><td>returned by <code>artifact_id_*</code></td><td>The exact octets of a saved envelope document, extensions included.</td></tr>
+    <tr><td><code>candid-core:artifact:compilation-json:v1</code></td><td>returned by <code>artifact_id_*</code></td><td>The exact octets of a saved Compilation document.</td></tr>
+  </tbody>
+</table>
+
+<p>
+  Artifact identities are <em>detached</em>: they are returned to the caller and never written into the
+  document they name, they exist even for bytes that would fail validation, and reformatting changes
+  them. <a href="identities.html">Content-addressed identities</a> explains what moves each one.
+</p>
+
+<h2>Byte-level detail lives in the specification</h2>
+
+<p>
+  This page describes the documents; it does not describe the octets. Two files in the repository do
+  that, and they are the authority if anything here reads ambiguously:
+</p>
+
+<ul>
+  <li>
+    <a href="https://github.com/b3hr4d/candid-core/blob/main/docs/canonicalization-v1.md">docs/canonicalization-v1.md</a>
+    — the <code>candid-core-canon-1</code> profile: minimisation, node renumbering, sort orders, the
+    node signature encoding, and the exact identity preimages.
+  </li>
+  <li>
+    <a href="https://github.com/b3hr4d/candid-core/blob/main/docs/artifact-identity-v1.md">docs/artifact-identity-v1.md</a>
+    — the detached exact-octet identity: the frozen domain strings, the domain separator, and the
+    chunking rules.
+  </li>
+</ul>
+
+<p>
+  Each specification has its own standard-library Python reference implementation
+  (<code>tests/fixtures/conformance/verify_vectors.py</code> and
+  <code>tests/fixtures/artifact-identity/verify_artifact_ids.py</code>) that recomputes every vector
+  in its manifest without Rust, and each runs in CI as a separate job. See
+  <a href="canonical-bytes.html">Canonical bytes</a> and
+  <a href="guarantees.html">Guarantees and verification</a>.
+</p>
+
+<h2>Next</h2>
+
+<div class="card-grid">
+  <a class="card" href="contract-graph.html">
+    <span class="card-kicker">Concept</span>
+    <span class="card-title">The Contract graph</span>
+    <p>What the arena, declarations and actor mean, and how to walk them.</p>
+  </a>
+  <a class="card" href="reference-diagnostics.html">
+    <span class="card-kicker">Reference</span>
+    <span class="card-title">Diagnostics</span>
+    <p>Every code a rejected document can come back with.</p>
+  </a>
+  <a class="card" href="schema-from-contract.html">
+    <span class="card-kicker">TypeScript</span>
+    <span class="card-title">Schemas at runtime</span>
+    <p>Feeding these documents straight to the npm runtime, with no build step.</p>
+  </a>
+</div>

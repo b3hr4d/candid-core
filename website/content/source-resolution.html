@@ -1,0 +1,594 @@
+<p>
+  Real Candid interfaces are rarely one file. A <code>.did</code> can <code>import</code>
+  another, that one can import a third, and two of them can import the same fourth. Something
+  has to decide what each import string points at and produce the bytes. In most tools that
+  something is ambient: the compiler opens whatever the path resolves to on the machine it
+  happens to be running on.
+</p>
+<p>
+  candid-core does not do that. Import resolution is a <strong>capability you hand in</strong>:
+  an object with two methods that turns an import spelling into a canonical identifier and
+  returns bytes for it. The compiler never reaches for a file or a socket on its own, so
+  whatever authority the resolver has is the only authority in play. The result is that the same
+  bundle compiles identically in a CLI, in CI, and inside a browser — and that the exact
+  sources it used can be recorded, shipped, and later re-derived rather than believed.
+</p>
+
+<h2>Logical source IDs</h2>
+
+<p>
+  Every source in a compile is named by a <code>SourceId</code>: a normalised logical URI of
+  the form <code>&lt;scheme&gt;:/&lt;path&gt;</code>, such as <code>memory:/api/types.did</code>
+  or <code>workspace:/root.did</code>. It is deliberately not a host path. Two hosts with
+  different directory layouts that supply the same logical bundle get the same identities.
+</p>
+
+<pre data-lang="rust" data-file="src/resolver.rs">
+pub struct SourceId(String);
+
+impl SourceId {
+    pub fn parse(value: impl AsRef<str>) -> Result<Self, ResolveError>;
+    pub fn as_str(&self) -> &str;
+    pub fn scheme(&self) -> &str;
+    pub fn path(&self) -> &str;
+}
+</pre>
+
+<p>
+  The path grammar is UTF-8 with <code>/</code> separators, and it is strict. Empty segments, a
+  leading <code>/</code>, backslashes, control characters and colons inside a segment are all
+  rejected; <code>.</code> is dropped and <code>..</code> removes one preceding segment but may
+  not escape the root. A scheme is at least two characters, starts with a lowercase ASCII
+  letter, and otherwise contains lowercase letters, digits or <code>-</code>. That two-character
+  minimum exists for one reason: it stops a Windows drive prefix like <code>C:</code> from
+  being read as a scheme.
+</p>
+
+<p>
+  <code>SourceId::parse</code> with no scheme defaults to <code>memory</code>, which is why the
+  bare name <code>"api/root.did"</code> becomes <code>memory:/api/root.did</code>. The type also
+  has <code>FromStr</code> and <code>TryFrom&lt;&amp;str&gt;</code>, and its
+  <code>Deserialize</code> routes through <code>parse</code> — so a decoded ID is always already
+  canonical.
+</p>
+
+<h2>The SourceResolver capability</h2>
+
+<p>
+  This is the whole interface between candid-core and wherever your sources live. Two required
+  methods; the rest have defaults.
+</p>
+
+<pre data-lang="rust" data-file="src/resolver.rs">
+pub trait SourceResolver {
+    fn identify(&self, from: Option<&SourceId>, import: &str) -> Result<SourceId, ResolveError>;
+
+    fn load(&self, id: &SourceId, limits: &Limits) -> Result<ResolvedSource, ResolveError>;
+
+    /// Loads with cooperative runtime cancellation and deadline checks.
+    /// Implementations that do long-running work may override this method to
+    /// checkpoint internally.
+    fn load_with_context(
+        &self,
+        id: &SourceId,
+        context: &crate::RuntimeContext,
+    ) -> Result<ResolvedSource, ResolveError> { /* default */ }
+
+    fn resolve(
+        &self,
+        from: Option<&SourceId>,
+        import: &str,
+        limits: &Limits,
+    ) -> Result<ResolvedSource, ResolveError> { /* default */ }
+
+    fn resolve_with_context(
+        &self,
+        from: Option<&SourceId>,
+        import: &str,
+        context: &crate::RuntimeContext,
+    ) -> Result<ResolvedSource, ResolveError> { /* default */ }
+}
+</pre>
+
+<p>
+  <code>identify</code> answers "given the import string <code>import</code>, written inside
+  source <code>from</code> (or <code>None</code> for the entry), what is its canonical ID?"
+  <code>load</code> answers "what are the bytes for that ID?" Nothing else is delegated: depth
+  limits, byte limits, cycle detection, digest checking and provenance all stay on the
+  compiler's side.
+</p>
+
+<p>
+  The supported boundary is <strong>synchronous, immutable source data supplied by the
+  host</strong>. There is no <code>async</code> variant and no future to poll, because the
+  compiler consumes one bundle that does not change while it is being compiled. If your sources
+  need fetching, fetch them first and hand over the result.
+</p>
+
+<h3>What a resolver returns, and how it is checked</h3>
+
+<pre data-lang="rust" data-file="src/resolver.rs">
+pub struct ResolvedSource {
+    pub id: SourceId,
+    pub source: String,
+    pub digest: String,
+}
+
+impl ResolvedSource {
+    pub fn verify(&self) -> Result<(), ResolveError>;
+}
+</pre>
+
+<p>
+  <code>digest</code> is <code>sha256:&lt;hex&gt;</code> over the text. A custom resolver has
+  three ways to be rejected before its bytes are used at all:
+</p>
+
+<table>
+  <thead>
+    <tr><th>Failure</th><th>Code</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>identify</code> returned an ID that is not already canonical</td><td><code>did_invalid_source_id</code></td></tr>
+    <tr><td><code>load</code> returned a source whose <code>id</code> differs from the one requested</td><td><code>did_resolver_identity_mismatch</code></td></tr>
+    <tr><td>The declared <code>digest</code> does not match the returned bytes</td><td><code>did_source_digest_mismatch</code></td></tr>
+  </tbody>
+</table>
+
+<p>
+  Failures come back as <code>ResolveError { code, message, resource_limit }</code>. The
+  <code>code</code> is the stable, machine-matchable part; message text is not an interface. All
+  three fields are public, so a resolver you write constructs one directly.
+</p>
+
+<h2>The two resolvers that ship</h2>
+
+<h3>MemoryResolver</h3>
+
+<p>
+  A map the host fills in. IDs must use the <code>memory</code> scheme; a bare relative name is
+  normalised into it. This is the resolver for tests, editors, agents, and any host — a browser
+  included — that already holds its sources.
+</p>
+
+<pre data-lang="rust" data-file="src/resolver.rs">
+impl MemoryResolver {
+    pub fn new() -> Self;
+    pub fn insert(
+        &mut self,
+        id: impl AsRef<str>,
+        source: impl Into<String>,
+    ) -> Result<(), ResolveError>;
+    pub fn with_source(
+        mut self,
+        id: impl AsRef<str>,
+        source: impl Into<String>,
+    ) -> Result<Self, ResolveError>;
+}
+</pre>
+
+<p>
+  A non-<code>memory</code> entry ID, or an attempt to resolve from a non-<code>memory</code>
+  source, fails with <code>did_source_scheme_mismatch</code>. <code>with_source</code> is the
+  chaining form of <code>insert</code>.
+</p>
+
+<h3>WorkspaceResolver and its sandbox</h3>
+
+<p>
+  <code>WorkspaceResolver</code> is the one resolver that maps logical
+  <code>workspace:/…</code> segments onto native paths, which is why it — and the
+  <code>cap-std</code> capability crate it uses — lives behind
+  <span class="pill accent">filesystem-compiler</span> rather than
+  <span class="pill accent">compiler</span>.
+</p>
+
+<pre data-lang="rust" data-file="src/resolver.rs">
+impl WorkspaceResolver {
+    pub fn new(root: impl AsRef<Path>) -> Result<Self, ResolveError>;
+    pub fn root(&self) -> &Path;
+}
+</pre>
+
+<p>
+  Construction opens a directory <em>capability</em> for the authorised root and holds it. Every
+  subsequent path is opened relative to that same open handle, never re-derived from a string
+  and re-opened from the top. Two properties follow. An absolute symlink out of the root, or a
+  <code>..</code> that pops past it, fails with
+  <code>did_import_outside_workspace</code>, while an ordinary permission denial keeps the
+  distinct code <code>did_file_read_error</code> — you can tell "this tried to escape" from
+  "this file is unreadable". And because authorisation and reading use one handle, an attacker
+  who replaces a path between the two cannot swap in a file from outside; a test races symlink
+  replacement against two thousand loads and asserts no read ever escapes.
+</p>
+
+<p>
+  Reads are bounded as they happen: a source is read through a capped reader and exceeding
+  <code>max_source_bytes</code> produces a structured <code>source_bytes</code> resource
+  failure rather than a large allocation.
+</p>
+
+<h2>How imports become a bundle</h2>
+
+<p>
+  A <strong>bundle</strong> is the entry source plus every source reachable through its imports,
+  each loaded exactly once and treated as immutable for the rest of the compile. The bundle is
+  what gets type-checked, and it is what <code>source_bundle_id</code> hashes.
+</p>
+
+<p>Candid has two import forms, and the loader records which one produced each edge:</p>
+
+<dl>
+  <dt><code>import "types.did";</code></dt>
+  <dd>
+    Recorded as <code>SourceImportKind::Type</code>. Brings in that file's type declarations.
+  </dd>
+  <dt><code>import service "registry.did";</code></dt>
+  <dd>
+    Recorded as <code>SourceImportKind::Service</code>. Additionally brings in that file's main
+    service, so the entry's actor can be resolved from it. A source reached only by such an edge
+    that declares no main service is an error, reported against that source.
+  </dd>
+</dl>
+
+<h3>Diamonds load once</h3>
+
+<p>
+  The loader keys already-loaded sources by canonical <code>SourceId</code>. When the same
+  target is reached again it does not re-load; it only records whether <em>any</em> edge to it
+  was a service import. This conformance test wraps a <code>MemoryResolver</code> in a counter
+  and pins the behaviour — four sources, four <code>load</code> calls, even though
+  <code>common.did</code> is reached through both <code>a.did</code> and <code>b.did</code>:
+</p>
+
+<pre data-lang="rust" data-file="tests/adr_conformance.rs">
+let mut inner = MemoryResolver::new();
+inner
+    .insert(
+        "root.did",
+        r#"import "a.did"; import "b.did"; service : { get: () -> (Common) };"#,
+    )
+    .unwrap();
+inner
+    .insert("a.did", r#"import "common.did"; type A = Common;"#)
+    .unwrap();
+inner
+    .insert("b.did", r#"import "common.did"; type B = Common;"#)
+    .unwrap();
+inner.insert("common.did", "type Common = nat;").unwrap();
+let loads = Arc::new(AtomicUsize::new(0));
+let resolver = CountingResolver {
+    inner,
+    loads: loads.clone(),
+};
+let compilation = compile_with_resolver(
+    "root.did",
+    &resolver,
+    CompileOptions::default(),
+    &RuntimeContext::default(),
+)
+.unwrap();
+assert_eq!(compilation.source_info().unwrap().sources().len(), 4);
+assert_eq!(loads.load(Ordering::SeqCst), 4);
+</pre>
+
+<p>
+  Wrapping <code>load</code> like this is also the practical way to see exactly which sources a
+  compile pulled in — the resolver is the only thing that touches them.
+</p>
+
+<h3>What bounds the traversal</h3>
+
+<p>
+  The import graph is walked with an explicit work list, not recursion, and every step is
+  charged against the caller's budget. The limits that apply are all defaults of the
+  <code>interactive_v1</code> profile:
+</p>
+
+<table>
+  <thead>
+    <tr><th>Limit</th><th>Default</th><th>What it bounds</th><th>Resource name on failure</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>max_import_depth</code></td><td>64</td><td>How far a chain of imports may nest below the entry</td><td><code>import_depth</code></td></tr>
+    <tr><td><code>max_import_edges</code></td><td>1024</td><td>Total import statements across the whole bundle</td><td><code>import_edges</code></td></tr>
+    <tr><td><code>max_sources</code></td><td>256</td><td>Distinct sources loaded</td><td><code>sources</code></td></tr>
+    <tr><td><code>max_source_bytes</code></td><td>1 MiB</td><td>Any single source</td><td><code>source_bytes</code></td></tr>
+    <tr><td><code>max_bundle_bytes</code></td><td>8 MiB</td><td>All sources together</td><td><code>bundle_bytes</code></td></tr>
+    <tr><td><code>max_source_id_bytes</code></td><td>1024</td><td>A logical ID, and separately each import spelling</td><td><code>source_id_bytes</code></td></tr>
+  </tbody>
+</table>
+
+<p>
+  Exhaustion produces a <code>resource_limit_exceeded</code> diagnostic in the
+  <code>Load</code> phase carrying a <code>{ resource, limit, observed }</code> triple — not a
+  panic and not a truncated result. A cycle is caught separately and reported as
+  <code>did_import_cycle</code>. The import-spelling check is deliberately run last, after the
+  whole graph has loaded, so a resolver that aliases a very long spelling onto a short canonical
+  target cannot slip past the check the provenance sidecar performs later.
+</p>
+
+<h2>A worked example: a bundle with no filesystem</h2>
+
+<p>
+  This is a runnable program in the repository — <code>cargo run --example
+  hermetic_bundle</code>. It needs only the <span class="pill accent">compiler</span> feature,
+  which is why the identical code runs in a browser.
+</p>
+
+<pre data-lang="rust" data-file="examples/hermetic_bundle.rs">
+//! Imported-bundle compilation with no filesystem.
+//!
+//! The host holds every source itself and hands the compiler one immutable
+//! logical bundle. Nothing is read from or written to disk, so this is
+//! `compiler` surface — the same code a browser-WASM host runs.
+
+use candid_core::{compile_with_resolver, CompileOptions, MemoryResolver, RuntimeContext};
+use std::error::Error;
+
+fn main() -> Result<(), Box<dyn Error>> {
+    let mut resolver = MemoryResolver::new();
+    resolver.insert(
+        "api/root.did",
+        r#"import "types.did"; service : { read: () -> (Item) query };"#,
+    )?;
+    resolver.insert(
+        "api/types.did",
+        "type Item = record { id: nat64; label: text };",
+    )?;
+
+    let compilation = compile_with_resolver(
+        "api/root.did",
+        &resolver,
+        CompileOptions::default(),
+        &RuntimeContext::default(),
+    )?;
+    let source_info = compilation
+        .source_info()
+        .ok_or("source provenance was not requested")?;
+    println!("contract: {}", compilation.contract().contract_id());
+    println!("source bundle: {}", source_info.source_bundle_id());
+    for source in source_info.sources() {
+        println!("- {} ({} bytes)", source.name, source.source.len());
+    }
+    Ok(())
+}
+</pre>
+
+<p>
+  The two bare names normalise to <code>memory:/api/root.did</code> and
+  <code>memory:/api/types.did</code>. The import <code>"types.did"</code> inside
+  <code>root.did</code> resolves relative to the importing source's directory, which is why the
+  second source has to live under <code>api/</code> too. <code>CompileOptions::default()</code>
+  sets <code>include_source_info: true</code>, which is why <code>source_info()</code> is
+  <code>Some</code>; pass <code>CompileOptions { include_source_info: false }</code> when you
+  want only the Contract. The Contract and its identities are byte-identical either way.
+</p>
+
+<h2>The provenance sidecar</h2>
+
+<p>
+  The canonical Contract deliberately throws away everything that is about the source text
+  rather than the wire semantics. <code>SourceInfo</code> is where that goes: a separate,
+  separately versioned document produced alongside the Contract, bound to it by
+  <code>contract_id</code> and part of no identity.
+</p>
+
+<table>
+  <thead>
+    <tr><th>Field</th><th>What it records</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>source_info_version</code></td><td>Currently <code>1</code>. Any other value is rejected with <code>unsupported_source_info_version</code>.</td></tr>
+    <tr><td><code>contract_id</code></td><td>The Contract this sidecar belongs to; a mismatch is <code>source_contract_id_mismatch</code>.</td></tr>
+    <tr><td><code>source_bundle_id</code></td><td>A content identity over the raw sources and import edges alone.</td></tr>
+    <tr><td><code>sources</code></td><td><code>{ name, source }</code> for the entry and every resolved import — the exact text, comments included.</td></tr>
+    <tr><td><code>imports</code></td><td>One entry per edge: <code>{ from, import, to, kind }</code>. <code>import</code> is the caller's original spelling, verbatim; <code>to</code> is the canonical target the resolver chose.</td></tr>
+    <tr><td><code>declarations</code></td><td>Which source each <code>type Foo = …</code> came from, plus its doc comments.</td></tr>
+    <tr><td><code>field_labels</code></td><td>For every source occurrence of a record or variant label: its origin, an AST-shaped occurrence <code>path</code>, the container node, the wire <code>id</code>, the <code>SourceLabel</code>, and doc comments.</td></tr>
+    <tr><td><code>methods</code></td><td>Method occurrences with origin, path and doc comments.</td></tr>
+    <tr><td><code>function_arguments</code></td><td>Argument and result names by position — <code>read: (id: nat) -> …</code> keeps <code>id</code>.</td></tr>
+    <tr><td><code>actors</code></td><td>Which source declared the service block, plus its doc comments.</td></tr>
+  </tbody>
+</table>
+
+<p>
+  <code>SourceLabel</code> is the piece that only the sidecar can supply. Candid hashes a named
+  label, an explicit numeric label and a positional tuple field to the same kind of 32-bit
+  number, so the Contract cannot tell them apart. The sidecar can:
+</p>
+
+<pre data-lang="rust" data-file="src/model/source_info.rs">
+/// Source spelling is intentionally separate from the semantic field ID.
+/// `positional` differentiates tuple syntax from an explicitly numeric label.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum SourceLabel {
+    Named { name: String },
+    Numeric,
+    Positional,
+}
+</pre>
+
+<p>
+  Here is a real sidecar, the provenance half of an artifact-identity fixture, for a two-file
+  bundle very like the example above:
+</p>
+
+<pre data-lang="json" data-file="tests/fixtures/artifact-identity/artifacts/compilation.json">
+  "source_info": {
+    "source_info_version": 1,
+    "contract_id": "candid-core:contract:v1:sha256:5b4d7090e72cefb298b0d5e2941dc2ed1f6ac44957163d75dd406ac5e30c930d",
+    "source_bundle_id": "candid-core:source-bundle:v1:sha256:52cb9ba7ed7105a36de5a5f2665ef82261080406133498ed4aa8b3cac6f9bcca",
+    "sources": [
+      {
+        "name": "memory:/root.did",
+        "source": "import \"types.did\";\n/// Ledger service.\nservice : { read: (id: nat) -> (Item) query };\n"
+      },
+      {
+        "name": "memory:/types.did",
+        "source": "/// An item.\ntype Item = record { id: nat; label: text };\n"
+      }
+    ],
+    "imports": [
+      {
+        "from": "memory:/root.did",
+        "import": "types.did",
+        "to": "memory:/types.did",
+        "kind": "type"
+      }
+    ],
+
+    … "declarations", "field_labels" and "methods" elided …
+
+    "function_arguments": [
+      {
+        "origin": {
+          "kind": "actor",
+          "source": "memory:/root.did"
+        },
+        "path": "actor.methods[0].function.args[0]",
+        "function": 1,
+        "direction": "argument",
+        "position": 0,
+        "name": "id"
+      }
+    ],
+    "actors": [
+      {
+        "source": "memory:/root.did",
+        "docs": [
+          "/ Ledger service."
+        ]
+      }
+    ]
+  }
+</pre>
+
+<h3>Provenance is re-derived, not trusted</h3>
+
+<p>
+  This is the property that makes the sidecar worth shipping. When somebody hands you a
+  <code>SourceInfo</code>, candid-core does not check that it looks internally consistent. It
+  takes the source bundle embedded inside it, <em>recompiles it</em> through the same backend
+  that produced it, and accepts the sidecar only if the re-derived Contract identity and every
+  derived collection match exactly.
+</p>
+
+<div class="api-entry">
+  <div class="api-head">
+    <span class="api-name">SourceInfo::try_from_raw</span>
+    <span class="pill accent">compiler</span>
+  </div>
+  <div class="api-body">
+<pre data-lang="rust">pub fn try_from_raw(
+    raw: RawSourceInfo,
+    contract: &Contract,
+    limits: &Limits,
+) -> Result<Self, ContractValidationError></pre>
+    <p>
+      Recompiles the embedded bundle and compares. A bundle that re-derives a different Contract
+      fails with <code>source_contract_rederivation_mismatch</code>; a presented collection that
+      differs from the re-derived one fails with
+      <code>source_info_provenance_mismatch</code>, and the violation's <code>path</code> names
+      which collection disagreed — <code>$.sources</code>, <code>$.imports</code>,
+      <code>$.declarations</code>, <code>$.field_labels</code>, <code>$.methods</code>,
+      <code>$.function_arguments</code> or <code>$.actors</code>.
+      <code>try_from_raw_with_context</code> takes a resource policy.
+    </p>
+  </div>
+</div>
+
+<p>
+  The rederivation runs through <code>compile_resolved_bundle</code> — the same internal
+  function <code>compile_with_resolver</code> calls — so public compilation and provenance
+  authentication cannot drift apart into two implementations that quietly disagree. A validated
+  <code>SourceInfo</code> therefore means "this matched a fresh recompilation on your budget",
+  not "this parsed".
+</p>
+
+<p>
+  One consequence worth internalising: <code>source_bundle_id</code> and
+  <code>contract_id</code> answer different questions. Editing a comment or reformatting a file
+  moves the bundle ID and leaves the Contract ID exactly where it was, because the first hashes
+  bytes and the second hashes meaning. Cache compiled output on the bundle ID; ask "is this the
+  same interface?" with the Contract or interface ID.
+  <a href="identities.html">Content-addressed identities</a> has the full table.
+</p>
+
+<h2>The hermetic guarantee, stated plainly</h2>
+
+<p>
+  <strong>candid-core never fetches anything, never resolves asynchronously, and never consults
+  a registry.</strong> Its entire production dependency set is <code>serde</code>,
+  <code>serde_json</code>, <code>sha2</code>, <code>hex</code>, and — behind features —
+  <code>candid</code>, <code>candid_parser</code>, <code>ic_principal</code> and
+  <code>cap-std</code>. None of those is an HTTP client. The only filesystem access on the whole
+  surface is <code>WorkspaceResolver</code>, which requires a feature you enable and a root you
+  name.
+</p>
+
+<p>
+  A resolver you write can front whatever you like — a package registry, an editor's open
+  buffers, a browser cache — and the point is that this authority is then explicitly yours. A
+  host can put a permission prompt in front of the resolver, because the resolver is the single
+  place where anything is reached for.
+</p>
+
+<h2>Two target facts</h2>
+
+<callout type="warn" title="WorkspaceResolver has nothing to open on browser WASM">
+  <p>
+    On <code>wasm32-unknown-unknown</code>, <code>cap-std</code> is not in the dependency graph
+    at all — it is declared under <code>cfg(not(target_os = "unknown"))</code>. The
+    <span class="pill accent">filesystem-compiler</span> items still <em>compile</em> for that
+    target; they have no filesystem to reach. <code>WorkspaceResolver::new</code>
+    returns <code>did_workspace_root_error</code>, and <code>load</code> returns
+    <code>did_file_read_error</code>. Use <code>MemoryResolver</code> or your own resolver
+    there.
+  </p>
+</callout>
+
+<callout type="warn" title="compile_did refuses a source that contains imports">
+  <p>
+    <code>compile_did</code> takes one self-contained string and does no import resolution. If
+    the parsed source declares any <code>import</code> or <code>import service</code>, it fails
+    in the <code>Load</code> phase with <code>did_import_requires_file</code>, one note per
+    import path, and a message that names both alternatives:
+  </p>
+  <p>
+    <em>"DID source contains imports; supply the bundle through a SourceResolver and compile it
+    with compile_with_resolver, or use compile_did_file to read it from a native
+    workspace"</em>
+  </p>
+  <p>
+    Do not work around this by concatenating your files. <code>import service</code> merge
+    semantics are not textual, and the concatenation would compile to something else.
+  </p>
+</callout>
+
+<p>
+  The third entry point, <code>compile_did_file</code>
+  (<span class="pill accent">filesystem-compiler</span>), roots a
+  <code>WorkspaceResolver</code> at the file's <em>parent</em> directory and uses the file name
+  as the entry. It is not a wrapper around <code>compile_with_resolver</code>: it deliberately
+  keeps a second, native backend that writes the loaded bundle into a private temporary
+  directory and hands the entry to <code>candid_parser::check_file</code>, which is what keeps
+  the file checker's own diagnostic mapping. So
+  <code>compile_did_file("api/root.did")</code> authorises <code>api/</code>
+  and nothing above it, and an import of <code>"../shared/types.did"</code> pops past the root
+  and fails with <code>did_import_outside_workspace</code>. If your bundle spans directories,
+  root a <code>WorkspaceResolver</code> higher yourself and call
+  <code>compile_with_resolver</code>.
+</p>
+
+<h2>Next</h2>
+
+<p>
+  <a href="rust-compiling.html">Compiling Candid sources</a> covers the three entry points and
+  their option and context variants in full.
+  <a href="limits-and-diagnostics.html">Limits, budgets and diagnostics</a> explains the budget
+  the loader charges against, including deadlines and cancellation, and
+  <a href="contract-graph.html">the Contract graph</a> describes the structure all of this
+  produces.
+</p>

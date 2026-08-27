@@ -1,0 +1,371 @@
+<p>An <strong>actor</strong> is an object with one async method per canister method. You build it from a
+service schema, call <code>await actor.balance_of(account)</code>, and get back the decoded reply. The
+object is plain data assembled at construction time, not a class instance: each method is a closure
+that encodes its arguments, hands the bytes to a transport, and decodes what comes back.</p>
+
+<p>What separates this layer from a conventional agent binding is where the Candid encoding lives. The
+actor owns it, using the package's own <a href="schema-codec.html">binary codec</a>. The network layer
+is an interface with exactly two methods that move <code>Uint8Array</code> in and
+<code>Uint8Array</code> out, so whatever implements it never sees a schema and never learns anything
+about your types. That split is what lets you drive an actor from a plain object literal in a unit
+test, and swap the network without touching a single call site.</p>
+
+<h2>createActor</h2>
+
+<div class="api-entry">
+  <div class="api-head">
+    <span class="api-name">createActor</span>
+    <span class="pill accent">@candid-core/schema/actor</span>
+  </div>
+  <div class="api-body">
+<pre data-lang="ts" data-file="crates/candid-core-ts/ts/actor.ts">export function createActor<A = Record<string, (...args: never[]) => Promise<unknown>>>(
+  service: AnyFieldSchema,
+  canisterId: string,
+  transport: Transport,
+  options: ActorOptions = {},
+): A
+</pre>
+    <p>Walks the service schema's method table once and installs one async method per canister
+    method, keyed by name, in the order the schema itself lists them. Throws
+    <code>TypeError</code> straight away if <code>service</code> does not resolve to a service
+    schema.</p>
+  </div>
+</div>
+
+<p>The methods come from <code>serviceMethods</code>, the same walk you can run yourself, so the table
+you can inspect and the table the actor dispatches on cannot disagree. For a generated module that
+order is the <a href="canonical-bytes.html">Contract's canonical</a> one — methods sorted by Candid
+label id, which is the hash of the method name — not the order the methods appear in your
+<code>.did</code>. The returned object is built with <code>Object.create(null)</code>, which matters
+because Candid admits method names such as <code>__proto__</code> and <code>toString</code>: with no
+prototype in the way, those are ordinary own properties.</p>
+
+<h3>Why the interface type is passed explicitly</h3>
+
+<p>Generated modules wrap every declaration in <code>c.rec(() =&gt; …)</code>, a lazy thunk that makes
+recursive types and forward references safe. That wrapper erases method structure from the schema's
+<em>static</em> type, so <code>typeof actorSchema</code> cannot tell TypeScript which methods exist.
+The call interface therefore travels as its own export, <code>export type Actor = { … }</code>, and
+you pass it as <code>createActor&lt;Actor&gt;(…)</code>. The two stay in step because
+<a href="generator.html">the generator</a> emits both from the same
+<a href="contract-graph.html">Contract</a> — this project's validated, canonical model of a
+<code>.did</code> interface — and the test suite pins the emitted <code>Actor</code> against a
+hand-written interface with a type-level equality check.</p>
+
+<p><code>ActorOptions</code> has one field, <code>effectiveCanisterId</code>, copied into every call
+target the actor builds.</p>
+
+<h2>The Transport interface</h2>
+
+<p>This is the whole network contract. Two async methods, taking a call target plus Candid-encoded
+argument bytes, resolving to Candid-encoded reply bytes.</p>
+
+<pre data-lang="ts" data-file="crates/candid-core-ts/ts/actor.ts">/** Where a call goes; `effectiveCanisterId` only matters for system routing. */
+export interface CallTarget {
+  readonly canisterId: string;
+  readonly methodName: string;
+  readonly effectiveCanisterId?: string;
+}
+
+/** Candid-encoded bytes in, Candid-encoded reply bytes out. */
+export interface Transport {
+  /** Non-replicated read path: `query` and `composite_query` methods. */
+  query(target: CallTarget, arg: Uint8Array): Promise<Uint8Array>;
+  /** Replicated certified path: `update` and `oneway` methods. */
+  call(target: CallTarget, arg: Uint8Array): Promise<Uint8Array>;
+}
+</pre>
+
+<p><code>effectiveCanisterId</code> exists for management-canister routing, where a request is
+addressed to <code>aaaaa-aa</code> but has to reach the subnet hosting the canister being acted on.
+When it is absent, a call routes to <code>canisterId</code>.</p>
+
+<h3>How each method mode dispatches</h3>
+
+<p>Every Candid method declares a mode, and the actor turns that mode into a choice of transport
+method. The whole decision sits in <code>dispatch</code>:</p>
+
+<pre data-lang="ts" data-file="crates/candid-core-ts/ts/actor.ts">const viaQuery = func.mode === "query" || func.mode === "composite_query";
+const reply = viaQuery
+  ? await transport.query(target, encoded.bytes)
+  : await transport.call(target, encoded.bytes);
+</pre>
+
+<table>
+  <thead>
+    <tr><th>Candid mode</th><th>Transport method</th><th>Path</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>query</code></td><td><code>transport.query</code></td><td>Non-replicated read</td></tr>
+    <tr><td><code>composite_query</code></td><td><code>transport.query</code></td><td>Non-replicated read</td></tr>
+    <tr><td><code>update</code></td><td><code>transport.call</code></td><td>Replicated, certified reply</td></tr>
+    <tr><td><code>oneway</code></td><td><code>transport.call</code></td><td>Replicated, certified reply</td></tr>
+  </tbody>
+</table>
+
+<p><code>update</code> is the unannotated default, made explicit in the Contract and in the generated
+schema. A <code>oneway</code> method is dispatched and awaited exactly like an update: the reference
+agent has no separate oneway path, and inventing one here would invent semantics the platform does not
+offer. A <code>oneway</code> call resolves to <code>undefined</code>.</p>
+
+<h3>What a call resolves to</h3>
+
+<p>Candid methods return zero, one or several values. The actor collapses them the way the wider
+ecosystem does, and the generated <code>Actor</code> type renders the same three cases.</p>
+
+<table>
+  <thead>
+    <tr><th>Results declared</th><th>Resolves to</th><th>Generated signature</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>none</td><td><code>undefined</code></td><td><code>Promise&lt;void&gt;</code></td></tr>
+    <tr><td>one</td><td>that value</td><td><code>Promise&lt;T&gt;</code></td></tr>
+    <tr><td>several</td><td>an array of them</td><td><code>Promise&lt;[A, B]&gt;</code></td></tr>
+  </tbody>
+</table>
+
+<h2>Calling a real canister</h2>
+
+<p>The adapter from <code>Transport</code> to <code>@icp-sdk/core</code>'s <code>HttpAgent</code> ships
+compiled and tested as its own subpath, so it is written once here rather than re-derived by every
+consumer against a moving agent API.</p>
+
+<div class="api-entry">
+  <div class="api-head">
+    <span class="api-name">httpTransport</span>
+    <span class="pill accent">@candid-core/schema/transport-icp</span>
+  </div>
+  <div class="api-body">
+<pre data-lang="ts" data-file="crates/candid-core-ts/ts/transport-icp.ts">export interface HttpTransportOptions {
+  readonly rootKey?: Uint8Array;
+  readonly host?: string;
+  readonly agent?: Agent;
+}
+
+export function httpTransport(options: HttpTransportOptions = {}): Transport
+</pre>
+    <p>Three options and no more. <code>host</code> is the replica URL and defaults to the page
+    origin. <code>rootKey</code> is the key certificates are verified against — needed on a local
+    network, omitted on mainnet, whose root key the agent already knows. <code>agent</code> supplies a
+    pre-built agent for everything else, including identity, and must travel alone: combining it with
+    <code>host</code> or <code>rootKey</code> throws <code>TypeError</code>, because configuring a
+    supplied agent from here would silently discard what it was built with.</p>
+  </div>
+</div>
+
+<p><code>httpTransport</code> returns its <code>Transport</code> synchronously; the agent is created
+once and awaited inside each call. <code>query</code> calls <code>agent.query</code>;
+<code>call</code> calls <code>agent.update</code> and returns <code>result.reply</code>. The peer range
+<code>&gt;= 6</code> is load-bearing for that second line: on v6 the agent submits, polls to
+completion, and verifies the certificate before resolving, so those bytes are the certified reply.
+Older majors resolved <code>update</code> at submission and need their own submit-and-poll adapter,
+deliberately not written here.</p>
+
+<callout type="warn" title="The @icp-sdk/core peer is optional, and nothing installs it for you">
+  <p><code>@icp-sdk/core</code> is declared as a peer dependency at <code>&gt;=6</code> with
+  <code>"optional": true</code> in <code>peerDependenciesMeta</code>. <code>npm install
+  @candid-core/schema</code> pulls in nothing extra and warns about nothing. Importing
+  <code>@candid-core/schema/transport-icp</code> is the moment the SDK becomes a real runtime
+  requirement, and you install it yourself. Every other subpath compiles and runs with no SDK present,
+  in your runtime and in your types. This subpath also carries its own Node floor of
+  <strong>20.19</strong>, which is what the pinned SDK dependency tree's own <code>engines</code>
+  declare; the other seven subpaths are exercised from Node 16 up.</p>
+</callout>
+
+<h3>End to end</h3>
+
+<p>This uses the generated module for the ICP ledger interface — the same one the repository keeps as a
+golden. It exports <code>actor</code> (the runtime service schema the factory walks) and
+<code>Actor</code> (the static call interface you type the result with), alongside a type alias and
+schema for each declaration.</p>
+
+<pre data-lang="ts">import { createActor, ActorError } from "@candid-core/schema/actor";
+import { httpTransport } from "@candid-core/schema/transport-icp";
+import * as ledger from "./ledger.ts"; // the generated module
+
+const icrc = createActor<ledger.Actor>(
+  ledger.actor,
+  "ryjl3-tyaaa-aaaaa-aaaba-cai",
+  httpTransport({ host: "https://icp-api.io" }),
+);
+
+// query mode, so this rides transport.query
+const symbol: string = await icrc.symbol();
+
+// A principal is anything whose toText() returns canonical principal text.
+// The SDK's Principal satisfies that structurally, and so does this.
+const recipient = { toText: () => "ryjl3-tyaaa-aaaaa-aaaba-cai" };
+
+try {
+  // update mode, so this rides transport.call and the reply is certified
+  const outcome: ledger.TransferResult = await icrc.transfer({
+    to: { owner: recipient, subaccount: null },
+    fee: null,
+    memo: null,
+    from_subaccount: null,
+    created_at_time: null,
+    amount: { e8s: 7n },
+  });
+
+  if (outcome.tag === "ok") {
+    const blockIndex: bigint = outcome.value;
+    console.log(`${symbol} transferred in block ${blockIndex}`);
+  } else {
+    console.error("the ledger refused the transfer:", outcome.value);
+  }
+} catch (error) {
+  if (error instanceof ActorError) {
+    // A codec failure: the value did not match the schema.
+    for (const issue of error.issues) {
+      console.error(issue.code, issue.path, issue.message);
+    }
+  } else {
+    // A transport failure, propagated untouched.
+    throw error;
+  }
+}
+</pre>
+
+<p>Adjust the import specifier for the generated module to whatever your module resolution expects.
+Read the argument literal closely, because it is the domain model this project chose: every
+<code>opt</code> field is <code>T | null</code> rather than the <code>[] | [T]</code> array agent-js
+uses, and <code>TransferResult</code> is a <code>{ tag, value }</code> discriminated union rather than
+a single-key object. The <a href="reference-mapping.html">mapping reference</a> has the full table, and
+compatibility with agent-js shapes is an explicit non-goal.</p>
+
+<p>Decoded principals follow the same rule in reverse: the codec never constructs an SDK class, so a
+decoded principal carries exactly <code>toText()</code>. <code>instanceof Principal</code> is
+<code>false</code> and <code>.toUint8Array()</code> does not exist on it. Re-wrap with
+<code>Principal.fromText(value.toText())</code> when you need the class.</p>
+
+<h2>When a call fails</h2>
+
+<p>There are three distinct failure styles, and telling them apart is deliberate.</p>
+
+<dl>
+  <dt><code>ActorError</code> — a rejected promise</dt>
+  <dd>The codec refused to encode an argument or decode a reply. The message names the stage
+  (<code>"encode"</code> or <code>"decode"</code>) and the method; <code>issues</code> carries the
+  codec's structured failures, each with a stable <code>code</code>, a <code>$</code>-rooted
+  <code>path</code> (<code>$args[i]</code> per argument), and a <code>message</code> — the same
+  <code>code</code>/<code>path</code>/<code>message</code> convention the Rust crate's
+  <a href="reference-diagnostics.html">diagnostics</a> carry, on a narrower record. An argument that fails
+  to encode rejects <em>before</em> anything crosses the transport, so a bad call never reaches the
+  replica.</dd>
+
+  <dt><code>TypeError</code> — thrown synchronously</dt>
+  <dd>Misuse of the API itself, raised at the call that made the mistake rather than at some later
+  await. Passing a non-service schema to <code>createActor</code>, or combining a pre-built agent with
+  <code>host</code> or <code>rootKey</code> in <code>httpTransport</code>, both land here.</dd>
+
+  <dt>Anything the transport throws — propagated unchanged</dt>
+  <dd>Network failures are not wrapped. Neither are replica rejects: when the replica rejects a query,
+  the ICP adapter throws a plain <code>Error</code> whose message is
+  <code>`${methodName} rejected (${reject_code}): ${reject_message}`</code>. There is no reject class
+  to catch and no parsed reject payload on the error object. Classifying rejects stays on the agent's
+  side of the pipe; if you want structured handling, write it around the transport.</dd>
+</dl>
+
+<h2>Writing your own transport</h2>
+
+<p>Two methods is the entire obligation, so a transport can be an object literal. This is a complete
+one, from the introspection test — enough to build an actor and check its shape without a network, an
+agent, or a canister:</p>
+
+<pre data-lang="ts" data-file="crates/candid-core-ts/ts/tests/introspect.test.ts">const transport: Transport = {
+  query: () => Promise.reject(new Error("no call is made in this test")),
+  call: () => Promise.reject(new Error("no call is made in this test")),
+};
+const actor = createActor<Record<string, () => Promise<unknown>>>(
+  ledger.actor,
+  "aaaaa-aa",
+  transport,
+);
+assert.deepStrictEqual(
+  Object.keys(actor),
+  [...serviceMethods(ledger.actor).keys()],
+  "same method names, same order",
+);
+</pre>
+
+<p>Because a transport is an ordinary value, wrapping one composes. There is deliberately no logging
+hook on <code>httpTransport</code>; this is the intended way to observe traffic, and the same shape
+works for retries, request recording, or routing calls at different hosts.</p>
+
+<pre data-lang="ts">import type { CallTarget, Transport } from "@candid-core/schema/actor";
+
+function recording(inner: Transport, log: string[]): Transport {
+  const through = (
+    path: "query" | "call",
+    target: CallTarget,
+    arg: Uint8Array,
+  ): Promise<Uint8Array> => {
+    log.push(`${path} ${target.canisterId}.${target.methodName}`);
+    return inner[path](target, arg);
+  };
+  return {
+    query: (target, arg) => through("query", target, arg),
+    call: (target, arg) => through("call", target, arg),
+  };
+}
+
+const log: string[] = [];
+const icrc = createActor<ledger.Actor>(
+  ledger.actor,
+  "ryjl3-tyaaa-aaaaa-aaaba-cai",
+  recording(httpTransport({ host: "https://icp-api.io" }), log),
+);
+</pre>
+
+<p>The project's own integration test goes one step further: its transport decodes each request's
+argument bytes with the same schemas and encodes its reply with them, so a byte-level disagreement
+anywhere in the chain fails loudly, with no live network involved.</p>
+
+<h2>What this layer does not do</h2>
+
+<p>Everything an agent does beyond moving bytes stays on the agent's side of the pipe. The actor layer
+owns the DIDL message and nothing else. It does not:</p>
+
+<ul>
+  <li><strong>Hold an identity or sign anything.</strong> Keys, delegations and signing belong to the
+  agent you build. With <code>httpTransport</code>, that means constructing an <code>HttpAgent</code>
+  yourself and passing it as <code>agent</code>.</li>
+  <li><strong>Construct the ingress envelope.</strong> Request ids, ingress expiry, nonces and the
+  read-state polling loop are the agent's. The adapter's <code>call</code> hands
+  <code>agent.update</code> a method name and argument bytes, and takes back a reply.</li>
+  <li><strong>Verify certificates or query signatures.</strong> The agent does that, against the root
+  key it was configured with. <code>httpTransport</code> passes <code>rootKey</code> through and
+  otherwise stays out of it.</li>
+  <li><strong>Classify or retry rejects.</strong> See the failure styles above.</li>
+  <li><strong>Carry per-call options.</strong> A <code>CallTarget</code> holds exactly
+  <code>canisterId</code>, <code>methodName</code> and an optional <code>effectiveCanisterId</code>. No
+  timeout or deadline travels through the pipe.</li>
+</ul>
+
+<callout type="note" title="effectiveCanisterId is per-actor, not per-call">
+  <p><code>ActorOptions.effectiveCanisterId</code> is read once when the actor is built and copied into
+  every method's call target, so one actor cannot vary its routing target between calls. For
+  management-canister work, where the effective target changes per call, build a <code>CallTarget</code>
+  and drive the transport directly.</p>
+</callout>
+
+<h2>Next</h2>
+
+<div class="card-grid">
+  <a class="card" href="generator.html">
+    <span class="card-kicker">TypeScript</span>
+    <span class="card-title">The code generator</span>
+    <p>Where <code>export const actor</code> and <code>export type Actor</code> come from, and what
+    proves they agree.</p>
+  </a>
+  <a class="card" href="schema-codec.html">
+    <span class="card-kicker">TypeScript</span>
+    <span class="card-title">The binary codec</span>
+    <p>The encoding every actor call runs through, and the issues it reports when a value is refused.</p>
+  </a>
+  <a class="card" href="schema-from-contract.html">
+    <span class="card-kicker">TypeScript</span>
+    <span class="card-title">Schemas at runtime</span>
+    <p>Build the service schema from a Contract document instead, with no generated module.</p>
+  </a>
+</div>

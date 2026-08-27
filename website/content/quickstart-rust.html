@@ -1,0 +1,291 @@
+<p>This page takes a Candid <code>.did</code> interface and turns it into a
+<strong>Contract</strong>: the validated, canonical type graph this project is
+built around, carrying content-addressed identities that let you tell two
+interfaces apart — or prove they are the same — without diffing text. Cargo is
+the only tool you need.</p>
+
+<p>Parsing and type checking are not reimplemented here. The crate delegates
+both to the official <code>candid_parser</code>, then <em>projects</em> the
+checked result into its own arena of type nodes, sorts and canonicalizes it,
+and hashes the canonical bytes. Everything downstream — the TypeScript
+generator, the schema runtime, the CLI — consumes that graph rather than the
+source text.</p>
+
+<callout type="warn" title="This is a prerelease, and the requirement must say so">
+  <p><code>candid-core</code> is at <code>0.1.0-beta.3</code>. Cargo only
+  selects a prerelease when the requirement mentions one, so a caret
+  requirement such as <code>candid-core = "0.1"</code> resolves to
+  <em>nothing</em>. Every example below pins the exact version. Until 1.0, any
+  release may change the public API, the serialized shapes, the canonical bytes,
+  and therefore every identity computed over them.</p>
+</callout>
+
+<h2>From .did source to a Contract</h2>
+
+<ol class="steps">
+  <li>
+    <h3>Add the dependency</h3>
+    <pre data-lang="toml" data-file="Cargo.toml">[dependencies]
+candid-core = "=0.1.0-beta.3"</pre>
+    <p>Or from the command line, <code>cargo add candid-core@=0.1.0-beta.3</code>.
+    The MSRV is Rust 1.78 and the licence is Apache-2.0.</p>
+    <p>That line gives you the whole surface, because all three Cargo features
+    are on by default: <span class="pill accent">compiler</span> (the
+    <code>candid_parser</code>-backed source compiler),
+    <span class="pill accent">filesystem-compiler</span> (reading
+    <code>.did</code> files, and the <code>candid-core</code> binary) and
+    <span class="pill accent">host-value</span> (the tagged JSON value ABI).
+    A consumer that only reads Contracts someone else produced can switch all
+    three off with <code>default-features = false</code> and keep the model,
+    the validation and the identities;
+    <a href="rust-install.html">Install and features</a> lays out the four
+    surfaces and what each one pulls into the dependency graph.</p>
+  </li>
+
+  <li>
+    <h3>Compile an inline source and read its identities</h3>
+    <p><code>compile_did</code> takes Candid source as a <code>&amp;str</code> and
+    returns a <code>Compilation</code>: the Contract itself plus an optional
+    provenance sidecar. It needs no filesystem, which is what makes it the
+    entry point a browser or WASM host uses.</p>
+    <pre data-lang="rust">use candid_core::compile_did;
+use std::error::Error;
+
+fn main() -> Result<(), Box<dyn Error>> {
+    let compilation = compile_did(
+        r#"
+        type Account = record { owner: principal; balance: nat };
+
+        service : {
+          balance_of: (Account) -> (nat) query;
+        };
+        "#,
+    )?;
+
+    let contract = compilation.contract();
+    println!("contract:  {}", contract.contract_id());
+    println!("interface: {}", contract.interface_id().unwrap_or("(none)"));
+    Ok(())
+}</pre>
+    <pre data-lang="text">contract:  candid-core:contract:v1:sha256:<64 lowercase hex digits>
+interface: candid-core:interface:v1:sha256:<64 lowercase hex digits></pre>
+    <p>The digests are elided above because the exact bytes depend on the
+    release you build against — that is the point of the beta warning, not a
+    coyness about the values. The <em>shape</em> is fixed and is checked on
+    every Contract that loads: a domain prefix, then
+    <code>sha256:</code>, then exactly 64 lowercase hex characters.</p>
+    <p>The two identities answer different questions.
+    <code>contract_id</code> covers the complete canonical Contract payload:
+    the format markers, both profile markers, every retained type node, the
+    declarations <em>and their names</em>, and the actor when there is one.
+    <code>interface_id</code> covers only the type graph reachable from the
+    actor plus the profile markers, so declaration names and
+    actor-unreachable declarations do not move it — rename
+    <code>Account</code> to <code>Acct</code> and the interface identity holds
+    while the contract identity changes. It is
+    <code>Option&lt;&amp;str&gt;</code> because a declaration-only Contract with no
+    <code>service</code> block has no interface to identify.</p>
+    <p>Neither one covers <code>producer</code>, source text, comments or
+    formatting. What identifies raw source bytes is a third value,
+    <code>source_bundle_id</code>, which lives on the provenance sidecar; what
+    commits to the exact octets of a serialized document is a fourth,
+    <code>artifact_id</code>, computed on demand and never written into the
+    document. <a href="identities.html">Content-addressed identities</a> is the
+    page that pulls the four apart.</p>
+    <p>From the same <code>Compilation</code> you can walk the graph itself —
+    <code>contract.types()</code> is the arena, <code>contract.declarations()</code>
+    the named entries, <code>contract.actor()</code> the root — and
+    <code>compilation.source_info()</code> gives the provenance sidecar with the
+    field labels, documentation comments and source list. The runnable
+    walkthrough does exactly that:</p>
+    <pre data-lang="bash">cargo run --example contract_walkthrough</pre>
+  </li>
+
+  <li>
+    <h3>Compile a file instead</h3>
+    <p><code>compile_did_file</code> is the same pipeline over a path, and it is
+    the one entry point that resolves <code>import</code> statements: it roots a
+    <code>WorkspaceResolver</code> at the entry file's parent directory and
+    reads the bundle through it, so nothing outside that directory is
+    reachable.</p>
+    <pre data-lang="rust">use candid_core::compile_did_file;
+use std::error::Error;
+
+fn main() -> Result<(), Box<dyn Error>> {
+    let compilation = compile_did_file("./service.did")?;
+    let contract = compilation.contract();
+
+    println!("{} type node(s)", contract.types().len());
+    println!("{} declaration(s)", contract.declarations().len());
+    println!("{}", contract.to_json_pretty()?);
+    Ok(())
+}</pre>
+    <p>This needs the <span class="pill accent">filesystem-compiler</span>
+    feature, which is on by default and pulls in <code>cap-std</code>. Turn
+    default features off and the item is absent at compile time — a build
+    error naming <code>compile_did_file</code>, not a runtime stub.</p>
+    <callout type="note" title="compile_did refuses imports by design">
+      <p>Hand <code>compile_did</code> a source containing
+      <code>import</code> and it fails with a
+      <code>did_import_requires_file</code> diagnostic listing each import as a
+      note, rather than resolving anything. That is the boundary being explicit:
+      an in-memory entry point never touches a filesystem. Supply the bundle
+      yourself through a <code>SourceResolver</code> and call
+      <code>compile_with_resolver</code>, or read it from disk with
+      <code>compile_did_file</code>. See
+      <a href="source-resolution.html">Sources, imports and provenance</a>.</p>
+    </callout>
+  </li>
+
+  <li>
+    <h3>Tighten the limits and read the diagnostic</h3>
+    <p>Every entry point runs under a resource budget, so <code>.did</code>
+    source you did not write cannot hang the process or allocate without bound.
+    <code>Limits::default()</code> is the frozen <code>interactive_v1</code>
+    profile — 27 values, including <code>max_source_bytes</code> at 1 MiB and
+    <code>max_input_bytes</code> at 4 MiB. Fields are private; you start from a
+    profile and override with <code>with_*</code> builders, then wrap the result
+    in a <code>RuntimeContext</code> and pass it to a
+    <code>_with_context</code> entry point.</p>
+    <pre data-lang="rust">use candid_core::{compile_did_with_context, CompileOptions, Limits, RuntimeContext};
+
+fn main() {
+    // 38 bytes of source, and a 16-byte ceiling.
+    let source = "service : { ping: () -> (nat) query };";
+    let context = RuntimeContext::new(Limits::default().with_max_source_bytes(16));
+
+    let error = compile_did_with_context(source, CompileOptions::default(), &context)
+        .expect_err("the source is larger than the limit");
+
+    for diagnostic in &error.diagnostics {
+        println!("code:    {}", diagnostic.code);
+        println!("phase:   {:?}", diagnostic.phase);
+        println!("message: {}", diagnostic.message);
+        if let Some(limit) = &diagnostic.resource_limit {
+            println!(
+                "budget:  resource={} limit={} observed={}",
+                limit.resource, limit.limit, limit.observed
+            );
+        }
+    }
+}</pre>
+    <pre data-lang="text">code:    resource_limit_exceeded
+phase:   Some(Load)
+message: source "memory:/inline.did" uses 38 bytes; limit is 16
+budget:  resource=source_bytes limit=16 observed=38</pre>
+    <p>That is the whole failure contract. A <code>CompileError</code> is a
+    struct with one public field, <code>diagnostics: Vec&lt;Diagnostic&gt;</code>,
+    and a <code>Diagnostic</code> carries a
+    stable <code>code</code>, a <code>message</code>, and optionally a
+    <code>phase</code> (<code>parse</code>, <code>type_check</code>,
+    <code>load</code> or <code>lower</code>), a <code>severity</code>, a
+    <code>path</code>, a <code>span</code> naming the logical source, ordered
+    <code>related</code> locations, <code>notes</code>, and the
+    <code>{resource, limit, observed}</code> triple above. The codes, the paths
+    and the resource metadata are the machine surface and are stable; the
+    message text is not. <code>limit</code> and <code>observed</code> are
+    fixed-width <code>u64</code>, so the serialized triple means the same thing
+    on a 32-bit and a 64-bit target.</p>
+    <p>Raising a limit does not raise the others: the budgets are charged
+    separately, so a caller who raised <code>max_input_bytes</code> enough to
+    parse a document may still fail to <em>render</em> it against
+    <code>max_canonicalization_work</code>.
+    <code>cargo run --example bounded_parsing</code> demonstrates exactly that,
+    and <a href="reference-limits.html">the limits reference</a> lists all 27
+    values with their defaults.</p>
+  </li>
+
+  <li>
+    <h3>Skip the Rust and use the binary</h3>
+    <p>The crate ships one binary, also called <code>candid-core</code>, gated
+    on the same <span class="pill accent">filesystem-compiler</span> feature.
+    It accepts exactly this grammar and nothing else.</p>
+    <pre data-lang="text">candid-core compile <path> [--no-source-info | --envelope]
+candid-core validate <path></pre>
+    <pre data-lang="bash">cargo install candid-core --version 0.1.0-beta.3 --locked
+
+candid-core compile ./service.did              # contract + provenance sidecar
+candid-core compile ./service.did --envelope   # one self-describing document
+candid-core validate ./contract.json           # re-check a document you were given</pre>
+    <p><code>compile</code> prints
+    <code>{"contract": …, "ok": true, "source_info": …}</code>. The Contract
+    inside has nine top-level keys when the interface has an actor, in this
+    order. Digests and arena
+    indices are elided below — the indices a real run assigns depend on the
+    canonical ordering of your own type graph:</p>
+    <pre data-lang="json">{
+  "actor": { "kind": "service", "service": N },
+  "canonicalization_profile": "candid-core-canon-1",
+  "declarations": [{ "name": "Account", "type": N }],
+  "format": "candid-core",
+  "format_version": 1,
+  "identities": {
+    "contract": "candid-core:contract:v1:sha256:…",
+    "interface": "candid-core:interface:v1:sha256:…"
+  },
+  "producer": {
+    "candid_parser_version": "0.4.0",
+    "candid_version": "0.10.30",
+    "name": "candid-core",
+    "version": "0.1.0-beta.3"
+  },
+  "semantics_profile": "candid-1",
+  "types": [ "…the arena, one node per entry…" ]
+}</pre>
+    <p>A declaration-only interface omits the <code>"actor"</code> key
+    entirely, leaving eight, and the <code>"interface"</code> identity is
+    likewise absent. <code>"actor": null</code> is not part of the v1 wire
+    format at all: serialization never emits it, the identity payload never
+    hashes it, and decoding rejects it. <code>producer</code> is unverified
+    provenance held
+    <em>outside</em> both semantic identities: rewriting it leaves
+    <code>contract_id</code> and <code>interface_id</code> byte-identical, which
+    is why a version bump does not move them.</p>
+    <p><code>--envelope</code> is the flag to reach for when the consumer is
+    TypeScript: it prints a <code>ContractEnvelope</code> —
+    <code>{"contract": …, "extensions": {…}}</code> — whose
+    <code>org.candid-core.field-names/v1</code> extension carries the field-name
+    table, because a semantic Contract stores label <em>ids</em> and not text.
+    That document is exactly what <code>schemaFromContract</code> in
+    <code>@candid-core/schema</code> consumes whole. Extensions live outside the
+    canonical identities, so carrying them never moves a
+    <code>contract_id</code>.</p>
+    <callout type="warn" title="Failures print to stdout, not stderr">
+      <p>Every non-usage outcome is one pretty-printed JSON document on stdout
+      with an empty stderr — success and failure alike. Branch on the exit
+      status or on the <code>ok</code> key, never on which stream produced the
+      output. Success exits 0; a read, parse, validation or resource-limit
+      failure exits 1; a usage error writes nothing to stdout, prints the usage
+      text on stderr, and exits 64. Flags go <em>after</em> the path, and a token
+      beginning with <code>-</code> is always an option in the path position —
+      spell a dash-leading file as <code>./-service.did</code>.</p>
+    </callout>
+    <p><a href="cli-rust.html">The candid-core binary</a> has the full output
+    contract, including the two different failure keys
+    <code>validate</code> uses depending on how far the read got.</p>
+  </li>
+</ol>
+
+<h2>Next</h2>
+
+<p>You now have a Contract and know what its identities do and do not cover.
+The two directions from here are downward, into the model itself, and outward,
+into the TypeScript that consumes it.</p>
+
+<div class="card-grid">
+  <a class="card" href="contract-graph.html">
+    <span class="card-kicker">Concept</span>
+    <span class="card-title">The Contract graph</span>
+    <p>The arena of type nodes, what a <code>TypeRef</code> is, and the invariants validation enforces.</p>
+  </a>
+  <a class="card" href="rust-examples.html">
+    <span class="card-kicker">Rust</span>
+    <span class="card-title">Worked examples</span>
+    <p>The six runnable programs in <code>examples/</code>, and the exact command for each.</p>
+  </a>
+  <a class="card" href="quickstart-typescript.html">
+    <span class="card-kicker">Quickstart</span>
+    <span class="card-title">TypeScript</span>
+    <p>Turning that Contract document into typed, validated schemas with <code>@candid-core/schema</code>.</p>
+  </a>
+</div>

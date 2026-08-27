@@ -1,0 +1,137 @@
+<p>A <strong>Contract</strong> is this project's noun for the validated type graph projected out of a Candid <code>.did</code> interface — the type nodes, the declarations, the optional actor — together with a byte-exact <em>canonical</em> encoding of that graph and the SHA-256 <em>identities</em> computed over those bytes. Claims about a structure like that are worth exactly what the evidence behind them is worth, so this page keeps two things apart that are easy to blur: a gate that runs, and a property that has been shown to hold.</p>
+
+<p>Everything named here is a file you can open. Where a claim is supported only by an implementation and not yet by independent evidence, this page says so rather than rounding up.</p>
+
+<h2>The battery every change runs</h2>
+
+<p>No change reaches the default branch without passing all of this. It is written down in <code>CLAUDE.md</code> and split across two workflows, each of which runs on every pull request and every push to <code>main</code>. <code>Verify</code> carries the formatting, lint and test gates and the feature-graph verifier; <code>Release candidate</code> carries the packaging and semver verifiers, because those two ask their question of the <em>published archive</em> rather than of the repository tree.</p>
+
+<pre data-lang="bash" data-file="CLAUDE.md">
+cargo fmt --check && git diff --check
+cargo clippy --all-targets --all-features --locked -- -D warnings
+cargo test --all-targets --locked
+cargo test --all-targets --locked --no-default-features
+python3 tests/fixtures/packaging/verify_package_manifest.py --locked
+python3 tests/fixtures/packaging/verify_feature_graph.py
+python3 tests/fixtures/packaging/verify_semver.py
+</pre>
+
+<h3>Formatting, lints and the feature matrix</h3>
+
+<p>Clippy runs over <em>all targets</em> — library, binary, tests, benchmarks, examples — with <code>-D warnings</code>, so a warning is a failure rather than a note somebody scrolls past. Tests run twice in the battery above, but the <code>Verify</code> feature matrix runs all six supported feature combinations — no features, <code>host-value</code>, <code>compiler</code>, <code>compiler,host-value</code>, <code>filesystem-compiler</code>, and every feature — because a change that only compiles with default features is a change that breaks a real consumer. Clippy is run again over four of those six, and rustdoc over the reduced and full surfaces, so an intra-doc link to a feature-gated item cannot break the reduced build.</p>
+
+<p>Suites with meaningful pure-model coverage build under <code>--no-default-features</code> and gate individual cases, so the conformance vectors and the canonicalization property tests run with no features at all — the configuration that links no Candid engine. Suites that need a feature throughout declare <code>required-features</code> and are skipped rather than silently emptied.</p>
+
+<h3>The packaging verifier and the positive allowlist</h3>
+
+<p>The published archive is defined by a positive <code>include</code> list in <code>Cargo.toml</code>, not by an exclude list. The difference is which way a mistake falls: with <code>exclude</code>, a file added tomorrow ships until somebody remembers to keep it out; with <code>include</code>, a new path is <em>outside</em> the archive until it is named on purpose.</p>
+
+<pre data-lang="toml" data-file="Cargo.toml">
+include = [
+    "/src/**/*.rs",
+    "/examples/**/*.rs",
+    "/docs/**/*.md",
+    "/README.md",
+    "/CHANGELOG.md",
+    "/LICENSE",
+]
+</pre>
+
+<p><code>verify_package_manifest.py</code> asserts that policy in both directions, and each direction has its own failure mode. Nothing internal ships: <code>tests/</code>, <code>benches/</code>, <code>fuzz/</code>, <code>.github/</code>, agent assets and any scratch directory in a contributor's working tree must all be absent. Nothing required is missing: every <code>src/**.rs</code>, <code>examples/**.rs</code> and <code>docs/**.md</code> on disk must be present in the archive, with per-directory floors — at least 20 paths under <code>src/</code>, 6 under <code>examples/</code>, 10 under <code>docs/</code> — so an <code>include</code> glob that silently matches nothing cannot pass. The same check reports <em>strays</em>: a file under a published directory that the globs do not match, such as a <code>src/table.json</code> behind an <code>include_str!</code> or a <code>docs/diagram.svg</code> an ADR links to, compiles and renders here and is absent for a consumer, so the script names it rather than letting the first installer find it. And in the other direction no unexplained path is admitted: every packaged path must be accounted for by a rule in the script, and the manifest metadata itself is compared against recorded values, so relaxing the allowlist is a deliberate edit to the script in the same change.</p>
+
+<p>The archive holds <strong>57 paths</strong> today. The script prints that count; what it <em>asserts</em> is the set membership in both directions that produces it, plus the floors. The number is a recorded expectation in <code>Cargo.toml</code> and the contributor guide, not a hard-coded assertion in the verifier — worth knowing if you are relying on it.</p>
+
+<h3>The feature-graph verifier, and why <code>cargo metadata</code> is the wrong tool</h3>
+
+<p>The feature split is a claim about <em>dependency graphs</em>: a consumer who only reads Contracts must not be made to build a Candid source engine, and a consumer who never touches a filesystem must not be made to build a filesystem capability crate. <code>verify_feature_graph.py</code> checks that claim by resolving <code>cargo tree --edges no-dev</code> per feature set and per target triple, and asserting that the base graph excludes <code>candid</code>, <code>candid_parser</code>, <code>cap-std</code> and <code>ic_principal</code>; that <code>host-value</code> adds only <code>ic_principal</code>; that <code>compiler</code> adds the parser stack but no <code>cap-std</code>; and that <code>cap-std</code> appears only for <code>filesystem-compiler</code> on targets that have a filesystem.</p>
+
+<callout type="warn" title="Whole-workspace metadata unifies features and silently voids the claim">
+  <p>The script used to walk normal and build edges over a <code>cargo metadata</code> resolve. That was sound while the package was alone in its workspace and stopped being sound the moment it gained a sibling: the generator crate's golden tests dev-depend on <code>candid-core</code> with <code>compiler</code> on, and a whole-workspace resolve unifies that feature into <code>candid-core</code> <em>before</em> any edge filtering can help. <code>--edges no-dev</code> excludes dev-dependencies from resolution itself, not from a walk over an already-resolved graph.</p>
+</callout>
+
+<p>The two verifiers answer different questions: feature selection bounds what a consumer must <em>build</em>, while the include allowlist bounds what a consumer must <em>download</em>. So <code>default-features = false</code> does not shrink the archive, and it cannot subtract features from a build where something else already asked for more.</p>
+
+<h3>The semver gate — and what it actually proves</h3>
+
+<p><code>verify_semver.py</code> runs <code>cargo semver-checks</code> against the published baseline on both published surfaces. Read its claim precisely: it is evidence that <strong>no breaking change reached the published surfaces unnoticed</strong> — not that none occurred. The crate is pre-1.0 and reserves the right to change the public API, the serialized shapes, the canonical bytes and every identity computed over them, so a gate that hard-failed on a break would fight intended work, and a warning nobody must act on would be ignored. A reported break must instead be acknowledged in the <code>## Unreleased</code> section of <code>CHANGELOG.md</code> by a list item <em>beginning</em> with a bolded <code>BREAKING</code> marker.</p>
+
+<p>Two details in that gate are load-bearing. The marker has to start a list item, because the changelog entry documenting the gate necessarily contains the word while explaining it — a substring match would be satisfied by its own documentation and would then pass every break forever. And the script forces <code>--release-type patch</code>: without it, a branch whose version has not been bumped compares <code>X -&gt; X</code>, which <code>cargo semver-checks</code> reads as "assume major" and answers by running zero checks. A gate that passes because it asked nothing is worse than no gate.</p>
+
+<h2>Cross-implementation evidence</h2>
+
+<p>This is the part that is actually interesting. A test written against the same implementation it tests can only confirm that the implementation agrees with itself. Several claims here are instead checked by a second implementation that shares no code with the first.</p>
+
+<h3>Two compilation backends, compared against each other</h3>
+
+<p>There are two ways to get from sources to a checked result: an in-memory backend that merges the bundle into one virtual program through the <code>candid_parser</code> merged-program APIs, and a native backend that materialises files for the upstream file checker used by <code>compile_did_file</code>. Rather than trusting that they agree, <code>src/compile/differential.rs</code> runs the same bundles through both and requires byte-identical canonical Contracts, identities and provenance for valid input, and identical stable diagnostic codes, phases and resource triples for invalid input — across type imports, service imports, diamonds, recursion, actorless and class actors, and merge, type-check, duplicate-binding and parse failures.</p>
+
+<h3>Two independent Python references</h3>
+
+<p>The canonical byte format is specified in <code>docs/canonicalization-v1.md</code>; the Rust code is a reference implementation, not the specification. A standard-library Python canonicaliser recomputes every conformance vector's canonical graph, payload bytes, domain preimage and identities from the raw, non-canonical inputs — without calling Rust — and CI runs it as its own job.</p>
+
+<pre data-lang="bash">
+python3 tests/fixtures/conformance/verify_vectors.py
+python3 tests/fixtures/artifact-identity/verify_artifact_ids.py
+</pre>
+
+<p>The second reference is deliberately separate, so the closed semantic conformance set keeps meaning exactly what it did. It recomputes every vector's <code>artifact_id</code> from the exact bytes on disk, pins the whole domain-framing preimage as hex for the empty vector, and asserts that the nine documents embedding one shared <code>contract_id</code> have nine <em>distinct</em> artifact identities — which is the whole reason a detached exact-octet identity exists. Those fixtures are marked <code>text eol=lf</code> in <code>.gitattributes</code>, because an exact-octet identity cannot survive a checkout that rewrites line endings.</p>
+
+<h3>The TypeScript codec, in both directions, against the reference Candid crate</h3>
+
+<p>The upstream <code>candid</code> Rust crate is the reference wire-format implementation, and <code>crates/candid-core-ts/tests/wire_vectors.rs</code> holds both halves of the differential. <em>Emit</em>: every vector is encoded with <code>candid</code> into a golden of hex bytes that the TypeScript decoder must accept and interpret to the same domain value. <em>Verify back</em>: the TypeScript encoder's own bytes are checked in and decoded <em>here</em> with <code>candid</code>, and must equal the case's value — so the reference validates this project's encoder, not only the reverse. The type environment comes from <code>candid_parser</code> over the fixture <code>.did</code> source directly, deliberately not through candid-core's own compiler, so the reference path shares no code with the model under test.</p>
+
+<h3>The wasm CLI against the native binary, and the browser on a pinned Chrome</h3>
+
+<p>The WebAssembly build wraps the same Rust code the native binary uses, and the repository asserts that rather than assuming it: the generated module for every fixture must be byte-identical to the reviewed golden, and the envelope output must be byte-identical to a committed fixture the native <code>candid-core compile --envelope</code> binary actually produced — the entire document, <code>producer</code> included. The same comparisons run again through the real compiled WebAssembly under Node, and two clean builds must produce identical bytes.</p>
+
+<p>The browser suite is a runtime claim, not a build claim. It compiles a self-contained source and a four-source imported bundle inside headless Chrome, pins the resulting <code>contract_id</code>, <code>interface_id</code>, <code>source_bundle_id</code>, exact logical sources and exact import edges, and asserts that an unresolvable import, an exhausted limit, cancellation and an explicit deadline all fail with stable codes on a target with no filesystem and no clock. Three things are pinned exactly — <code>wasm-pack</code> at <code>0.14.0</code>, the browser at Chrome for Testing <code>150.0.7871.124</code>, and the ChromeDriver taken from that same build — so no rolling channel is involved, and the job prints both versions before running. Every case body is shared with the native jobs, which is what stops the pinned identities drifting between the two.</p>
+
+<h3>The tsc equality gate over the generated goldens</h3>
+
+<p>The generator emits, for each declaration, a line of the form <code>export const X: Schema&lt;X&gt; = c.rec(() =&gt; …)</code>. Because <code>Schema&lt;in out T&gt;</code> is invariant, that line compiles only if the type the builder infers is equal to the reviewed alias <em>in both directions</em>. Running <code>tsc --noEmit</code> over the checked-in goldens with the exact-pinned TypeScript is therefore a proof about the mapping, not a lint. Alongside it, the schema runtime's own suite includes a cross-check that schemas built dynamically from the golden Contract JSON documents validate exactly the values the generated builders describe — same verdicts, same issue codes, same paths, same messages, asserted by deep equality on the whole result.</p>
+
+<h2>Fuzzing: <code>candid-core-fuzz</code></h2>
+
+<p>The fuzz harness is <code>publish = false</code> and declares its own <code>[workspace]</code> table with its own tracked <code>fuzz/Cargo.lock</code>, so <code>libfuzzer-sys</code> never enters the published crate's resolved graph or Cargo's feature unification. It mirrors the library's feature surface, and each target declares the feature that owns the API it drives. There are seven targets:</p>
+
+<table>
+  <thead><tr><th>Target</th><th>Entry point it drives</th><th>Feature</th></tr></thead>
+  <tbody>
+    <tr><td><code>source_parsing</code></td><td><code>compile_did</code></td><td><span class="pill accent">compiler</span></td></tr>
+    <tr><td><code>contract_json</code></td><td><code>Contract::from_json_with_limits</code></td><td>base</td></tr>
+    <tr><td><code>canonicalization</code></td><td><code>RawContract</code> decode then <code>ContractDraft</code> build</td><td>base</td></tr>
+    <tr><td><code>resolver_ids</code></td><td><code>SourceId::parse</code></td><td><span class="pill accent">compiler</span></td></tr>
+    <tr><td><code>provenance</code></td><td><code>Compilation::from_slice_with_limits</code></td><td><span class="pill accent">compiler</span></td></tr>
+    <tr><td><code>host_value</code></td><td><code>HostValue::from_json_with_limits</code></td><td><span class="pill accent">host-value</span></td></tr>
+    <tr><td><code>envelope_json</code></td><td><code>ContractEnvelope::from_slice_with_limits</code></td><td>base</td></tr>
+  </tbody>
+</table>
+
+<p>Pull requests compile every target and replay its tracked seed and regression corpora with <code>-runs=0</code>, so a target that stops compiling, or a previously fixed crash that returns, fails on the pull request rather than on the next weekly run. The replay performs no mutation and is therefore deterministic. Both fuzz jobs first assert that <code>fuzz/Cargo.lock</code> is current, because <code>cargo fuzz</code> accepts no <code>--locked</code> flag of its own. A weekly job does the actual mutation and uploads crash artifacts.</p>
+
+<h2>Benchmarks measure; they never gate</h2>
+
+<p>Benchmarks exist and are reproducible, and the comparison tool refuses rather than guesses: it records both halves of a run's identity — corpus fingerprints, feature set and metric units from the Rust side; toolchain, target, host, codegen flags and the bench binary's resolved dependency graph from its own side — and exits non-zero with "no comparison was made" when they disagree. Every report leads with control benchmarks that execute only upstream parser code, because a shift the controls share with the rest of the table measures the machinery rather than the change.</p>
+
+<p><strong>No timing or allocation measurement ever fails a workflow in this repository.</strong> That is a recorded decision, not an unfinished feature: hosted runners are shared and thermally variable, and a threshold calibrated from their noise produces a red check maintainers learn to ignore. Detection without enforcement — the numbers are surfaced with absolute values, intervals and raw data, and a human decides.</p>
+
+<p>That policy is also why no page on this site states a performance number. A measurement no workflow defends is a measurement that can drift without anyone noticing, and publishing one as a property would be exactly the blurring this page exists to avoid. Treat any single benchmark result as a reason to investigate, never as proof of a regression.</p>
+
+<h2>The honest ledger</h2>
+
+<p>Seven architecture decision records define the protocol boundaries that must hold before the Contract format could be called stable. Readiness is tracked per decision, and the two states mean different things. <em>Implemented, verification pending</em> means a working reference implementation exists and its required-verification list is written down, while at least one gate on that list has no recorded evidence. <em>Verified</em> means those specific gates completed and the evidence — pull request, commit, CI run — is recorded.</p>
+
+<p>As the files stand today:</p>
+
+<ul>
+  <li><strong>ADR 0002</strong> (version schema, semantics and canonical bytes independently) — <span class="pill ok">Verified</span>. The independent Python reference reproduced every canonical graph, payload byte, domain preimage, Contract ID and interface ID across the 11 required scenarios in PR #73, and the dedicated <code>conformance-reference</code> job passed in a named CI run recorded in <code>docs/verification.md</code>.</li>
+  <li><strong>ADRs 0001 and 0003–0007</strong> — <span class="pill warn">Implemented, verification pending</span>, all six.</li>
+</ul>
+
+<p>ADR 0002's result promotes nothing else. ADR 0007 in particular has an independent Python reference <em>and</em> a dedicated CI job, and its status is still pending, because the repository records no run of that job. <strong>Wiring a CI job is not evidence.</strong> A workflow file that exists, a script that is committed, and a gate that would fire are three descriptions of intent; the evidence is a recorded run against a named commit, and until there is one, the honest status is pending.</p>
+
+<callout type="warn" title="What follows for you">
+  <p>The Contract format is <strong>not</strong> a stable v1, and the beta does not promote it to one. Any pre-1.0 release may change the public API, the serialized shapes, the canonical bytes, and therefore every identity computed over them — so pin an exact version, and treat a stored <code>contract_id</code> as stable within a version rather than across versions. If a property matters enough to depend on, the vectors, the references and the fixtures are all in the repository under an allowlist that keeps them out of the published archive: clone it and run them yourself.</p>
+</callout>
+
+<p>Next: <a href="decisions.html">Design decisions</a> covers what each ADR actually decided and the consequence you can see in the API; <a href="status.html">Status, versions and releases</a> covers what is published, what changed in each version, and the pre-1.0 policy in full. <a href="identities.html">Content-addressed identities</a> explains the four identities the evidence above is mostly about.</p>
