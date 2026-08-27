@@ -122,6 +122,12 @@ def main():
         # 4. A real consumer: install the tarball beside the schema package it
         #    declares, run the CLI end to end, and compile against it with no
         #    DOM lib — the shape most Node consumers of a CLI actually use.
+        # The peer's `dist/` is a build product excluded from git, so packing
+        # it unbuilt yields a tarball whose subpaths do not resolve. `npm ci`
+        # alone does not produce it — this is what CI has and a warm working
+        # tree does not, which is exactly the difference a gate must not depend
+        # on.
+        run(["npm", "run", "build"], SCHEMA, stdout=subprocess.DEVNULL)
         schema_tarball = pack(SCHEMA, tmp)
         consumer = tmp / "consumer"
         consumer.mkdir()
