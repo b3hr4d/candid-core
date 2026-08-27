@@ -23,6 +23,15 @@ const failures = [];
 const fail = (page, message) => failures.push({ page, message });
 
 const site = JSON.parse(await readFile(join(CONTENT, "_site.json"), "utf8"));
+
+/* The crate version the pages must agree with, read from the manifest rather
+ * than repeated here, so a release makes every stale dependency line in the
+ * documentation fail on the next run instead of quietly lying. */
+const manifest = await readFile(join(HERE, "..", "Cargo.toml"), "utf8");
+const CRATE_VERSION = (manifest.match(/^version\s*=\s*"([^"]+)"/m) || [])[1];
+if (!CRATE_VERSION) throw new Error("could not read the crate version from Cargo.toml");
+const IS_PRERELEASE = CRATE_VERSION.includes("-");
+const REQUIRED_REQ = IS_PRERELEASE ? `=${CRATE_VERSION}` : CRATE_VERSION;
 const slugs = new Set(site.sections.flatMap((section) => section.pages.map((page) => page.slug)));
 
 /* Commands and dependency lines that must never appear in a CODE BLOCK.
@@ -38,12 +47,6 @@ const FORBIDDEN_IN_CODE = [
     // to a 404 in the registry.
     pattern: /(npm\s+(i|install)|npx|pnpm\s+add|yarn\s+add)\s+(-\S+\s+)*@candid-core\/cli\b/,
     message: "install/npx line for @candid-core/cli, which is not published on npm",
-  },
-  {
-    // A caret requirement never selects a prerelease, so this line resolves to
-    // nothing at all.
-    pattern: /^\s*candid-core\s*=\s*"\^?0\.1(\.0)?"/m,
-    message: 'caret dependency line for candid-core; it must be "=0.1.0-beta.3"',
   },
   {
     pattern: /^\s*cargo\s+add\s+candid-core\s*$/m,
@@ -169,6 +172,46 @@ for (const name of (await readdir(CONTENT)).filter((f) => f.endsWith(".html"))) 
   for (const rule of FORBIDDEN_IN_CODE) {
     const hit = code.match(rule.pattern);
     if (hit) fail(page, `${rule.message} — found ${JSON.stringify(hit[0].trim())}`);
+  }
+
+  /* --- candid-core dependency requirements ---
+   *
+   * An allowlist, not a blocklist, for the same reason Cargo.toml's `include`
+   * is one: it decides which way a mistake falls. A blocklist of the caret
+   * spellings someone thought of missed `candid-core = "0.1.0-beta.3"` — which
+   * IS a caret requirement, because a bare string in a manifest means `^` —
+   * along with the inline-table form and every other version entirely.
+   *
+   * While the crate version is a prerelease the `=` is mandatory, because a
+   * caret requirement never selects a prerelease at all. After 1.0 the plain
+   * requirement becomes the correct one and this rule follows automatically.
+   *
+   * Scoped to manifest dependency lines on purpose. `cargo install --version
+   * 0.1.0-beta.3` is NOT the same defect: cargo's manual states that a
+   * `--version` without a requirement operator installs exactly that version
+   * and is not treated as a caret requirement, unlike a dependency. */
+  for (const match of code.matchAll(/^[ \t]*candid-core\s*=\s*(.+)$/gm)) {
+    const value = match[1].trim();
+    const version = (value.match(/^"([^"]*)"/) ||
+      value.match(/\bversion\s*=\s*"([^"]*)"/) ||
+      [])[1];
+    if (version === undefined) {
+      fail(page, `candid-core dependency line with no readable version: ${JSON.stringify(value)}`);
+    } else if (version !== REQUIRED_REQ) {
+      fail(
+        page,
+        `candid-core dependency requirement ${JSON.stringify(version)}; it must be ${JSON.stringify(REQUIRED_REQ)}` +
+          (IS_PRERELEASE ? " — a caret requirement never selects a prerelease" : ""),
+      );
+    }
+  }
+  for (const match of code.matchAll(/\bcargo\s+add\s+candid-core@(\S+)/g)) {
+    if (match[1] !== REQUIRED_REQ) {
+      fail(
+        page,
+        `\`cargo add candid-core@${match[1]}\`; the requirement must be ${JSON.stringify(REQUIRED_REQ)}`,
+      );
+    }
   }
   for (const rule of FORBIDDEN_IN_PROSE) {
     const hit = prose.match(rule.pattern);

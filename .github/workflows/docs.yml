@@ -14,7 +14,11 @@
 # - `push` to main republishes after a merge, filtered to the paths that can
 #   change the site.
 # - `workflow_dispatch` republishes on demand, for a redeploy that no commit
-#   caused.
+#   caused. A dispatch can select any ref, and `actions/checkout` would take
+#   that ref, so the deploy job also requires `github.ref` to be main: there is
+#   one Pages site and no preview channel, so deploying a branch would replace
+#   the public documentation with unmerged content. A dispatch from another ref
+#   builds and checks, and says why it did not publish.
 #
 # Every action is pinned by commit SHA, like the release workflows. The
 # toolchain is not a canary here: the site build is release tooling.
@@ -64,6 +68,15 @@ jobs:
       - name: Check
         run: node website/check.mjs
 
+      # A skipped deploy job is easy to misread as a successful one, so a
+      # dispatch that cannot publish says so on the run itself.
+      - name: Explain why this run will not publish
+        if: github.event_name == 'workflow_dispatch' && github.ref != 'refs/heads/main'
+        run: |
+          echo "::warning title=No deployment::Dispatched from ${{ github.ref }}. \
+          Pages publishes only from refs/heads/main, so this run builds and checks \
+          but does not deploy. Re-run it with main selected to republish."
+
       - name: Upload the built site
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
@@ -73,9 +86,9 @@ jobs:
 
   deploy:
     name: Deploy to Pages
-    # A pull request never reaches this job; a merge to main and a manual
-    # dispatch both do.
-    if: github.event_name != 'pull_request'
+    # Two conditions, not one. `github.event_name` alone would let a dispatch
+    # from a feature branch publish that branch to the live site.
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     needs: build
     runs-on: ubuntu-latest
     permissions:

@@ -99,9 +99,20 @@ And, **in a code block only** — because a page is expected to discuss the
 broken spellings, and a copyable line is the thing that must work:
 
 - an install or `npx` line for `@candid-core/cli`, which is not published;
-- a caret dependency line for `candid-core`, which cannot resolve, because
-  `0.1.0-beta.3` is a prerelease and a caret requirement never selects one;
-- a bare `cargo add candid-core`, for the same reason.
+- a `candid-core` dependency requirement that is anything other than the
+  exact pin. The required spelling is derived from the `version` in
+  `Cargo.toml` rather than written down here, so a release makes every stale
+  line in the documentation fail on the next run. While that version is a
+  prerelease the `=` is mandatory, because a caret requirement never selects
+  a prerelease — and note that a bare `candid-core = "0.1.0-beta.3"` _is_ a
+  caret requirement. After 1.0 the plain requirement becomes the correct one
+  and this rule follows on its own;
+- a bare `cargo add candid-core`, or `cargo add candid-core@<wrong-req>`.
+
+`cargo install candid-core --version 0.1.0-beta.3` is deliberately **not**
+flagged. Cargo's manual states that a `--version` without a requirement
+operator installs exactly that version and is not treated as a caret
+requirement — unlike a dependency in a manifest, where a bare string is one.
 
 It also warns about softer filler without failing.
 
@@ -126,7 +137,10 @@ GitHub Pages at <https://b3hr4d.github.io/candid-core/>.
 - A **pull request** touching `website/**` builds and runs `check.mjs`. It
   publishes nothing.
 - A **merge to `main`** touching `website/**` republishes.
-- **Run workflow** on the Actions tab republishes on demand.
+- **Run workflow** on the Actions tab republishes on demand — but only with
+  `main` selected. There is one Pages site and no preview channel, so a
+  dispatch from any other ref builds and checks, prints a warning saying it
+  did not publish, and skips the deploy.
 
 The published URL is a project subpath, not a domain root, which is why every
 asset reference and internal link the generator emits is relative. If you ever
