@@ -24,8 +24,8 @@
 //! recursion — and, since issue #104, the reference types: a `func` value is
 //! the inert `{ principal, method }` reference (its signature lives in the
 //! `c.func` builder), a `service` value is the principal of a running
-//! service, and a contract with an actor emits `export const actor` (the
-//! service schema) plus `export type Actor` (the typed call interface a call
+//! service, and a contract with an actor exports `actor` (the
+//! service schema) plus the type `Actor` (the typed call interface a call
 //! layer built on the codec takes explicitly). A `class` declaration or
 //! actor denotes its running service; init args are install-time metadata,
 //! noted per declaration and not exposed. A `class` *nested* inside a value
@@ -48,6 +48,50 @@
 //! And consuming these types against a live agent needs a boundary
 //! conversion, which is future work recorded on the issue — the types
 //! describe the domain, not the transport.
+//!
+//! # Module layout: collision-free `$` bindings
+//!
+//! Since issue #188 every binding a generated module declares is a local
+//! whose name starts with `$`, and each Candid name reaches consumers only
+//! as an *export* name:
+//!
+//! ```ts
+//! import * as $ from "@candid-core/schema";
+//!
+//! type $Account = { owner: $.PrincipalValue; subaccount: Uint8Array | null };
+//! const $Account: $.Schema<$Account> = $.c.rec(() => $.c.record({ … }));
+//! export { $Account as Account };
+//!
+//! const $actor: $.Schema<$.PrincipalValue> = $.c.rec(() => $.c.service({ … }));
+//! type $Actor = {
+//!   transfer: (arg0: $TransferArg) => Promise<$TransferResult>;
+//! };
+//! export { $actor as actor, type $Actor as Actor };
+//! ```
+//!
+//! The schema runtime is the namespace `$`; a declaration `X` is the local
+//! `$X`, its alias and builder sharing that name, and `export { $X as X }`
+//! exports both meanings. A declaration name is identifier-shaped
+//! (`[A-Za-z_$][A-Za-z0-9_$]*`, a superset of Candid's identifier grammar),
+//! so `$X` is always a valid binding and never a keyword, and prefixing is
+//! injective — no declaration can shadow the runtime namespace, the ambient
+//! types the lowerings use (`Array<T>`, `Record<string, never>`,
+//! `Uint8Array`, `Promise<T>`), or another declaration. A declaration named
+//! `c`, `Schema`, `Array`, `Promise`, or a TypeScript reserved word such as
+//! `delete` or `string` therefore generates, and consumers import it under
+//! its Candid spelling (`import { delete as del } from "./gen.ts"`). A
+//! declaration named `default` becomes the module's default export.
+//!
+//! Only the module's own export names remain reserved: `actor` and `Actor`,
+//! which the actor surface exports. A declaration by either name is refused
+//! with [`TsGenError::ReservedDeclarationName`], unconditionally — with or
+//! without an actor — so a name's validity never depends on another part of
+//! the contract (the #116 locality rule).
+//!
+//! When [`TsOptions::principal_import`] names the schema runtime (the
+//! default), the principal type is `$.PrincipalValue`; any other module is
+//! imported as `import type { PrincipalValue } from "…"`, a local that no
+//! `$`-prefixed declaration binding can collide with.
 //!
 //! # Determinism
 //!
@@ -127,15 +171,21 @@ pub struct TsOptions {
     /// uses the `principal` primitive. Since issue #150 this is the schema
     /// runtime's own structural type — `{ toText(): string }`, the honest
     /// type of a decoded principal — not the SDK class, which the runtime
-    /// never constructs. The import is emitted only when used, and as
-    /// `import type`, so it never implies a runtime dependency.
+    /// never constructs. At the default — the schema runtime itself — the
+    /// type is referenced through the module's `$` namespace
+    /// (`$.PrincipalValue`); any other module is imported only when used,
+    /// and as `import type`, so it never implies a runtime dependency.
     pub principal_import: String,
 }
+
+/// The module specifier every generated module imports the schema runtime
+/// from, as the namespace `$`.
+const SCHEMA_MODULE: &str = "@candid-core/schema";
 
 impl Default for TsOptions {
     fn default() -> Self {
         Self {
-            principal_import: "@candid-core/schema".to_string(),
+            principal_import: SCHEMA_MODULE.to_string(),
         }
     }
 }
@@ -152,7 +202,14 @@ pub enum TsGenError {
         declaration: String,
         kind: &'static str,
     },
-    /// A declaration name cannot be a TypeScript type identifier.
+    /// A declaration name is not identifier-shaped
+    /// (`[A-Za-z_$][A-Za-z0-9_$]*`), so `$` plus the name is not a binding.
+    /// Candid source cannot produce one — its identifier grammar is a subset
+    /// — but a Contract document admits any non-empty name, so a hand-built
+    /// or JSON-loaded Contract can reach this. Reserved words are not
+    /// refused: since issue #188 a declaration binds as a `$`-prefixed local
+    /// and reaches consumers as an export name, where any identifier name is
+    /// legal.
     InvalidDeclarationName { name: String },
     /// A field or arm name shaped like the `_N_` id rendering (canonical
     /// decimal below 2^32). Erased to a schema key, such a name is
@@ -160,18 +217,15 @@ pub enum TsGenError {
     /// codec would derive the wrong wire id from it — the same reservation
     /// `schemaFromContract` enforces on its name table (issues #103, #115).
     ReservedFieldName { declaration: String, name: String },
-    /// A declaration named after a binding the generated module itself
-    /// references: an imported binding (`c`, `Schema`, `PrincipalValue`), an
-    /// ambient type its lowerings emit (`Array`, `Record`, `Uint8Array`,
-    /// `Promise`), or the actor surface's own emission names (`actor`,
-    /// `Actor`).
-    /// Emitting it would produce a module that cannot load or compile — a
-    /// duplicate or shadowed module-scope binding — so generation refuses
-    /// instead of emitting known-broken text. Unconditional by owner
-    /// decision on issue #116: every name is refused even when the contract
-    /// happens not to exercise the lowering that references it, so adding
-    /// one field to a contract cannot start breaking a previously-working
-    /// declaration name.
+    /// A declaration named after one of the module's own export names: the
+    /// actor surface's `actor` and `Actor`. Emitting it would export the name
+    /// twice, a module that cannot compile, so generation refuses instead of
+    /// emitting known-broken text. Every other name generates since issue
+    /// #188, whose `$`-prefixed locals cannot collide with the module's
+    /// imports or with the ambient types its lowerings use. Unconditional,
+    /// by the locality rule recorded on issue #116: both names are refused
+    /// even in a contract with no actor, so adding an actor cannot start
+    /// breaking a previously-working declaration name.
     ReservedDeclarationName { name: String },
     /// A variant arm whose payload is a *declared* `opt` of a never-domain
     /// type (`opt empty`, `opt` of an empty variant). The arm renders as a
@@ -200,7 +254,9 @@ impl fmt::Display for TsGenError {
             ),
             Self::InvalidDeclarationName { name } => write!(
                 f,
-                "declaration name `{name}` is not a valid TypeScript type identifier"
+                "declaration name `{name}` is not identifier-shaped \
+                 ([A-Za-z_$][A-Za-z0-9_$]*), so it cannot name a module \
+                 binding; generation refuses"
             ),
             Self::ReservedFieldName { declaration, name } => write!(
                 f,
@@ -211,10 +267,10 @@ impl fmt::Display for TsGenError {
             ),
             Self::ReservedDeclarationName { name } => write!(
                 f,
-                "declaration name `{name}` collides with a binding the \
-                 generated module itself references (its imports and the \
-                 ambient types its lowerings use), so the module could \
-                 never compile; generation refuses (issue #116)"
+                "declaration name `{name}` is one of the generated module's \
+                 own export names (`actor`, `Actor`), so the module would \
+                 export it twice and could never compile; generation refuses \
+                 (issues #116, #188)"
             ),
             Self::AmbiguousVariantArm { declaration, arm } => write!(
                 f,
@@ -245,13 +301,27 @@ pub fn generate_module(
     names: &TsNames,
     options: &TsOptions,
 ) -> Result<String, TsGenError> {
+    let principal = if options.principal_import == SCHEMA_MODULE {
+        "$.PrincipalValue"
+    } else {
+        "PrincipalValue"
+    };
     Generator {
         contract,
         names,
         declared: first_names(contract),
+        principal,
         uses_principal: false,
     }
     .module(options)
+}
+
+/// The module-local binding of a declaration: `$` plus its name. Candid
+/// names are identifier-shaped, so the local is a valid binding, never a
+/// keyword, and never equal to the runtime namespace `$`, an ambient type,
+/// or another declaration's local (see "Module layout" in the crate docs).
+fn local(name: &str) -> String {
+    format!("${name}")
 }
 
 /// The first declaration name for each node, in declaration order. Later
@@ -280,6 +350,9 @@ struct Generator<'a> {
     contract: &'a Contract,
     names: &'a TsNames,
     declared: BTreeMap<TypeRef, String>,
+    /// The principal type expression: `$.PrincipalValue`, or the imported
+    /// `PrincipalValue` for a non-default [`TsOptions::principal_import`].
+    principal: &'static str,
     uses_principal: bool,
 }
 
@@ -288,12 +361,12 @@ impl Generator<'_> {
         let mut aliases = Vec::new();
 
         for declaration in self.contract.declarations() {
-            if !is_ts_type_identifier(&declaration.name) {
+            if !is_ts_property_identifier(&declaration.name) {
                 return Err(TsGenError::InvalidDeclarationName {
                     name: declaration.name.clone(),
                 });
             }
-            if RESERVED_MODULE_BINDINGS.contains(&declaration.name.as_str()) {
+            if RESERVED_EXPORT_NAMES.contains(&declaration.name.as_str()) {
                 return Err(TsGenError::ReservedDeclarationName {
                     name: declaration.name.clone(),
                 });
@@ -319,10 +392,14 @@ impl Generator<'_> {
             // is canonical (name-sorted), not dependency-sorted, and
             // the lazy thunk is what makes a forward reference safe at
             // module initialization.
+            //
+            // Both meanings bind the `$`-prefixed local and leave under the
+            // Candid name through one export specifier (issue #188).
             let alias = self.declaration_body(target_ty, &declaration.name, Target::Alias)?;
             let builder = self.declaration_body(target_ty, &declaration.name, Target::Builder)?;
             aliases.push(format!(
-                "export type {name} = {alias};\nexport const {name}: Schema<{name}> = c.rec(() => {builder});\n",
+                "type {local} = {alias};\nconst {local}: $.Schema<{local}> = $.c.rec(() => {builder});\nexport {{ {local} as {name} }};\n",
+                local = local(&declaration.name),
                 name = declaration.name,
             ));
         }
@@ -378,12 +455,14 @@ impl Generator<'_> {
                 ));
             }
             actor_out.push_str(&format!(
-                "export const actor: Schema<PrincipalValue> = c.rec(() => {builder});\n"
+                "const $actor: $.Schema<{principal}> = $.c.rec(() => {builder});\n",
+                principal = self.principal,
             ));
             actor_out.push_str(&format!(
-                "export type Actor = {{\n{}\n}};\n",
+                "type $Actor = {{\n{}\n}};\n",
                 signatures.join("\n")
             ));
+            actor_out.push_str("export { $actor as actor, type $Actor as Actor };\n");
             if is_class {
                 actor_out.push_str(
                     "// Note: the actor is a service class; init args are install-time \
@@ -396,9 +475,12 @@ impl Generator<'_> {
             "// Generated by candid-core-ts from a candid-core Contract. Do not edit.\n",
         );
         if !aliases.is_empty() || !actor_out.is_empty() {
-            out.push_str("import { c, type Schema } from \"@candid-core/schema\";\n");
+            out.push_str(&format!(
+                "import * as $ from {};\n",
+                quote_string(SCHEMA_MODULE)
+            ));
         }
-        if self.uses_principal {
+        if self.uses_principal && options.principal_import != SCHEMA_MODULE {
             out.push_str(&format!(
                 "import type {{ PrincipalValue }} from {};\n",
                 quote_string(&options.principal_import)
@@ -425,7 +507,7 @@ impl Generator<'_> {
         target: Target,
     ) -> Result<String, TsGenError> {
         match self.declared.get(&ty) {
-            Some(first) if first != own_name => Ok(first.clone()),
+            Some(first) if first != own_name => Ok(local(first)),
             _ => self.render_structure(ty, own_name, target),
         }
     }
@@ -458,7 +540,7 @@ impl Generator<'_> {
                     kind: "class",
                 });
             }
-            return Ok(name.clone());
+            return Ok(local(name));
         }
         self.render_structure(reference, declaration, target)
     }
@@ -490,7 +572,7 @@ impl Generator<'_> {
                 Ok(match target {
                     Target::Alias if boxed => format!("{{ some: {inner} }} | null"),
                     Target::Alias => format!("{inner} | null"),
-                    Target::Builder => format!("c.opt({inner})"),
+                    Target::Builder => format!("$.c.opt({inner})"),
                 })
             }
             TypeNode::Vec { inner } => {
@@ -505,14 +587,14 @@ impl Generator<'_> {
                     {
                         return Ok(match target {
                             Target::Alias => "Uint8Array".to_string(),
-                            Target::Builder => "c.blob()".to_string(),
+                            Target::Builder => "$.c.blob()".to_string(),
                         });
                     }
                 }
                 let inner = self.render(inner, declaration, target)?;
                 Ok(match target {
                     Target::Alias => format!("Array<{inner}>"),
-                    Target::Builder => format!("c.vec({inner})"),
+                    Target::Builder => format!("$.c.vec({inner})"),
                 })
             }
             TypeNode::Record { fields } => {
@@ -521,7 +603,7 @@ impl Generator<'_> {
                     // Candid record is a unit value, and this is its honest type.
                     return Ok(match target {
                         Target::Alias => "Record<string, never>".to_string(),
-                        Target::Builder => "c.unit()".to_string(),
+                        Target::Builder => "$.c.unit()".to_string(),
                     });
                 }
                 if is_tuple_shaped(&fields) {
@@ -531,7 +613,7 @@ impl Generator<'_> {
                     }
                     return Ok(match target {
                         Target::Alias => format!("[{}]", elements.join(", ")),
-                        Target::Builder => format!("c.tuple([{}])", elements.join(", ")),
+                        Target::Builder => format!("$.c.tuple([{}])", elements.join(", ")),
                     });
                 }
                 let mut members = Vec::with_capacity(fields.len());
@@ -543,7 +625,7 @@ impl Generator<'_> {
                 }
                 Ok(match target {
                     Target::Alias => format!("{{ {} }}", members.join("; ")),
-                    Target::Builder => format!("c.record({{ {} }})", members.join(", ")),
+                    Target::Builder => format!("$.c.record({{ {} }})", members.join(", ")),
                 })
             }
             TypeNode::Variant { fields } => {
@@ -553,7 +635,7 @@ impl Generator<'_> {
                     // `never`, matching the alias by construction.
                     return Ok(match target {
                         Target::Alias => "never".to_string(),
-                        Target::Builder => "c.variant({})".to_string(),
+                        Target::Builder => "$.c.variant({})".to_string(),
                     });
                 }
                 // A discriminated union: `tag` is the label as a string
@@ -598,7 +680,7 @@ impl Generator<'_> {
                 }
                 Ok(match target {
                     Target::Alias => arms.join(" | "),
-                    Target::Builder => format!("c.variant({{ {} }})", arms.join(", ")),
+                    Target::Builder => format!("$.c.variant({{ {} }})", arms.join(", ")),
                 })
             }
             TypeNode::Func {
@@ -612,7 +694,10 @@ impl Generator<'_> {
                 match target {
                     Target::Alias => {
                         self.uses_principal = true;
-                        Ok("{ principal: PrincipalValue; method: string }".to_string())
+                        Ok(format!(
+                            "{{ principal: {}; method: string }}",
+                            self.principal
+                        ))
                     }
                     Target::Builder => {
                         let mut rendered_args = Vec::with_capacity(args.len());
@@ -624,7 +709,7 @@ impl Generator<'_> {
                             rendered_results.push(self.render(*result, declaration, target)?);
                         }
                         Ok(format!(
-                            "c.func([{}], [{}], \"{}\")",
+                            "$.c.func([{}], [{}], \"{}\")",
                             rendered_args.join(", "),
                             rendered_results.join(", "),
                             mode_text(mode),
@@ -637,7 +722,7 @@ impl Generator<'_> {
                 match target {
                     Target::Alias => {
                         self.uses_principal = true;
-                        Ok("PrincipalValue".to_string())
+                        Ok(self.principal.to_string())
                     }
                     Target::Builder => {
                         let mut members = Vec::with_capacity(methods.len());
@@ -646,7 +731,7 @@ impl Generator<'_> {
                             let value = self.render(method.function, declaration, target)?;
                             members.push(format!("{key}: {value}"));
                         }
-                        Ok(format!("c.service({{ {} }})", members.join(", ")))
+                        Ok(format!("$.c.service({{ {} }})", members.join(", ")))
                     }
                 }
             }
@@ -663,24 +748,24 @@ impl Generator<'_> {
                 self.uses_principal = true;
             }
             return match primitive {
-                PrimitiveType::Null => "c.null",
-                PrimitiveType::Bool => "c.bool",
-                PrimitiveType::Nat => "c.nat",
-                PrimitiveType::Int => "c.int",
-                PrimitiveType::Nat8 => "c.nat8",
-                PrimitiveType::Nat16 => "c.nat16",
-                PrimitiveType::Nat32 => "c.nat32",
-                PrimitiveType::Nat64 => "c.nat64",
-                PrimitiveType::Int8 => "c.int8",
-                PrimitiveType::Int16 => "c.int16",
-                PrimitiveType::Int32 => "c.int32",
-                PrimitiveType::Int64 => "c.int64",
-                PrimitiveType::Float32 => "c.float32",
-                PrimitiveType::Float64 => "c.float64",
-                PrimitiveType::Text => "c.text",
-                PrimitiveType::Reserved => "c.reserved",
-                PrimitiveType::Empty => "c.empty",
-                PrimitiveType::Principal => "c.principal",
+                PrimitiveType::Null => "$.c.null",
+                PrimitiveType::Bool => "$.c.bool",
+                PrimitiveType::Nat => "$.c.nat",
+                PrimitiveType::Int => "$.c.int",
+                PrimitiveType::Nat8 => "$.c.nat8",
+                PrimitiveType::Nat16 => "$.c.nat16",
+                PrimitiveType::Nat32 => "$.c.nat32",
+                PrimitiveType::Nat64 => "$.c.nat64",
+                PrimitiveType::Int8 => "$.c.int8",
+                PrimitiveType::Int16 => "$.c.int16",
+                PrimitiveType::Int32 => "$.c.int32",
+                PrimitiveType::Int64 => "$.c.int64",
+                PrimitiveType::Float32 => "$.c.float32",
+                PrimitiveType::Float64 => "$.c.float64",
+                PrimitiveType::Text => "$.c.text",
+                PrimitiveType::Reserved => "$.c.reserved",
+                PrimitiveType::Empty => "$.c.empty",
+                PrimitiveType::Principal => "$.c.principal",
             };
         }
         match primitive {
@@ -707,7 +792,7 @@ impl Generator<'_> {
             PrimitiveType::Empty => "never",
             PrimitiveType::Principal => {
                 self.uses_principal = true;
-                "PrincipalValue"
+                self.principal
             }
         }
     }
@@ -868,101 +953,24 @@ fn method_key(name: &str) -> String {
     }
 }
 
-/// Names the generated module itself references: the imported bindings
-/// (`import { c, type Schema }` always, `import type { PrincipalValue }`
-/// when the principal primitive is used — the structural type of issue
-/// #150, which replaced the SDK `Principal` import) and the ambient types
-/// its lowerings emit (`Array<T>` for vecs, `Record<string, never>` for the
-/// empty record, `Uint8Array` for anonymous `vec nat8`, `Promise<T>` on
-/// every actor method signature — issue #130). A declaration by any of
-/// these names shadows the referenced binding for the whole module.
-/// …plus the actor surface's own emission names (`actor`, `Actor`), reserved
-/// since issue #104 for the same reason.
-const RESERVED_MODULE_BINDINGS: &[&str] = &[
-    "c",
-    "Schema",
-    "PrincipalValue",
-    "Array",
-    "Record",
-    "Uint8Array",
-    "Promise",
-    "actor",
-    "Actor",
-];
+/// The module's own export names: the actor surface exports the service
+/// schema as `actor` and its call interface as `Actor`, so a declaration by
+/// either name would be a duplicate export. Every other binding the module
+/// declares is a `$`-prefixed local (issue #188), which no declaration name
+/// can collide with; these two are reserved unconditionally, actor or not,
+/// by the #116 locality rule. Issue #189 turns the refusal into omitting the
+/// colliding declaration.
+const RESERVED_EXPORT_NAMES: &[&str] = &["actor", "Actor"];
 
 /// Property names may be any identifier-shaped text, keywords included —
 /// `{ delete: T }` is legal TypeScript — so only the character shape matters.
+/// The same shape admits a declaration name: its `$`-prefixed local is then
+/// a valid binding that no reserved word can equal, and its export name may
+/// be any identifier name.
 fn is_ts_property_identifier(name: &str) -> bool {
     let mut chars = name.chars();
     matches!(chars.next(), Some(c) if c.is_ascii_alphabetic() || c == '_' || c == '$')
         && chars.all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '$')
-}
-
-/// Type alias names additionally must not be a reserved or predefined-type
-/// word: `export type delete = …` and `export type string = …` do not parse.
-fn is_ts_type_identifier(name: &str) -> bool {
-    const RESERVED: &[&str] = &[
-        "any",
-        "as",
-        "await",
-        "bigint",
-        "boolean",
-        "break",
-        "case",
-        "catch",
-        "class",
-        "const",
-        "continue",
-        "debugger",
-        "declare",
-        "default",
-        "delete",
-        "do",
-        "else",
-        "enum",
-        "export",
-        "extends",
-        "false",
-        "finally",
-        "for",
-        "function",
-        "if",
-        "implements",
-        "import",
-        "in",
-        "instanceof",
-        "interface",
-        "let",
-        "never",
-        "new",
-        "null",
-        "number",
-        "object",
-        "package",
-        "private",
-        "protected",
-        "public",
-        "return",
-        "static",
-        "string",
-        "super",
-        "switch",
-        "symbol",
-        "this",
-        "throw",
-        "true",
-        "try",
-        "type",
-        "typeof",
-        "undefined",
-        "unknown",
-        "var",
-        "void",
-        "while",
-        "with",
-        "yield",
-    ];
-    is_ts_property_identifier(name) && !RESERVED.contains(&name)
 }
 
 /// JSON-compatible string quoting, which is valid TypeScript.
@@ -1005,17 +1013,6 @@ mod tests {
         assert!(!is_ts_property_identifier("has space"));
         assert!(!is_ts_property_identifier("naïve"));
         assert!(!is_ts_property_identifier(""));
-    }
-
-    #[test]
-    fn type_identifiers_reject_reserved_words() {
-        assert!(is_ts_type_identifier("Item"));
-        assert!(!is_ts_type_identifier("delete"));
-        assert!(!is_ts_type_identifier("string"));
-        assert!(!is_ts_type_identifier("undefined"));
-        // Reserved at ES-module top level even though it is not a keyword
-        // everywhere: `export type await = ...` does not parse.
-        assert!(!is_ts_type_identifier("await"));
     }
 
     #[test]

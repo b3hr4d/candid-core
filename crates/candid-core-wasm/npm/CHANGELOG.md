@@ -27,6 +27,41 @@ version.
   them. The release that ships this generator must raise the
   `@candid-core/schema` peer from `^0.2.0` to that release.
 
+### Generated modules bind `$`-prefixed locals
+
+The embedded generator changes the layout of every module it emits; the
+exported names, every type, every field and field order, and every
+builder are unchanged. A module imports the schema runtime as a namespace and
+binds each declaration as a local whose name starts with `$`, exported under
+its Candid name:
+
+```ts
+import * as $ from "@candid-core/schema";
+
+type $Tokens = { e8s: bigint };
+const $Tokens: $.Schema<$Tokens> = $.c.rec(() => $.c.record({ e8s: $.c.nat64 }));
+export { $Tokens as Tokens };
+```
+
+- **BREAKING**: the text of every generated module changes. `import
+  { Tokens, actor, type Actor } from "./ledger"` resolves exactly as before,
+  so code that imports the generated names is unaffected; code that parses or
+  patches the generated source, or relied on its module-scope names
+  (`export type X`, `export const X`, the `c` and `Schema` bindings, the
+  separate `import type { PrincipalValue }` line), must follow the new layout.
+- **BREAKING**: declarations the generator used to refuse with
+  `ts_generation_refused` now generate: names that collided with the module's
+  own bindings (`c`, `Schema`, `PrincipalValue`), with the global types its
+  lowerings use (`Array`, `Record`, `Uint8Array`, `Promise`), or that are
+  TypeScript reserved words (`delete`, `string`). Import them by name,
+  renaming where needed (`import { delete as del } from "./service"`). A
+  declaration named `default` becomes the module's default export.
+- Declarations named `actor` or `Actor` are still refused with
+  `ts_generation_refused`: those are the module's own export names.
+- **Release ordering**: none. The layout needs only the `c`, `Schema` and
+  `PrincipalValue` exports `@candid-core/schema` 0.2.0 already has; the
+  goldens without collapsing options type-check against 0.2.0 unchanged.
+
 ## 0.1.0 — 2026-08-27
 
 Embeds `candid-core` 0.1.0-beta.3 and the `candid-core-ts` generator from

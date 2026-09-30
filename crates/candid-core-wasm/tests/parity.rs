@@ -35,6 +35,8 @@ fn modules_match_the_generator_goldens() {
         "ledger",
         "empties",
         "arms",
+        "options",
+        "shadowing",
     ] {
         let source = repo(&format!("crates/candid-core-ts/tests/fixtures/{name}.did"));
         let golden = repo(&format!("crates/candid-core-ts/tests/goldens/{name}.ts"));
@@ -134,7 +136,7 @@ fn bundles_resolve_through_the_files_map() {
         assert!(module["module"]
             .as_str()
             .unwrap()
-            .contains("export type Item"));
+            .contains("export { $Item as Item };"));
     }
 }
 
@@ -163,7 +165,7 @@ fn colliding_spellings_collapse_to_the_generated_key() {
         module["module"]
             .as_str()
             .unwrap()
-            .contains(&format!("{winner}: c.nat")),
+            .contains(&format!("{winner}: $.c.nat")),
         "the module must render the same spelling the table carries: {winner:?}",
     );
 }
@@ -196,11 +198,30 @@ fn diagnostics_pass_through_verbatim() {
     assert_eq!(response["ok"], Value::Bool(false), "{response}");
 
     // The generator's fail-closed refusals surface under a stable code with
-    // the refusal text verbatim.
-    let response: Value = serde_json::from_str(&did_to_module(&single("type c = nat8;"))).unwrap();
+    // the refusal text verbatim: a source name shaped like the `_N_` id
+    // rendering is still refused (issues #103, #115).
+    let response: Value =
+        serde_json::from_str(&did_to_module(&single("type R = record { _0_ : nat };"))).unwrap();
     assert_eq!(response["ok"], Value::Bool(false));
     assert_eq!(response["diagnostics"][0]["code"], "ts_generation_refused");
     assert_eq!(response["diagnostics"][0]["phase"], "generate");
+    assert!(
+        response["diagnostics"][0]["message"]
+            .as_str()
+            .unwrap()
+            .contains("`_0_`"),
+        "the refusal text passes through verbatim: {response}",
+    );
+
+    // A declaration named after one of the module's former bindings
+    // generates since issue #188: it binds as a `$`-prefixed local and is
+    // exported under its Candid name.
+    let response: Value = serde_json::from_str(&did_to_module(&single("type c = nat8;"))).unwrap();
+    assert_eq!(response["ok"], Value::Bool(true), "{response}");
+    assert!(response["module"]
+        .as_str()
+        .unwrap()
+        .contains("export { $c as c };"));
 }
 
 /// Malformed requests fail closed with this crate's own stable code — never

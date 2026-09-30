@@ -28,8 +28,8 @@ primitives, `opt`, `vec`, `record` (tuple-shaped records become TypeScript
 tuples), `variant`, and named declaration references, recursion included.
 Since issue #104 the reference types generate too: a `func` value is the
 inert `{ principal, method }` reference, a `service` value is the principal
-of a running service, and a contract with an actor emits the service schema
-(`export const actor`) plus the call interface (`export type Actor`) — one
+of a running service, and a contract with an actor exports the service schema
+(`actor`) plus the call interface (the type `Actor`) — one
 async method per service method, typed for whatever call layer a consumer
 builds on the codec; the package itself stops at the bytes. A `class` denotes its
 running service; init args are install-time metadata, noted per declaration
@@ -59,7 +59,7 @@ rule.
 
 **The generated artifact is a runtime schema, not just types.** Each
 declaration emits an invariantly-annotated builder alongside its alias —
-`export const X: Schema<X> = c.rec(() => …)` — targeting the schema core in
+`const $X: $.Schema<$X> = $.c.rec(() => …)` — targeting the schema core in
 `ts/schema.ts` (imported as `@candid-core/schema`, the published npm package's name). Because `Schema<in out T>` is invariant,
 the annotation makes `tsc` itself prove on every golden that the builder infers
 exactly the reviewed alias. The builders carry the structure the Zod-style
@@ -82,13 +82,28 @@ sample by sample. The suites run on Node's built-in test runner with native
 type stripping — no test framework, no `@types/node`, no npm dependency
 beyond the pinned TypeScript.
 
+**Every binding is a `$`-prefixed local (issue #188).** A generated module
+imports the schema core as the namespace `$` (`import * as $ from
+"@candid-core/schema"`), binds each declaration `X` — alias and builder — as
+the local `$X`, and exports it under its Candid name with
+`export { $X as X }`. A Candid name cannot contain `$`, so no declaration
+can shadow the import, the global types the lowerings reference (`Array`,
+`Record`, `Uint8Array`, `Promise`), or another declaration: `type c`,
+`type Array`, `type delete` and `type string` all generate, and a consumer
+imports them by name (`import { delete as del } from "./service"`); a
+declaration named `default` becomes the default export. The only names still
+refused are the module's own export names `actor` and `Actor`, with
+`ReservedDeclarationName`, unconditionally. Consumers import the export
+names, which did not change; the module's local names are not a supported
+surface.
+
 **Golden tests carry the mapping decisions.** Each fixture under
 `tests/fixtures/` must generate byte-identical output to its checked-in golden
 in `tests/goldens/`; regenerate deliberately with `UPDATE_GOLDENS=1` and review
 the diff. The goldens are additionally compiled by the exact TypeScript pinned
 in `ts/package-lock.json` under `strict` (`npm ci && npx tsc --noEmit` in
 `ts/`). Generated modules import only `@candid-core/schema` — `PrincipalValue`
-included, since issue #150 — so the check needs no peer and no stub; the
+included, since issue #150, as `$.PrincipalValue` — so the check needs no peer and no stub; the
 `@icp-sdk/core` in `ts/`'s devDependencies exists only for the suite proving
 real SDK `Principal` values encode unchanged, not for the goldens.
 

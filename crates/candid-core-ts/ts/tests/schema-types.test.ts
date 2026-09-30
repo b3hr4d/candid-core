@@ -257,7 +257,7 @@ test("a resolved node narrows without casts", () => {
 });
 
 // The generated call interface, proven against a hand-written one. A module
-// generated from a contract with an actor emits `export type Actor` — one
+// generated from a contract with an actor exports the type `Actor` — one
 // async method per service method, zero results resolving to `void`, one to
 // the value, several to a tuple — as reviewed generator output for whatever
 // call layer a consumer builds on it. `Equals` is the same invariance trick

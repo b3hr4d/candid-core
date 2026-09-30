@@ -101,7 +101,7 @@ fn hash_colliding_spellings_collapse_to_the_generator_name() {
     let module = generate_module(compilation.contract(), &names, &TsOptions::default())
         .expect("the colliding source generates");
     assert!(
-        module.contains(&format!("{winner}: c.nat")),
+        module.contains(&format!("{winner}: $.c.nat")),
         "the generated module must render the same spelling the table carries: \
          table={winner:?}, module:\n{module}"
     );
@@ -197,6 +197,18 @@ fn golden_arms() {
 #[test]
 fn golden_options() {
     assert_golden("options");
+}
+
+/// Issue #188: declarations named after the module's former bindings — the
+/// runtime's `c`, `Schema` and `PrincipalValue`, the ambient `Array`,
+/// `Record`, `Uint8Array` and `Promise`, and the reserved words `delete`,
+/// `string` and `default` — generate beside the lowerings that reference
+/// those ambients. The tsc equality gate compiles the golden, and
+/// `ts/tests/shadowing.test.ts` loads it under Node and imports every
+/// declaration through its Candid export name.
+#[test]
+fn golden_shadowing() {
+    assert_golden("shadowing");
 }
 
 /// The schema runtime (issue #102) consumes these same fixtures as data: each
@@ -324,11 +336,11 @@ fn nested_func_generates() {
     let output = generate_module(anonymous.contract(), &names, &TsOptions::default())
         .expect("anonymous nested func generates since #104");
     assert!(
-        output.contains("hook: { principal: PrincipalValue; method: string }"),
+        output.contains("hook: { principal: $.PrincipalValue; method: string }"),
         "{output}"
     );
     assert!(
-        output.contains("c.func([c.nat], [c.text], \"update\")"),
+        output.contains("$.c.func([$.c.nat], [$.c.text], \"update\")"),
         "{output}"
     );
 
@@ -340,10 +352,10 @@ fn nested_func_generates() {
     let output = generate_module(named.contract(), &names, &TsOptions::default())
         .expect("a reference to a func alias generates since #104");
     assert!(
-        output.contains("export type Callback = { principal: PrincipalValue; method: string };"),
+        output.contains("type $Callback = { principal: $.PrincipalValue; method: string };"),
         "{output}"
     );
-    assert!(output.contains("hook: Callback"), "{output}");
+    assert!(output.contains("hook: $Callback"), "{output}");
     assert!(output.contains("\"query\""), "{output}");
 }
 
@@ -357,23 +369,23 @@ fn collapsing_options_box() {
     for (source, alias) in [
         (
             "type DoubleOpt = opt opt nat;",
-            "export type DoubleOpt = { some: bigint | null } | null;",
+            "type $DoubleOpt = { some: bigint | null } | null;",
         ),
         (
             "type OptNull = opt null;",
-            "export type OptNull = { some: null } | null;",
+            "type $OptNull = { some: null } | null;",
         ),
         (
             "type OptReserved = opt reserved;",
-            "export type OptReserved = { some: unknown } | null;",
+            "type $OptReserved = { some: unknown } | null;",
         ),
         (
             "type Inner = opt nat;\ntype Outer = opt Inner;",
-            "export type Outer = { some: Inner } | null;",
+            "type $Outer = { some: $Inner } | null;",
         ),
-        ("type L = opt L;", "export type L = { some: L } | null;"),
-        ("type E = opt empty;", "export type E = never | null;"),
-        ("type N = opt nat;", "export type N = bigint | null;"),
+        ("type L = opt L;", "type $L = { some: $L } | null;"),
+        ("type E = opt empty;", "type $E = never | null;"),
+        ("type N = opt nat;", "type $N = bigint | null;"),
     ] {
         let compilation = compile_did(source).expect("source must compile");
         let output = generate_module(
@@ -385,24 +397,46 @@ fn collapsing_options_box() {
         assert!(output.contains(alias), "{source}: {output}");
         // The builder is `c.opt` either way; the box is a domain shape the
         // runtime's `OptDomain` and walkers derive from the same node rule.
-        assert!(output.contains("c.opt("), "{source}: {output}");
+        assert!(output.contains("$.c.opt("), "{source}: {output}");
     }
 }
 
 /// The caller-supplied module specifier is escaped, never interpolated: a
 /// hostile or accidental quote cannot produce syntactically invalid output.
+/// A non-default module is imported as the bare `PrincipalValue`, which no
+/// `$`-prefixed declaration local can collide with — a declaration of that
+/// very name included (issue #188).
 #[test]
 fn principal_import_is_escaped() {
-    let compilation = compile_did("type Who = principal;").expect("compile");
+    let compilation =
+        compile_did("type Who = principal;\ntype PrincipalValue = record { who : Who };")
+            .expect("compile");
     let options = TsOptions {
         principal_import: "bad\"path".to_string(),
     };
     let output =
         generate_module(compilation.contract(), &TsNames::new(), &options).expect("generate");
     assert!(
-        output.contains("from \"bad\\\"path\";"),
+        output.contains("import type { PrincipalValue } from \"bad\\\"path\";\n"),
         "specifier must be escaped: {output}"
     );
+    assert!(output.contains("type $Who = PrincipalValue;"), "{output}");
+    assert!(
+        output.contains("export { $PrincipalValue as PrincipalValue };"),
+        "{output}"
+    );
+    assert!(!output.contains("$.PrincipalValue"), "{output}");
+
+    // At the default, the type comes through the runtime namespace and no
+    // second import is emitted.
+    let output = generate_module(
+        compilation.contract(),
+        &TsNames::new(),
+        &TsOptions::default(),
+    )
+    .expect("generate");
+    assert!(output.contains("type $Who = $.PrincipalValue;"), "{output}");
+    assert!(!output.contains("import type"), "{output}");
 }
 
 /// A source name shaped like the `_N_` id rendering is refused (issue #115):
@@ -438,33 +472,68 @@ fn numeric_shaped_source_names_are_refused() {
     assert!(output.contains("_007_"), "the name must render: {output}");
 }
 
-/// A declaration named after one of the module's own imports would emit a
-/// module that can never load (`export const c` against `import { c }`) —
-/// refused instead, unconditionally: `PrincipalValue` is reserved even in a
-/// contract that never uses the principal primitive (issue #116; the
-/// reserved name tracked the import when #150 replaced the SDK `Principal`
-/// with the structural type).
+/// Issue #188: the declaration names #116 and #130 refused — the module's
+/// imports, the ambient types its lowerings reference, and (new) reserved
+/// words — generate, because every declaration binds as a `$`-prefixed
+/// local and leaves under its Candid name. The `shadowing` golden carries
+/// them through the tsc gate and Node; this pins each former refusal
+/// individually, actor or not, so no single case can regress unnoticed.
 #[test]
-fn import_shadowing_declaration_names_are_refused() {
+fn former_binding_names_generate() {
+    for (source, name) in [
+        ("type c = nat8;", "c"),
+        ("type Schema = nat8;", "Schema"),
+        (
+            "type PrincipalValue = record { p : principal };",
+            "PrincipalValue",
+        ),
+        ("type PrincipalValue = nat8;", "PrincipalValue"),
+        ("type Array = nat8; type V = vec text;", "Array"),
+        ("type Record = nat8; type E = record {};", "Record"),
+        ("type Uint8Array = text; type B = blob;", "Uint8Array"),
+        ("type Array = nat8;", "Array"),
+        ("type Promise = nat8;", "Promise"),
+        (
+            "type Promise = record { id : nat }; service : { ping : () -> () };",
+            "Promise",
+        ),
+        ("type delete = text;", "delete"),
+        ("type string = nat;", "string"),
+        ("type default = bool;", "default"),
+        ("type Principal = nat8;", "Principal"),
+    ] {
+        let compilation = compile_did(source).expect("compile");
+        let output = generate_module(
+            compilation.contract(),
+            &TsNames::new(),
+            &TsOptions::default(),
+        )
+        .unwrap_or_else(|error| panic!("{source} must generate since #188: {error}"));
+        assert!(
+            output.contains(&format!("\nexport {{ ${name} as {name} }};\n")),
+            "{source}: {output}"
+        );
+        assert!(
+            output.contains(&format!("\ntype ${name} = ")),
+            "{source}: {output}"
+        );
+        assert!(
+            output.contains(&format!("\nconst ${name}: $.Schema<${name}> = $.c.rec(")),
+            "{source}: {output}"
+        );
+    }
+}
+
+/// The module's own export names stay reserved: the actor surface exports
+/// `actor` and `Actor`, so a declaration by either name would be a
+/// duplicate export. Refused unconditionally — with or without an actor —
+/// by the #116 locality rule; issue #189 turns this into an omission.
+#[test]
+fn export_name_declarations_are_refused() {
     for source in [
-        "type c = nat8;",
-        "type Schema = nat8;",
-        "type PrincipalValue = record { p : principal };",
-        // No principal primitive anywhere: still refused by decision.
-        "type PrincipalValue = nat8;",
-        // The ambient types the lowerings emit are bindings too: a
-        // declaration by these names shadows them module-wide.
-        "type Array = nat8; type V = vec text;",
-        "type Record = nat8; type E = record {};",
-        "type Uint8Array = text; type B = blob;",
-        // And unconditionally, without the lowering that references them.
-        "type Array = nat8;",
-        // The actor lowering's ambient `Promise` is a binding too, and the
-        // same unconditional rule applies without any actor (issue #130).
-        "type Promise = nat8;",
-        // The actor surface's own emission names, reserved since #104 —
-        // exercised here rather than assumed, actor or not.
         "type actor = nat8;",
+        "type actor = nat8; service : { ping : () -> () };",
+        "type Actor = nat8;",
         "type Actor = nat8; service : { ping : () -> () };",
     ] {
         let compilation = compile_did(source).expect("compile");
@@ -473,9 +542,12 @@ fn import_shadowing_declaration_names_are_refused() {
             &TsNames::new(),
             &TsOptions::default(),
         )
-        .expect_err("an import-shadowing declaration name must refuse generation");
+        .expect_err("a declaration named after an export must refuse generation");
         assert!(
-            matches!(error, TsGenError::ReservedDeclarationName { .. }),
+            matches!(
+                &error,
+                TsGenError::ReservedDeclarationName { name } if name == "actor" || name == "Actor"
+            ),
             "unexpected error for {source}: {error}"
         );
         // Message hygiene: a joined multi-line literal bakes indentation
@@ -485,56 +557,78 @@ fn import_shadowing_declaration_names_are_refused() {
             "error message carries embedded space runs: {error}"
         );
     }
-    // Near-misses are ordinary names — including `Principal` itself, which
-    // stopped being a referenced binding when #150 switched the emitted
-    // import to `PrincipalValue`: a contract may now declare it freely. The
-    // expected export is asserted exactly per case (review finding: a bare
-    // `export type Principal` substring would also match `Principal2`).
-    for (near_miss, exported) in [
+    // The reservation is the exact names: case variants and near-misses
+    // are ordinary declarations beside the actor's exports.
+    for (source, name) in [
+        ("type ACTOR = nat8; service : { ping : () -> () };", "ACTOR"),
         (
-            "type Principal2 = nat8;",
-            "export type Principal2 = number;",
+            "type actors = nat8; service : { ping : () -> () };",
+            "actors",
         ),
-        ("type Principal = nat8;", "export type Principal = number;"),
+        (
+            "type Actor2 = nat8; service : { ping : () -> () };",
+            "Actor2",
+        ),
     ] {
-        let compilation = compile_did(near_miss).expect("compile");
+        let compilation = compile_did(source).expect("compile");
         let output = generate_module(
             compilation.contract(),
             &TsNames::new(),
             &TsOptions::default(),
         )
-        .expect("a non-referenced name is not reserved");
-        assert!(output.contains(exported), "{near_miss}: {output}");
+        .unwrap_or_else(|error| panic!("{source}: {error}"));
+        assert!(
+            output.contains(&format!("export {{ ${name} as {name} }};")),
+            "{source}: {output}"
+        );
+        assert!(
+            output.contains("export { $actor as actor, type $Actor as Actor };"),
+            "{source}: {output}"
+        );
     }
 }
 
-/// The actor lowering references the ambient global `Promise` on every
-/// method signature, so a declaration by that name shadows it module-wide
-/// and the emitted `Promise<T>` stops compiling (TS2315) — the same
-/// cannot-compile class as `Array`/`Record`/`Uint8Array`, refused with the
-/// same unconditional rule (issue #130).
+/// A Contract document admits any non-empty declaration name; Candid source
+/// admits only identifiers. A name that is not identifier-shaped cannot
+/// become a `$`-prefixed local, so it still fails closed — reachable only
+/// through a hand-built or JSON-loaded Contract.
 #[test]
-fn promise_shadowing_declaration_is_refused() {
-    // The original repro: an actor plus a declaration literally named
-    // `Promise` passed both name guards and generated known-broken text.
-    let source = "type Promise = record { id : nat }; service : { ping : () -> () };";
-    let compilation = compile_did(source).expect("compile");
-    let names = TsNames::from_source_info(compilation.source_info().expect("provenance"));
-    let error = generate_module(compilation.contract(), &names, &TsOptions::default())
-        .expect_err("a Promise declaration must refuse generation");
-    assert!(
-        matches!(&error, TsGenError::ReservedDeclarationName { name } if name == "Promise"),
-        "the error must name the collision: {error}"
-    );
-    // The reservation is the exact name: a case variant is an ordinary
-    // declaration and coexists with the actor's `Promise<void>`.
-    let compilation =
-        compile_did("type promise = nat8; service : { ping : () -> () };").expect("compile");
-    let names = TsNames::from_source_info(compilation.source_info().expect("provenance"));
-    let output = generate_module(compilation.contract(), &names, &TsOptions::default())
-        .expect("a case variant is not reserved");
-    assert!(output.contains("export type promise"), "{output}");
-    assert!(output.contains("Promise<void>"), "{output}");
+fn non_identifier_declaration_names_are_refused() {
+    let contract_named = |name: &str| {
+        candid_core::ContractDraft::new(
+            vec![candid_core::TypeNode::Primitive {
+                primitive: candid_core::PrimitiveType::Nat,
+            }],
+            vec![candid_core::Declaration {
+                name: name.to_string(),
+                ty: 0,
+            }],
+            None,
+        )
+        .build()
+        .unwrap_or_else(|error| panic!("{name:?}: a valid Contract: {error}"))
+    };
+    for name in ["has space", "na\u{ef}ve", "1abc", "a-b"] {
+        let error = generate_module(
+            &contract_named(name),
+            &TsNames::new(),
+            &TsOptions::default(),
+        )
+        .expect_err("a non-identifier declaration name must refuse generation");
+        assert!(
+            matches!(&error, TsGenError::InvalidDeclarationName { name: refused } if refused == name),
+            "unexpected error for {name:?}: {error}"
+        );
+    }
+    // `$` is identifier-shaped, and `$` plus a `$`-bearing name is still an
+    // injective, valid local.
+    let output = generate_module(
+        &contract_named("$ok"),
+        &TsNames::new(),
+        &TsOptions::default(),
+    )
+    .expect("an identifier-shaped name generates");
+    assert!(output.contains("export { $$ok as $ok };"), "{output}");
 }
 
 /// Issue #127: a variant arm whose payload is a *declared* `opt` of a
@@ -605,7 +699,10 @@ fn actor_emission_covers_class_unwrap_and_proto_methods() {
     let names = TsNames::from_source_info(class_actor.source_info().expect("provenance"));
     let output = generate_module(class_actor.contract(), &names, &TsOptions::default())
         .expect("a class actor generates its running service");
-    assert!(output.contains("export const actor"), "{output}");
+    assert!(
+        output.contains("export { $actor as actor, type $Actor as Actor };"),
+        "{output}"
+    );
     assert!(output.contains("ping: () => Promise<void>;"), "{output}");
     assert!(
         output.contains("init args are install-time"),
@@ -618,7 +715,7 @@ fn actor_emission_covers_class_unwrap_and_proto_methods() {
     let output =
         generate_module(proto.contract(), &names, &TsOptions::default()).expect("generate");
     assert!(
-        output.contains("c.service({ [\"__proto__\"]: c.func"),
+        output.contains("$.c.service({ [\"__proto__\"]: $.c.func"),
         "the method key must be computed: {output}"
     );
 }

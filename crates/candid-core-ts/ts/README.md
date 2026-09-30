@@ -183,8 +183,8 @@ if (method !== undefined) {
 Transports, identity, certificate verification, retries, and invoking a
 decoded func reference are the call layer's job, not this package's: a func
 *value* stays the inert `{ principal, method }` pair. Generated modules still
-emit the typed call interface as `export type Actor = { … }` beside the
-`actor` service schema, because `c.rec` erases method structure from a
+export the typed call interface as the type `Actor` beside the `actor`
+service schema, because `c.rec` erases method structure from a
 schema's *type* — schemas carry values, not calls — so a call layer cannot
 re-derive it from `typeof`.
 
