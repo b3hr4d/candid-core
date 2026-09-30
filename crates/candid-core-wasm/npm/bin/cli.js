@@ -1,24 +1,32 @@
 #!/usr/bin/env node
 // The @candid-core/cli entry point:
 //
-//   candid-core-cli gen <service.did> [-o <dir>]
+//   candid-core-cli gen <service.did>... [-o <dir>] [--json] [--check]
 //
-// The JS host does all the I/O: it reads the entry file and every `.did`
-// beneath the entry's directory, hands them to the wasm compiler as data,
-// and writes the two artifacts — `<stem>.ts` (the generated module) and
-// `<stem>.envelope.json` (the one-document contract envelope with field
-// names) — printing the content-addressed identities on stdout.
+// The JS host does all the I/O: for each entry it reads the entry file and
+// every `.did` beneath the entry's directory, hands them to the wasm
+// compiler as data, and writes the two artifacts — `<stem>.ts` (the
+// generated module) and `<stem>.envelope.json` (the one-document contract
+// envelope with field names) — printing the content-addressed identities on
+// stdout. Nothing is read from stdin, ever, and nothing is written outside
+// `-o`.
 //
 // Conventions follow the native `candid-core` binary: anything outside the
 // grammar is a usage error (exit 64, usage on stderr, nothing on stdout);
-// a compile or generation failure prints its JSON diagnostics document on
-// stdout and exits 1. Determinism is enforced, not assumed: every
-// generation runs twice and the run refuses on any byte mismatch.
+// any entry that fails (a compile or generation failure, an unreadable
+// entry, a determinism mismatch) makes the run exit 1 while the other
+// entries still run. Determinism is enforced, not assumed: every generation
+// runs twice and the entry refuses on any byte mismatch.
 //
 // A module that had to leave declarations or actor methods out is still
 // usable, so the run succeeds (exit 0): each omission is printed as
 // a `warning: omitted …` line on stderr, in the order and wording of the
-// module's own `// Omitted:` header, and stdout carries the usual report.
+// module's own `// Omitted:` header.
+//
+// `--json` replaces every human line with exactly one JSON document on
+// stdout (shape: README, `CliReport` in lib/index.d.ts); stderr stays empty.
+// `--check` generates in memory, compares byte-for-byte with the files on
+// disk, writes nothing, and exits 1 on any drift.
 
 import { readFile, readdir, mkdir, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -26,7 +34,11 @@ import process from "node:process";
 
 import { didToContract, didToModule, init } from "../lib/index.js";
 
-const USAGE = "usage: candid-core-cli gen <service.did> [-o <dir>]";
+const USAGE = "usage: candid-core-cli gen <service.did>... [-o <dir>] [--json] [--check]";
+
+// The `--json` document's version. It changes only when an existing field's
+// meaning or shape changes; a consumer refuses a version it does not know.
+const SCHEMA_VERSION = 1;
 
 // The compiler's own source bounds (`Limits::default()` — the values the
 // root README documents), enforced *while walking*: the entry's whole
@@ -37,17 +49,27 @@ const MAX_SOURCE_BYTES = 1_048_576; // max_source_bytes, per file
 const MAX_BUNDLE_BYTES = 8_388_608; // max_bundle_bytes, aggregate
 const MAX_SOURCES = 256; // max_sources, file count
 
-function usage() {
+function usage(problem) {
+  if (problem !== undefined) {
+    console.error(problem);
+  }
   console.error(USAGE);
   process.exit(64);
+}
+
+/** The output stem an entry generates, e.g. `service` for `a/service.did`. */
+function stemOf(entry) {
+  return path.basename(entry).replace(/\.did$/, "");
 }
 
 function parseArguments(argv) {
   if (argv.length === 0 || argv[0] !== "gen") {
     usage();
   }
-  let entry;
+  const entries = [];
   let outDir;
+  let json = false;
+  let check = false;
   for (let index = 1; index < argv.length; index += 1) {
     const argument = argv[index];
     if (argument === "-o") {
@@ -56,37 +78,63 @@ function parseArguments(argv) {
       }
       index += 1;
       outDir = argv[index];
+    } else if (argument === "--json") {
+      json = true;
+    } else if (argument === "--check") {
+      check = true;
     } else if (argument.startsWith("-")) {
       usage();
-    } else if (entry === undefined) {
-      entry = argument;
     } else {
-      usage();
+      entries.push(argument);
     }
   }
-  if (entry === undefined) {
+  if (entries.length === 0) {
     usage();
   }
-  return { entry, outDir: outDir ?? "." };
+  // Decision D2 (a recommendation the maintainer can overturn): every entry
+  // writes `<stem>.ts` into the one `-o`, so two entries with one stem would
+  // overwrite each other. Refuse, as a usage error, before any work. Stems
+  // compare case-insensitively: the output must check out the same on a
+  // case-folding filesystem.
+  const seen = new Map();
+  for (const entry of entries) {
+    const key = stemOf(entry).toLowerCase();
+    if (seen.has(key)) {
+      usage(
+        `error: ${seen.get(key)} and ${entry} would both write ${stemOf(entry)}.ts; ` +
+          "give each entry a distinct file name",
+      );
+    }
+    seen.set(key, entry);
+  }
+  return { entries, outDir: outDir ?? ".", json, check };
 }
 
-/** Print a structured resource refusal on stdout and exit 1 — the same
- * channel and item shape a compile failure uses. */
+/** A diagnostic in the compiler's own item shape. */
+function diagnostic(code, phase, message, extra = {}) {
+  return { code, phase, severity: "error", message, ...extra };
+}
+
+/**
+ * One entry's failure. `diagnostics` is what `--json` reports. Without
+ * `--json` it prints as the `{ ok: false, diagnostics }` document on stdout
+ * — the native binary's convention — unless `plain` is set, in which case
+ * the failure has no document and `plain` is the stderr line it always had.
+ */
+class EntryFailure extends Error {
+  constructor(diagnostics, plain) {
+    super(diagnostics[0].message);
+    this.diagnostics = diagnostics;
+    this.plain = plain;
+  }
+}
+
 function resourceFailure(resource, limit, observed, message) {
-  const document = {
-    ok: false,
-    diagnostics: [
-      {
-        code: "resource_limit_exceeded",
-        phase: "load",
-        severity: "error",
-        message,
-        resource_limit: { resource, limit, observed },
-      },
-    ],
-  };
-  console.log(JSON.stringify(document, null, 2));
-  process.exit(1);
+  return new EntryFailure([
+    diagnostic("resource_limit_exceeded", "load", message, {
+      resource_limit: { resource, limit, observed },
+    }),
+  ]);
 }
 
 /**
@@ -107,7 +155,7 @@ async function didFiles(root) {
     candidates.push({ absolute, relative });
   }
   if (candidates.length > MAX_SOURCES) {
-    resourceFailure(
+    throw resourceFailure(
       "sources",
       MAX_SOURCES,
       candidates.length,
@@ -118,7 +166,7 @@ async function didFiles(root) {
   for (const candidate of candidates) {
     const { size } = await stat(candidate.absolute);
     if (size > MAX_SOURCE_BYTES) {
-      resourceFailure(
+      throw resourceFailure(
         "source_bytes",
         MAX_SOURCE_BYTES,
         size,
@@ -127,7 +175,7 @@ async function didFiles(root) {
     }
     bundleBytes += size;
     if (bundleBytes > MAX_BUNDLE_BYTES) {
-      resourceFailure(
+      throw resourceFailure(
         "bundle_bytes",
         MAX_BUNDLE_BYTES,
         bundleBytes,
@@ -140,6 +188,19 @@ async function didFiles(root) {
     files[candidate.relative] = await readFile(candidate.absolute, "utf8");
   }
   return files;
+}
+
+// Decision D1 (a recommendation the maintainer can overturn): the bundle
+// root of an entry is the entry's own directory, and the 256-file / 1 MiB /
+// 8 MiB bounds apply to each entry's bundle on its own. Entries that share a
+// directory share one walk here — the tree is read and counted once, not
+// once per entry — so they never double-count against each other.
+const bundles = new Map();
+function bundleOf(root) {
+  if (!bundles.has(root)) {
+    bundles.set(root, didFiles(root));
+  }
+  return bundles.get(root);
 }
 
 /**
@@ -189,59 +250,157 @@ async function deterministic(label, produce) {
   const first = await produce();
   const second = await produce();
   if (JSON.stringify(first) !== JSON.stringify(second)) {
-    console.error(`determinism check failed: two ${label} runs disagreed; refusing to write`);
-    process.exit(1);
+    const message = `determinism check failed: two ${label} runs disagreed; refusing to write`;
+    throw new EntryFailure([diagnostic("nondeterministic_output", "generate", message)], message);
   }
   return first;
 }
 
-const { entry, outDir } = parseArguments(process.argv.slice(2));
+/** The file's bytes, or `null` when it does not exist. */
+async function onDisk(file) {
+  try {
+    return await readFile(file);
+  } catch (error) {
+    if (error.code === "ENOENT") {
+      return null;
+    }
+    throw error;
+  }
+}
 
-const entryPath = path.resolve(entry);
-const root = path.dirname(entryPath);
-const entryName = path.basename(entryPath);
-let files;
-try {
-  files = await didFiles(root);
-} catch (error) {
-  console.error(`cannot read ${root}: ${error.message}`);
-  process.exit(1);
+/** Generate one entry and write it, or (with `check`) compare it. Never throws. */
+async function processEntry(entry, { outDir, check }) {
+  const stem = stemOf(entry);
+  const modulePath = path.join(outDir, `${stem}.ts`);
+  const envelopePath = path.join(outDir, `${stem}.envelope.json`);
+  const report = {
+    entry,
+    status: "failed",
+    module: modulePath,
+    envelope: envelopePath,
+    omitted: [],
+    diagnostics: [],
+  };
+  // What the human path prints for this entry, in order; `--json` drops it.
+  const human = { out: [], err: [] };
+  const drift = [];
+  try {
+    const entryPath = path.resolve(entry);
+    const root = path.dirname(entryPath);
+    const entryName = path.basename(entryPath);
+    let files;
+    try {
+      files = await bundleOf(root);
+    } catch (error) {
+      if (error instanceof EntryFailure) {
+        throw error;
+      }
+      const message = `cannot read ${root}: ${error.message}`;
+      throw new EntryFailure([diagnostic("did_file_read_error", "load", message)], message);
+    }
+    if (files[entryName] === undefined) {
+      const message = `cannot read ${entryPath}: no such .did file`;
+      throw new EntryFailure([diagnostic("did_source_not_found", "load", message)], message);
+    }
+
+    const sources = { entry: entryName, files };
+    const envelope = await deterministic("contract", () => didToContract(sources));
+    if (!("contract" in envelope)) {
+      throw new EntryFailure(envelope.diagnostics);
+    }
+    const generated = await deterministic("module", () => didToModule(sources));
+    if (!generated.ok) {
+      throw new EntryFailure(generated.diagnostics);
+    }
+
+    const artifacts = [
+      [modulePath, Buffer.from(generated.module)],
+      [envelopePath, Buffer.from(`${JSON.stringify(envelope, null, 2)}\n`)],
+    ];
+    let wrote = false;
+    for (const [file, bytes] of artifacts) {
+      const existing = await onDisk(file);
+      if (existing !== null && existing.equals(bytes)) {
+        human.out.push(`unchanged ${file}`);
+      } else if (check) {
+        drift.push(file);
+        human.err.push(`${existing === null ? "missing" : "drifted"} ${file}`);
+      } else {
+        await mkdir(outDir, { recursive: true });
+        await writeFile(file, bytes);
+        wrote = true;
+        human.out.push(`wrote ${file}`);
+      }
+    }
+    if (!check) {
+      const identities = envelope.contract.identities ?? {};
+      const lines = [];
+      if (identities.contract !== undefined) {
+        lines.push(`contract:  ${identities.contract}`);
+      }
+      if (identities.interface !== undefined) {
+        lines.push(`interface: ${identities.interface}`);
+      }
+      human.out.unshift(...lines);
+    }
+    for (const omission of generated.omitted) {
+      human.err.push(`warning: omitted ${describeOmission(omission)}`);
+    }
+    report.omitted = generated.omitted;
+    report.status = drift.length > 0 ? "drifted" : wrote ? "written" : "unchanged";
+  } catch (error) {
+    const failure =
+      error instanceof EntryFailure
+        ? error
+        : new EntryFailure([
+            { code: "internal_error", severity: "error", message: String(error.message ?? error) },
+          ]);
+    report.diagnostics = failure.diagnostics;
+    human.out.length = 0;
+    human.err.length = 0;
+    drift.length = 0;
+    if (failure.plain !== undefined) {
+      human.err.push(failure.plain);
+    } else {
+      human.out.push(JSON.stringify({ ok: false, diagnostics: failure.diagnostics }, null, 2));
+    }
+  }
+  return { report, human, drift };
 }
-if (files[entryName] === undefined) {
-  console.error(`cannot read ${entryPath}: no such .did file`);
-  process.exit(1);
-}
+
+const { entries, outDir, json, check } = parseArguments(process.argv.slice(2));
 
 await init();
-const sources = { entry: entryName, files };
 
-const envelope = await deterministic("contract", () => didToContract(sources));
-if (!("contract" in envelope)) {
-  console.log(JSON.stringify(envelope, null, 2));
-  process.exit(1);
-}
-const generated = await deterministic("module", () => didToModule(sources));
-if (!generated.ok) {
-  console.log(JSON.stringify(generated, null, 2));
-  process.exit(1);
+const reports = [];
+const drift = [];
+for (const entry of entries) {
+  const result = await processEntry(entry, { outDir, check });
+  reports.push(result.report);
+  drift.push(...result.drift);
+  if (!json) {
+    for (const line of result.human.out) {
+      console.log(line);
+    }
+    for (const line of result.human.err) {
+      console.error(line);
+    }
+    if (result.report.status === "failed" && result.human.err.length === 0 && entries.length > 1) {
+      console.error(`error: ${entry}: failed; its diagnostics are on stdout`);
+    }
+  }
 }
 
-const stem = entryName.replace(/\.did$/, "");
-await mkdir(outDir, { recursive: true });
-const modulePath = path.join(outDir, `${stem}.ts`);
-const envelopePath = path.join(outDir, `${stem}.envelope.json`);
-await writeFile(modulePath, generated.module);
-await writeFile(envelopePath, `${JSON.stringify(envelope, null, 2)}\n`);
-
-const identities = envelope.contract.identities ?? {};
-if (identities.contract !== undefined) {
-  console.log(`contract:  ${identities.contract}`);
+const ok = reports.every((report) => report.status !== "failed" && report.status !== "drifted");
+if (json) {
+  const document = { schemaVersion: SCHEMA_VERSION, ok, check, entries: reports, drift };
+  console.log(JSON.stringify(document, null, 2));
+} else if (drift.length > 0) {
+  console.error(
+    `${drift.length} file(s) differ from what the current sources generate; ` +
+      "run without --check to regenerate",
+  );
 }
-if (identities.interface !== undefined) {
-  console.log(`interface: ${identities.interface}`);
-}
-console.log(`wrote ${modulePath}`);
-console.log(`wrote ${envelopePath}`);
-for (const entry of generated.omitted) {
-  console.error(`warning: omitted ${describeOmission(entry)}`);
-}
+// Not `process.exit`: on some platforms a pipe drains asynchronously, and the
+// document must reach the reader whole.
+process.exitCode = ok ? 0 : 1;

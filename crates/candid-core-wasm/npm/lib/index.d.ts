@@ -89,6 +89,33 @@ export interface ContractEnvelope {
 }
 
 /**
+ * One declaration or method a module leaves out.
+ */
+export interface Omission {
+  /** A named declaration, or a method of the actor's service. */
+  kind: "declaration" | "method";
+  /** The declaration or method name, as the Candid source spells it. */
+  name: string;
+  /**
+   * Why, from a closed set: `reserved_field_name` (a field or arm named
+   * like the `_N_` id rendering), `ambiguous_variant_arm` (an arm whose
+   * payload is a declared `opt` of an uninhabited type),
+   * `reserved_export_name` (a declaration named `actor` or `Actor`),
+   * `invalid_declaration_name` (a name that is not identifier-shaped;
+   * Contract documents only), or `references_omitted` (it references the
+   * omitted declaration named by `via`).
+   */
+  reason:
+    | "reserved_field_name"
+    | "ambiguous_variant_arm"
+    | "reserved_export_name"
+    | "invalid_declaration_name"
+    | "references_omitted";
+  /** For `references_omitted` only: the omitted declaration referenced. */
+  via?: string;
+}
+
+/**
  * A successful module generation. A module that had to leave something out
  * is still a success: everything it emits is exactly what it would be
  * without the omitted declarations, and `omitted` lists what is missing.
@@ -109,29 +136,7 @@ export interface ModuleSuccess {
    * by name; empty, never absent, when nothing is omitted.
    * `schemaFromContract` reports the same list for the same Contract.
    */
-  omitted: {
-    /** A named declaration, or a method of the actor's service. */
-    kind: "declaration" | "method";
-    /** The declaration or method name, as the Candid source spells it. */
-    name: string;
-    /**
-     * Why, from a closed set: `reserved_field_name` (a field or arm named
-     * like the `_N_` id rendering), `ambiguous_variant_arm` (an arm whose
-     * payload is a declared `opt` of an uninhabited type),
-     * `reserved_export_name` (a declaration named `actor` or `Actor`),
-     * `invalid_declaration_name` (a name that is not identifier-shaped;
-     * Contract documents only), or `references_omitted` (it references the
-     * omitted declaration named by `via`).
-     */
-    reason:
-      | "reserved_field_name"
-      | "ambiguous_variant_arm"
-      | "reserved_export_name"
-      | "invalid_declaration_name"
-      | "references_omitted";
-    /** For `references_omitted` only: the omitted declaration referenced. */
-    via?: string;
-  }[];
+  omitted: Omission[];
 }
 
 /**
@@ -176,3 +181,69 @@ export function didToContract(sources: Sources): Promise<ContractEnvelope | Fail
  * }
  */
 export function didToModule(sources: Sources): Promise<ModuleSuccess | Failure>;
+
+/**
+ * What happened to one entry of `candid-core-cli gen`.
+ *
+ * - `written`: the entry generated and at least one of its two files was
+ *   created or changed on disk.
+ * - `unchanged`: the entry generated and both files already held exactly
+ *   those bytes; nothing was written.
+ * - `drifted`: `--check` only — at least one file is missing or differs from
+ *   what the entry now generates; nothing was written.
+ * - `failed`: the entry did not generate; `diagnostics` says why. A compile
+ *   failure writes nothing for the entry.
+ */
+export type CliEntryStatus = "written" | "unchanged" | "drifted" | "failed";
+
+/** One entry's part of the `--json` document. */
+export interface CliEntryReport {
+  /** The entry exactly as it was given on the command line. */
+  entry: string;
+  status: CliEntryStatus;
+  /** The generated module's path: `-o` joined with `<stem>.ts`. */
+  module: string;
+  /** The contract envelope's path: `-o` joined with `<stem>.envelope.json`. */
+  envelope: string;
+  /**
+   * What the module leaves out, exactly as `didToModule` returns it. Empty
+   * for a `failed` entry and when nothing is omitted. Omissions never make an
+   * entry fail.
+   */
+  omitted: Omission[];
+  /**
+   * The compiler's diagnostics for a `failed` entry, in the same shape the
+   * library returns; empty otherwise. Failures that occur before compilation
+   * use the same shape with codes this CLI originates:
+   * `did_file_read_error`, `did_source_not_found`, `resource_limit_exceeded`,
+   * `nondeterministic_output` and `internal_error` (which carries no `phase`).
+   */
+  diagnostics: Diagnostic[];
+}
+
+/**
+ * The one document `candid-core-cli gen … --json` prints on stdout, and
+ * nothing else: stderr stays empty. The process exit code is 0 exactly when
+ * `ok` is true, and 1 otherwise. A usage error exits 64 and prints no
+ * document.
+ */
+export interface CliReport {
+  /**
+   * The document's version. It changes only when an existing field's meaning
+   * or shape changes; adding a field does not change it. Refuse a version
+   * you do not know.
+   */
+  schemaVersion: 1;
+  /** True when no entry is `failed` or `drifted`. Omissions do not clear it. */
+  ok: boolean;
+  /** Whether `--check` was given. */
+  check: boolean;
+  /** One report per entry, in command-line order. */
+  entries: CliEntryReport[];
+  /**
+   * Every path `--check` found missing or different from what its entry now
+   * generates, in entry order, module before envelope. Always empty without
+   * `--check`, and for a `failed` entry.
+   */
+  drift: string[];
+}

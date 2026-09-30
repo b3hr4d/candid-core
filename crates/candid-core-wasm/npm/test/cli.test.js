@@ -8,8 +8,18 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { execFileSync, spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, writeFileSync, mkdirSync, rmSync } from "node:fs";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
+import {
+  existsSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  statSync,
+  writeFileSync,
+  mkdirSync,
+  rmSync,
+  utimesSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -119,6 +129,17 @@ test("an omitted method's name is quoted exactly as the module header quotes it"
   ]);
   assert.deepStrictEqual(run.stderr.split("\n"), [...header, ""]);
   assert.doesNotMatch(run.stderr, /[\r\u2028\u2029]/);
+
+  // Under --json the name is data, raw as didToModule returns it (not the
+  // header's quoting), and stderr stays empty.
+  const json = gen(["gen", path.join(scratch, "quoted.did"), "-o", out, "--json"]);
+  assert.strictEqual(json.status, 0, `${json.stdout}${json.stderr}`);
+  assert.strictEqual(json.stderr, "");
+  const [entry] = JSON.parse(json.stdout).entries;
+  assert.deepStrictEqual(
+    entry.omitted.map((item) => item.name),
+    ["Bad", 'a"b\\c\n\r\t\b\f\u001f\u2028\u2029\u00e9\u{1f600}'],
+  );
 });
 
 test("the envelope is byte-identical to the native CLI's committed output", () => {
@@ -172,7 +193,16 @@ test("compile failures print the diagnostics document and exit 1", () => {
 });
 
 test("usage errors exit 64 with the usage text on stderr", () => {
-  for (const argv of [[], ["frobnicate"], ["gen"], ["gen", "a.did", "extra"], ["gen", "a.did", "-o"], ["gen", "--typo", "a.did"]]) {
+  for (const argv of [
+    [],
+    ["frobnicate"],
+    ["gen"],
+    ["gen", "--json"],
+    ["gen", "--check", "-o", "out"],
+    ["gen", "a.did", "-o"],
+    ["gen", "a.did", "-o", "x", "-o", "y"],
+    ["gen", "--typo", "a.did"],
+  ]) {
     const run = gen(argv);
     assert.strictEqual(run.status, 64, JSON.stringify(argv));
     assert.strictEqual(run.stdout, "", JSON.stringify(argv));
@@ -264,4 +294,430 @@ test("the bundle walk fails closed on the compiler's source bounds", () => {
   rmSync(path.join(crowded, "extra255.did"));
   const atLimit = gen(["gen", path.join(crowded, "entry.did"), "-o", outDir]);
   assert.strictEqual(atLimit.status, 0, `${atLimit.stdout}${atLimit.stderr}`);
+});
+
+// ---------------------------------------------------------------------------
+// Several entries, `--json`, `--check`, and the stdin constraint.
+//
+// Every run below passes *relative* paths with a scratch `cwd`, so the
+// documents and file names the CLI prints are machine-independent and can be
+// pinned literally.
+// ---------------------------------------------------------------------------
+
+const sep = path.sep;
+const fixture = (name) => readFileSync(path.join(FIXTURES, `${name}.did`), "utf8");
+
+/** A scratch directory holding `files` (relative path → text). */
+function scratchWith(label, files) {
+  const dir = mkdtempSync(path.join(tmpdir(), `candid-cli-${label}-`));
+  for (const [name, text] of Object.entries(files)) {
+    mkdirSync(path.dirname(path.join(dir, name)), { recursive: true });
+    writeFileSync(path.join(dir, name), text);
+  }
+  return dir;
+}
+
+/** Run the CLI in `cwd`; `--json` runs return the parsed document too. */
+function run(cwd, args) {
+  const result = gen(args, { cwd });
+  const document = args.includes("--json") ? JSON.parse(result.stdout) : undefined;
+  return { ...result, document };
+}
+
+const read = (...parts) => readFileSync(path.join(...parts), "utf8");
+const snapshot = (dir) =>
+  existsSync(dir)
+    ? readdirSync(dir).map((name) => {
+        const info = statSync(path.join(dir, name));
+        return [name, read(dir, name), info.mtimeMs];
+      })
+    : null;
+
+test("several entries generate in one run, each equal to its single-entry run", () => {
+  const scratch = scratchWith("multi", {
+    "a/primitives.did": fixture("primitives"),
+    "b/ledger.did": fixture("ledger"),
+    "c/omissions.did": fixture("omissions"),
+  });
+  const together = run(scratch, [
+    "gen",
+    "a/primitives.did",
+    "b/ledger.did",
+    "c/omissions.did",
+    "-o",
+    "out",
+  ]);
+  assert.strictEqual(together.status, 0, `${together.stdout}${together.stderr}`);
+  assert.deepStrictEqual(readdirSync(path.join(scratch, "out")).sort(), [
+    "ledger.envelope.json",
+    "ledger.ts",
+    "omissions.envelope.json",
+    "omissions.ts",
+    "primitives.envelope.json",
+    "primitives.ts",
+  ]);
+  for (const [dir, stem] of [
+    ["a", "primitives"],
+    ["b", "ledger"],
+    ["c", "omissions"],
+  ]) {
+    const single = run(scratch, ["gen", `${dir}/${stem}.did`, "-o", `single-${stem}`]);
+    assert.strictEqual(single.status, 0, `${single.stdout}${single.stderr}`);
+    for (const artifact of [`${stem}.ts`, `${stem}.envelope.json`]) {
+      assert.deepStrictEqual(
+        readFileSync(path.join(scratch, "out", artifact)),
+        readFileSync(path.join(scratch, `single-${stem}`, artifact)),
+        artifact,
+      );
+    }
+  }
+  // The human report: each entry prints its own identities and `wrote` lines
+  // in command-line order, and the omissions fixture's warnings go to stderr.
+  const wrote = together.stdout.split("\n").filter((line) => line.startsWith("wrote "));
+  assert.deepStrictEqual(wrote, [
+    `wrote out${sep}primitives.ts`,
+    `wrote out${sep}primitives.envelope.json`,
+    `wrote out${sep}ledger.ts`,
+    `wrote out${sep}ledger.envelope.json`,
+    `wrote out${sep}omissions.ts`,
+    `wrote out${sep}omissions.envelope.json`,
+  ]);
+  assert.match(together.stderr, /^warning: omitted /m);
+});
+
+test("entries sharing a directory share one bundle and stay independent", () => {
+  const scratch = scratchWith("shared", {
+    "svc/one.did": 'import "types.did";\nservice : { get : () -> (Item) query };',
+    "svc/two.did": 'import "types.did";\nservice : { put : (Item) -> () };',
+    "svc/types.did": "type Item = record { id : nat };",
+  });
+  const together = run(scratch, ["gen", "svc/one.did", "svc/two.did", "-o", "out", "--json"]);
+  assert.strictEqual(together.status, 0, `${together.stdout}${together.stderr}`);
+  assert.deepStrictEqual(
+    together.document.entries.map((entry) => [entry.entry, entry.status]),
+    [
+      ["svc/one.did", "written"],
+      ["svc/two.did", "written"],
+    ],
+  );
+  for (const stem of ["one", "two"]) {
+    const single = run(scratch, ["gen", `svc/${stem}.did`, "-o", `single-${stem}`]);
+    assert.strictEqual(single.status, 0);
+    assert.strictEqual(
+      read(scratch, "out", `${stem}.ts`),
+      read(scratch, `single-${stem}`, `${stem}.ts`),
+    );
+  }
+});
+
+test("a failing entry is reported on its own and the others still run", () => {
+  // `crowded/` is over the 256-source limit: a bundle bound of *its* directory
+  // alone, which `good/` (a different root) must not inherit or be charged for.
+  const files = {
+    "good/good.did": "service : { ping : () -> () };",
+    "broken/broken.did": "service : {",
+    "crowded/entry.did": "service : {};",
+  };
+  for (let index = 0; index < 256; index += 1) {
+    files[`crowded/extra${index}.did`] = "type T = nat;";
+  }
+  const scratch = scratchWith("partial-failure", files);
+  const result = run(scratch, [
+    "gen",
+    "broken/broken.did",
+    "good/good.did",
+    "crowded/entry.did",
+    "-o",
+    "out",
+    "--json",
+  ]);
+  assert.strictEqual(result.status, 1);
+  assert.strictEqual(result.stderr, "");
+  const { document } = result;
+  assert.strictEqual(document.ok, false);
+  assert.deepStrictEqual(
+    document.entries.map((entry) => [entry.entry, entry.status]),
+    [
+      ["broken/broken.did", "failed"],
+      ["good/good.did", "written"],
+      ["crowded/entry.did", "failed"],
+    ],
+  );
+  assert.strictEqual(document.entries[0].diagnostics[0].code, "did_parse_error");
+  assert.deepStrictEqual(document.entries[2].diagnostics[0].resource_limit, {
+    resource: "sources",
+    limit: 256,
+    observed: 257,
+  });
+  assert.deepStrictEqual(document.entries[1].diagnostics, []);
+  // Only the good entry reached the disk.
+  assert.deepStrictEqual(readdirSync(path.join(scratch, "out")).sort(), [
+    "good.envelope.json",
+    "good.ts",
+  ]);
+
+  // Without --json the failure documents are on stdout as before, the
+  // process still exits 1, and the good entry is still written.
+  const human = run(scratch, ["gen", "broken/broken.did", "good/good.did", "-o", "out-human"]);
+  assert.strictEqual(human.status, 1);
+  assert.match(human.stdout, /"code": "did_parse_error"/);
+  assert.match(human.stdout, /^wrote out-human\/good\.ts$/m);
+  assert.match(human.stderr, /broken\/broken\.did/);
+});
+
+test("duplicate output stems are a usage error before any work", () => {
+  const scratch = scratchWith("dup", {
+    "a/service.did": "service : { a : () -> () };",
+    "b/service.did": "service : { b : () -> () };",
+    "c/Service.did": "service : { c : () -> () };",
+    "d/other.did": "service : {};",
+  });
+  for (const args of [
+    ["gen", "a/service.did", "b/service.did", "-o", "out"],
+    ["gen", "a/service.did", "d/other.did", "a/service.did", "-o", "out", "--json"],
+    // A case-folding filesystem would merge these two outputs.
+    ["gen", "a/service.did", "c/Service.did", "-o", "out", "--check"],
+  ]) {
+    const result = gen(args, { cwd: scratch });
+    assert.strictEqual(result.status, 64, JSON.stringify(args));
+    assert.strictEqual(result.stdout, "", JSON.stringify(args));
+    assert.match(result.stderr, /would both write .*service\.ts/i, JSON.stringify(args));
+    assert.match(result.stderr, /^usage: candid-core-cli gen/m, JSON.stringify(args));
+    assert.strictEqual(existsSync(path.join(scratch, "out")), false, "nothing was written");
+  }
+  // Distinct stems from different directories are fine.
+  const fine = run(scratch, ["gen", "a/service.did", "d/other.did", "-o", "out"]);
+  assert.strictEqual(fine.status, 0, `${fine.stdout}${fine.stderr}`);
+});
+
+test("--json prints exactly one document on stdout, pinned for success", () => {
+  const scratch = scratchWith("json-ok", { "a/basic.did": "service : { ping : () -> () };" });
+  const result = run(scratch, ["gen", "a/basic.did", "-o", "out", "--json"]);
+  assert.strictEqual(result.status, 0, `${result.stdout}${result.stderr}`);
+  assert.strictEqual(result.stderr, "", "nothing but the document, and it is on stdout");
+  assert.strictEqual(result.stdout, `${JSON.stringify(result.document, null, 2)}\n`);
+  assert.deepStrictEqual(result.document, {
+    schemaVersion: 1,
+    ok: true,
+    check: false,
+    entries: [
+      {
+        entry: "a/basic.did",
+        status: "written",
+        module: path.join("out", "basic.ts"),
+        envelope: path.join("out", "basic.envelope.json"),
+        omitted: [],
+        diagnostics: [],
+      },
+    ],
+    drift: [],
+  });
+  // Identities are not part of the document.
+  assert.doesNotMatch(result.stdout, /candid-core:(contract|interface):/);
+  // The same run again leaves the files alone and says so.
+  const again = run(scratch, ["gen", "a/basic.did", "-o", "out", "--json"]);
+  assert.strictEqual(again.document.entries[0].status, "unchanged");
+  assert.strictEqual(again.document.ok, true);
+});
+
+test("--json on a compile error: one document, failed entry, exit 1, nothing written", () => {
+  const scratch = scratchWith("json-fail", { "broken.did": "service : {" });
+  const result = run(scratch, ["gen", "broken.did", "-o", "out", "--json"]);
+  assert.strictEqual(result.status, 1);
+  assert.strictEqual(result.stderr, "");
+  const { document } = result;
+  assert.deepStrictEqual(Object.keys(document), [
+    "schemaVersion",
+    "ok",
+    "check",
+    "entries",
+    "drift",
+  ]);
+  assert.strictEqual(document.ok, false);
+  const [entry] = document.entries;
+  assert.deepStrictEqual(Object.keys(entry), [
+    "entry",
+    "status",
+    "module",
+    "envelope",
+    "omitted",
+    "diagnostics",
+  ]);
+  assert.strictEqual(entry.status, "failed");
+  assert.deepStrictEqual(entry.omitted, []);
+  // The wasm's own diagnostics, unchanged in shape.
+  assert.strictEqual(entry.diagnostics[0].code, "did_parse_error");
+  assert.strictEqual(entry.diagnostics[0].phase, "parse");
+  assert.strictEqual(entry.diagnostics[0].severity, "error");
+  assert.strictEqual(existsSync(path.join(scratch, "out")), false);
+
+  // A missing entry is a per-entry diagnostic too, not a bare stderr line.
+  const missing = run(scratch, ["gen", "absent.did", "--json"]);
+  assert.strictEqual(missing.status, 1);
+  assert.strictEqual(missing.stderr, "");
+  assert.strictEqual(missing.document.entries[0].status, "failed");
+  assert.strictEqual(missing.document.entries[0].diagnostics[0].code, "did_source_not_found");
+});
+
+test("--json lists omissions and exit 0: the omissions fixture matches the library's list", () => {
+  const scratch = scratchWith("json-omit", { "omissions.did": fixture("omissions") });
+  const result = run(scratch, ["gen", "omissions.did", "-o", "out", "--json"]);
+  assert.strictEqual(result.status, 0, `${result.stdout}${result.stderr}`);
+  assert.strictEqual(result.stderr, "");
+  assert.strictEqual(result.document.ok, true);
+  const [entry] = result.document.entries;
+  assert.strictEqual(entry.status, "written");
+  assert.deepStrictEqual(
+    entry.omitted,
+    JSON.parse(readFileSync(path.join(GOLDENS, "omissions.omitted.json"), "utf8")),
+  );
+  assert.ok(entry.omitted.length > 0);
+  assert.deepStrictEqual(entry.diagnostics, []);
+});
+
+test("--check: clean tree exits 0, one touched byte exits 1, and nothing is ever written", () => {
+  const scratch = scratchWith("check", {
+    "a/primitives.did": fixture("primitives"),
+    "b/ledger.did": fixture("ledger"),
+  });
+  const entries = ["a/primitives.did", "b/ledger.did"];
+  assert.strictEqual(run(scratch, ["gen", ...entries, "-o", "out"]).status, 0);
+
+  const clean = run(scratch, ["gen", ...entries, "-o", "out", "--check", "--json"]);
+  assert.strictEqual(clean.status, 0, `${clean.stdout}${clean.stderr}`);
+  assert.strictEqual(clean.stderr, "");
+  assert.strictEqual(clean.document.ok, true);
+  assert.strictEqual(clean.document.check, true);
+  assert.deepStrictEqual(
+    clean.document.entries.map((entry) => entry.status),
+    ["unchanged", "unchanged"],
+  );
+  assert.deepStrictEqual(clean.document.drift, []);
+
+  // Age the files so a rewrite would be visible in mtime, then drift one byte.
+  const out = path.join(scratch, "out");
+  const past = new Date(Date.now() - 3_600_000);
+  for (const name of readdirSync(out)) {
+    utimesSync(path.join(out, name), past, past);
+  }
+  const target = path.join(out, "ledger.ts");
+  writeFileSync(target, `${read(target)} `);
+  utimesSync(target, past, past);
+  const before = snapshot(out);
+
+  const drifted = run(scratch, ["gen", ...entries, "-o", "out", "--check", "--json"]);
+  assert.strictEqual(drifted.status, 1);
+  assert.strictEqual(drifted.stderr, "");
+  assert.strictEqual(drifted.document.ok, false);
+  assert.deepStrictEqual(
+    drifted.document.entries.map((entry) => entry.status),
+    ["unchanged", "drifted"],
+  );
+  assert.deepStrictEqual(drifted.document.drift, [path.join("out", "ledger.ts")]);
+  assert.deepStrictEqual(snapshot(out), before, "--check changed a file or its mtime");
+
+  // The human report lists the drifted path on stderr and exits 1 too.
+  const human = run(scratch, ["gen", ...entries, "-o", "out", "--check"]);
+  assert.strictEqual(human.status, 1);
+  assert.match(human.stderr, new RegExp(`^drifted out\\${sep}ledger\\.ts$`, "m"));
+  assert.match(human.stderr, /1 file\(s\) differ/);
+  assert.deepStrictEqual(snapshot(out), before);
+
+  // A missing file is drift as well, and --check does not create the tree.
+  const absent = run(scratch, ["gen", ...entries, "-o", "fresh", "--check", "--json"]);
+  assert.strictEqual(absent.status, 1);
+  assert.strictEqual(absent.document.drift.length, 4);
+  assert.strictEqual(existsSync(path.join(scratch, "fresh")), false);
+  const absentHuman = run(scratch, ["gen", entries[0], "-o", "fresh", "--check"]);
+  assert.match(absentHuman.stderr, /^missing fresh\/primitives\.ts$/m);
+  assert.strictEqual(existsSync(path.join(scratch, "fresh")), false);
+
+  // Regenerating repairs the drift, after which the check is clean again.
+  assert.strictEqual(run(scratch, ["gen", ...entries, "-o", "out"]).status, 0);
+  assert.strictEqual(run(scratch, ["gen", ...entries, "-o", "out", "--check"]).status, 0);
+});
+
+test("--check reports a compile error as a failed entry, not as drift", () => {
+  const scratch = scratchWith("check-fail", { "broken.did": "service : {" });
+  const result = run(scratch, ["gen", "broken.did", "-o", "out", "--check", "--json"]);
+  assert.strictEqual(result.status, 1);
+  assert.strictEqual(result.document.entries[0].status, "failed");
+  assert.deepStrictEqual(result.document.drift, []);
+});
+
+test("a second run changes nothing: identical files, identical documents, no rewrite", () => {
+  const files = { "x/ledger.did": fixture("ledger"), "y/omissions.did": fixture("omissions") };
+  const args = ["gen", "x/ledger.did", "y/omissions.did", "-o", "out", "--json"];
+  // Two independent directories, same relative layout: the documents must be
+  // byte-for-byte equal — no timestamps, no absolute paths, no ordering luck.
+  const first = scratchWith("det-a", files);
+  const second = scratchWith("det-b", files);
+  const a = gen(args, { cwd: first });
+  const b = gen(args, { cwd: second });
+  assert.strictEqual(a.status, 0);
+  assert.strictEqual(a.stdout, b.stdout);
+  for (const name of readdirSync(path.join(first, "out"))) {
+    assert.deepStrictEqual(
+      readFileSync(path.join(first, "out", name)),
+      readFileSync(path.join(second, "out", name)),
+      name,
+    );
+  }
+  // Re-running in place leaves every file (and mtime) alone; the only
+  // difference in the document is each entry's status.
+  const past = new Date(Date.now() - 3_600_000);
+  for (const name of readdirSync(path.join(first, "out"))) {
+    utimesSync(path.join(first, "out", name), past, past);
+  }
+  const before = snapshot(path.join(first, "out"));
+  const again = gen(args, { cwd: first });
+  assert.strictEqual(again.status, 0);
+  assert.deepStrictEqual(snapshot(path.join(first, "out")), before);
+  const expected = JSON.parse(a.stdout);
+  for (const entry of expected.entries) {
+    entry.status = "unchanged";
+  }
+  assert.deepStrictEqual(JSON.parse(again.stdout), expected);
+  // And the check document is itself reproducible.
+  const checkArgs = [...args, "--check"];
+  assert.strictEqual(gen(checkArgs, { cwd: first }).stdout, gen(checkArgs, { cwd: second }).stdout);
+});
+
+// The CLI reads files and nothing else. A stdin that is an open pipe nobody
+// ever writes to or closes would hang any read, so completing proves none
+// happened; a stdin that is closed outright (`/dev/null`) must be as harmless.
+test("stdin is never read: an open, silent pipe and a closed stdin both complete", async () => {
+  const scratch = scratchWith("stdin", { "a.did": "service : { ping : () -> () };" });
+  for (const argv of [
+    ["gen", "a.did", "-o", "out"],
+    ["gen", "a.did", "-o", "out", "--json"],
+    ["gen", "a.did", "-o", "out", "--check", "--json"],
+  ]) {
+    const child = spawn(process.execPath, [CLI, ...argv], {
+      cwd: scratch,
+      stdio: ["pipe", "pipe", "pipe"], // stdin stays open; nothing is written to it
+    });
+    let stdout = "";
+    child.stdout.on("data", (chunk) => (stdout += chunk));
+    const outcome = await new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        child.kill("SIGKILL");
+        resolve({ hung: true });
+      }, 20_000);
+      child.on("close", (status, signal) => {
+        clearTimeout(timer);
+        resolve({ hung: false, status, signal });
+      });
+    });
+    child.stdin.destroy();
+    assert.strictEqual(outcome.hung, false, `${argv.join(" ")} blocked on stdin`);
+    // The `--check` run is last, so it finds the files the first run wrote.
+    assert.strictEqual(outcome.status, 0, `${argv.join(" ")}: ${stdout}`);
+  }
+  const closed = gen(["gen", "a.did", "-o", "out", "--json"], {
+    cwd: scratch,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  assert.strictEqual(closed.status, 0);
+  assert.strictEqual(JSON.parse(closed.stdout).ok, true);
 });
