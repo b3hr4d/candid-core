@@ -19,6 +19,8 @@
     "./validate.ts",
     "./contract.ts",
     "./labels.ts",
+    "./options.ts",
+    "./typetable.ts",
     "./codec.ts",
     "./forms.ts",
     "./tests/**/*.ts"

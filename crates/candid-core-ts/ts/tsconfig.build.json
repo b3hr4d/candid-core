@@ -12,6 +12,8 @@
     "./validate.ts",
     "./contract.ts",
     "./codec.ts",
-    "./labels.ts"
+    "./labels.ts",
+    "./options.ts",
+    "./typetable.ts"
   ]
 }

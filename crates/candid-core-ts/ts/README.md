@@ -44,7 +44,9 @@ Modules, each a subpath export:
   `resolveSchema` and `serviceMethods` for reading one back, since a schema
   reached by name is a `rec` indirection and a service's methods are a table.
 - **`./validate`** — bounded, fail-closed structural validation; never throws
-  on any value; issues carry stable codes and `$`-rooted paths — plus
+  on any value (an options object with an unknown key or a limit that is not a
+  non-negative safe integer throws `TypeError`, in every subpath: options are
+  code); issues carry stable codes and `$`-rooted paths — plus
   `isResultSchema` and `unwrapResult`, the schema-directed read of the
   `variant { ok; err }` convention [below](#unwrapping-okerr-results).
 - **`./contract`** — build the same schemas at runtime from a canonical
@@ -52,7 +54,9 @@ Modules, each a subpath export:
   its hash-enforced field-name table.
 - **`./codec`** — the Candid binary wire format, schema-directed, with the
   spec's coercion relation on decode and explicit resource budgets. Verified
-  bidirectionally against the reference implementation's vectors.
+  bidirectionally against the reference implementation's vectors. Encoded
+  bytes depend only on the values and the Candid types, never on whether a
+  schema was generated, loaded or hand-built.
 
 Those four are the whole export map. 0.2.0 also exported `./actor`,
 `./transport-icp`, `./forms`, and `./labels`; they are gone — see
@@ -179,6 +183,12 @@ if (method !== undefined) {
   void decodeArgs;
 }
 ```
+
+The request bytes are a sound cache or deduplication key: the type table is
+built from the Candid types' structure, so one call encodes to the same bytes
+whether its schemas came from a generated module, from `schemaFromContract`,
+or from `c.*` calls like the ones above, and in whatever key order the value
+spells its fields.
 
 Transports, identity, certificate verification, retries, and invoking a
 decoded func reference are the call layer's job, not this package's: a func

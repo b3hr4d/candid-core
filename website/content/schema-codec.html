@@ -10,10 +10,12 @@
 </p>
 
 <p>
-  Nothing here throws. Every call returns a discriminated result you branch on, and every failure
-  carries a machine-readable code and a <code>$</code>-rooted path into the offending value. That
-  holds for hostile bytes and hostile values alike: a getter that throws mid-encode becomes an
-  <code>unreadable_value</code> issue, not an escaping exception.
+  Nothing here throws for a value or a byte string. Every call returns a discriminated result you
+  branch on, and every failure carries a machine-readable code and a <code>$</code>-rooted path into
+  the offending value. That holds for hostile bytes and hostile values alike: a getter that throws
+  mid-encode becomes an <code>unreadable_value</code> issue, not an escaping exception. The one
+  thing that does throw is a malformed <em>options</em> object — see
+  <a href="#the-budgets-and-what-a-caller-observes">the budgets</a> below.
 </p>
 
 <h2>The four entry points</h2>
@@ -185,9 +187,31 @@ if (encoded.ok) {
   Emission order is fixed by the format, not by your object: record fields are read and validated
   in declaration order — so the first issue's path matches what <code>validate</code> reports —
   and then the buffered bytes are reordered into ascending wire-id order. Service method names go
-  out sorted by raw UTF-8 byte sequence. Identical inputs therefore produce identical bytes:
-  the type table is built in first-visit order over the schema graph, and nothing depends on time,
-  environment, or map iteration order.
+  out sorted by raw UTF-8 byte sequence. Identical inputs therefore produce identical bytes, and
+  nothing depends on time, environment, or map iteration order.
+</p>
+
+<p>
+  The bytes also do not depend on how the schema objects were built. A generated module mints a
+  fresh <code>c.opt(c.blob())</code> for every field that spells one; a schema loaded with
+  <code>schemaFromContract</code> shares one node per Contract type; a hand-written schema does
+  whatever its author did. The encoder walks whichever graph it is given, then rewrites the type
+  table into a structural canonical form before writing it: equal Candid types become one entry,
+  numbered in first-visit order from the argument types. So one call is one byte string — and a
+  sound cache or deduplication key — whether its schemas were generated, loaded or hand-built,
+  however they share nodes, and in whatever key order the schema or the value spells a record.
+  <code>blob</code> and <code>vec nat8</code> are the same wire type and share an entry. A schema
+  with no repeated structure writes exactly the table it always did.
+</p>
+
+<p>
+  Recursive types are canonical per knot. Every schema generated from or loaded from a Contract has
+  one knot per recursive type, because the Contract canonicalizer has already minimised the graph,
+  so those agree. Two separately hand-built knots for one recursive type — <code>Even</code> and
+  <code>Odd</code> written as two <code>c.rec</code> calls when each is
+  <code>record { next : opt Self }</code> — are not merged: the bytes are larger, valid, and
+  decode to the same value, but they are different bytes. Minimising cyclic graphs in the encoder is
+  a recorded non-goal.
 </p>
 
 <h2>Schema-directed decoding</h2>
@@ -279,11 +303,30 @@ decode(c.opt(c.variant({ ok: c.null })), later.bytes);  // { ok: true, value: nu
   exported constant. The same object is accepted by encode and decode.
 </p>
 
+<p>
+  Options are code, not input, so they are checked strictly and up front. An own key that is not
+  one of the five below throws <code>TypeError</code> — a misspelled <code>maxDeph</code> used to
+  apply the default without a word, and <code>maxIssues</code> belongs to <code>validate</code>,
+  not here. So does a limit that is not a non-negative safe integer: <code>NaN</code> (which used to
+  switch its bound off, since nothing is greater than <code>NaN</code>), a negative, a fraction, a
+  string, <code>null</code>, or <code>Infinity</code>. A trusted host that wants no practical bound
+  passes a large integer. <code>undefined</code> means the default, and <code>0</code> is a valid
+  limit that refuses any input consuming that resource. Each option is read exactly once, and the
+  call runs on that checked copy: a getter or Proxy cannot pass the check with one value and run
+  with another. An options object whose getter or trap throws while being read raises a
+  <code>TypeError</code> too, carrying the original exception as its <code>cause</code>.
+</p>
+
 <pre data-lang="ts" data-file="crates/candid-core-ts/ts/codec.ts">
 export interface CodecOptions {
   /** Input size ceiling for decode, in bytes. */
   readonly maxBytes?: number;
-  /** Wire type table entry cap, mirroring `Limits::max_type_nodes`. */
+  /**
+   * Wire type table entry cap, mirroring `Limits::max_type_nodes`. Decode
+   * refuses a wire table claiming more entries. Encode charges one entry per
+   * distinct composite schema node its walk meets, before repeated structure
+   * is merged, so the table it writes is never larger than this.
+   */
   readonly maxTypeTableEntries?: number;
   /** Traversal depth cap, mirroring `Limits::max_value_depth`. */
   readonly maxDepth?: number;
@@ -309,7 +352,7 @@ export interface CodecOptions {
       <td><code>maxTypeTableEntries</code></td>
       <td><code>100_000</code></td>
       <td><code>type_table_entries</code></td>
-      <td>The declared type-table size, checked before entries are read.</td>
+      <td>Decode: the declared type-table size, checked before entries are read. Encode: the distinct composite schema nodes the walk meets, before equal types are merged.</td>
     </tr>
     <tr>
       <td><code>maxDepth</code></td>
@@ -552,7 +595,12 @@ encode(c.principal, { toText: () => "aaaaa-ab" }); // invalid_principal (checksu
 <p>
   Each vector is also decoded twice: once under the generated golden schema, and once under the
   schema <code>schemaFromContract</code> builds from the same fixture's Contract document. Both
-  must produce the same value and re-encode to byte-identical output.
+  must produce the same value and re-encode to byte-identical output. The ledger fixture is in the
+  set precisely because its generated and loaded schemas share nodes differently; for its vectors
+  the TypeScript bytes are also exactly the bytes <code>candid</code> writes. A seeded property
+  test goes further over every golden fixture: the same value, with its keys shuffled, must encode
+  to the same bytes through the generated schema, the loaded one, and rebuilt copies that duplicate
+  every node, intern every node, or wrap nodes in extra <code>rec</code> indirections.
 </p>
 
 <p>

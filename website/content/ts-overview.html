@@ -90,7 +90,8 @@ export { $Items as Items };
 
 <p>
   <code>validate(schema, value)</code> returns <code>{ ok: true }</code> or
-  <code>{ ok: false, issues }</code> and never throws, for any input. Each issue carries a stable
+  <code>{ ok: false, issues }</code> and never throws, for any value (a malformed options object is
+  a programmer error and throws <code>TypeError</code>). Each issue carries a stable
   code and a <code>$</code>-rooted path — <code>$.transactions[2].amount.e8s</code> addresses one
   leaf — and the walk is bounded, so a hostile value hits a budget rather than running away. See
   <a href="schema-validation.html">Validation</a>.

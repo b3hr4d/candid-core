@@ -1,0 +1,38 @@
+[
+  {
+    "declaration": "TransferArg",
+    "hex": "4449444c076c06fbca0101c6fcb60204ba89e5c20402a2de94eb060282f3f3910c06d8a38ca80d056c02b3b0dac30368ad86ca8305026e036d7b6e056c01e0a9b302786e780100010000000000000100000000000000",
+    "name": "transfer_arg_minimal",
+    "textual": "(record { to = record { owner = principal \"aaaaa-aa\"; subaccount = null }; amount = record { e8s = 1 }; fee = null; memo = null; from_subaccount = null; created_at_time = null })"
+  },
+  {
+    "declaration": "TransferArg",
+    "hex": "4449444c076c06fbca0101c6fcb60204ba89e5c20402a2de94eb060282f3f3910c06d8a38ca80d056c02b3b0dac30368ad86ca8305026e036d7b6e056c01e0a9b302786e780100010104010201020110270000000000000102abcd0101000100002a36fe9c971700e1f50500000000",
+    "name": "transfer_arg_full",
+    "textual": "(record { to = record { owner = principal \"2vxsx-fae\"; subaccount = opt blob \"\\01\\02\" }; amount = record { e8s = 100000000 }; fee = opt record { e8s = 10000 }; memo = opt blob \"\\ab\\cd\"; from_subaccount = opt blob \"\\00\"; created_at_time = opt 1700000000000000000 })"
+  },
+  {
+    "declaration": "TransferResult",
+    "hex": "4449444c096b029cc2017de58eb402016b08928ab4920102c6d0a5db0104e0e0eeb702059fabb2b3047fbcbcc48f067f8cf781b80806c9e8cbb609078bc3dc880a086c019cbab69c02036c01e0a9b302786c01a3bb918c0a786c02c7ebc4d00971c498b1b50d7d6c01bf9bb7f00d036c019bb3bea60a036c018bbdf29b017d0100002a",
+    "name": "transfer_result_ok",
+    "textual": "(variant { ok = 42 })"
+  },
+  {
+    "declaration": "TransferResult",
+    "hex": "4449444c096b029cc2017de58eb402016b08928ab4920102c6d0a5db0104e0e0eeb702059fabb2b3047fbcbcc48f067f8cf781b80806c9e8cbb609078bc3dc880a086c019cbab69c02036c01e0a9b302786c01a3bb918c0a786c02c7ebc4d00971c498b1b50d7d6c01bf9bb7f00d036c019bb3bea60a036c018bbdf29b017d010001051027000000000000",
+    "name": "transfer_result_bad_fee",
+    "textual": "(variant { err = variant { bad_fee = record { expected_fee = record { e8s = 10000 } } } })"
+  },
+  {
+    "declaration": "Transaction",
+    "hex": "4449444c076c07fbca0101c6fcb60205eaca8a9e0401ba89e5c20403d6a9bbae0a7892b6d2f00b7dd8a38ca80d066e026c02b3b0dac30368ad86ca8305036e046d7b6e066c01e0a9b30278010001010104010109000101000001000100000000000000070500000000000000",
+    "name": "transaction",
+    "textual": "(record { index = 7; timestamp = 1; from = opt record { owner = principal \"aaaaa-aa\"; subaccount = null }; to = opt record { owner = principal \"2vxsx-fae\"; subaccount = opt blob \"\\09\" }; amount = record { e8s = 5 }; fee = null; memo = opt blob \"\" })"
+  },
+  {
+    "declaration": "TransactionsResponse",
+    "hex": "4449444c0e6c0381d586b70a7dd581cdb40c019290eecc0d096d026c07fbca0103c6fcb60207eaca8a9e0403ba89e5c20405d6a9bbae0a7892b6d2f00b7dd8a38ca80d086e046c02b3b0dac30368ad86ca8305056e066d7b6e086c01e0a9b302786d0a6c03c5b39af8070be2e8ada0087de6a99ef8097d6a010c010d01016c02e2e8ada0087de6a99ef8097d6c01d581cdb40c0101000200010101000a6765745f626c6f636b730002",
+    "name": "transactions_response",
+    "textual": "(record { log_length = 2; transactions = vec {}; archived_transactions = vec { record { start = 0; length = 2; callback = func \"aaaaa-aa\".\"get_blocks\" } } })"
+  }
+]

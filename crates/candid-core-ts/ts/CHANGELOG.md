@@ -164,6 +164,60 @@ the `c`, `Schema` and `PrincipalValue` exports 0.2.0 already has. The
 `Schema` documentation comment that quoted the old generated line is
 updated.
 
+### Encoded bytes no longer depend on how a schema was built; bad options throw
+
+Two fail-open behaviours closed (issue #190). Neither changes a validation
+verdict, an issue code, a decoded value, or a generated binding.
+
+- **BREAKING**: `encode` and `encodeArgs` write a *structural* type table.
+  The table used to be keyed by schema-object identity, so the same value
+  encoded through a generated module and through `schemaFromContract` could
+  produce different bytes — the ledger fixture's `TransferArg` wrote an
+  11-entry table through the generated schema and a 7-entry one through the
+  loaded schema. Anything keying a cache or deduplicating requests on
+  argument bytes saw two keys for one call. Equal Candid types now produce
+  equal entries, written once: bytes depend on the values and the types, not
+  on whether the schema was generated, loaded or hand-built, how it shares or
+  duplicates nodes, or in which order a record's schema or value spells its
+  keys. `blob` and `vec nat8` share one entry. A schema with no repeated
+  structure writes exactly the bytes it wrote before — every checked-in wire
+  golden is unchanged — and a schema with repeated anonymous structure now
+  writes a smaller table, still valid Candid that every decoder reads; for
+  the ledger vectors it is byte-for-byte what the `candid` crate writes.
+  Recursive types are canonical per knot: schemas generated from or loaded
+  from a Contract (one knot per recursive node, the Contract canonicalizer
+  having already minimised the graph) agree, while two separately hand-built
+  knots for one recursive type are not merged — cyclic minimisation is a
+  non-goal, and the case is pinned. `maxTypeTableEntries` still charges one
+  entry per distinct composite schema node the encoder's walk meets, before
+  merging, so where it refuses is unchanged. The rewrite is iterative and
+  linear in the table's size.
+- **BREAKING**: every entry point that takes an options object — `validate`
+  and `unwrapResult` in `./validate`, `encode`, `encodeArgs`, `decode` and
+  `decodeArgs` in `./codec`, `schemaFromContract` in `./contract` — throws
+  `TypeError` on an own key it does not define (a misspelled limit used to
+  apply the default silently; `maxIssues` passed to `encode` is now an error
+  too), and on a limit that is not a non-negative safe integer: `NaN`, a
+  negative, a fraction, a string, `null`, and `Infinity` all throw. A `NaN`
+  limit used to switch its bound off entirely (`validate` accepted a
+  depth-300 value under `maxDepth: NaN`) and a string one was compared as a
+  string. Options are code, not input, so this is a `TypeError` like the
+  ones `resolveSchema`, `serviceMethods` and `unwrapResult` already throw,
+  not a new issue code; it is raised before anything else is read.
+  `undefined` still means "use the default", and `0` is still a valid,
+  fail-closed limit. Each option is read from the caller's object exactly
+  once, into a frozen snapshot that the whole call — nested calls included —
+  reads instead, so a getter or Proxy cannot pass the check with one value
+  and run with another; an options object whose getter or Proxy trap throws
+  while being read raises a `TypeError` naming the entry point, with the
+  original exception as its `cause`. Values, byte strings and Contract documents still never
+  make these functions throw. Refusing `Infinity` is the recommendation
+  recorded on issue #190, pending the maintainer: a trusted host that wants
+  no practical bound passes a large safe integer.
+- Two internal modules ship in `dist/` without an export: `options.js` (the
+  shared option check) and `typetable.js` (the structural table). Deep
+  imports of them fail like every other internal module.
+
 ## 0.2.0 — 2026-08-24
 
 Pairs with `candid-core` 0.1.0-beta.3.

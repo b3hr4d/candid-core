@@ -507,7 +507,10 @@ export type ValidateResult =
     terminal <code>unreadable_value</code> issue instead. Data never throws. Passing the wrong
     <em>schema</em> does: <code>resolveSchema</code>, <code>serviceMethods</code>,
     and <code>unwrapResult</code> raise a <code>TypeError</code> eagerly, which is a programmer
-    error rather than a failure mode.
+    error rather than a failure mode. So does passing the wrong <em>options</em>: every entry point
+    above throws <code>TypeError</code> for an unknown option key or a limit that is not a
+    non-negative safe integer, before it reads anything — the TypeScript counterpart of the Rust
+    policy's refusal of unknown override fields.
   </li>
   <li>
     <strong>No sentinel on the issue cap.</strong> Rust replaces the last slot with a

@@ -419,8 +419,13 @@ built.actor; // the service schema, when the document has one
 </table>
 
 <p>
-  Nothing throws — not even when the document itself fights inspection with accessors or Proxy
-  traps, which become an <code>invalid_contract_document</code> issue at the choke point.
+  Nothing throws for a document — not even when the document itself fights inspection with
+  accessors or Proxy traps, which become an <code>invalid_contract_document</code> issue at the
+  choke point. The options object is code, not document data, and is checked before the document is
+  read: an own key other than <code>names</code> and the three caps above, or a cap that is not a
+  non-negative safe integer (<code>NaN</code>, negative, fractional, a string, <code>null</code>,
+  <code>Infinity</code>), throws <code>TypeError</code>. <code>0</code> is a valid cap that refuses
+  any non-empty document part it bounds.
   <code>ContractIssueCode</code> is a closed union of 15 members; several deliberately reuse the
   codes candid-core's own Rust validator produces for the same condition, so the two loaders refuse
   the same documents under the same names.
