@@ -427,6 +427,60 @@ const VECTORS: &[(&str, &[Case])] = &[
             },
         ],
     ),
+    (
+        // Issue #191: a declared primitive names only itself, and every
+        // `vec nat8` is a blob whatever its element is called. These values
+        // cross the wire as reference bytes; the TypeScript suites decode
+        // them under the generated and the loaded schema alike, and the
+        // reference decodes what the TS encoder writes back.
+        "fidelity",
+        &[
+            Case {
+                name: "memo",
+                declaration: "R",
+                textual: "(record { a = 1; b = 2 })",
+            },
+            Case {
+                name: "raw_full",
+                declaration: "Raw",
+                textual: "(record { raw = blob \"\\01\\02\"; bytes = blob \"\\03\\04\"; \
+                          grid = vec { blob \"\\05\"; blob \"\" }; maybe = opt blob \"\\06\"; \
+                          one = 7; plain = 8 })",
+            },
+            Case {
+                name: "raw_empty",
+                declaration: "Raw",
+                textual: "(record { raw = blob \"\"; bytes = vec {}; grid = vec {}; \
+                          maybe = null; one = 0; plain = 255 })",
+            },
+            Case {
+                name: "timing",
+                declaration: "Timing",
+                textual: "(record { started = 1; elapsed = 2; raw = -3 })",
+            },
+            Case {
+                name: "transfer_arg",
+                declaration: "TransferArg",
+                textual: "(record { to = record { owner = principal \"aaaaa-aa\"; \
+                          subaccount = opt blob \"\\09\" }; amount = 100; fee = opt 10 })",
+            },
+            Case {
+                name: "transfer_ok",
+                declaration: "TransferResult",
+                textual: "(variant { Ok = 42 })",
+            },
+            Case {
+                name: "transfer_err",
+                declaration: "TransferResult",
+                textual: "(variant { Err = \"bad\" })",
+            },
+            Case {
+                name: "owned",
+                declaration: "Owned",
+                textual: "(record { by = principal \"aaaaa-aa\"; alias = principal \"2vxsx-fae\" })",
+            },
+        ],
+    ),
 ];
 
 fn goldens_dir() -> PathBuf {

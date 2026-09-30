@@ -19,7 +19,9 @@
 // Every owner-reviewed decision in `candid-core-ts`'s Rust emitter holds here,
 // checked by the golden cross-check test:
 //
-// - anonymous `vec nat8` (an inner node no declaration names) is a blob;
+// - every `vec nat8` is a blob, whatever its element type is called: a
+//   declared `type Byte = nat8` does not turn `vec Byte` into an array of
+//   numbers (issue #191);
 // - a record whose ids are exactly `0..n-1` is a tuple; an empty record is
 //   the unit schema; label text comes from a caller-supplied name table and
 //   an unnamed field renders by the `_id_` convention;
@@ -1001,14 +1003,6 @@ function buildFromContract(
   // through `c.rec`, with `validate`'s depth limit as the runtime bound.
   const sound = parsed as ParsedNode[];
 
-  // The generator's `first_names`: the first declaration name for each node
-  // decides the blob rule ("an element type the Contract declares by name is
-  // a deliberate abstraction and keeps its name").
-  const declared = new Set<number>();
-  for (const declaration of parsedDeclarations) {
-    declared.add(declaration.type);
-  }
-
   const memo: (AnySchema | undefined)[] = new Array(types.length);
   const schemaAt = (ref: number): AnySchema => {
     const existing = memo[ref];
@@ -1030,7 +1024,7 @@ function buildFromContract(
         return c.opt(lazy(node.inner));
       case "vec": {
         const inner = sound[node.inner];
-        if (!declared.has(node.inner) && inner.kind === "primitive" && inner.primitive === "nat8") {
+        if (inner.kind === "primitive" && inner.primitive === "nat8") {
           return c.blob();
         }
         return c.vec(lazy(node.inner));

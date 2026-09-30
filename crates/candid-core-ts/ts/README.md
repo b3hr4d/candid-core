@@ -334,7 +334,7 @@ Types describe the modern domain, not the agent-js runtime shapes: `opt T` is
 `T | null` — except that an opt whose inner type admits `null` (`opt opt T`,
 `opt null`, `opt reserved`) is `{ some: T } | null`, so `None`, `Some(None)`,
 and `Some(Some(x))` stay three distinct values — variants are
-`{ tag, value }` discriminated unions, anonymous `vec nat8` is `Uint8Array`,
+`{ tag, value }` discriminated unions, every `vec nat8` (`blob`) is `Uint8Array`,
 `nat`/`int`/64-bit integers are `bigint`, and principals are their canonical
 text, the branded [`Principal`](#principal-values) string.
 Compatibility with agent-js value shapes is an explicit non-goal, recorded on

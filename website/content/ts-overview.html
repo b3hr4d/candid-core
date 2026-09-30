@@ -137,7 +137,7 @@ export { $Items as Items };
 <ul>
   <li><code>opt T</code> is <code>T | null</code>, not <code>[] | [T]</code>.</li>
   <li>A variant is a <code>{ tag, value }</code> discriminated union, not a single-key object.</li>
-  <li>An anonymous <code>vec nat8</code> is a <code>Uint8Array</code>, not a <code>number[]</code>.</li>
+  <li>A <code>vec nat8</code> (<code>blob</code>) is a <code>Uint8Array</code>, not a <code>number[]</code>, whatever its element type is called.</li>
   <li><code>nat</code>, <code>int</code> and the 64-bit widths are <code>bigint</code>.</li>
   <li>
     <code>principal</code> is <code>Principal</code>: its canonical text as a branded string —

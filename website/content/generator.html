@@ -94,7 +94,7 @@ export { $Unit as Unit };
 </pre>
 
 <p>Several mapping decisions are visible in those thirty lines. <code>blob</code> and the inner
-anonymous <code>vec nat8</code> of <code>Grid</code> both become <code>Uint8Array</code>. The
+<code>vec nat8</code> of <code>Grid</code> both become <code>Uint8Array</code>. The
 tuple-syntax record becomes a TypeScript tuple, because Candid lowers <code>record { nat; text }</code>
 to a record whose labels are the sequential ids <code>0..n</code>. <code>opt</code> becomes
 <code>| null</code>. <code>Items</code> references the declared <code>Item</code> by name instead of
@@ -149,6 +149,84 @@ export { $actor as actor, type $Actor as Actor };
 <code>"update"</code>. The exports <code>actor</code> (the service schema) and <code>Actor</code> (a
 type) are the pair a call layer needs: the service schema to encode and decode with, and the typed interface it
 cannot re-derive from the schema's type.</p>
+
+<h3>A declared primitive names only itself</h3>
+
+<p>The Contract arena stores one node per structure, so every <code>nat64</code> in an interface is
+the same node whichever declaration spelled it. Composite nodes render by the name of their first
+declaration; a <em>primitive</em> never does. Every use renders structurally and a declaration of
+it is still emitted and exported as itself:</p>
+
+<pre data-lang="candid">
+type Memo = nat64;
+type Byte = nat8;
+type Tokens = nat;
+type BlockIndex = nat;
+type R = record { a : nat64; b : Memo; raw : blob; bytes : vec Byte };
+type Transfer = record { amount : Tokens; block : BlockIndex };
+</pre>
+
+<pre data-lang="ts">
+type $R = { a: bigint; b: bigint; raw: Uint8Array; bytes: Uint8Array };
+type $Transfer = { block: bigint; amount: bigint };
+type $Memo = bigint;
+type $Tokens = bigint;
+type $BlockIndex = bigint;
+</pre>
+
+<p>Before issue #191 one declaration renamed every use of its primitive: <code>Tokens</code> and
+<code>BlockIndex</code> collapsed to whichever came first, and the single <code>type Byte = nat8</code>
+turned every <code>blob</code> in the interface into <code>number[]</code>. A <code>blob</code> — any
+<code>vec</code> of a <code>nat8</code>, however named — is now always <code>Uint8Array</code>, in the
+generated module and in <code>schemaFromContract</code> alike. The price is the source spelling:
+<code>amount : Tokens</code> reads <code>amount: bigint</code>, the same type.</p>
+
+<h3>Doc comments become JSDoc</h3>
+
+<p>The <code>.did</code>&rsquo;s doc comments and argument names travel in the provenance sidecar, and
+the generator writes them as JSDoc: above each exported type and const, on record properties and
+variant arms, and on the methods of <code>Actor</code>, with a <code>@param</code> for each argument
+the <code>.did</code> named. The <code>Actor</code> method&rsquo;s parameters take those names.</p>
+
+<pre data-lang="candid">
+/// A transfer request.
+type Transfer = record {
+  /// Who receives the tokens.
+  to : principal;
+  amount : nat;
+};
+service : {
+  /// Move tokens.
+  send : (request : Transfer, memo : opt text) -> (nat);
+}
+</pre>
+
+<pre data-lang="ts">
+/** A transfer request. */
+type $Transfer = {
+  /** Who receives the tokens. */
+  to: $.Principal;
+  amount: bigint;
+};
+type $Actor = {
+  /**
+   * Move tokens.
+   * @param request
+   * @param memo
+   */
+  send: (request: $Transfer, memo: string | null) => Promise<bigint>;
+};
+</pre>
+
+<p>Candid&rsquo;s doc comment is the line comment (<code>///</code>, or plain <code>//</code> lines)
+directly above the item; block comments are not docs. Doc text is neutralised rather than
+interpreted: <code>*/</code> is written <code>*\/</code>, an <code>@</code> that could start a tag or an
+inline link is written <code>\@</code>, and a code fence is escaped, so a comment can neither end
+early nor forge or swallow a <code>@param</code>. A record or union with any documented member spans
+several lines; one with none keeps its single-line form, and tuple elements, which have no property
+to carry a doc, get none. When the arena has de-duplicated two spellings into one node, the docs come
+from the declaration whose structure is being emitted, and occurrences that disagree are dropped, not
+merged.</p>
 
 <h2>The public API</h2>
 

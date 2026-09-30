@@ -37,6 +37,8 @@ fn modules_match_the_generator_goldens() {
         "arms",
         "options",
         "shadowing",
+        "fidelity",
+        "docs",
     ] {
         let source = repo(&format!("crates/candid-core-ts/tests/fixtures/{name}.did"));
         let golden = repo(&format!("crates/candid-core-ts/tests/goldens/{name}.ts"));

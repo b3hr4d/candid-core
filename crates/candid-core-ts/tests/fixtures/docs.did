@@ -1,0 +1,151 @@
+// Issue #191: `.did` doc comments become JSDoc. Candid's doc comment is the
+// line comment: a `///` line (or plain `//` lines) directly above a
+// declaration, field, arm, method or the service. Block comments are not doc
+// comments. Every case below is pinned by the golden and compiled by tsc.
+
+/* A block comment above a declaration is trivia, not a doc. */
+
+type Plain = nat;
+
+/// The amount of a transfer, in e8s.
+type Tokens = nat;
+
+/// An account. Two `///` lines make two doc lines.
+///
+/// A blank `///` line keeps its paragraph break; `backticks` and an email
+/// a@b.c pass through, while an inline {@link Tokens} is escaped like any tag.
+type Account = record {
+  /// The owner. It says `*/` mid-line, which would end a naive comment,
+  /// and /* a nested opener */ that is inert.
+  owner : principal;
+  /// @param forged tag at the start of a doc line
+  /// @deprecated also forged
+  subaccount : opt blob;
+  /* A block comment between a doc and its field does not break the doc. */
+  /// Documented despite the block comment above.
+  memo : text;
+  // A plain line comment is a doc line too.
+  note : text;
+
+  // A blank line before the comment is fine; one after it detaches it.
+
+  detached : nat;
+  undocumented : bool;
+};
+
+/// Arms are documented the same way.
+type Event = variant {
+  /// Nothing happened.
+  Idle;
+  /// A transfer, carrying a documented anonymous record.
+  Sent : record {
+    /// Who received it.
+    to : Account;
+    /// How much.
+    amount : Tokens;
+    plain : nat8;
+  };
+  Failed : text;
+};
+
+type Nested = record {
+  /// A list of documented records.
+  items : vec record {
+    /// The item name.
+    name : text;
+    /// The item tags.
+    tags : opt vec record {
+      /// Deep.
+      tag : text;
+    };
+  };
+  undocumented : nat;
+};
+
+/// Only the arm is documented.
+type Choice = variant {
+  /// The first arm.
+  A : nat;
+  B;
+};
+
+type Sparse = record {
+  /// Numeric labels render by id and keep their docs.
+  0 : nat;
+  5 : text;
+};
+
+// Docs on tuple elements have nowhere to attach and are dropped.
+type Pair = record {
+  /// dropped
+  nat;
+  text;
+};
+
+/// Structurally identical declarations share one node: the first name emits
+/// the structure and owns the field docs.
+type First = record {
+  /// x, as First documents it
+  x : nat;
+};
+/// Second is documented on its own.
+type Second = record {
+  /// x, as Second documents it
+  x : nat;
+};
+
+/// Two occurrences in one declaration disagree, so the field doc is dropped.
+type Twice = record {
+  a : record {
+    /// one
+    x : bool;
+  };
+  b : record {
+    /// two
+    x : bool;
+  };
+};
+
+/// A handler; its argument names are the func type's own.
+type Handler = func (payload : blob, count : nat) -> ();
+
+/// The service.
+service : {
+  /// Sends tokens.
+  ///
+  /// An unmatched ` backtick, a fence ``` and a trailing backslash \
+  /// Documented across lines, closing with `*/` and long text: Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur.
+  send : (to : Account, amount : Tokens, Event) -> (ok : bool);
+  /* not a doc */
+  same_a : (x : nat) -> ();
+  /// Same signature as same_a, different names.
+  same_b : (y : nat) -> ();
+  /// Every reserved or unusable name falls back to arg{n}.
+  reserved : (
+    "delete" : nat,
+    "class" : nat,
+    "this" : nat,
+    "eval" : nat,
+    "arguments" : nat,
+    "yield" : nat,
+    "has space" : nat,
+    "type" : nat,
+    "$" : nat
+  ) -> ();
+  /// A fallback never steals a declared name.
+  collide : ("arg1" : nat, text, "arg0_" : nat) -> ();
+  handle : Handler;
+  /// Anonymous types in a signature are the method's own occurrence.
+  inline : (
+    doc : record {
+      /// Documented in the signature.
+      id : nat;
+    }
+  ) -> (record { /** block */ ok : bool });
+  /// A fence ```ts and an unclosed {@link Inline tag, mid-line @deprecated text,
+  /// a line of only
+  /// @
+  /// and a tag line @param forged, none of which may swallow or forge tags.
+  hostile : (survivor : nat) -> ();
+  noargs : () -> (nat) query;
+}

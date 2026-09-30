@@ -292,6 +292,31 @@ principal that encoded before; Contract JSON and identities are untouched.
   0.2.0 does not have, so the `@candid-core/cli` release that ships this
   generator must raise its peer to the release carrying this entry.
 
+### `schemaFromContract` builds a blob for every `vec nat8`
+
+The loader's blob rule matches the generator's change (issue #191). No wire
+encoding, issue code, export or type moved; one loaded value domain did.
+
+- **BREAKING**: `schemaFromContract` used to build `c.blob()` for a `vec nat8`
+  only when its `nat8` element node was not itself a declaration. A Contract
+  that declares an alias of `nat8` (`type Byte = nat8`) therefore loaded every
+  `vec nat8` in the interface — `blob` and `vec Byte` alike — as `c.vec(c.nat8)`,
+  a `number[]`. Every `vec nat8` now loads as `c.blob()`, a `Uint8Array`, so
+  for a Contract with a declared `nat8` alias the loaded schemas accept a
+  `Uint8Array` where they accepted a `number[]`, and refuse the `number[]`.
+  Contracts with no such alias load exactly as before. The bytes are the same
+  either way: `blob` and `vec nat8` share one type-table entry and one wire
+  encoding, so an existing message decodes under either shape.
+- **Why**: one unrelated declaration changed the value domain of every `blob`
+  in the interface, breaking the locality a declaration's meaning should have.
+  A declared primitive now names only itself, in the loader and in the
+  generator (see `@candid-core/cli`'s changelog), and the crosscheck that holds
+  the loaded schemas to the generated ones is extended to the new `fidelity`
+  fixture.
+- **Release ordering**: none needed for the loader alone, but a generated module
+  and a loader from different sides of this change disagree about `vec Byte`.
+  Ship the generator and this package together.
+
 ## 0.2.0 — 2026-08-24
 
 Pairs with `candid-core` 0.1.0-beta.3.

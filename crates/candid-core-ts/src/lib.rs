@@ -37,7 +37,8 @@
 //! By owner decision on issue #38, the output is the clean modern reading of
 //! a Contract rather than the shapes the agent-js runtime produces: `opt T`
 //! is `T | null`, variants are discriminated `{ tag, value }` unions, and
-//! anonymous `vec nat8` is `Uint8Array`. Two consequences are deliberate.
+//! every `vec nat8` — `blob` — is `Uint8Array`. Two consequences are
+//! deliberate.
 //! An `opt` whose inner type can itself be `null` — another `opt`, `null`,
 //! `reserved` — is *boxed*: `{ some: T } | null`, because `T | null` cannot
 //! carry `None` versus `Some(None)` there. Only those opts box; `opt opt nat`
@@ -48,6 +49,62 @@
 //! And consuming these types against a live agent needs a boundary
 //! conversion, which is future work recorded on the issue — the types
 //! describe the domain, not the transport.
+//!
+//! # A declared primitive names only itself
+//!
+//! The Contract arena de-duplicates structurally identical nodes, so every use
+//! of `nat64` in an interface is one node whichever declaration spelled it.
+//! The generator renders a *composite* node by its first declaration's name —
+//! a naming choice — but never a *primitive* one: since issue #191 every use
+//! of a primitive renders structurally (`bigint`, `$.c.nat64`, `$.Principal`
+//! for `principal`), and a declaration of it is emitted as itself.
+//!
+//! ```ts
+//! // type Memo = nat64; type R = record { a : nat64; b : Memo };
+//! type $Memo = bigint;
+//! type $R = { a: bigint; b: bigint }; // not { a: Memo; b: Memo }
+//! ```
+//!
+//! Before, one declaration renamed every use of its primitive across the whole
+//! interface: `type Tokens = nat; type BlockIndex = nat` rendered a `Tokens`
+//! field as `BlockIndex`, and `type Byte = nat8` turned every `blob` into
+//! `Array<Byte>` — a value-domain change (`number[]` for `Uint8Array`) caused
+//! by an unrelated declaration. A `blob`, and any `vec` of a `nat8` however
+//! named, is always `Uint8Array` / `$.c.blob()`. The cost is the source
+//! spelling: a field written `amount : Tokens` reads `amount: bigint`, the
+//! same type. Composite nodes keep first-name rendering, as before; two
+//! structurally equal *records* still collapse to the first name.
+//!
+//! # `.did` docs become JSDoc
+//!
+//! `TsNames::from_source_info` carries the sidecar's doc comments and
+//! argument names to the generator (issue #191), which writes `/** … */`
+//! above each exported type and const, on each record property and each
+//! variant arm's `tag`, and on each method of the `Actor` type, with `@param`
+//! tags for the argument names the `.did` wrote. The `Actor` method's own
+//! parameters take those names; an unnamed argument, a reserved word, a name
+//! that is not identifier-shaped, or a collision falls back to `arg{n}`, and
+//! earns no `@param`.
+//!
+//! Candid's doc comment is the line comment: a `///` run (or plain `//` lines)
+//! directly above a declaration, field, arm, method or the service. Block
+//! comments are not docs. A node the arena has de-duplicated can carry several
+//! occurrences' docs, and one rule picks: **the docs written inside the
+//! declaration (or the actor) whose structure is being emitted** — the first
+//! declaration for a node rendered by name, the containing declaration for an
+//! anonymous one, the method's own occurrence in a signature. Occurrences
+//! inside one origin that disagree are dropped, never merged. A
+//! documented record or union spans several lines (Prettier's layout); one
+//! with no docs keeps its one-line form.
+//!
+//! Doc text is neutralised, not interpreted: `*/` is written `*\/`, an `@`
+//! that could start a tag or an inline link is written `\@`, and a run of three
+//! backticks (a code fence the reader would never close) is written with each
+//! backtick escaped — measured against the TypeScript compiler's own JSDoc
+//! reader, so a `.did` comment can neither end its comment, nor forge a
+//! `@param` or `@deprecated`, nor swallow the generator's own `@param` tags.
+//! Tuple elements have no property to carry a doc and get none, and the
+//! compiler-free [`TsNames::from_pairs`] surface carries no docs at all.
 //!
 //! # Module layout: collision-free `$` bindings
 //!
@@ -110,14 +167,26 @@
 use std::collections::BTreeMap;
 use std::fmt;
 
-use candid_core::{Contract, Field, PrimitiveType, TypeNode, TypeRef};
+use candid_core::{Contract, Field, PrimitiveType, ServiceMethod, TypeNode, TypeRef};
 
-/// Caller-supplied field label text, keyed by `(container node, label id)`.
+mod docs;
+
+use docs::{doc_block, resolve_parameters, Origin, Parameter, Provenance};
+
+/// Caller-supplied provenance: field label text keyed by `(container node,
+/// label id)`, and — when built from a compilation — the `.did` doc comments
+/// and argument names the generator renders as JSDoc (issue #191).
 ///
 /// The semantic Contract stores only label IDs; see the crate docs for why.
+/// Docs and argument names are provenance of the same kind and travel the
+/// same way, so one table carries all three: [`TsNames::new`] and
+/// [`TsNames::from_pairs`] build the compiler-free base surface, which names
+/// fields and documents nothing, and `TsNames::from_source_info` fills
+/// everything the sidecar records.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct TsNames {
     labels: BTreeMap<(TypeRef, u32), String>,
+    provenance: Provenance,
 }
 
 impl TsNames {
@@ -148,7 +217,10 @@ impl TsNames {
     /// Fill the table from a compilation's provenance sidecar.
     ///
     /// Only named labels are recorded: a numeric Candid label carries no name,
-    /// and its provenance entry must not override the `_id_` rendering.
+    /// and its provenance entry must not override the `_id_` rendering. The
+    /// sidecar's doc comments and argument names are recorded too, and become
+    /// JSDoc; see the crate docs for the occurrence rule that picks which
+    /// occurrence documents a node the arena has de-duplicated.
     #[cfg(feature = "compiler")]
     pub fn from_source_info(source_info: &candid_core::SourceInfo) -> Self {
         let mut names = Self::new();
@@ -157,6 +229,7 @@ impl TsNames {
                 names.insert(provenance.container, provenance.id, name.clone());
             }
         }
+        names.provenance = Provenance::from_source_info(source_info);
         names
     }
 
@@ -317,6 +390,8 @@ pub fn generate_module(
         declared: first_names(contract),
         principal,
         uses_principal: false,
+        origins: Vec::new(),
+        indent: 0,
     }
     .module(options)
 }
@@ -329,11 +404,27 @@ fn local(name: &str) -> String {
     format!("${name}")
 }
 
-/// The first declaration name for each node, in declaration order. Later
-/// aliases of the same node render as references to the first name.
+/// The first declaration name for each *composite* node, in declaration
+/// order. Later aliases of the same node render as references to the first
+/// name.
+///
+/// A primitive node is never in the map. The Contract arena de-duplicates
+/// structurally identical nodes, so every `nat64` in an interface is one node
+/// whichever declaration spells it — and a name recorded for it would be
+/// rendered at *every* use of that primitive, including the ones that never
+/// wrote the name (issue #191): `type Memo = nat64` would turn an unrelated
+/// `nat64` field into `Memo`, and `type Byte = nat8` would turn every `blob`
+/// into `Array<Byte>`. A primitive declaration is still emitted, structurally
+/// (`type $Memo = bigint`); it just names nothing but itself.
 fn first_names(contract: &Contract) -> BTreeMap<TypeRef, String> {
     let mut map = BTreeMap::new();
     for declaration in contract.declarations() {
+        if matches!(
+            contract.types().get(declaration.ty as usize),
+            Some(TypeNode::Primitive { .. })
+        ) {
+            continue;
+        }
         map.entry(declaration.ty)
             .or_insert_with(|| declaration.name.clone());
     }
@@ -359,6 +450,21 @@ struct Generator<'a> {
     /// `Principal` for a non-default [`TsOptions::principal_import`].
     principal: &'static str,
     uses_principal: bool,
+    /// The origins the doc lookups of the structure being emitted are scoped
+    /// to, in priority order (see `docs`): the declaration being emitted, or
+    /// for an `Actor` method the method's own occurrence and then the
+    /// declaration of its function type.
+    origins: Vec<Origin>,
+    /// The nesting level, in two-space units, of the line a rendered alias
+    /// expression starts on. Only an alias containing docs spans lines, and
+    /// its members indent from here.
+    indent: usize,
+}
+
+/// One member of an object type in an alias: its docs and its text.
+struct Member {
+    docs: Vec<String>,
+    text: String,
 }
 
 impl Generator<'_> {
@@ -400,11 +506,22 @@ impl Generator<'_> {
             //
             // Both meanings bind the `$`-prefixed local and leave under the
             // Candid name through one export specifier (issue #188).
+            self.origins = vec![Origin::of(&declaration.name)];
+            self.indent = 0;
             let alias = self.declaration_body(target_ty, &declaration.name, Target::Alias)?;
             let builder = self.declaration_body(target_ty, &declaration.name, Target::Builder)?;
+            // The declaration's docs sit above both meanings of the local:
+            // a hover on either the type or the value reads them, and the
+            // `export` specifier carries whichever the consumer uses.
+            let docs = doc_block(
+                0,
+                self.names.provenance.declaration_docs(&declaration.name),
+                &[],
+            );
+            let local = local(&declaration.name);
             aliases.push(format!(
-                "type {local} = {alias};\nconst {local}: $.Schema<{local}> = $.c.rec(() => {builder});\nexport {{ {local} as {name} }};\n",
-                local = local(&declaration.name),
+                "{docs}{}\n{docs}const {local}: $.Schema<{local}> = $.c.rec(() => {builder});\nexport {{ {local} as {name} }};\n",
+                assign(&format!("type {local}"), &alias) + ";",
                 name = declaration.name,
             ));
         }
@@ -429,16 +546,31 @@ impl Generator<'_> {
                 TypeNode::Service { methods } => methods.clone(),
                 _ => Vec::new(),
             };
+            // A method's docs and argument names come from the service's
+            // occurrence in the actor position, else from the first
+            // declaration the generator emits for the service node (an actor
+            // written `service : S`), by the same occurrence rule as fields.
+            let mut method_origins = vec![Origin::Actor];
+            if let Some(first) = self.declared.get(&service_ty) {
+                method_origins.push(Origin::Declaration(first.clone()));
+            }
             let mut signatures = Vec::with_capacity(methods.len());
             for method in &methods {
                 let func = match self.node(method.function)? {
                     TypeNode::Func { args, results, .. } => (args.clone(), results.clone()),
                     _ => (Vec::new(), Vec::new()),
                 };
+                let (docs, parameters, origins) =
+                    self.method_provenance(&method_origins, service_ty, method, func.0.len());
+                // Anonymous types in the signature are the method's own
+                // occurrence; method members sit one level in.
+                self.origins = origins;
+                self.indent = 1;
                 let mut params = Vec::with_capacity(func.0.len());
-                for (position, arg) in func.0.iter().enumerate() {
+                for (arg, parameter) in func.0.iter().zip(&parameters) {
                     params.push(format!(
-                        "arg{position}: {}",
+                        "{}: {}",
+                        parameter.name,
                         self.render(*arg, "actor", Target::Alias)?
                     ));
                 }
@@ -453,18 +585,25 @@ impl Generator<'_> {
                         format!("[{}]", parts.join(", "))
                     }
                 };
+                let tags: Vec<String> = parameters
+                    .iter()
+                    .filter(|parameter| parameter.declared)
+                    .map(|parameter| parameter.name.clone())
+                    .collect();
                 signatures.push(format!(
-                    "  {key}: ({params}) => Promise<{reply}>;",
+                    "{}  {key}: ({params}) => Promise<{reply}>;",
+                    doc_block(1, &docs, &tags),
                     key = method_key(&method.name),
                     params = params.join(", "),
                 ));
             }
+            let docs = doc_block(0, self.names.provenance.actor_docs(), &[]);
             actor_out.push_str(&format!(
-                "const $actor: $.Schema<{principal}> = $.c.rec(() => {builder});\n",
+                "{docs}const $actor: $.Schema<{principal}> = $.c.rec(() => {builder});\n",
                 principal = self.principal,
             ));
             actor_out.push_str(&format!(
-                "type $Actor = {{\n{}\n}};\n",
+                "{docs}type $Actor = {{\n{}\n}};\n",
                 signatures.join("\n")
             ));
             actor_out.push_str("export { $actor as actor, type $Actor as Actor };\n");
@@ -515,6 +654,79 @@ impl Generator<'_> {
             Some(first) if first != own_name => Ok(local(first)),
             _ => self.render_structure(ty, own_name, target),
         }
+    }
+
+    /// The docs, parameter names and doc origins for one `Actor` method.
+    ///
+    /// The method's occurrence is the first of `origins` that wrote it. Its
+    /// argument names are those written on its own inline function type; a
+    /// method typed by a reference (`f : Handler`) writes none there, so they
+    /// come from the first declaration the generator emits for the function
+    /// node. The origins returned scope the doc lookups of the anonymous
+    /// types in the signature in the same order: the method's own occurrence
+    /// first, then that declaration.
+    fn method_provenance(
+        &self,
+        origins: &[Origin],
+        service: TypeRef,
+        method: &ServiceMethod,
+        arguments: usize,
+    ) -> (Vec<String>, Vec<Parameter>, Vec<Origin>) {
+        let provenance = &self.names.provenance;
+        let occurrence = origins.iter().find_map(|origin| {
+            provenance
+                .method(origin, service, &method.name)
+                .map(|(docs, path)| (origin, docs, path))
+        });
+        let mut sources: Vec<(Origin, String)> = Vec::new();
+        let mut scope: Vec<Origin> = Vec::new();
+        if let Some((origin, _, path)) = &occurrence {
+            scope.push((*origin).clone());
+            if let Some(path) = path {
+                sources.push(((*origin).clone(), format!("{path}.function")));
+            }
+        }
+        if let Some(first) = self.declared.get(&method.function) {
+            scope.push(Origin::Declaration(first.clone()));
+            sources.push((Origin::Declaration(first.clone()), format!("type:{first}")));
+        }
+        let declared: Vec<Option<String>> = (0..arguments)
+            .map(|position| {
+                sources.iter().find_map(|(origin, path)| {
+                    provenance
+                        .argument_name(origin, path, method.function, position)
+                        .map(str::to_string)
+                })
+            })
+            .collect();
+        let docs = occurrence
+            .map(|(_, docs, _)| docs.to_vec())
+            .unwrap_or_default();
+        (docs, resolve_parameters(&declared), scope)
+    }
+
+    /// An object type from its members. Single-line when nothing in it spans
+    /// lines — the form every doc-free alias has always had — and one member
+    /// per line, each preceded by its docs, otherwise. `level` is the
+    /// nesting level of the line the opening brace is on.
+    fn object_type(members: &[Member], level: usize) -> String {
+        if members
+            .iter()
+            .all(|member| member.docs.is_empty() && !member.text.contains('\n'))
+        {
+            let texts: Vec<&str> = members.iter().map(|member| member.text.as_str()).collect();
+            return format!("{{ {} }}", texts.join("; "));
+        }
+        let mut out = String::from("{\n");
+        for member in members {
+            out.push_str(&doc_block(level + 1, &member.docs, &[]));
+            out.push_str(&"  ".repeat(level + 1));
+            out.push_str(&member.text);
+            out.push_str(";\n");
+        }
+        out.push_str(&"  ".repeat(level));
+        out.push('}');
+        out
     }
 
     fn node(&self, reference: TypeRef) -> Result<&TypeNode, TsGenError> {
@@ -582,19 +794,19 @@ impl Generator<'_> {
             }
             TypeNode::Vec { inner } => {
                 // `vec nat8` is binary data, and `Uint8Array` is its modern
-                // type. Only the *anonymous* nat8 node gets it: an element
-                // type the Contract declares by name (`type Byte = nat8`) is a
-                // deliberate abstraction and keeps its name.
-                if !self.declared.contains_key(&inner) {
-                    if let TypeNode::Primitive {
-                        primitive: PrimitiveType::Nat8,
-                    } = self.node(inner)?
-                    {
-                        return Ok(match target {
-                            Target::Alias => "Uint8Array".to_string(),
-                            Target::Builder => "$.c.blob()".to_string(),
-                        });
-                    }
+                // type — always, whatever the element is called: in Candid
+                // `blob` *is* `vec nat8`, so `vec Byte` with `type Byte =
+                // nat8` is the same type, and one unrelated declaration must
+                // not change the value domain of every blob in the
+                // interface (issue #191, amending #38).
+                if let TypeNode::Primitive {
+                    primitive: PrimitiveType::Nat8,
+                } = self.node(inner)?
+                {
+                    return Ok(match target {
+                        Target::Alias => "Uint8Array".to_string(),
+                        Target::Builder => "$.c.blob()".to_string(),
+                    });
                 }
                 let inner = self.render(inner, declaration, target)?;
                 Ok(match target {
@@ -621,16 +833,35 @@ impl Generator<'_> {
                         Target::Builder => format!("$.c.tuple([{}])", elements.join(", ")),
                     });
                 }
+                // Members of a multi-line object sit one level in; a member's
+                // own nested object indents from there.
+                let level = self.indent;
+                if target == Target::Alias {
+                    self.indent = level + 1;
+                }
                 let mut members = Vec::with_capacity(fields.len());
                 for field in &fields {
                     self.check_reserved_name(reference, field.id, declaration)?;
                     let key = self.field_key(reference, field.id, target);
                     let value = self.render(field.ty, declaration, target)?;
-                    members.push(format!("{key}: {value}"));
+                    let docs = self
+                        .names
+                        .provenance
+                        .field_docs(&self.origins, reference, field.id)
+                        .to_vec();
+                    members.push(Member {
+                        docs,
+                        text: property(&key, &value),
+                    });
                 }
+                self.indent = level;
                 Ok(match target {
-                    Target::Alias => format!("{{ {} }}", members.join("; ")),
-                    Target::Builder => format!("$.c.record({{ {} }})", members.join(", ")),
+                    Target::Alias => Self::object_type(&members, level),
+                    Target::Builder => {
+                        let texts: Vec<&str> =
+                            members.iter().map(|member| member.text.as_str()).collect();
+                        format!("$.c.record({{ {} }})", texts.join(", "))
+                    }
                 })
             }
             TypeNode::Variant { fields } => {
@@ -656,6 +887,7 @@ impl Generator<'_> {
                 // reference whose static type equals a null alias's, so
                 // `check_ambiguous_arm` refuses it instead of emitting text
                 // the equality gate would reject.
+                let level = self.indent;
                 let mut arms = Vec::with_capacity(fields.len());
                 for field in &fields {
                     self.check_reserved_name(reference, field.id, declaration)?;
@@ -669,23 +901,71 @@ impl Generator<'_> {
                                     primitive: PrimitiveType::Null
                                 }
                             );
-                            if payload_is_null {
-                                arms.push(format!("{{ tag: {tag} }}"));
-                            } else {
+                            let docs = self
+                                .names
+                                .provenance
+                                .field_docs(&self.origins, reference, field.id)
+                                .to_vec();
+                            let mut members = vec![Member {
+                                docs,
+                                text: format!("tag: {tag}"),
+                            }];
+                            if !payload_is_null {
+                                // An expanded arm's members are three levels
+                                // in: `| ` on the union line, then the object.
+                                self.indent = level + 3;
                                 let value = self.render(field.ty, declaration, target)?;
-                                arms.push(format!("{{ tag: {tag}; value: {value} }}"));
+                                self.indent = level;
+                                members.push(Member {
+                                    docs: Vec::new(),
+                                    text: property("value", &value),
+                                });
                             }
+                            arms.push(members);
                         }
                         Target::Builder => {
                             let key = self.field_key(reference, field.id, target);
                             let value = self.render(field.ty, declaration, target)?;
-                            arms.push(format!("{key}: {value}"));
+                            arms.push(vec![Member {
+                                docs: Vec::new(),
+                                text: property(&key, &value),
+                            }]);
                         }
                     }
                 }
                 Ok(match target {
-                    Target::Alias => arms.join(" | "),
-                    Target::Builder => format!("$.c.variant({{ {} }})", arms.join(", ")),
+                    Target::Alias => {
+                        let plain = |members: &[Member]| {
+                            members
+                                .iter()
+                                .all(|member| member.docs.is_empty() && !member.text.contains('\n'))
+                        };
+                        if arms.iter().all(|members| plain(members)) {
+                            let arms: Vec<String> = arms
+                                .iter()
+                                .map(|members| Self::object_type(members, level))
+                                .collect();
+                            arms.join(" | ")
+                        } else {
+                            // Documented arms: one arm per line, the union
+                            // opened on its own line as Prettier lays it out.
+                            let mut out = String::new();
+                            for members in &arms {
+                                out.push('\n');
+                                out.push_str(&"  ".repeat(level + 1));
+                                out.push_str("| ");
+                                out.push_str(&Self::object_type(members, level + 2));
+                            }
+                            out
+                        }
+                    }
+                    Target::Builder => {
+                        let arms: Vec<&str> = arms
+                            .iter()
+                            .map(|members| members[0].text.as_str())
+                            .collect();
+                        format!("$.c.variant({{ {} }})", arms.join(", "))
+                    }
                 })
             }
             TypeNode::Func {
@@ -886,6 +1166,25 @@ impl Generator<'_> {
             Some(name) => quote_string(name),
             None => format!("_{id}_"),
         }
+    }
+}
+
+/// `lhs = rhs`, or `lhs =` and the right-hand side on the lines below when it
+/// opens with a line break (a multi-line union), so no line ends in a space.
+fn assign(lhs: &str, rhs: &str) -> String {
+    if rhs.starts_with('\n') {
+        format!("{lhs} ={rhs}")
+    } else {
+        format!("{lhs} = {rhs}")
+    }
+}
+
+/// `key: value`, with the same line-break rule as [`assign`].
+fn property(key: &str, value: &str) -> String {
+    if value.starts_with('\n') {
+        format!("{key}:{value}")
+    } else {
+        format!("{key}: {value}")
     }
 }
 

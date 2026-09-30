@@ -39,8 +39,8 @@ IDs — with a `compiler`-feature bridge from a compilation's provenance sidecar
 
 **The output is a clean domain model, by owner decision on issue #38.**
 `opt T` renders `T | null`; variants render as discriminated
-`{ tag, value }` unions with `value` omitted for `null` payloads; anonymous
-`vec nat8` renders `Uint8Array`; principals type as `Principal`, the
+`{ tag, value }` unions with `value` omitted for `null` payloads; every
+`vec nat8` (`blob`) renders `Uint8Array`; principals type as `Principal`, the
 canonical principal text as a branded string — what the runtime actually
 decodes and the only principal value it encodes — referenced from
 `@candid-core/schema` by default (`TsOptions::principal_import`; issue #150
@@ -59,6 +59,30 @@ test is on the inner node so aliases and recursion (`type L = opt L`) box
 alike, and the runtime's `OptDomain` type and its walkers apply the same
 rule.
 
+**A declared primitive names only itself (issue #191).** The arena shares one
+node per structure, so every `nat64` in an interface is one node whichever
+declaration spelled it. Composite nodes render by their first declaration's
+name; a primitive never does — every use renders structurally (`bigint`,
+`$.c.nat64`), and a declaration of it is still emitted and exported as
+itself. Before, `type Byte = nat8` turned every `blob` into `Array<Byte>`
+(`number[]` for `Uint8Array`), and `type Tokens = nat; type BlockIndex = nat`
+rendered a `Tokens` field as `BlockIndex`. A `blob` — any `vec` of a `nat8`,
+however named — is always `Uint8Array`, in the generated module and in
+`schemaFromContract` alike. The cost is the source spelling: `amount :
+Tokens` reads `amount: bigint`.
+
+**`.did` docs are JSDoc (issue #191).** `TsNames::from_source_info` also
+carries the sidecar's doc comments and argument names. A `///` run (or plain
+`//` lines) above a declaration, field, variant arm, method or the service
+becomes `/** … */` on the generated type and const, the property or arm, and
+the `Actor` method, with `@param name` for each argument the `.did` named —
+the method's parameters take those names, and an unnamed, reserved-word,
+non-identifier or colliding name stays `arg{n}`. `*/`, `@` and code fences in
+the text are escaped so a comment can neither end early nor forge or swallow
+a tag; block comments are not docs. Which occurrence documents a
+de-duplicated node is one rule: the declaration (or actor) whose structure is
+being emitted. See the crate docs.
+
 **The generated artifact is a runtime schema, not just types.** Each
 declaration emits an invariantly-annotated builder alongside its alias —
 `const $X: $.Schema<$X> = $.c.rec(() => …)` — targeting the schema core in
@@ -75,7 +99,7 @@ with path-addressed issues in candid-core's own diagnostic shape
 (`{code, path, message, resource_limit?}`, stable snake_case codes,
 `$`-rooted paths). `ts/contract.ts` builds the same schemas dynamically from
 a canonical Contract JSON document, applying every generator mapping decision
-(anonymous `vec nat8` → blob, tuple-shaped records, boxed collapsing
+(every `vec nat8` → blob, tuple-shaped records, boxed collapsing
 `opt`s, reference types and the actor included) with label text from the same
 caller-supplied name-table shape `TsNames` takes. The golden cross-check test
 proves the two paths agree: for every fixture, the dynamically built schema

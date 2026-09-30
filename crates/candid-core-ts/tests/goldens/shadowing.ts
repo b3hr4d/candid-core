@@ -25,7 +25,17 @@ type $Schema = number;
 const $Schema: $.Schema<$Schema> = $.c.rec(() => $.c.int16);
 export { $Schema as Schema };
 
+/**
+ * The lowerings that reference the ambient types, beside the declarations
+ * that used to shadow them: `Array<T>`, `Record<string, never>`,
+ * `Uint8Array`, and `Promise<T>` on every actor method.
+ */
 type $Texts = Array<string>;
+/**
+ * The lowerings that reference the ambient types, beside the declarations
+ * that used to shadow them: `Array<T>`, `Record<string, never>`,
+ * `Uint8Array`, and `Promise<T>` on every actor method.
+ */
 const $Texts: $.Schema<$Texts> = $.c.rec(() => $.c.vec($.c.text));
 export { $Texts as Texts };
 
@@ -37,11 +47,29 @@ type $Unit = Record<string, never>;
 const $Unit: $.Schema<$Unit> = $.c.rec(() => $.c.unit());
 export { $Unit as Unit };
 
-type $Uses = { a: $Array; d: $delete; p: $Promise; s: $Schema; t: $Texts; w: $PrincipalValue; x: $c };
-const $Uses: $.Schema<$Uses> = $.c.rec(() => $.c.record({ a: $Array, d: $delete, p: $Promise, s: $Schema, t: $Texts, w: $PrincipalValue, x: $c }));
+type $Uses = { a: number; d: number; p: $Promise; s: number; t: $Texts; w: $PrincipalValue; x: number };
+const $Uses: $.Schema<$Uses> = $.c.rec(() => $.c.record({ a: $.c.int32, d: $.c.float64, p: $Promise, s: $.c.int16, t: $Texts, w: $PrincipalValue, x: $.c.int8 }));
 export { $Uses as Uses };
 
+/**
+ * Declaration names that collided with a generated module's own bindings
+ * before the `$` layout (issue #188) and were refused (#116, #130): the
+ * runtime's `c`, `Schema` and `PrincipalValue` (the principal type then; it is
+ * `Principal` since issue #187, covered in golden.rs), the ambient types the
+ * lowerings reference, and TypeScript reserved words. Each binds as a
+ * `$`-prefixed local and leaves under its Candid name. Every one uses a
+ * primitive no other declaration uses, so no alias captures a lowering.
+ */
 type $c = number;
+/**
+ * Declaration names that collided with a generated module's own bindings
+ * before the `$` layout (issue #188) and were refused (#116, #130): the
+ * runtime's `c`, `Schema` and `PrincipalValue` (the principal type then; it is
+ * `Principal` since issue #187, covered in golden.rs), the ambient types the
+ * lowerings reference, and TypeScript reserved words. Each binds as a
+ * `$`-prefixed local and leaves under its Candid name. Every one uses a
+ * primitive no other declaration uses, so no alias captures a lowering.
+ */
 const $c: $.Schema<$c> = $.c.rec(() => $.c.int8);
 export { $c as c };
 
@@ -57,10 +85,10 @@ type $string = number;
 const $string: $.Schema<$string> = $.c.rec(() => $.c.nat16);
 export { $string as string };
 
-const $actor: $.Schema<$.Principal> = $.c.rec(() => $.c.service({ all: $.c.func([$Uses], [$default, $Bytes, $Unit], "query"), get: $.c.func([$string], [$delete], "query"), ping: $.c.func([$c], [$Promise], "update") }));
+const $actor: $.Schema<$.Principal> = $.c.rec(() => $.c.service({ all: $.c.func([$Uses], [$.c.nat32, $Bytes, $Unit], "query"), get: $.c.func([$.c.nat16], [$.c.float64], "query"), ping: $.c.func([$.c.int8], [$Promise], "update") }));
 type $Actor = {
-  all: (arg0: $Uses) => Promise<[$default, $Bytes, $Unit]>;
-  get: (arg0: $string) => Promise<$delete>;
-  ping: (arg0: $c) => Promise<$Promise>;
+  all: (arg0: $Uses) => Promise<[number, $Bytes, $Unit]>;
+  get: (arg0: number) => Promise<number>;
+  ping: (arg0: number) => Promise<$Promise>;
 };
 export { $actor as actor, type $Actor as Actor };
