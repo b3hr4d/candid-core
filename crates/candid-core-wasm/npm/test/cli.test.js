@@ -11,6 +11,7 @@ import assert from "node:assert/strict";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import {
   existsSync,
+  realpathSync,
   mkdtempSync,
   readdirSync,
   readFileSync,
@@ -681,6 +682,81 @@ test("a second run changes nothing: identical files, identical documents, no rew
   // And the check document is itself reproducible.
   const checkArgs = [...args, "--check"];
   assert.strictEqual(gen(checkArgs, { cwd: first }).stdout, gen(checkArgs, { cwd: second }).stdout);
+});
+
+// A report must not depend on where it was produced: the same failing
+// invocation from two checkouts prints the same bytes, and no absolute host
+// path appears unless the user passed one (review finding on this PR).
+test("every reported path is as the user passed it, never an absolute host path", () => {
+  // `gen missing.did` walks "." recursively, so the over-limit tree lives in
+  // its own pair of checkouts.
+  const small = {
+    "good/good.did": "service : { ping : () -> () };",
+    "broken/broken.did": "service : {",
+    "stale/stale.did": "service : { ping : () -> () };",
+  };
+  const crowded = { "crowded/entry.did": "service : {};" };
+  for (let index = 0; index < 256; index += 1) {
+    crowded[`crowded/extra${index}.did`] = "type T = nat;";
+  }
+  const checkouts = {
+    small: [scratchWith("paths-a", small), scratchWith("paths-b", small)],
+    crowded: [scratchWith("paths-c", crowded), scratchWith("paths-d", crowded)],
+  };
+  const invocations = [
+    ["small", ["gen", "missing.did", "--json"]],
+    ["small", ["gen", "./nodir/x.did", "-o", "./out", "--json"]],
+    ["small", ["gen", "broken/broken.did", "good/good.did", "-o", "out", "--json"]],
+    ["crowded", ["gen", "crowded/entry.did", "--json"]],
+    // --check: stale.did has no output yet, so its files are missing drift.
+    ["small", ["gen", "stale/stale.did", "-o", "out", "--check", "--json"]],
+    // The human report says the same thing the document does.
+    ["small", ["gen", "missing.did"]],
+    ["small", ["gen", "./nodir/x.did"]],
+    ["crowded", ["gen", "crowded/entry.did"]],
+    ["small", ["gen", "stale/stale.did", "-o", "out", "--check"]],
+  ];
+  for (const [which, args] of invocations) {
+    const [first, second] = checkouts[which];
+    const a = gen(args, { cwd: first });
+    const b = gen(args, { cwd: second });
+    const label = args.join(" ");
+    assert.notStrictEqual(a.status, 64, label);
+    assert.strictEqual(a.status, b.status, label);
+    assert.strictEqual(a.stdout, b.stdout, `${label}: stdout differs between checkouts`);
+    assert.strictEqual(a.stderr, b.stderr, `${label}: stderr differs between checkouts`);
+    const hosts = [first, realpathSync(first), path.dirname(first)];
+    for (const text of [a.stdout, a.stderr]) {
+      for (const host of hosts) {
+        assert.ok(!text.includes(host), `${label} leaks ${host}: ${text}`);
+      }
+      assert.doesNotMatch(text, /(^|[\s'"(])\/[\w.-]/, `${label} holds an absolute path`);
+    }
+  }
+
+  // The messages name what the user typed.
+  const [first, second] = checkouts.small;
+  const missing = run(first, ["gen", "missing.did", "--json"]);
+  assert.strictEqual(
+    missing.document.entries[0].diagnostics[0].message,
+    "cannot read missing.did: no such .did file",
+  );
+  assert.match(
+    run(first, ["gen", "./nodir/x.did", "--json"]).document.entries[0].diagnostics[0].message,
+    /^cannot read \.\/nodir: ENOENT/,
+  );
+  assert.deepStrictEqual(
+    run(first, ["gen", "stale/stale.did", "-o", "out", "--check", "--json"]).document.drift,
+    [path.join("out", "stale.ts"), path.join("out", "stale.envelope.json")],
+  );
+  // An absolute path the user did pass is reported as passed.
+  const absolute = path.join(first, "absent.did");
+  const given = run(second, ["gen", absolute, "--json"]);
+  assert.strictEqual(given.document.entries[0].entry, absolute);
+  assert.strictEqual(
+    given.document.entries[0].diagnostics[0].message,
+    `cannot read ${absolute}: no such .did file`,
+  );
 });
 
 // The CLI reads files and nothing else. A stdin that is an open pipe nobody

@@ -153,8 +153,11 @@ with `--check`. A usage error (exit 64) prints no document.
 
 The same types ship as `CliReport` and `CliEntryReport` in the package's
 declarations. A run is deterministic: the same inputs give the same files and
-the same document, byte for byte (there are no timestamps or absolute paths
-other than those you pass).
+the same document, byte for byte, from any working directory. There are no
+timestamps, and every path in the document and in the human report (including
+the messages of failures such as an unreadable or missing entry) is spelled as
+you passed it, or `-o` joined with a file name, never resolved to an absolute
+host path: an absolute path appears only if you passed one.
 
 ## The library
 

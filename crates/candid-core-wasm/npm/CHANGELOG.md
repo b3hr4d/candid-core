@@ -59,6 +59,10 @@ version.
   `unchanged <path>` where it read `wrote <path>`. Bytes, names and exit codes
   are unchanged; scripts matching `wrote ` on a re-run should match
   `unchanged ` too, or use `--json`.
+- Every path the CLI reports, in the document and in the human output, is the
+  entry or directory as passed (or `-o` joined with a file name), never a
+  resolved absolute path, so the same invocation prints the same bytes from any
+  working directory.
 - The library (`didToModule`, `didToContract`, `init`) is unchanged. The type
   of an `omitted` item is now also exported by name, as `Omission`.
 

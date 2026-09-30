@@ -195,12 +195,18 @@ async function didFiles(root) {
 // 8 MiB bounds apply to each entry's bundle on its own. Entries that share a
 // directory share one walk here — the tree is read and counted once, not
 // once per entry — so they never double-count against each other.
+//
+// Every path this CLI reports is spelled as the user passed it (an entry, its
+// directory, `-o` joined with a file name), never `path.resolve`d: the same
+// invocation must print the same bytes from any working directory. So the
+// walk reads through the directory as given, and only the memo key resolves.
 const bundles = new Map();
-function bundleOf(root) {
-  if (!bundles.has(root)) {
-    bundles.set(root, didFiles(root));
+function bundleOf(directory) {
+  const key = path.resolve(directory);
+  if (!bundles.has(key)) {
+    bundles.set(key, didFiles(directory));
   }
-  return bundles.get(root);
+  return bundles.get(key);
 }
 
 /**
@@ -285,21 +291,21 @@ async function processEntry(entry, { outDir, check }) {
   const human = { out: [], err: [] };
   const drift = [];
   try {
-    const entryPath = path.resolve(entry);
-    const root = path.dirname(entryPath);
-    const entryName = path.basename(entryPath);
+    // The directory and file name as given: `dirname("a.did")` is ".".
+    const directory = path.dirname(entry);
+    const entryName = path.basename(entry);
     let files;
     try {
-      files = await bundleOf(root);
+      files = await bundleOf(directory);
     } catch (error) {
       if (error instanceof EntryFailure) {
         throw error;
       }
-      const message = `cannot read ${root}: ${error.message}`;
+      const message = `cannot read ${directory}: ${error.message}`;
       throw new EntryFailure([diagnostic("did_file_read_error", "load", message)], message);
     }
     if (files[entryName] === undefined) {
-      const message = `cannot read ${entryPath}: no such .did file`;
+      const message = `cannot read ${entry}: no such .did file`;
       throw new EntryFailure([diagnostic("did_source_not_found", "load", message)], message);
     }
 
