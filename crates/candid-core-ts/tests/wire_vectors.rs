@@ -409,3 +409,68 @@ fn ts_encodings_decode_under_the_reference_implementation() {
         }
     }
 }
+
+/// Two of the ic-reactor v3 regression vectors
+/// (`ts/tests/ic-reactor-regressions.test.ts`) exist because the reference
+/// implementation refused what `@icp-sdk/core` wrote (B3Pay/ic-reactor #634,
+/// U2 and U4). The TypeScript suite pins this encoder's bytes for both; here
+/// the `candid` crate decodes exactly those bytes, so the claim that the
+/// reference accepts them is checked, not assumed. A change to either hex
+/// string has to be made in both files.
+#[test]
+fn ic_reactor_634_ts_encodings_decode_under_the_reference_implementation() {
+    let source = r#"
+        type U2Quoted = record { "a:nat; b" : nat };
+        type U2Plain = record { a : nat; b : nat };
+        type U4 = service { "！" : () -> () query; "😀" : () -> () query };
+    "#;
+    let prog: IDLProg = source.parse().expect("vector types must parse");
+    let mut env = TypeEnv::new();
+    check_prog(&mut env, &prog).expect("vector types must type-check");
+    let cases: [(&str, &[&str], &str, &str); 2] = [
+        (
+            "U2",
+            &["U2Quoted", "U2Plain"],
+            "4449444c026c01f5f8cecf037d6c02617d627d020001010203",
+            "(record { \"a:nat; b\" = 1 }, record { a = 2; b = 3 })",
+        ),
+        (
+            "U4",
+            &["U4"],
+            "4449444c02690203efbc810104f09f9880016a0000010101000100",
+            "(service \"aaaaa-aa\")",
+        ),
+    ];
+    for (name, declarations, ts_hex, textual) in cases {
+        let types: Vec<_> = declarations
+            .iter()
+            .map(|declaration| env.find_type(declaration).expect("declaration").clone())
+            .collect();
+        let bytes: Vec<u8> = (0..ts_hex.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&ts_hex[i..i + 2], 16).expect("valid hex"))
+            .collect();
+        let decoded =
+            IDLArgs::from_bytes_with_types(&bytes, &env, &types).unwrap_or_else(|error| {
+                panic!("reference decode of the TS {name} bytes failed: {error}")
+            });
+        let expected = parse_idl_args(textual)
+            .expect("textual value must parse")
+            .annotate_types(true, &env, &types)
+            .expect("value must type against the declarations");
+        assert_eq!(
+            decoded.args, expected.args,
+            "TS {name} bytes decode to a different value"
+        );
+        // And the reference writes the very same bytes: the type table order
+        // (U2's two entries, U4's UTF-8 method order) is the spec's, not ours.
+        let reference = expected
+            .to_bytes_with_types(&env, &types)
+            .expect("reference encoding must succeed");
+        assert_eq!(
+            hex(&reference),
+            ts_hex,
+            "{name}: reference and TS bytes differ"
+        );
+    }
+}
