@@ -93,7 +93,7 @@ module and a `ContractEnvelope` document, `./generated/service.envelope.json`,
 which is byte-identical to the `compile --envelope` output below:
 
 ```sh
-npx @candid-core/cli gen ./service.did -o ./generated
+npx @candid-core/cli@0.1.0 gen ./service.did -o ./generated
 ```
 
 With the Rust crate, it is two commands. Install the compiler. `candid-core`

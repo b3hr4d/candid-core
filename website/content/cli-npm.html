@@ -461,9 +461,10 @@ npm test
 <p>
   What that buys you is specific: for those fixtures, at that commit, the WebAssembly path and the
   native Rust path emit the same bytes, and the artifact is reproducible from its pinned inputs. What it
-  does not buy you is a package on npm — no gate can make a name exist in a registry — nor a promise
-  about versions beyond the tested set. The version pairing is a <em>revision</em> pairing: the package
-  embeds the compiler and generator from the exact commit a release is dispatched from, and the
+  does not buy you is a published version: the gates run on a commit and publish nothing, and a version
+  reaches the registry only when its release workflow is dispatched, as <code>0.1.0</code> was. Nor does
+  it buy a promise about versions beyond the tested set. The version pairing is a <em>revision</em>
+  pairing: the package embeds the compiler and generator from the exact commit a release is dispatched from, and the
   changelog names the revisions per release. Read the changelog for the pairing rather than assuming a
   crate version.
 </p>
