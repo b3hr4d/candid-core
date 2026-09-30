@@ -29,6 +29,11 @@ on:
     branches:
       - main
   workflow_dispatch:
+  # Weekly, on the same slot as Verify: the pinned toolchain and Chrome for
+  # Testing build do not move, but the runner image around them does, and
+  # with no commits nothing else would notice.
+  schedule:
+    - cron: '0 3 * * 0'
 
 permissions:
   contents: read

@@ -161,8 +161,10 @@ jobs:
       # ChromeDriver from that same build, so the pair is matched by
       # construction. A browser upgrade then becomes a deliberate edit to this
       # file rather than a silent change to what the runtime evidence was
-      # collected on. The action puts that browser on `PATH`, which is where
-      # ChromeDriver resolves it from.
+      # collected on. Putting that browser on `PATH` is not enough: ChromeDriver
+      # searches /usr/bin, /opt/google/chrome and the other fixed directories
+      # before `PATH`, so on its own it launches the runner image's Google
+      # Chrome. The test step below names the binary explicitly.
       - uses: browser-actions/setup-chrome@v2
         id: chrome
         with:
@@ -189,11 +191,28 @@ jobs:
       # `--safari`" when only the driver path is given. A non-zero exit from
       # wasm-pack — a build failure, a browser that will not start, or a failed
       # assertion inside Chrome — fails this job.
+      #
+      # `goog:chromeOptions.binary` is what makes the browser half of the pin
+      # hold. Without it ChromeDriver picks the image's /opt/google/chrome/chrome
+      # ahead of the `PATH` entry above. ChromeDriver 150 accepts Chrome 151 with
+      # only a warning, which is how this job stayed green while it tested the
+      # wrong browser. It rejects Chrome 152, which image ubuntu24/20260831.293
+      # shipped. wasm-bindgen-test-runner sends a legacy (non-W3C) new-session
+      # request, so that rejection comes back as HTTP 200 carrying a session id,
+      # and the job then failed on the next command as a bare
+      # "Error: http status: 404". The runner reads extra capabilities from the
+      # file that WASM_BINDGEN_TEST_WEBDRIVER_JSON names and logs "Ok" when it
+      # finds it.
       - name: Compile imported bundles in headless Chrome
+        env:
+          CHROME_BINARY: ${{ steps.chrome.outputs.chrome-path }}
+          WASM_BINDGEN_TEST_WEBDRIVER_JSON: ${{ runner.temp }}/webdriver.json
         run: |
           set -euxo pipefail
           '${{ steps.chrome.outputs.chrome-path }}' --version
           '${{ steps.chrome.outputs.chromedriver-path }}' --version
+          jq -n --arg binary "$CHROME_BINARY" '{"goog:chromeOptions": {binary: $binary}}' > "$WASM_BINDGEN_TEST_WEBDRIVER_JSON"
+          cat "$WASM_BINDGEN_TEST_WEBDRIVER_JSON"
           wasm-pack test --headless --chrome --chromedriver '${{ steps.chrome.outputs.chromedriver-path }}' -- --locked --test browser_wasm --no-default-features --features compiler
   generator:
     name: Generator crate
