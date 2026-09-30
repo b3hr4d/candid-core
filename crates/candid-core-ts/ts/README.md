@@ -12,8 +12,7 @@ npm install @candid-core/schema
 ```
 
 That is the whole install: no runtime dependencies and no peers, principal
-typing included ([the decoded-value contract](#decoded-principal-values)
-below).
+handling included ([principal values](#principal-values) below).
 
 This README describes the package from the release after 0.2.0 on. 0.2.0
 itself also exports `./actor`, `./transport-icp`, `./forms`, and `./labels`
@@ -21,14 +20,14 @@ and declares an optional `@icp-sdk/core` peer for the transport; the
 [changelog](./CHANGELOG.md) lists what was removed and why.
 
 ```ts
-import { c, type Infer } from "@candid-core/schema";
+import { c, principal, type Infer } from "@candid-core/schema";
 import { validate } from "@candid-core/schema/validate";
 import { encode, decode } from "@candid-core/schema/codec";
 
 const Account = c.record({ owner: c.principal, balance: c.nat });
-type Account = Infer<typeof Account>; // { owner: PrincipalValue; balance: bigint }
+type Account = Infer<typeof Account>; // { owner: Principal; balance: bigint }
 
-const value: Account = { owner: { toText: () => "aaaaa-aa" }, balance: 5n };
+const value: Account = { owner: principal("aaaaa-aa"), balance: 5n };
 
 validate(Account, value); // { ok: true } | { ok: false, issues }
 const encoded = encode(Account, value); // { ok: true, bytes } | { ok: false, issues }
@@ -42,7 +41,8 @@ Modules, each a subpath export:
 - **`.`** — the schema core: the `c` builders, `Schema<in out T>` (deliberately
   invariant), `Infer`, and the node interfaces walkers narrow on — plus
   `resolveSchema` and `serviceMethods` for reading one back, since a schema
-  reached by name is a `rec` indirection and a service's methods are a table.
+  reached by name is a `rec` indirection and a service's methods are a table,
+  and the `Principal` type with its `principal` and `isPrincipal` functions.
 - **`./validate`** — bounded, fail-closed structural validation; never throws
   on any value (an options object with an unknown key or a limit that is not a
   non-negative safe integer throws `TypeError`, in every subpath: options are
@@ -67,23 +67,57 @@ Those four are the whole export map. 0.2.0 also exported `./actor`,
 From the release after 0.2.0 on, this package does not depend on
 `@icp-sdk/core` — not at runtime, not in its declarations, and not as a
 peer — so everything compiles and runs with no SDK installed, under strict
-TypeScript with `skipLibCheck` off included. SDK values still work where the
-schemas take a principal, because principal typing is structural.
+TypeScript with `skipLibCheck` off included. A principal is its canonical
+text, so an SDK value converts once, at your own boundary, with `principal()`.
 
-### Decoded principal values
+### Principal values
 
-`c.principal` types as `PrincipalValue` — `{ toText(): string }`, exported
-from the root — which is the truth in both directions:
+`c.principal` types as `Principal`, exported from the root: canonical
+principal text as a branded string — lowercase base32 of a CRC-32 checksum and
+the id bytes, dash-grouped by five, such as `"ryjl3-tyaaa-aaaaa-aaaba-cai"`.
+The `principal` of a func reference and a service reference are `Principal`
+too. This is the contract in both directions:
 
-- **What you get.** The codec is self-contained and never constructs an SDK
-  class: a decoded principal carries exactly `toText()`. It is *not* a
-  `Principal` instance — `instanceof` is `false`, and class methods like
-  `.toUint8Array()` do not exist on it. Code that wants the class re-wraps:
-  `Principal.fromText(value.toText())`.
-- **What you can give.** Validation and encoding are structural — any object
-  whose `toText()` returns canonical principal text — and the SDK class
-  satisfies that shape, so values built with `Principal.fromText(…)` encode
-  unchanged.
+- **What you get.** Decoding returns the canonical text itself — a plain
+  string at runtime. A decoded reply therefore survives `JSON.stringify` (a
+  principal serializes as its text), `structuredClone` and `postMessage`,
+  compares with `===`, and works as a `Map` key or inside a cache key. It is
+  not an SDK `Principal` instance; code that wants the class converts with
+  the SDK's `Principal.fromText(value)`.
+- **What you can give.** Exactly a `Principal`. Validation and encoding
+  accept a string whose text is canonical and refuse everything else —
+  a non-canonical spelling, an object with `toText()`, an SDK `Principal`
+  instance — with `invalid_type`, the two agreeing case for case. Make one
+  with `principal()`, which takes text or anything with `toText()`:
+
+```ts
+import { c, isPrincipal, principal, type Principal } from "@candid-core/schema";
+import { encode } from "@candid-core/schema/codec";
+
+declare const sdkPrincipal: { toText(): string }; // an @icp-sdk/core Principal, say
+
+const owner: Principal = principal(sdkPrincipal); // once, at your boundary
+const ledger = principal("ryjl3-tyaaa-aaaaa-aaaba-cai");
+
+isPrincipal("aaaaa-aa"); // true: the management canister
+isPrincipal("AAAAA-AA"); // false: not canonical
+encode(c.record({ owner: c.principal }), { owner }); // { ok: true, bytes }
+void ledger;
+```
+
+`principal()` refuses rather than repairs. The text must already be canonical
+— lower case, a dash after every five characters and nowhere else, a matching
+checksum, zero padding bits in the last character, an id of at most 29 bytes
+— or it throws `TypeError`; so does an input that is neither a string nor an
+object with `toText()`. `"aaaaa-aa"` (the management canister) and
+`"2vxsx-fae"` (the anonymous principal) are canonical; `"AAAAA-AA"` and
+`"aaaaaaa"` are not. `isPrincipal` is the matching guard, the same check
+`validate` and `encode` apply. The brand exists only in the type system, so a
+string cannot stand in for a principal without that check, at no runtime
+cost.
+
+The name matches the SDK's class. Code that imports both aliases one:
+`import type { Principal as CandidPrincipal } from "@candid-core/schema"`.
 
 ## From a `.did` file
 
@@ -164,7 +198,7 @@ schemas — and the codec turns each call's arguments and reply into Candid
 bytes, which is everything a call layer needs from this package:
 
 ```ts
-import { c, serviceMethods } from "@candid-core/schema";
+import { c, principal, serviceMethods } from "@candid-core/schema";
 import { encodeArgs, decodeArgs } from "@candid-core/schema/codec";
 
 const Account = c.record({ owner: c.principal, subaccount: c.opt(c.vec(c.nat8)) });
@@ -175,7 +209,7 @@ const Ledger = c.service({
 const method = serviceMethods(Ledger).get("balance_of");
 if (method !== undefined) {
   const request = encodeArgs(method.args, [
-    { owner: { toText: () => "aaaaa-aa" }, subaccount: null },
+    { owner: principal("aaaaa-aa"), subaccount: null },
   ]);
   // `request.bytes` is the argument a transport sends on the `method.mode`
   // path; the reply's bytes decode with `decodeArgs(method.results, reply)`.
@@ -301,8 +335,8 @@ Types describe the modern domain, not the agent-js runtime shapes: `opt T` is
 `opt null`, `opt reserved`) is `{ some: T } | null`, so `None`, `Some(None)`,
 and `Some(Some(x))` stay three distinct values — variants are
 `{ tag, value }` discriminated unions, anonymous `vec nat8` is `Uint8Array`,
-`nat`/`int`/64-bit integers are `bigint`, and principals are the structural
-[`PrincipalValue`](#decoded-principal-values) the codec actually delivers.
+`nat`/`int`/64-bit integers are `bigint`, and principals are their canonical
+text, the branded [`Principal`](#principal-values) string.
 Compatibility with agent-js value shapes is an explicit non-goal, recorded on
 the project's issue tracker.
 

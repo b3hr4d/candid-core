@@ -7,7 +7,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { runInNewContext } from "node:vm";
 
-import { c, type Schema } from "../schema.ts";
+import { c, principal, type Schema } from "../schema.ts";
 import { validate, type ValidateResult, type ValidationCode } from "../validate.ts";
 
 function ok(schema: { readonly kind: string }, value: unknown): void {
@@ -134,11 +134,58 @@ test("empty accepts nothing", () => {
   fails(c.empty, undefined, "uninhabited_type");
 });
 
-test("principal is checked structurally", () => {
-  ok(c.principal, { toText: () => "aaaa-aa" });
+test("principal is canonical principal text, and nothing else", () => {
+  // Issue #187: a principal is a `Principal` — a string holding canonical
+  // text. The canonical-text boundary itself is pinned in
+  // principal-value.test.ts; these are the criterion's rejected inputs.
+  ok(c.principal, "aaaaa-aa");
+  ok(c.principal, "2vxsx-fae");
+  ok(c.principal, principal("ryjl3-tyaaa-aaaaa-aaaba-cai"));
+  fails(c.principal, "garbage", "invalid_type");
+  fails(c.principal, { toText: () => "aaaaa-aa" }, "invalid_type");
+  fails(c.principal, "AAAAA-AA", "invalid_type");
   fails(c.principal, "aaaa-aa", "invalid_type");
+  fails(c.principal, "", "invalid_type");
   fails(c.principal, {}, "invalid_type");
   fails(c.principal, null, "invalid_type");
+  fails(c.principal, undefined, "invalid_type");
+  // The messages tell the two refusals apart: not a string at all, versus a
+  // string whose text is not canonical.
+  assert.deepStrictEqual(validate(c.principal as Schema<unknown>, { toText: () => "aaaaa-aa" }), {
+    ok: false,
+    issues: [
+      {
+        code: "invalid_type",
+        path: "$",
+        message: "expected a Principal (canonical principal text), got object",
+      },
+    ],
+  });
+  assert.deepStrictEqual(validate(c.principal as Schema<unknown>, "AAAAA-AA"), {
+    ok: false,
+    issues: [
+      {
+        code: "invalid_type",
+        path: "$",
+        message: "expected a Principal, got a string that is not canonical principal text",
+      },
+    ],
+  });
+  // The same check in the other two principal positions.
+  fails(c.service({}), "AAAAA-AA", "invalid_type");
+  fails(c.service({}), { toText: () => "aaaaa-aa" }, "invalid_type");
+  fails(
+    c.func([], [], "query"),
+    { principal: { toText: () => "aaaaa-aa" }, method: "m" },
+    "invalid_type",
+    "$.principal",
+  );
+  fails(
+    c.func([], [], "query"),
+    { principal: "garbage", method: "m" },
+    "invalid_type",
+    "$.principal",
+  );
 });
 
 test("opt admits null and the inner type, nothing else", () => {
@@ -403,13 +450,14 @@ test("values that throw while inspected fail closed with unreadable_value", () =
         },
       },
     ],
-    // An accessor behind the principal duck check.
+    // An accessor on a func reference's principal.
     [
-      c.principal,
+      c.func([], [], "query"),
       {
-        get toText(): () => string {
+        get principal(): string {
           throw new Error("boom");
         },
+        method: "m",
       },
     ],
     // Proxy traps: ownKeys, get, getOwnPropertyDescriptor, getPrototypeOf.
@@ -607,12 +655,12 @@ test("validate never throws on hostile values", () => {
 
 test("func values are strict: extras rejected, both fields required", () => {
   const schema = c.func([], [], "update");
-  const principal = { toText: () => "aaaaa-aa" };
+  const principal = "aaaaa-aa";
   ok(schema, { principal, method: "go" });
   fails(schema, { principal, method: "go", extra: 1 }, "unexpected_field", "$.extra");
   fails(schema, { principal }, "missing_field", "$.method");
   fails(schema, { method: "go" }, "missing_field", "$.principal");
   fails(schema, { principal, method: "" }, "invalid_type", "$.method");
   ok(c.service({}), principal);
-  fails(c.service({}), "aaaaa-aa", "invalid_type", "$");
+  fails(c.service({}), { toText: () => principal }, "invalid_type", "$");
 });

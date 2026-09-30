@@ -59,9 +59,13 @@
 // - `float32` accepts any JavaScript number: f32 representability is a codec
 //   concern, and rejecting `0.1` here would fail values the domain types
 //   deliberately admit. NaN and infinities are valid Candid floats.
-// - `principal` is checked structurally (an object with a `toText` function):
-//   this harness deliberately has no runtime dependency on a Principal
-//   implementation, and the type stub carries no brand to test for.
+// - `principal` (and a service value, and a func reference's `principal`)
+//   is a `Principal`: a string holding canonical principal text, checked
+//   with `isPrincipal` (issue #187). Anything else — a non-canonical
+//   spelling, an object with `toText()`, an SDK `Principal` instance — is
+//   `invalid_type`, the code and path the encoder reports for the same
+//   value, so the two refuse exactly the same principals. No Principal
+//   implementation is a runtime dependency; the text form is this package's.
 // - Issue order is deterministic: schema fields in their object's enumeration
 //   order (canonical Contract order for every key the generator emits; note
 //   JavaScript hoists integer-like keys, which no `_id_`-conventional or
@@ -74,10 +78,11 @@
 // surface here (issue #151): a validated read of the `variant { ok; err }`
 // convention, directed by the schema rather than by probing a decoded value
 // for `ok`/`err` keys. They live in this module because unwrapping *is*
-// validation plus one typed read, and because the root entry imports nothing
-// at runtime while the Contract loader (and the internal form-model builder)
-// import *it* — so a validator dependency there would have arrived with
-// `schemaFromContract` for consumers who never asked for one.
+// validation plus one typed read, and because the root entry imports only
+// the small principal-text module at runtime while the Contract loader (and
+// the internal form-model builder) import *it* — so a validator dependency
+// there would have arrived with `schemaFromContract` for consumers who never
+// asked for one.
 
 import type {
   AnySchema,
@@ -97,7 +102,7 @@ import type {
   VariantSchema,
   VecSchema,
 } from "./schema.ts";
-import { resolveSchema } from "./schema.ts";
+import { isPrincipal, resolveSchema } from "./schema.ts";
 import { checkOptions } from "./options.ts";
 
 // The boxed-option rule `isBoxedOpt` states, applied to an inner node this
@@ -445,8 +450,8 @@ class Walk {
         return;
       case "service":
         // A service value is the principal of a running service (issue
-        // #104) — the same structural check the principal primitive uses.
-        this.principalShaped(value, path, "a service value is a Principal");
+        // #104) — the same check the principal primitive uses.
+        this.principalText(value, path);
         return;
       case "rec": {
         const body: unknown = node.body();
@@ -605,11 +610,7 @@ class Walk {
         this.issue("uninhabited_type", path, "empty has no values");
         return;
       case "principal":
-        this.principalShaped(
-          value,
-          path,
-          `expected a Principal (an object with a toText method), got ${describe(value)}`,
-        );
+        this.principalText(value, path);
         return;
       default:
         this.issue("unsupported_schema", path, `unknown primitive ${JSON.stringify(name)}`);
@@ -831,13 +832,23 @@ class Walk {
     }
   }
 
-  private principalShaped(value: unknown, path: PathSegment[], message: string): void {
-    if (
-      (typeof value !== "object" && typeof value !== "function") ||
-      value === null ||
-      typeof (value as { toText?: unknown }).toText !== "function"
-    ) {
-      this.issue("invalid_type", path, message);
+  /**
+   * A `Principal`: a string holding canonical principal text. The encoder
+   * applies the same two checks with the same code, path, and messages.
+   */
+  private principalText(value: unknown, path: PathSegment[]): void {
+    if (typeof value !== "string") {
+      this.issue(
+        "invalid_type",
+        path,
+        `expected a Principal (canonical principal text), got ${describe(value)}`,
+      );
+    } else if (!isPrincipal(value)) {
+      this.issue(
+        "invalid_type",
+        path,
+        "expected a Principal, got a string that is not canonical principal text",
+      );
     }
   }
 
@@ -859,11 +870,7 @@ class Walk {
     if (!hasOwnEnumerable(value, "principal")) {
       this.issue("missing_field", path, "a func reference names a principal");
     } else {
-      this.principalShaped(
-        value.principal,
-        path,
-        `expected a Principal (an object with a toText method), got ${describe(value.principal)}`,
-      );
+      this.principalText(value.principal, path);
     }
     path.pop();
     path.push("method");

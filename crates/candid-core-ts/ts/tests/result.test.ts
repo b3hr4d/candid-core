@@ -594,19 +594,30 @@ test("a reply that made the round trip through the codec unwraps", () => {
   assert.deepStrictEqual(outcome, { ok: false, error: { tag: "too_old" } });
 });
 
-test("the root entry still imports nothing at runtime, which is why these live here", () => {
+test("the root entry imports only the principal text form at runtime, which is why these live here", () => {
   // The measured reason these helpers ship from `./validate` rather than the
-  // root: `schema.ts` is the leaf of the package's runtime graph, and the
-  // Contract loader (and the internal form-model builder) import it. A
+  // root: `schema.ts` sits at the bottom of the package's runtime graph, and
+  // the Contract loader (and the internal form-model builder) import it. A
   // convenience re-export placed there later would hand the validator to
-  // every `schemaFromContract` consumer, and the claim in
-  // the shipped changelog would quietly stop being true — so the claim is a
-  // test rather than prose.
-  const source = readFileSync(new URL("../schema.ts", import.meta.url), "utf8");
-  const runtimeImports = (source.match(/^import .*$/gm) ?? []).filter(
-    (line) => !line.startsWith("import type "),
+  // every `schemaFromContract` consumer — so the claim is a test rather than
+  // prose. Since issue #187 the root's `principal()` and `isPrincipal()` need
+  // the principal text form at runtime, so the root imports exactly that one
+  // internal module, which itself imports nothing: the root's runtime graph
+  // is those two files, and the validator is still not in it.
+  const runtimeImportsOf = (module: string): string[] =>
+    (readFileSync(new URL(module, import.meta.url), "utf8").match(/^import .*$/gm) ?? []).filter(
+      (line) => !line.startsWith("import type "),
+    );
+  assert.deepStrictEqual(
+    runtimeImportsOf("../schema.ts"),
+    ['import { principalBytesFromText } from "./principal-text.ts";'],
+    "the root entry must import at runtime only the principal text form",
   );
-  assert.deepStrictEqual(runtimeImports, [], "the root entry must import only types");
+  assert.deepStrictEqual(
+    runtimeImportsOf("../principal-text.ts"),
+    [],
+    "the principal text form is a leaf: it imports nothing",
+  );
   // And the direction this module depends on it: walker to core, never back.
   const walker = readFileSync(new URL("../validate.ts", import.meta.url), "utf8");
   assert.strictEqual(

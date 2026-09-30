@@ -56,9 +56,14 @@
 //   (`invalid_text`), decode refuses malformed UTF-8 (`invalid_utf8`),
 //   overlong forms included.
 // - Principals are self-contained: the canonical text form (lowercase base32
-//   of CRC-32 ‖ bytes, dash-grouped by five) is implemented here — encode
-//   parses `toText()` and refuses non-canonical text (`invalid_principal`),
-//   decode returns a minimal `{ toText }` carrier of the canonical text.
+//   of CRC-32 ‖ bytes, dash-grouped by five) is implemented in
+//   `principal-text.ts`, with no runtime dependency on any Principal class.
+//   A principal's domain value is that text as a branded `Principal` string
+//   (issue #187): decode returns the canonical text for the primitive, a
+//   func reference's `principal` and a service reference alike, and encode
+//   accepts exactly the strings `validate` accepts — a string holding
+//   canonical text — refusing anything else with validate's code and path
+//   (`invalid_type`); there is no `{ toText }` duck-typing.
 //   Opaque reference forms (tag byte 0) and any external reference sequence
 //   are unsupported in this slice: decode fails closed, and input with bytes
 //   remaining after the value section is refused (`trailing_bytes`).
@@ -110,10 +115,16 @@
 // the engine and its JIT state, so an input near that point can succeed on
 // one call and report `stack` on the next.
 
-import type { AnyFieldSchema, AnySchema, PrincipalValue, Schema } from "./schema.ts";
+import type { AnyFieldSchema, AnySchema, Principal, Schema } from "./schema.ts";
 import { fieldIdOfKey, utf8BytesStrict, utf8Decode } from "./labels.ts";
 import { checkOptions } from "./options.ts";
+import { principalBytesFromText, principalTextFromBytes } from "./principal-text.ts";
 import { canonicalTypeTable, type TableEntry } from "./typetable.ts";
+
+// The principal text form's two directions stay part of this entry point's
+// surface; their one implementation lives in the internal module the root
+// entry's `principal`/`isPrincipal` and the validator share.
+export { principalBytesFromText, principalTextFromBytes };
 
 // The boxed-option rule `isBoxedOpt` states, applied to an inner node this
 // walk has already resolved under its own budget. Module-local on purpose:
@@ -224,14 +235,6 @@ export const DEFAULT_MAX_DEPTH = 256;
 export const DEFAULT_MAX_ELEMENTS = 1_000_000;
 /** Default `maxNumericBytes`: 1 MiB for one unbounded `nat`/`int`. */
 export const DEFAULT_MAX_NUMERIC_BYTES = 1_048_576;
-
-/**
- * A decoded principal: the minimal structural carrier of canonical text —
- * the same surface `PrincipalValue` in `@candid-core/schema` documents as
- * the decoded-value contract. This name predates that one and remains as an
- * alias.
- */
-export type DecodedPrincipal = PrincipalValue;
 
 // ---------------------------------------------------------------------------
 // Shared internals
@@ -591,92 +594,6 @@ function writeLebGroups(out: number[], unsignedImage: bigint, groups: number): v
   for (let i = start; i < out.length - 1; i += 1) {
     out[i] |= 0x80;
   }
-}
-
-// ---------------------------------------------------------------------------
-// Principal text form
-// ---------------------------------------------------------------------------
-
-const BASE32_ALPHABET = "abcdefghijklmnopqrstuvwxyz234567";
-
-const CRC32_TABLE: Uint32Array = (() => {
-  const table = new Uint32Array(256);
-  for (let n = 0; n < 256; n += 1) {
-    let c = n;
-    for (let k = 0; k < 8; k += 1) {
-      c = (c & 1) !== 0 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
-    }
-    table[n] = c >>> 0;
-  }
-  return table;
-})();
-
-function crc32(bytes: Uint8Array): number {
-  let crc = 0xffffffff;
-  for (const byte of bytes) {
-    crc = CRC32_TABLE[(crc ^ byte) & 0xff] ^ (crc >>> 8);
-  }
-  return (crc ^ 0xffffffff) >>> 0;
-}
-
-/** Canonical principal text for raw id bytes. */
-export function principalTextFromBytes(bytes: Uint8Array): string {
-  const checksum = crc32(bytes);
-  const data = new Uint8Array(4 + bytes.length);
-  data[0] = (checksum >>> 24) & 0xff;
-  data[1] = (checksum >>> 16) & 0xff;
-  data[2] = (checksum >>> 8) & 0xff;
-  data[3] = checksum & 0xff;
-  data.set(bytes, 4);
-  let encoded = "";
-  let buffer = 0;
-  let bits = 0;
-  for (const byte of data) {
-    buffer = (buffer << 8) | byte;
-    bits += 8;
-    while (bits >= 5) {
-      bits -= 5;
-      encoded += BASE32_ALPHABET[(buffer >> bits) & 31];
-    }
-  }
-  if (bits > 0) {
-    encoded += BASE32_ALPHABET[(buffer << (5 - bits)) & 31];
-  }
-  let grouped = "";
-  for (let i = 0; i < encoded.length; i += 5) {
-    grouped += (i > 0 ? "-" : "") + encoded.slice(i, i + 5);
-  }
-  return grouped;
-}
-
-/**
- * Raw id bytes of canonical principal text, or `undefined` when the text is
- * not canonical: wrong alphabet or grouping, checksum mismatch, an id longer
- * than the 29-byte IC maximum, or any re-rendering difference (case
- * included) — encode fails closed rather than guessing.
- */
-export function principalBytesFromText(text: string): Uint8Array | undefined {
-  const compact = text.split("-").join("");
-  let buffer = 0;
-  let bits = 0;
-  const data: number[] = [];
-  for (const char of compact) {
-    const index = BASE32_ALPHABET.indexOf(char);
-    if (index < 0) {
-      return undefined;
-    }
-    buffer = (buffer << 5) | index;
-    bits += 5;
-    if (bits >= 8) {
-      bits -= 8;
-      data.push((buffer >> bits) & 0xff);
-    }
-  }
-  if (data.length < 4 || data.length > 33) {
-    return undefined;
-  }
-  const bytes = Uint8Array.from(data.slice(4));
-  return principalTextFromBytes(bytes) === text ? bytes : undefined;
 }
 
 // ---------------------------------------------------------------------------
@@ -1356,7 +1273,7 @@ class Encoder {
         if (!hasOwnEnumerable(value, "principal")) {
           this.fail("missing_field", path, "a func reference names a principal");
         }
-        const principalBytes = this.principalValueBytes(value.principal, path);
+        const principalBytes = this.principalBytes(value.principal, path);
         path.pop();
         path.push("method");
         if (!hasOwnEnumerable(value, "method")) {
@@ -1392,7 +1309,7 @@ class Encoder {
       }
       case "service": {
         // A service value is the principal of a running service.
-        const bytes = this.principalValueBytes(value, path);
+        const bytes = this.principalBytes(value, path);
         out.push(1);
         writeLebNumber(out, bytes.length);
         for (const byte of bytes) {
@@ -1403,26 +1320,28 @@ class Encoder {
     }
   }
 
-  /** The raw id bytes of a principal-shaped value, or fail closed. */
-  private principalValueBytes(value: unknown, path: PathSegment[]): Uint8Array {
-    if (
-      (typeof value !== "object" && typeof value !== "function") ||
-      value === null ||
-      typeof (value as { toText?: unknown }).toText !== "function"
-    ) {
+  /**
+   * The raw id bytes of a `Principal` — the principal primitive, a func
+   * reference's `principal`, a service reference — or fail closed. Strict:
+   * exactly the strings `validate` accepts, refused with its code and path.
+   * An object with `toText()` (an SDK `Principal`) is not read; callers
+   * convert it once with `principal()`.
+   */
+  private principalBytes(value: unknown, path: PathSegment[]): Uint8Array {
+    if (typeof value !== "string") {
       this.fail(
         "invalid_type",
         path,
-        `expected a Principal (an object with a toText method), got ${describe(value)}`,
+        `expected a Principal (canonical principal text), got ${describe(value)}`,
       );
     }
-    const text: unknown = (value as { toText(): unknown }).toText();
-    if (typeof text !== "string") {
-      this.fail("invalid_principal", path, "toText() did not return a string");
-    }
-    const bytes = principalBytesFromText(text);
+    const bytes = principalBytesFromText(value);
     if (bytes === undefined) {
-      this.fail("invalid_principal", path, "toText() is not canonical principal text");
+      this.fail(
+        "invalid_type",
+        path,
+        "expected a Principal, got a string that is not canonical principal text",
+      );
     }
     return bytes;
   }
@@ -1575,25 +1494,7 @@ class Encoder {
         return;
       }
       case "principal": {
-        if (
-          typeof value !== "object" ||
-          value === null ||
-          typeof (value as { toText?: unknown }).toText !== "function"
-        ) {
-          this.fail(
-            "invalid_type",
-            path,
-            `expected a principal with toText(), got ${describe(value)}`,
-          );
-        }
-        const text: unknown = (value as { toText(): unknown }).toText();
-        if (typeof text !== "string") {
-          this.fail("invalid_principal", path, "toText() did not return a string");
-        }
-        const bytes = principalBytesFromText(text);
-        if (bytes === undefined) {
-          this.fail("invalid_principal", path, "toText() is not canonical principal text");
-        }
+        const bytes = this.principalBytes(value, path);
         out.push(1);
         writeLebNumber(out, bytes.length);
         for (const byte of bytes) {
@@ -2553,13 +2454,13 @@ class Decoder {
     return this.principalBody(path);
   }
 
-  private principalBody(path: readonly PathSegment[]): DecodedPrincipal {
+  private principalBody(path: readonly PathSegment[]): Principal {
     const length = this.lebU32(path, "principal length");
     if (length > 29) {
       this.fail("invalid_principal", path, "a principal id is at most 29 bytes");
     }
-    const text = principalTextFromBytes(Uint8Array.from(this.raw(length, path)));
-    return { toText: () => text };
+    // Canonical by construction: the rendering of an id of at most 29 bytes.
+    return principalTextFromBytes(Uint8Array.from(this.raw(length, path))) as Principal;
   }
 
   /**
@@ -3009,8 +2910,9 @@ class Decoder {
         if (length > 29) {
           this.fail("invalid_principal", path, "a principal id is at most 29 bytes");
         }
-        const text = principalTextFromBytes(Uint8Array.from(this.raw(length, path)));
-        return { toText: () => text } satisfies DecodedPrincipal;
+        // Canonical by construction: the rendering of an id of at most 29
+        // bytes, delivered as the branded text itself.
+        return principalTextFromBytes(Uint8Array.from(this.raw(length, path))) as Principal;
       }
       case "reserved":
         return null;

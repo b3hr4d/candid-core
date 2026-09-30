@@ -114,14 +114,14 @@ export function decode<T>(
 <p>Here is the whole surface in one round trip:</p>
 
 <pre data-lang="ts" data-file="crates/candid-core-ts/ts/README.md">
-import { c, type Infer } from "@candid-core/schema";
+import { c, principal, type Infer } from "@candid-core/schema";
 import { validate } from "@candid-core/schema/validate";
 import { encode, decode } from "@candid-core/schema/codec";
 
 const Account = c.record({ owner: c.principal, balance: c.nat });
-type Account = Infer<typeof Account>; // { owner: PrincipalValue; balance: bigint }
+type Account = Infer<typeof Account>; // { owner: Principal; balance: bigint }
 
-const value: Account = { owner: { toText: () => "aaaaa-aa" }, balance: 5n };
+const value: Account = { owner: principal("aaaaa-aa"), balance: 5n };
 
 validate(Account, value); // { ok: true } | { ok: false, issues }
 const encoded = encode(Account, value); // { ok: true, bytes } | { ok: false, issues }
@@ -131,9 +131,12 @@ if (encoded.ok) {
 </pre>
 
 <p>
-  A decoded principal is <code>{ toText(): string }</code> and nothing more — the codec never
-  constructs an SDK class. In the other direction encoding is structural, so an
-  <code>@icp-sdk/core</code> <code>Principal</code> encodes unchanged.
+  A decoded principal is its canonical text, a plain string typed as the branded
+  <code>Principal</code> — the codec never constructs an SDK class — so a decoded value
+  serializes with <code>JSON.stringify</code>, survives <code>structuredClone</code>, and compares
+  with <code>===</code>. In the other direction encoding is strict: it accepts exactly canonical
+  principal text, the same strings <code>validate</code> accepts, so an <code>@icp-sdk/core</code>
+  <code>Principal</code> converts once with <code>principal(sdkPrincipal)</code>.
 </p>
 
 <h2>What a Candid message looks like</h2>
@@ -475,18 +478,20 @@ encode(c.float32, Number.NaN);        // ok
 </p>
 
 <p>
-  Principal text is handled in this module, with no SDK dependency: the canonical form is
+  Principal text is handled inside the package, with no SDK dependency: the canonical form is
   lowercase base32 of a CRC-32 checksum concatenated with the id bytes, grouped in fives with
   dashes. <code>principalBytesFromText</code> decodes, then <em>re-renders</em> what it decoded and
-  compares it to the input — so any difference at all returns <code>undefined</code>, and encode
-  turns that into <code>invalid_principal</code>. Uppercase text, wrong dash grouping, a bad
-  checksum and an id longer than the 29-byte maximum all fail the same way. There is no lenient
-  parse.
+  compares it to the input — so any difference at all returns <code>undefined</code>. Uppercase
+  text, wrong dash grouping, a bad checksum, non-zero padding bits and an id longer than the
+  29-byte maximum all fail the same way. There is no lenient parse. Encode applies exactly the
+  check <code>validate</code> and <code>isPrincipal</code> apply, and refuses with
+  <code>validate</code>'s code, <code>invalid_type</code>, at the same path:
 </p>
 
 <pre data-lang="ts" data-file="crates/candid-core-ts/ts/tests/codec.test.ts">
-encode(c.principal, { toText: () => "AAAAA-AA" }); // invalid_principal (case)
-encode(c.principal, { toText: () => "aaaaa-ab" }); // invalid_principal (checksum)
+encode(c.principal, "AAAAA-AA"); // invalid_type (case)
+encode(c.principal, "aaaaa-ab"); // invalid_type (non-zero padding bits)
+encode(c.principal, { toText: () => "aaaaa-aa" }); // invalid_type (not a string)
 </pre>
 
 <h3>Encode validates as it goes</h3>
@@ -563,7 +568,7 @@ encode(c.principal, { toText: () => "aaaaa-ab" }); // invalid_principal (checksu
     <tr><td><code>invalid_tag_byte</code></td><td>A <code>bool</code>, <code>opt</code>, <code>principal</code>, <code>func</code> or <code>service</code> value starts with a byte other than 0 or 1.</td></tr>
     <tr><td><code>invalid_utf8</code></td><td>Decoded text or a decoded method name is not well-formed UTF-8.</td></tr>
     <tr><td><code>invalid_text</code></td><td>A string being encoded contains a lone surrogate.</td></tr>
-    <tr><td><code>invalid_principal</code></td><td>Non-canonical principal text, an over-length id, or an opaque reference form.</td></tr>
+    <tr><td><code>invalid_principal</code></td><td>Decoding only: a principal id longer than 29 bytes, or an opaque reference form. Encoding refuses non-canonical principal text with <code>invalid_type</code>, as <code>validate</code> does.</td></tr>
     <tr><td><code>unrepresentable_float32</code></td><td>A <code>float32</code> value is not <code>Math.fround</code>-exact.</td></tr>
     <tr><td><code>duplicate_field_id</code></td><td>Two keys of one record or variant derive the same wire label id.</td></tr>
   </tbody>

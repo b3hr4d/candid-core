@@ -52,7 +52,7 @@
     is the local <code>$X</code>, alias and builder alike, exported under its Candid name by
     <code>export { $X as X }</code>. The tables below write builders as <code>c.…</code> and
     references by their Candid name for readability; in the module they read <code>$.c.…</code>,
-    <code>$X</code> and <code>$.PrincipalValue</code>. Because a Candid name cannot contain
+    <code>$X</code> and <code>$.Principal</code>. Because a Candid name cannot contain
     <code>$</code>, no declaration name — <code>c</code>, <code>Array</code>, <code>Promise</code>,
     <code>delete</code> — can shadow the import or a global type the lowerings use.
   </li>
@@ -95,14 +95,14 @@
     <tr><td><code>text</code></td><td><code>primitive: "text"</code></td><td><code>string</code></td><td><code>c.text</code></td><td>Candid text is Unicode scalar values, so encoding refuses a lone surrogate with <code>invalid_text</code>.</td></tr>
     <tr><td><code>reserved</code></td><td><code>primitive: "reserved"</code></td><td><code>unknown</code></td><td><code>c.reserved</code></td><td>Accepts anything, asserts nothing — so a consumer must narrow before use.</td></tr>
     <tr><td><code>empty</code></td><td><code>primitive: "empty"</code></td><td><code>never</code></td><td><code>c.empty</code></td><td>Uninhabited on both sides. Every value fails with <code>uninhabited_type</code>.</td></tr>
-    <tr><td><code>principal</code></td><td><code>primitive: "principal"</code></td><td><code>PrincipalValue</code></td><td><code>c.principal</code></td><td>The structural interface <code>{ toText(): string }</code>, not the SDK class. Decoded values carry only that surface; an SDK <code>Principal</code> instance satisfies it and encodes unchanged.</td></tr>
+    <tr><td><code>principal</code></td><td><code>primitive: "principal"</code></td><td><code>Principal</code></td><td><code>c.principal</code></td><td>Canonical principal text as a branded string, not the SDK class. Decoding returns the text; validation and encoding accept exactly canonical text and refuse anything else, an SDK <code>Principal</code> instance included, with <code>invalid_type</code>. Convert with <code>principal(value)</code>, which refuses non-canonical text rather than repairing it.</td></tr>
   </tbody>
 </table>
 
 <p>
-  <code>PrincipalValue</code> comes from <code>TsOptions::principal_import</code>, defaulting to
+  <code>Principal</code> comes from <code>TsOptions::principal_import</code>, defaulting to
   <code>"@candid-core/schema"</code> — the package the generated file already imports as the
-  namespace <code>$</code>, so the type is written <code>$.PrincipalValue</code> and no second import
+  namespace <code>$</code>, so the type is written <code>$.Principal</code> and no second import
   is emitted. Any other module is imported <code>import type</code> and only when the contract
   actually uses a principal, so it never implies a runtime dependency.
 </p>
@@ -173,14 +173,14 @@
     <tr>
       <td><code>func (nat) -&gt; (text) query</code></td>
       <td><code>{"kind":"func","args":[…],"results":[…],"mode":"query"}</code></td>
-      <td><code>{ principal: PrincipalValue; method: string }</code></td>
+      <td><code>{ principal: Principal; method: string }</code></td>
       <td><code>c.func([c.nat], [c.text], "query")</code></td>
       <td>A <code>func</code> <em>value</em> is an address, not a callable. The signature lives in the builder. Modes are <code>"update"</code>, <code>"query"</code>, <code>"composite_query"</code>, <code>"oneway"</code>; an unannotated Candid method is explicitly <code>"update"</code> in the Contract.</td>
     </tr>
     <tr>
       <td><code>service { register : (text) -&gt; (nat) }</code></td>
       <td><code>{"kind":"service","methods":[…]}</code></td>
-      <td><code>PrincipalValue</code></td>
+      <td><code>Principal</code></td>
       <td><code>c.service({ register: c.func([c.text], [c.nat], "update") })</code></td>
       <td>A <code>service</code> <em>value</em> is the principal of a running service. The method table lives in the builder.</td>
     </tr>
@@ -207,7 +207,7 @@
   When the Contract has an actor — the <code>service : { … }</code> at the bottom of a
   <code>.did</code> — the module emits two more exports, bound as the locals <code>$actor</code> and
   <code>$Actor</code>: <code>actor</code>, the service schema typed
-  <code>$.Schema&lt;$.PrincipalValue&gt;</code>, and the type <code>Actor</code>, one async method per
+  <code>$.Schema&lt;$.Principal&gt;</code>, and the type <code>Actor</code>, one async method per
   service method. Parameters are positional and
   named <code>arg0</code>, <code>arg1</code>, …; the reply convention is zero results ⇒
   <code>Promise&lt;void&gt;</code>, one ⇒ <code>Promise&lt;T&gt;</code>, several ⇒
@@ -326,7 +326,7 @@ service : { ping : () -> () }
 </pre>
 
 <pre data-lang="ts" data-file="crates/candid-core-ts/tests/goldens/deferred.ts">
-type $Callback = { principal: $.PrincipalValue; method: string };
+type $Callback = { principal: $.Principal; method: string };
 const $Callback: $.Schema<$Callback> = $.c.rec(() => $.c.func([$.c.nat], [$.c.text], "query"));
 export { $Callback as Callback };
 
@@ -334,11 +334,11 @@ type $Kept = { value: bigint };
 const $Kept: $.Schema<$Kept> = $.c.rec(() => $.c.record({ value: $.c.nat }));
 export { $Kept as Kept };
 
-type $Registry = $.PrincipalValue;
+type $Registry = $.Principal;
 const $Registry: $.Schema<$Registry> = $.c.rec(() => $.c.service({ register: $.c.func([$.c.text], [$.c.nat], "update") }));
 export { $Registry as Registry };
 
-const $actor: $.Schema<$.PrincipalValue> = $.c.rec(() => $.c.service({ ping: $.c.func([], [], "update") }));
+const $actor: $.Schema<$.Principal> = $.c.rec(() => $.c.service({ ping: $.c.func([], [], "update") }));
 type $Actor = {
   ping: () => Promise<void>;
 };
@@ -423,7 +423,7 @@ encode(Description, { some: "x" });  // Some(Some("x")): set it
     <code>Actor</code>, which the actor surface exports. Both are refused unconditionally, actor or
     not, so adding an actor to a contract cannot start breaking a declaration name that worked
     before. Every other name generates: declarations bind <code>$</code>-prefixed locals, so the
-    runtime's <code>c</code>, <code>Schema</code> and <code>PrincipalValue</code>, the global
+    runtime's <code>c</code>, <code>Schema</code> and <code>Principal</code>, the global
     <code>Array</code>, <code>Record</code>, <code>Uint8Array</code> and <code>Promise</code>, and
     reserved words such as <code>delete</code> are all ordinary declaration names.
   </dd>

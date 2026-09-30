@@ -40,10 +40,12 @@ IDs — with a `compiler`-feature bridge from a compilation's provenance sidecar
 **The output is a clean domain model, by owner decision on issue #38.**
 `opt T` renders `T | null`; variants render as discriminated
 `{ tag, value }` unions with `value` omitted for `null` payloads; anonymous
-`vec nat8` renders `Uint8Array`; principals type as the structural
-`PrincipalValue` the runtime actually delivers, imported from
+`vec nat8` renders `Uint8Array`; principals type as `Principal`, the
+canonical principal text as a branded string — what the runtime actually
+decodes and the only principal value it encodes — referenced from
 `@candid-core/schema` by default (`TsOptions::principal_import`; issue #150
-replaced the SDK-class import). This deliberately diverges from the
+replaced the SDK-class import, and issue #187 the `{ toText }` carrier with
+canonical text). This deliberately diverges from the
 shapes the agent-js runtime produces (`[] | [T]` opts, single-key variant
 objects — what `@icp-sdk/bindgen` emits, verified against its 0.4.0 output):
 compatibility is a non-goal for now, and consuming these types against a live
@@ -102,10 +104,11 @@ surface.
 in `tests/goldens/`; regenerate deliberately with `UPDATE_GOLDENS=1` and review
 the diff. The goldens are additionally compiled by the exact TypeScript pinned
 in `ts/package-lock.json` under `strict` (`npm ci && npx tsc --noEmit` in
-`ts/`). Generated modules import only `@candid-core/schema` — `PrincipalValue`
-included, since issue #150, as `$.PrincipalValue` — so the check needs no peer and no stub; the
+`ts/`). Generated modules import only `@candid-core/schema` — the principal
+type included, as `$.Principal` since issue #187 — so the check needs no peer and no stub; the
 `@icp-sdk/core` in `ts/`'s devDependencies exists only for the suite proving
-real SDK `Principal` values encode unchanged, not for the goldens.
+real SDK `Principal` values convert through `principal()` to the same bytes, not
+for the goldens.
 
 **The codec speaks the wire format (issue #103).** `ts/codec.ts` encodes
 domain values to Candid binary and decodes Candid binary to domain values,

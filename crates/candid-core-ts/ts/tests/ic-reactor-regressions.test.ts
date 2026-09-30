@@ -120,11 +120,11 @@ test("ic-reactor #634 U4: service methods are ordered by UTF-8 bytes, not UTF-16
   const service = c.service({ "\u{1F600}": method, "！": method });
   const bytes = encodesTo(
     service,
-    { toText: () => "aaaaa-aa" },
+    "aaaaa-aa",
     "4449444c02690203efbc810104f09f9880016a0000010101000100",
   );
-  const value = decodes(service, bytes) as { toText(): string };
-  assert.strictEqual(value.toText(), "aaaaa-aa");
+  // A decoded service reference is the canonical principal text itself.
+  assert.strictEqual(decodes(service, bytes), "aaaaa-aa");
 });
 
 test("ic-reactor #634 U6: a field or arm named hasOwnProperty encodes and decodes", () => {

@@ -146,7 +146,7 @@ test("a func nested in a supported type builds (issue #104)", () => {
   assert(result.ok, "nested funcs are constructible since #104");
   if (result.ok) {
     const value = {
-      _1_: { principal: { toText: () => "aaaaa-aa" }, method: "go" },
+      _1_: { principal: "aaaaa-aa", method: "go" },
     };
     assert.deepStrictEqual(validate(result.schemas.Holder, value), { ok: true });
     assert(!validate(result.schemas.Holder, { _1_: "nope" }).ok);
@@ -175,9 +175,9 @@ test("reference declarations build and the actor is a service schema", () => {
     assert.deepStrictEqual(Object.keys(result.schemas), ["Callback", "Registry", "Kept"]);
     assert(result.actor !== undefined, "the document carries an actor");
     // A func value is { principal, method }; a service value is a principal.
-    const funcValue = { principal: { toText: () => "aaaaa-aa" }, method: "go" };
+    const funcValue = { principal: "aaaaa-aa", method: "go" };
     assert.deepStrictEqual(validate(result.schemas.Callback, funcValue), { ok: true });
-    assert.deepStrictEqual(validate(result.schemas.Registry, { toText: () => "aaaaa-aa" }), {
+    assert.deepStrictEqual(validate(result.schemas.Registry, "aaaaa-aa"), {
       ok: true,
     });
     assert.deepStrictEqual(validate(result.schemas.Kept, {}), { ok: true });
@@ -568,7 +568,7 @@ test("a nat8 vec whose element type is declared by name stays a vec", () => {
 });
 
 test("a func nested under opt or vec builds too (issue #104)", () => {
-  const funcValue = { principal: { toText: () => "aaaaa-aa" }, method: "go" };
+  const funcValue = { principal: "aaaaa-aa", method: "go" };
   for (const kind of ["opt", "vec"] as const) {
     const result = schemaFromContract(
       document(
@@ -705,7 +705,7 @@ test("a class actor denotes its running service; classes elsewhere are refused",
   const result = schemaFromContract(doc);
   assert(result.ok, "a canonical class-actor document loads");
   if (result.ok) {
-    const principal = { toText: () => "aaaaa-aa" };
+    const principal = "aaaaa-aa";
     assert.deepStrictEqual(Object.keys(result.schemas), ["Running", "Ping"]);
     assert(result.actor !== undefined);
     if (result.actor !== undefined) {

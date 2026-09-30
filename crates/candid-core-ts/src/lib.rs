@@ -58,11 +58,11 @@
 //! ```ts
 //! import * as $ from "@candid-core/schema";
 //!
-//! type $Account = { owner: $.PrincipalValue; subaccount: Uint8Array | null };
+//! type $Account = { owner: $.Principal; subaccount: Uint8Array | null };
 //! const $Account: $.Schema<$Account> = $.c.rec(() => $.c.record({ … }));
 //! export { $Account as Account };
 //!
-//! const $actor: $.Schema<$.PrincipalValue> = $.c.rec(() => $.c.service({ … }));
+//! const $actor: $.Schema<$.Principal> = $.c.rec(() => $.c.service({ … }));
 //! type $Actor = {
 //!   transfer: (arg0: $TransferArg) => Promise<$TransferResult>;
 //! };
@@ -89,9 +89,10 @@
 //! the contract (the #116 locality rule).
 //!
 //! When [`TsOptions::principal_import`] names the schema runtime (the
-//! default), the principal type is `$.PrincipalValue`; any other module is
-//! imported as `import type { PrincipalValue } from "…"`, a local that no
-//! `$`-prefixed declaration binding can collide with.
+//! default), the principal type is `$.Principal`; any other module is
+//! imported as `import type { Principal } from "…"`, a local that no
+//! `$`-prefixed declaration binding can collide with — so a declaration
+//! named `Principal` generates either way.
 //!
 //! # Determinism
 //!
@@ -167,14 +168,18 @@ impl TsNames {
 /// Generation options.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TsOptions {
-    /// The module the `PrincipalValue` type is imported from when a Contract
-    /// uses the `principal` primitive. Since issue #150 this is the schema
-    /// runtime's own structural type — `{ toText(): string }`, the honest
-    /// type of a decoded principal — not the SDK class, which the runtime
-    /// never constructs. At the default — the schema runtime itself — the
-    /// type is referenced through the module's `$` namespace
-    /// (`$.PrincipalValue`); any other module is imported only when used,
-    /// and as `import type`, so it never implies a runtime dependency.
+    /// The module the `Principal` type is imported from when a Contract uses
+    /// a principal (the primitive, a func reference, a service reference).
+    /// Since issue #187 that type is the schema runtime's own `Principal` —
+    /// canonical principal text as a branded string, the value the codec
+    /// decodes and the only one it encodes — not the SDK class, which the
+    /// runtime never constructs or accepts. At the default — the schema
+    /// runtime itself — the type is referenced through the module's `$`
+    /// namespace (`$.Principal`). Any other module is imported only when
+    /// used, as `import type { Principal }`, so it never implies a runtime
+    /// dependency; it must re-export the schema runtime's `Principal`
+    /// itself, because the brand makes that type nominal and the invariant
+    /// `$.Schema<…>` annotations compile against no other type.
     pub principal_import: String,
 }
 
@@ -302,9 +307,9 @@ pub fn generate_module(
     options: &TsOptions,
 ) -> Result<String, TsGenError> {
     let principal = if options.principal_import == SCHEMA_MODULE {
-        "$.PrincipalValue"
+        "$.Principal"
     } else {
-        "PrincipalValue"
+        "Principal"
     };
     Generator {
         contract,
@@ -350,8 +355,8 @@ struct Generator<'a> {
     contract: &'a Contract,
     names: &'a TsNames,
     declared: BTreeMap<TypeRef, String>,
-    /// The principal type expression: `$.PrincipalValue`, or the imported
-    /// `PrincipalValue` for a non-default [`TsOptions::principal_import`].
+    /// The principal type expression: `$.Principal`, or the imported
+    /// `Principal` for a non-default [`TsOptions::principal_import`].
     principal: &'static str,
     uses_principal: bool,
 }
@@ -482,7 +487,7 @@ impl Generator<'_> {
         }
         if self.uses_principal && options.principal_import != SCHEMA_MODULE {
             out.push_str(&format!(
-                "import type {{ PrincipalValue }} from {};\n",
+                "import type {{ Principal }} from {};\n",
                 quote_string(&options.principal_import)
             ));
         }
