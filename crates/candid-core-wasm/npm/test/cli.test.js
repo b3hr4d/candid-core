@@ -92,6 +92,35 @@ test("omissions are warnings, the run succeeds, and the library lists them", asy
   assert.deepStrictEqual(clean.omitted, []);
 });
 
+// A quoted Candid method name can hold any character — among them the four
+// that end a line in ECMAScript (LF, CR, U+2028, U+2029), other controls, and
+// the two `JSON.stringify` leaves raw or spells differently. Each warning is
+// still one stderr line, character for character the module's header line
+// for that omission (PR #210 review).
+test("an omitted method's name is quoted exactly as the module header quotes it", () => {
+  const scratch = mkdtempSync(path.join(tmpdir(), "candid-cli-quoted-"));
+  // Candid text escapes: the method name is  a"b\c <LF> <CR> <TAB> <BS> <FF>
+  // <US> <LS> <PS> é 😀  once the compiler reads it.
+  const method = String.raw`"a\"b\\c\n\r\t\u{8}\u{c}\u{1f}\u{2028}\u{2029}\u{e9}\u{1f600}"`;
+  writeFileSync(
+    path.join(scratch, "quoted.did"),
+    `type Bad = record { _0_ : nat };\nservice : { ${method} : (Bad) -> (); ok : () -> () }\n`,
+  );
+  const out = path.join(scratch, "out");
+  const run = gen(["gen", path.join(scratch, "quoted.did"), "-o", out]);
+  assert.strictEqual(run.status, 0, `${run.stdout}${run.stderr}`);
+  const header = readFileSync(path.join(out, "quoted.ts"), "utf8")
+    .split("\n")
+    .filter((line) => line.startsWith("// Omitted: "))
+    .map((line) => `warning: omitted ${line.slice("// Omitted: ".length)}`);
+  assert.deepStrictEqual(header, [
+    "warning: omitted type Bad (reserved_field_name)",
+    String.raw`warning: omitted method "a\"b\\c\n\r\t\u0008\u000c\u001f\u2028\u2029é😀" (references_omitted via Bad)`,
+  ]);
+  assert.deepStrictEqual(run.stderr.split("\n"), [...header, ""]);
+  assert.doesNotMatch(run.stderr, /[\r\u2028\u2029]/);
+});
+
 test("the envelope is byte-identical to the native CLI's committed output", () => {
   const scratch = mkdtempSync(path.join(tmpdir(), "candid-cli-envelope-"));
   writeFileSync(

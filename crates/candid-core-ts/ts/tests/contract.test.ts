@@ -389,6 +389,52 @@ test("an honest _N_-shaped name omits its declaration instead of refusing", () =
   }
 });
 
+// Two honest spellings can share one Candid hash — `_0_` and `` 6,/`U``
+// both hash to 4735054 — so a table may address one `(container, id)` twice.
+// The last entry wins, as in `TsNames`, and only the winner is classified:
+// `tests/golden.rs::the_last_name_for_a_key_wins_before_it_is_classified`
+// pins the generator's two outcomes for the same table in both orders
+// (PR #210 review).
+test("the last name for a key wins before it is classified, in generator parity", () => {
+  const reserved = "_0_";
+  const collision = " 6,/`U";
+  const id = candidLabelHash(reserved);
+  assert.strictEqual(id, 4_735_054);
+  assert.strictEqual(candidLabelHash(collision), id);
+  const doc = document(
+    [{ kind: "record", fields: [{ id, type: 1 }] }, primitive("nat")],
+    [{ name: "A", type: 0 }],
+  );
+
+  // Reserved first, ordinary last: the ordinary spelling wins and renders.
+  const ordinaryWins = schemaFromContract(doc, {
+    names: [
+      [0, id, reserved],
+      [0, id, collision],
+    ],
+  });
+  assert(ordinaryWins.ok);
+  if (ordinaryWins.ok) {
+    assert.deepStrictEqual(ordinaryWins.omitted, []);
+    assert.deepStrictEqual(validate(ordinaryWins.schemas.A, { [collision]: 1n }), { ok: true });
+  }
+
+  // Ordinary first, reserved last: the reserved spelling wins and omits.
+  const reservedWins = schemaFromContract(doc, {
+    names: [
+      [0, id, collision],
+      [0, id, reserved],
+    ],
+  });
+  assert(reservedWins.ok);
+  if (reservedWins.ok) {
+    assert.deepStrictEqual(Object.keys(reservedWins.schemas), []);
+    assert.deepStrictEqual(reservedWins.omitted, [
+      { kind: "declaration", name: "A", reason: "reserved_field_name" },
+    ]);
+  }
+});
+
 test("a malformed name table entry fails closed", () => {
   failsWith(
     schemaFromContract(document([primitive("nat")], [{ name: "A", type: 0 }]), {

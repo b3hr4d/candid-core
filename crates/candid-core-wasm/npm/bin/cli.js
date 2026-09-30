@@ -142,9 +142,39 @@ async function didFiles(root) {
   return files;
 }
 
-/** A name as the module header lists it: bare when identifier-shaped. */
+/**
+ * A name as the module header lists it, character for character: bare when
+ * identifier-shaped, else quoted exactly as the generator quotes it — `"`,
+ * `\\`, `\n`, `\r` and `\t` escaped, every other control character as a
+ * lowercase `\u00XX`, and U+2028 / U+2029 as `\u2028` / `\u2029`.
+ * `JSON.stringify` is not that: it leaves U+2028 and U+2029 raw — both end
+ * a line — and writes `\b` and `\f`. A quoted Candid method name can hold
+ * any of them, and each warning must stay one line equal to its header line.
+ */
 function listedName(name) {
-  return /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(name) ? name : JSON.stringify(name);
+  if (/^[A-Za-z_$][A-Za-z0-9_$]*$/.test(name)) {
+    return name;
+  }
+  let quoted = '"';
+  for (const character of name) {
+    const code = character.codePointAt(0);
+    if (character === '"') {
+      quoted += '\\"';
+    } else if (character === "\\") {
+      quoted += "\\\\";
+    } else if (character === "\n") {
+      quoted += "\\n";
+    } else if (character === "\r") {
+      quoted += "\\r";
+    } else if (character === "\t") {
+      quoted += "\\t";
+    } else if (code < 0x20 || code === 0x2028 || code === 0x2029) {
+      quoted += `\\u${code.toString(16).padStart(4, "0")}`;
+    } else {
+      quoted += character;
+    }
+  }
+  return `${quoted}"`;
 }
 
 /** One omission, worded as the module header's `// Omitted:` line. */

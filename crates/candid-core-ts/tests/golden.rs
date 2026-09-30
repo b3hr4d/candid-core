@@ -1222,6 +1222,102 @@ fn omission_codes_are_stable() {
     assert_eq!(OmissionKind::Method.code(), "method");
 }
 
+/// Two spellings with one Candid hash can address one `(container, id)` in a
+/// name table: `_0_` and `` 6,/`U`` both hash to 4735054. `TsNames` keeps
+/// the last one inserted, and only that winner is classified: a reserved
+/// `_N_` spelling that loses to a later ordinary one renders the ordinary
+/// key, and one that wins omits the declaration. `ts/tests/contract.test.ts`
+/// pins the same two outcomes for `schemaFromContract` over the same table
+/// in both orders (PR #210 review).
+#[test]
+fn the_last_name_for_a_key_wins_before_it_is_classified() {
+    let reserved = "_0_";
+    let collision = " 6,/`U";
+    let id = candid_parser_id(reserved);
+    assert_eq!(id, candid_parser_id(collision), "the two spellings collide");
+    assert_eq!(id, 4_735_054);
+    let contract = candid_core::ContractDraft::new(
+        vec![
+            candid_core::TypeNode::Record {
+                fields: vec![candid_core::Field { id, ty: 1 }],
+            },
+            candid_core::TypeNode::Primitive {
+                primitive: candid_core::PrimitiveType::Nat,
+            },
+        ],
+        vec![candid_core::Declaration {
+            name: "A".to_string(),
+            ty: 0,
+        }],
+        None,
+    )
+    .build()
+    .expect("a valid Contract");
+    let record = contract
+        .types()
+        .iter()
+        .position(|node| matches!(node, candid_core::TypeNode::Record { .. }))
+        .expect("the record node") as u32;
+
+    // Reserved first, ordinary last: the ordinary spelling wins and renders.
+    let names = TsNames::from_pairs([(record, id, reserved), (record, id, collision)]);
+    let generated = generate_module(&contract, &names, &TsOptions::default()).expect("generates");
+    assert!(generated.omitted.is_empty(), "{:?}", generated.omitted);
+    assert!(
+        generated
+            .module
+            .contains("$.c.record({ \" 6,/`U\": $.c.nat })"),
+        "{}",
+        generated.module
+    );
+
+    // Ordinary first, reserved last: the reserved spelling wins and omits.
+    let names = TsNames::from_pairs([(record, id, collision), (record, id, reserved)]);
+    let generated = generate_module(&contract, &names, &TsOptions::default()).expect("generates");
+    assert_eq!(
+        generated.omitted,
+        vec![declaration_omitted("A", OmissionReason::ReservedFieldName)]
+    );
+}
+
+/// A quoted method name may hold any character, including the four that end
+/// an ECMAScript `//` comment (LF, CR, U+2028, U+2029) and other controls.
+/// Its header line is still one line: JSON-style escapes, plus `\u2028` and
+/// `\u2029`, which JSON leaves raw. The CLI's `warning: omitted` line is
+/// held to the same text by `npm/test/cli.test.js` (PR #210 review).
+#[test]
+fn an_omitted_method_with_line_terminators_in_its_name_stays_on_one_line() {
+    let generated = generate_source_full(
+        "type Bad = record { _0_ : nat };\n\
+         service : { \"a\\u{2028}b\\u{2029}c\\nd\\re\\u{8}f\" : (Bad) -> (); ok : () -> () }",
+    );
+    assert_eq!(
+        generated.omitted,
+        vec![
+            declaration_omitted("Bad", OmissionReason::ReservedFieldName),
+            method_omitted_via("a\u{2028}b\u{2029}c\nd\re\u{8}f", "Bad"),
+        ]
+    );
+    let header =
+        "// Omitted: method \"a\\u2028b\\u2029c\\nd\\re\\u0008f\" (references_omitted via Bad)\n";
+    assert!(generated.module.contains(header), "{:?}", generated.module);
+    for terminator in ['\r', '\u{2028}', '\u{2029}'] {
+        assert!(
+            !generated.module.contains(terminator),
+            "{:?}",
+            generated.module
+        );
+    }
+    assert_eq!(
+        generated
+            .module
+            .lines()
+            .filter(|line| line.starts_with("// Omitted: "))
+            .count(),
+        2
+    );
+}
+
 /// Generate a fixture through the real provenance bridge, omissions included.
 fn generate_fixture_full(name: &str) -> GeneratedModule {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests");

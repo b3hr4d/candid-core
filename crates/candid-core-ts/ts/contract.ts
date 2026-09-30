@@ -927,6 +927,7 @@ function buildFromContract(
   // identically either way: shape, reservation, hash, and its entry count
   // included, so a corrupted table cannot amplify into an unbounded issue
   // list or Map. Issue paths are rooted where the table actually came from.
+  const winners = new Map<string, string>();
   const nameTable = new Map<string, string>();
   const reservedKeys = new Set<string>();
   if (!Array.isArray(namesSource.entries)) {
@@ -984,17 +985,24 @@ function buildFromContract(
       );
       continue;
     }
-    // An honest `_N_`-shaped name is real provenance — a Candid field
-    // genuinely named `_123_` — but erased to a key it is indistinguishable
-    // from the numeric-id rendering, so it never becomes one: the node that
-    // would render it is omitted with everything that references it, as the
-    // generator omits it (issues #115, #189). It is kept out of the key
-    // table, so no key ever renders from it.
+    // Two honest entries may address one `(container, id)` — two spellings
+    // with one Candid hash. The last one wins, exactly as `TsNames` keeps the
+    // last name inserted for a key, and the winner alone is classified below.
+    winners.set(`${entry[0]}:${entry[1]}`, name);
+  }
+  // An honest `_N_`-shaped winner is real provenance — a Candid field
+  // genuinely named `_123_` — but erased to a key it is indistinguishable
+  // from the numeric-id rendering, so it never becomes one: the node that
+  // would render it is omitted with everything that references it, as the
+  // generator omits it (issues #115, #189). It is kept out of the key table,
+  // so no key ever renders from it. Classifying only after the last entry
+  // has won keeps the two collections disjoint whatever the entry order.
+  for (const [key, name] of winners) {
     if (isNumericShapedName(name)) {
-      reservedKeys.add(`${entry[0]}:${entry[1]}`);
-      continue;
+      reservedKeys.add(key);
+    } else {
+      nameTable.set(key, name);
     }
-    nameTable.set(`${entry[0]}:${entry[1]}`, name);
   }
 
   const fieldKey = (container: number, id: number): string =>
