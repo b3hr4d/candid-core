@@ -1,4 +1,6 @@
 // Candid field labels, as this runtime renders them and the wire needs them.
+// Internal: the codec and the Contract loader import it, so it ships inside
+// `dist/`, but it is not a package export.
 //
 // The semantic Contract stores only numeric label ids; schema objects store
 // only rendered keys. The two are bridged by exactly two rules, both fixed by

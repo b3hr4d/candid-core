@@ -1,5 +1,9 @@
 // Form-generation metadata derived from a schema — the issue #105 slice, and
 // the first tool built on the structure the combinators deliberately carry.
+//
+// Internal: this module is not a package export and is not built into
+// `dist/`. It stays type-checked and tested here while downstream form
+// layers decide whether to consume it.
 // The output is a UI-agnostic form model: what to render, labeled how,
 // constrained how — never React/DOM components. Framework bindings consume
 // this model; they are not part of it.
@@ -46,7 +50,7 @@
 // model cannot know the chosen tag). Building the model never throws on any
 // schema a Contract can produce; a foreign schema object — or a rec chain
 // that never terminates, which no Contract builds — is a programmer error
-// and throws `TypeError`, the same stance `createActor` takes.
+// and throws `TypeError`, the same stance `resolveSchema` takes.
 
 import type { AnyFieldSchema, SchemaNode } from "./schema.ts";
 import { resolveSchema } from "./schema.ts";

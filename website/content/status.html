@@ -88,7 +88,7 @@ npm run build
   <dd>Linux, macOS and Windows on current stable; Linux on 1.78 for the MSRV suite; and <code>wasm32-unknown-unknown</code> for the library across every feature configuration meant to work there, with a browser runtime suite on an exact-pinned Chrome for Testing build.</dd>
 
   <dt><code>@candid-core/schema</code> runtime</dt>
-  <dd>TypeScript ≥ 5.0 (below that it is a <em>parse</em> error, not a type error); <code>moduleResolution</code> of <code>node16</code>, <code>nodenext</code> or <code>bundler</code> — <code>node10</code> cannot resolve the package at all; ESM only, with no CommonJS build; Node ≥ 16 for the seven peer-free subpaths and ≥ 20.19 for <code>./transport-icp</code>. The single peer, <code>@icp-sdk/core</code> ≥ 6, is declared optional and is needed only by that one subpath.</dd>
+  <dd>TypeScript ≥ 5.0 (below that it is a <em>parse</em> error, not a type error); <code>moduleResolution</code> of <code>node16</code>, <code>nodenext</code> or <code>bundler</code> — <code>node10</code> cannot resolve the package at all; ESM only, with no CommonJS build; Node ≥ 16 for the seven peer-free subpaths and ≥ 20.19 for <code>./transport-icp</code>. The single peer, <code>@icp-sdk/core</code> ≥ 6, is declared optional and is needed only by that one subpath. The next release removes <code>./transport-icp</code> and the peer, together with <code>./actor</code>, <code>./forms</code> and <code>./labels</code>; from then on the package has no runtime dependencies and no peers, and Node ≥ 16 covers every subpath.</dd>
 </dl>
 
 <h3>What does not work on bare WASM</h3>

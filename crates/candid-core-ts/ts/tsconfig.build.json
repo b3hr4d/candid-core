@@ -12,9 +12,6 @@
     "./validate.ts",
     "./contract.ts",
     "./codec.ts",
-    "./actor.ts",
-    "./transport-icp.ts",
-    "./forms.ts",
     "./labels.ts"
   ]
 }

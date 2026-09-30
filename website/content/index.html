@@ -5,7 +5,7 @@
     candid-core parses a <code>.did</code> file once, through the official Candid type
     checker, and projects the checked result into a validated type graph with a SHA-256
     identity over it. Rust and TypeScript packages read that one graph to give you typed
-    schemas, a binary codec, typed canister actors, and form metadata.
+    schemas, validation, and a binary codec.
   </p>
   <div class="hero-actions">
     <a class="button" href="what-is-candid-core.html">What it is for</a>
@@ -231,18 +231,6 @@ service : {
       <p><code>schemaFromContract</code> builds the same schema objects from a Contract document,
       with no code generation step — for an explorer, a wallet, or an agent tool.</p>
     </a>
-    <a class="card" href="schema-actors.html">
-      <span class="card-kicker">@candid-core/schema/actor</span>
-      <span class="card-title">Call a canister over a transport you control</span>
-      <p>The network layer is an interface with two methods moving <code>Uint8Array</code> in and
-      out. Pass an object literal and you have a canister call in a unit test, with no network.</p>
-    </a>
-    <a class="card" href="schema-forms.html">
-      <span class="card-kicker">@candid-core/schema/forms</span>
-      <span class="card-title">Drive a form from the interface itself</span>
-      <p>Every schema node is described as a control with its constraints. Form nodes and
-      validation issues share one path grammar, so an issue resolves to the control that produced it.</p>
-    </a>
     <a class="card" href="limits-and-diagnostics.html">
       <span class="card-kicker">candid-core</span>
       <span class="card-title">Accept <code>.did</code> source you did not write</span>
@@ -280,8 +268,8 @@ service : {
     <a class="card" href="ts-overview.html">
       <span class="card-kicker">npm · 0.2.0</span>
       <span class="card-title">@candid-core/schema</span>
-      <p>The schema runtime: builders and inference, validation, the binary codec, typed actors,
-      form metadata, and runtime schemas from a Contract document.</p>
+      <p>The schema runtime: builders and inference, validation, the binary codec, and runtime
+      schemas from a Contract document.</p>
     </a>
     <a class="card" href="cli-npm.html">
       <span class="card-kicker">npm · 0.1.0</span>

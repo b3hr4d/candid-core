@@ -29,10 +29,9 @@ tuples), `variant`, and named declaration references, recursion included.
 Since issue #104 the reference types generate too: a `func` value is the
 inert `{ principal, method }` reference, a `service` value is the principal
 of a running service, and a contract with an actor emits the service schema
-(`export const actor`) plus the call interface (`export type Actor`) that
-`ts/actor.ts`'s `createActor` takes explicitly — methods dispatched onto a
-two-method byte-pipe transport (`query` for query/composite_query, `call`
-for update/oneway), with the codec doing all encoding. A `class` denotes its
+(`export const actor`) plus the call interface (`export type Actor`) — one
+async method per service method, typed for whatever call layer a consumer
+builds on the codec; the package itself stops at the bytes. A `class` denotes its
 running service; init args are install-time metadata, noted per declaration
 and not exposed. Field names are
 caller-supplied through `TsNames` — the semantic Contract stores only label
@@ -85,8 +84,8 @@ the diff. The goldens are additionally compiled by the exact TypeScript pinned
 in `ts/package-lock.json` under `strict` (`npm ci && npx tsc --noEmit` in
 `ts/`). Generated modules import only `@candid-core/schema` — `PrincipalValue`
 included, since issue #150 — so the check needs no peer and no stub; the
-`@icp-sdk/core` in `ts/`'s devDependencies exists for the transport adapter's
-own suite, not for the goldens.
+`@icp-sdk/core` in `ts/`'s devDependencies exists only for the suite proving
+real SDK `Principal` values encode unchanged, not for the goldens.
 
 **The codec speaks the wire format (issue #103).** `ts/codec.ts` encodes
 domain values to Candid binary and decodes Candid binary to domain values,

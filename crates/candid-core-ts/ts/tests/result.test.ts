@@ -597,9 +597,9 @@ test("a reply that made the round trip through the codec unwraps", () => {
 test("the root entry still imports nothing at runtime, which is why these live here", () => {
   // The measured reason these helpers ship from `./validate` rather than the
   // root: `schema.ts` is the leaf of the package's runtime graph, and the
-  // actor factory, the form-model builder, and the Contract loader all import
-  // it. A convenience re-export placed there later would hand the validator
-  // to every `formModel` and `schemaFromContract` consumer, and the claim in
+  // Contract loader (and the internal form-model builder) import it. A
+  // convenience re-export placed there later would hand the validator to
+  // every `schemaFromContract` consumer, and the claim in
   // the shipped changelog would quietly stop being true — so the claim is a
   // test rather than prose.
   const source = readFileSync(new URL("../schema.ts", import.meta.url), "utf8");

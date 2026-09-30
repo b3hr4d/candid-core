@@ -1,7 +1,7 @@
 <p>
   Every Candid type has exactly one TypeScript rendering in this project, and every rendering has a
   matching runtime <em>schema</em> — an inert data object built from the <code>c</code> combinators
-  that validation, the binary codec, typed actors and form metadata all walk. This page is the
+  that validation and the binary codec both walk. This page is the
   complete table of both, plus the handful of shapes that refuse to generate rather than lose
   information.
 </p>
@@ -199,8 +199,9 @@
   <code>export type Actor</code>, one async method per service method. Parameters are positional and
   named <code>arg0</code>, <code>arg1</code>, …; the reply convention is zero results ⇒
   <code>Promise&lt;void&gt;</code>, one ⇒ <code>Promise&lt;T&gt;</code>, several ⇒
-  <code>Promise&lt;[A, B]&gt;</code>. <code>createActor&lt;Actor&gt;(actor, canisterId, transport)</code>
-  turns that pair into a live typed client — see <a href="schema-actors.html">Typed actors</a>.
+  <code>Promise&lt;[A, B]&gt;</code>. Calling the canister is a call layer's job, built on that
+  pair: the schema to encode arguments and decode replies with, and the interface to type the
+  client with.
 </p>
 
 <h3>Field names are an input</h3>
@@ -447,18 +448,15 @@ declaration `DoubleOpt` wraps `opt` in `opt`: `T | null` cannot distinguish `Non
 
 <p>
   <strong>Feeding these types to a classic agent needs a boundary conversion</strong>, and this project
-  does not supply one — it is recorded as future work. The supported path instead is the generated
-  <code>actor</code> schema plus <code>createActor</code> over a two-method byte-pipe transport, where
-  the package's own codec does all the encoding and never hands a schema to an agent. In a value's
-  lifetime the domain shape is what your application code sees, and the wire shape never appears at
-  all.
+  does not supply one — it is recorded as future work. What it supplies instead is the codec: the
+  generated schemas encode domain values straight to Candid bytes and decode replies back, so an
+  agent only ever moves bytes and never sees a schema. In a value's lifetime the domain shape is
+  what your application code sees, and the wire shape never appears at all.
 </p>
 
 <pre data-lang="ts">
-import { createActor } from "@candid-core/schema/actor";
-import { actor, type Actor, type TransferArg } from "./ledger.ts";
-
-const ledger = createActor<Actor>(actor, "ryjl3-tyaaa-aaaaa-aaaba-cai", transport);
+import { encodeArgs, decodeArgs } from "@candid-core/schema/codec";
+import { TransferArg, TransferResult } from "./ledger.ts";
 
 const arg: TransferArg = {
   to: { owner: recipient, subaccount: null },   // Account; opt blob absent
@@ -469,9 +467,14 @@ const arg: TransferArg = {
   amount: { e8s: 100_000_000n },
 };
 
-const result = await ledger.transfer(arg);
-if (result.tag === "ok") {
-  console.log("block index", result.value);
+const request = encodeArgs([TransferArg], [arg]); // Candid bytes for your transport
+// … send request.bytes on the update path, then decode what came back:
+const reply = decodeArgs([TransferResult], replyBytes);
+if (reply.ok) {
+  const result = reply.values[0] as TransferResult;
+  if (result.tag === "ok") {
+    console.log("block index", result.value);
+  }
 }
 </pre>
 

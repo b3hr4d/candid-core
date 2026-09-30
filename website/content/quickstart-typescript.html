@@ -9,10 +9,12 @@ hand-writing the description, and those routes do involve the Rust crate.</p>
 currently at <code>0.2.0</code>. It is a schema runtime for Candid in the shape
 Zod made familiar: a builder object called <code>c</code>, one combinator per
 Candid type, and a type-level <code>Infer</code> that reads the domain type
-back out of a schema. Its one peer dependency, <code>@icp-sdk/core</code>, is
-declared optional and is needed only if you import the
-<span class="pill">./transport-icp</span> subpath, so the install below pulls
-in nothing else.</p>
+back out of a schema. It has no runtime dependencies, so the install below
+pulls in nothing else. <code>0.2.0</code> declares one peer,
+<code>@icp-sdk/core</code>, marked optional and needed only by its
+<span class="pill">./transport-icp</span> subpath; the next release removes
+that subpath and the peer (see <a href="packages.html">Packages and
+crates</a>).</p>
 
 <callout type="note" title="Pre-1.0, on purpose">
   <p><code>@candid-core/schema</code> is below 1.0 and versions independently of
@@ -36,17 +38,17 @@ in nothing else.</p>
     <code>nodenext</code> or <code>bundler</code>; <code>node10</code> cannot
     see the package at all and fails every import with <code>TS2307</code>.
     TypeScript 5.0 is a hard floor, and Node 16 is the oldest runtime the
-    peer-free subpaths are exercised on.</p>
+    subpaths below are exercised on.</p>
     <p>Each module is a separate subpath export, and you import from the one you
     need: <span class="pill">.</span> for the builders,
     <span class="pill">./validate</span>,
-    <span class="pill">./codec</span>,
-    <span class="pill">./contract</span>,
-    <span class="pill">./actor</span>,
-    <span class="pill">./transport-icp</span>,
-    <span class="pill">./forms</span> and
-    <span class="pill">./labels</span>. Nothing is re-exported from the root
-    barrel, so importing the builders never drags the codec in behind them.</p>
+    <span class="pill">./codec</span> and
+    <span class="pill">./contract</span>. Nothing is re-exported from the root
+    barrel, so importing the builders never drags the codec in behind them.
+    <code>0.2.0</code> also exports <span class="pill">./actor</span>,
+    <span class="pill">./transport-icp</span>, <span class="pill">./forms</span>
+    and <span class="pill">./labels</span>; the next release removes all four,
+    so this guide does not use them.</p>
   </li>
 
   <li>
@@ -277,20 +279,22 @@ npx @candid-core/cli@0.1.0 gen ./service.did -o ./generated
 
 <h2>Next: calling a canister</h2>
 
-<p>Once a service schema exists — hand-written, generated, or loaded from a
-Contract document — <code>createActor</code> turns it into a typed call object.
-It needs a <code>Transport</code>, which is two methods that move Candid bytes
-and nothing more; the agent never sees a schema, and identity, polling and
-certificate verification stay on its side of that pipe. The compiled adapter
-over <code>@icp-sdk/core</code> ships as the
-<span class="pill">./transport-icp</span> subpath, and importing it is the
-moment the optional peer becomes a real runtime requirement.</p>
+<p>This package stops at the bytes. Once a service schema exists —
+hand-written, generated, or loaded from a Contract document —
+<code>serviceMethods</code> reads its method table and the codec encodes each
+method's arguments and decodes its reply. Sending those bytes to a canister —
+the agent, identity, polling and certificate verification — is the job of the
+call layer you build on top. (<code>0.2.0</code> still ships a
+<code>createActor</code> in <span class="pill">./actor</span> and an
+<code>@icp-sdk/core</code> transport in
+<span class="pill">./transport-icp</span>; the next release removes both, and
+the package changelog lists every removed name.)</p>
 
 <div class="card-grid">
-  <a class="card" href="schema-actors.html">
+  <a class="card" href="schema-codec.html">
     <span class="card-kicker">TypeScript</span>
-    <span class="card-title">Typed actors</span>
-    <p><code>createActor</code>, <code>callFunc</code>, the transport contract, and how a codec failure surfaces.</p>
+    <span class="card-title">The binary codec</span>
+    <p><code>encodeArgs</code> and <code>decodeArgs</code>: the Candid bytes a call layer sends and receives.</p>
   </a>
   <a class="card" href="schema-builders.html">
     <span class="card-kicker">Reference</span>

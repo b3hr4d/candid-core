@@ -25,8 +25,8 @@
 //! the inert `{ principal, method }` reference (its signature lives in the
 //! `c.func` builder), a `service` value is the principal of a running
 //! service, and a contract with an actor emits `export const actor` (the
-//! service schema) plus `export type Actor` (the call interface
-//! `ts/actor.ts`'s `createActor` takes explicitly). A `class` declaration or
+//! service schema) plus `export type Actor` (the typed call interface a call
+//! layer built on the codec takes explicitly). A `class` declaration or
 //! actor denotes its running service; init args are install-time metadata,
 //! noted per declaration and not exposed. A `class` *nested* inside a value
 //! type — which no Candid source can produce — fails closed with
@@ -339,7 +339,8 @@ impl Generator<'_> {
         // The actor surface: the service schema plus the directly-emitted
         // call interface — one async method per service method, the reply
         // convention being zero results ⇒ void, one ⇒ the value, several ⇒ a
-        // tuple. `createActor` in ts/actor.ts takes `Actor` explicitly.
+        // tuple. A call layer takes `Actor` explicitly, because `c.rec` erases
+        // method structure from a schema's type.
         let mut actor_out = String::new();
         if let Some(actor) = self.contract.actor() {
             let (service_ty, is_class) = match actor {

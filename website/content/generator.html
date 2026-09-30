@@ -124,8 +124,9 @@ export type Actor = {
 <code>service</code> value is the principal of a running service, so its type is
 <code>PrincipalValue</code> while the method table lives in <code>c.service</code>. The unannotated
 <code>register</code> and <code>ping</code> methods render their mode as the explicit
-<code>"update"</code>. <code>export const actor</code> plus <code>export type Actor</code> are exactly
-the pair <a href="schema-actors.html"><code>createActor</code></a> needs.</p>
+<code>"update"</code>. <code>export const actor</code> plus <code>export type Actor</code> are the
+pair a call layer needs: the service schema to encode and decode with, and the typed interface it
+cannot re-derive from the schema's type.</p>
 
 <h2>The public API</h2>
 
@@ -402,9 +403,9 @@ v1, so it pins rather than floats.</p>
     <span class="card-title">Builders and inference</span>
     <p>Every combinator on <code>c</code>, and how a schema and its type stay provably in step.</p>
   </a>
-  <a class="card" href="schema-actors.html">
+  <a class="card" href="schema-codec.html">
     <span class="card-kicker">TypeScript</span>
-    <span class="card-title">Typed actors</span>
-    <p>What to do with the <code>actor</code> schema and <code>Actor</code> type a module exports.</p>
+    <span class="card-title">The binary codec</span>
+    <p>Encoding a method's arguments and decoding its reply with the schemas a module exports.</p>
   </a>
 </div>

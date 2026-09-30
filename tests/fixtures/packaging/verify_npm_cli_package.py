@@ -11,7 +11,7 @@ permanent, so that cannot be corrected in place.
 The sibling gate (`verify_npm_package.py`) proves the same class of claim for
 `@candid-core/schema`. This is a separate script rather than a parameter on
 that one: the two packages ship different things (a bin and a wasm artifact
-here, eight subpath exports there) and share no assertion beyond "pack it and
+here, four subpath exports there) and share no assertion beyond "pack it and
 look", so one script serving both would be a switch statement wearing a
 function's clothes.
 
