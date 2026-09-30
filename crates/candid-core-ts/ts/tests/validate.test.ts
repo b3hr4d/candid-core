@@ -664,3 +664,100 @@ test("func values are strict: extras rejected, both fields required", () => {
   ok(c.service({}), principal);
   fails(c.service({}), { toText: () => principal }, "invalid_type", "$");
 });
+
+// ---------------------------------------------------------------------------
+// Iterative walk (issue #192)
+// ---------------------------------------------------------------------------
+
+type Nest = Nest[];
+const Nested: Schema<Nest> = c.rec(() => c.vec(Nested));
+type Chain = { head: bigint; tail: Chain | null };
+const Chain: Schema<Chain> = c.rec(() => c.record({ head: c.nat, tail: c.opt(Chain) }));
+type Tree = { tag: "leaf"; value: bigint } | { tag: "node"; value: [Tree, Tree] };
+const Tree: Schema<Tree> = c.rec(() => c.variant({ leaf: c.nat, node: c.tuple([Tree, Tree]) }));
+
+function nested(levels: number): Nest {
+  let value: Nest = [];
+  for (let level = 0; level < levels; level += 1) {
+    value = [value];
+  }
+  return value;
+}
+
+test("100,000-level nestings validate, deterministically, once limits are raised", () => {
+  // The recursive walk overflowed the host stack from about 2k levels, at a
+  // point that moved with the engine's JIT state; now the configured limits
+  // are the only bounds, and every run answers the same.
+  const levels = 100_000;
+  const raised = { maxDepth: 1e9, maxElements: 1e9 };
+  let chain: Chain | null = null;
+  let tree: Tree = { tag: "leaf", value: 0n };
+  for (let level = levels; level > 0; level -= 1) {
+    chain = { head: BigInt(level), tail: chain };
+    tree = { tag: "node", value: [tree, { tag: "leaf", value: BigInt(level) }] };
+  }
+  const cases: readonly [string, () => ValidateResult][] = [
+    ["vec nesting", () => validate(Nested, nested(levels), raised)],
+    ["linked list", () => validate(Chain, chain, raised)],
+    ["tree", () => validate(Tree, tree, raised)],
+  ];
+  for (const [name, run] of cases) {
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      assert.deepStrictEqual(run(), { ok: true }, `${name}, run ${attempt}`);
+    }
+  }
+  // A defect at the bottom is found, at its full path, every time.
+  let broken: unknown = { head: -1n, tail: null };
+  for (let level = 0; level < levels; level += 1) {
+    broken = { head: 1n, tail: broken };
+  }
+  const expectedPath = `$${".tail".repeat(levels)}.head`;
+  for (let run = 0; run < 3; run += 1) {
+    const result = validate(Chain, broken, raised);
+    assert.strictEqual(result.ok, false);
+    if (!result.ok) {
+      assert.strictEqual(result.issues.length, 1);
+      assert.strictEqual(result.issues[0].code, "out_of_range");
+      assert.strictEqual(result.issues[0].path, expectedPath);
+    }
+  }
+});
+
+test("a hostile deep value is refused with work bounded by maxDepth, not by its size", (t) => {
+  // A 1,000,000-level nesting at the default maxDepth and a raised one: the
+  // refusal is `value_depth` at maxDepth + 1, and the element budget it
+  // needed is pinned exactly — maxDepth + 1 charges (one per traversal step,
+  // depths 0 through maxDepth) — whatever lies beyond. Work, not time, is
+  // asserted; wall time is printed for information only (#39).
+  const hostile = nested(1_000_000);
+  for (const maxDepth of [256, 10_000]) {
+    const started = performance.now();
+    const refused = validate(Nested, hostile, { maxDepth });
+    const elapsed = performance.now() - started;
+    assert.deepStrictEqual(refused, {
+      ok: false,
+      issues: [
+        {
+          code: "resource_limit_exceeded",
+          path: `$${"[0]".repeat(maxDepth / 2)}`,
+          message: `value_depth limit ${maxDepth} exceeded (observed ${maxDepth + 1})`,
+          resource_limit: { resource: "value_depth", limit: maxDepth, observed: maxDepth + 1 },
+        },
+      ],
+    });
+    // Enough budget for exactly the work done: still a depth refusal.
+    const exact = validate(Nested, hostile, { maxDepth, maxElements: maxDepth + 1 });
+    assert.strictEqual(
+      exact.ok ? undefined : exact.issues[0].resource_limit?.resource,
+      "value_depth",
+    );
+    // One element less: the budget runs out first, having charged it all.
+    const short = validate(Nested, hostile, { maxDepth, maxElements: maxDepth });
+    assert.deepStrictEqual(short.ok ? undefined : short.issues[0].resource_limit, {
+      resource: "value_elements",
+      limit: maxDepth,
+      observed: maxDepth + 1,
+    });
+    t.diagnostic(`maxDepth ${maxDepth}: refused in ${elapsed.toFixed(2)} ms (informational)`);
+  }
+});

@@ -58,6 +58,13 @@ Modules, each a subpath export:
   bytes depend only on the values and the Candid types, never on whether a
   schema was generated, loaded or hand-built.
 
+`validate`, `encode` and `decode` keep their work on explicit stacks, not the
+JavaScript call stack, so the configured limits are their only bounds: the
+default `maxDepth` of 256 refuses a hostile deep value or message after work
+proportional to that limit, and a trusted host that raises it can walk a
+100,000-level linked list or ICRC-3 value whatever the engine's stack size —
+a worker's small stack included — with the same answer on every call.
+
 Those four are the whole export map. 0.2.0 also exported `./actor`,
 `./transport-icp`, `./forms`, and `./labels`; they are gone — see
 [CHANGELOG.md](./CHANGELOG.md).

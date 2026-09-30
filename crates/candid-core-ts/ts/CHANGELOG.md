@@ -40,17 +40,13 @@ moved, and the generated bindings and goldens are untouched.
   call's effective `maxDepth` and `observed` the deepest depth the walk had
   reached when the engine refused. Tell `stack` from `value_depth` by `resource`:
   `observed` is usually below `limit`, but not always (see below).
-- **When this can happen.** At the default `maxDepth` of 256 the walkers refuse
-  with `value_depth` long before any stack runs out, and that is unchanged, with
-  one exception. Otherwise overflow needs a `maxDepth` raised past what the
-  host's stack holds. The exception is `encode`'s type-table construction, which
-  charges depth only for `rec` hops and not for plain nested combinators: a
-  hand-built schema nested deeper than the stack (no `rec` anywhere) overflows
-  even at the default limits, reported with `observed` above `limit`. That
-  charging is left as it was. Where exactly an engine's limit falls varies by
-  engine, by JIT state and between runs, so an input near that point can succeed
-  on one call and report `stack` on the next; only the label, not the boundary,
-  is fixed here.
+- **When this can happen.** Since the walkers became iterative ("Iterative
+  walkers", below), only when user code a walk calls — a getter, a Proxy trap,
+  a `rec` thunk — recurses too deeply itself. When this change was made the
+  walkers were still recursive, and a `maxDepth` raised past what the host's
+  stack held, or a hand-built schema nested deeper than the stack, overflowed
+  them at a point that varied by engine, JIT state and run; that entry removes
+  both.
 - **How an overflow is recognised.** The engine's error is a `RangeError`
   reading "Maximum call stack size exceeded" (V8 and JavaScriptCore) or an
   `InternalError` reading "too much recursion" (SpiderMonkey, which does not
@@ -316,6 +312,60 @@ encoding, issue code, export or type moved; one loaded value domain did.
 - **Release ordering**: none needed for the loader alone, but a generated module
   and a loader from different sides of this change disagree about `vec Byte`.
   Ship the generator and this package together.
+
+### Iterative walkers: the configured limits are the only bounds
+
+`validate`, `encode`/`encodeArgs` and `decode`/`decodeArgs` no longer recurse
+on the JavaScript call stack once per nesting level: each keeps its work on an
+explicit stack of frames (issue #192). No wire encoding, golden or wire vector
+moved, and every issue code, `$`-path, message, `resource_limit` triple and
+first-issue precedence is what it was, with the one deliberate exception
+below. `DEFAULT_MAX_DEPTH` stays 256 and every other limit keeps its meaning.
+
+- **Deep data within raised limits now works, everywhere, every time.** With
+  `maxDepth` and `maxElements` raised, a 100,000-level value — a Motoko-style
+  linked list, an ICRC-3 `Value` tree, a nested `vec` — validates, encodes and
+  decodes on any engine, independent of its stack size, with the same result
+  on every call. Before, the walkers overflowed the host stack from about
+  1,500 (encode), 2,000 (validate) and 2,600 (decode) levels on Node, at a
+  point that moved with the engine's JIT state, and reported `stack`.
+- **Hostile depth is refused after bounded work.** A reply nested a million
+  levels deep is refused with `value_depth` at `maxDepth + 1` after charging
+  work proportional to `maxDepth` (256 elements at the default, 10,000 at
+  `maxDepth: 10_000`), whatever lies beyond; the suite pins the exact charge.
+- **Changed (decision D1 of #192, as the maintainer settled it): `encode`
+  charges `maxDepth` for Candid nesting depth, and only for that.** The
+  property: any type the candid-core compiler accepts encodes through its
+  generated module at the default limits, however it is split into
+  declarations. The type-table walk charges one depth unit per combinator
+  level at which it opens an entry (the argument's type at 0) and nothing for
+  `rec` hops, which are aliases and lazy edges — the count the compiler bounds
+  with `max_type_depth` (256), where an alias adds no depth either. A chain of
+  `rec` hops resolving one reference is capped on its own at `maxDepth`
+  (a generated module needs one or two, a loaded schema one). Before, the walk
+  counted rec hops and combinators together and checked the sum only at rec
+  hops: a compiler-accepted type reached through many aliases (for example
+  250 aliases each a `vec` of the next) and any `schemaFromContract` schema
+  deeper than about 128 levels were refused with `value_depth`, while a
+  hand-built static schema with no `rec` in it was not checked at all and
+  overflowed the stack. Now the first are accepted, and the last — `c.vec`
+  nested 20,000 times, say — is refused with `value_depth` at the first
+  composite at Candid depth 257 (`observed` 257, path `$`), after 257 entries.
+  Primitives open no entry and are not charged. Visible only in a schema's
+  type table: such an encode may now be accepted where it was refused, refused
+  where it was accepted (a shallow value in a hand-built schema nested past
+  the limit), or refused with a different `observed`, or ahead of a value
+  issue, since the type table is walked first. A value nested through every
+  level of a deep type still meets `maxDepth` in the value walk, which counts
+  rec hops as `validate` and `decode` do; that is unchanged. The worst case
+  for a hostile hand-built schema is `maxDepth × (maxDepth + 2)` thunk calls
+  per path (a full 256-hop chain at every level), pinned in the suite.
+- **`stack` is now only for user code.** The `stack` resource stays, for a
+  getter, Proxy trap or `rec` thunk that itself recurses too deeply; no depth
+  of value, message or schema produces it any more.
+- **Faster deep records.** `encode` no longer copies a record's field bytes
+  once per enclosing record to put them in wire order, so deeply nested
+  records encode in linear rather than quadratic time. Bytes are unchanged.
 
 ## 0.2.0 — 2026-08-24
 

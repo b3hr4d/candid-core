@@ -12,6 +12,15 @@
       ]
     }
   },
+  // The type checker cannot prove the equality gate for a type nested more
+  // than 98 levels inline ("Excessive stack depth comparing types", measured
+  // with the pinned compiler), and this generated module nests 256 levels —
+  // the Candid maximum — on purpose: it exists to show the runtime encodes
+  // it (issue #192). It still runs in `npm test`; only the static proof is
+  // out of reach (the test loads it by a computed specifier, so nothing
+  // imports it statically). The alias-chain and mixed depth modules are
+  // checked.
+  "exclude": ["../tests/goldens/depth/inline.ts"],
   "include": [
     "../tests/goldens/**/*.ts",
     "./node-builtins-stub.d.ts",

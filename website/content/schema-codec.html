@@ -361,7 +361,7 @@ export interface CodecOptions {
       <td><code>maxDepth</code></td>
       <td><code>256</code></td>
       <td><code>value_depth</code></td>
-      <td>Traversal depth. Every descent, every <code>rec</code> hop, and every skipped nesting level counts.</td>
+      <td>Traversal depth. Every descent, every <code>rec</code> hop, and every skipped nesting level counts; so does every combinator level at which <code>encode</code>'s type table gains an entry (Candid nesting depth, not <code>rec</code> hops).</td>
     </tr>
     <tr>
       <td><code>maxElements</code></td>
@@ -394,19 +394,26 @@ export interface CodecResourceLimitInfo {
 </pre>
 
 <p>
+  The codec's walks keep their work on explicit stacks, not the JavaScript call stack, so these
+  limits are the only bounds and the answer never depends on the engine: at the default
+  <code>maxDepth</code> of 256 a hostile nesting a million levels deep is refused with
+  <code>value_depth</code> after work proportional to 256, and a host that raises
+  <code>maxDepth</code> encodes and decodes a 100,000-level linked list or ICRC-3 value the same way
+  on every call. <code>encode</code>'s type table charges <code>maxDepth</code> for Candid nesting
+  depth only — once per combinator level at which it opens an entry, never for a <code>rec</code>
+  hop, since an alias adds no depth in Candid either — so any type the candid-core compiler
+  accepts encodes through its generated module at the default limits, and a hand-built schema
+  nested deeper than the limit is refused with <code>value_depth</code> at Candid depth 257.
+</p>
+
+<p>
   <code>stack</code> is the one resource that is not an option you set. It means the host
-  JavaScript stack ran out mid-walk: <code>limit</code> is the call's <code>maxDepth</code> and
-  <code>observed</code> is the deepest depth the walk had reached when the engine refused. Tell it
-  apart from <code>value_depth</code> by <code>resource</code>, not by comparing the two numbers.
-  Usually <code>observed</code> is below <code>limit</code>: at the default <code>maxDepth</code> of
-  256 a message or value stops at <code>value_depth</code> first, so you meet <code>stack</code>
-  after raising <code>maxDepth</code> past what your engine's stack holds. The exception is
-  <code>encode</code>'s type table, which charges depth only for <code>rec</code> hops, not for
-  plain nested combinators: a hand-built schema nested deeper than the stack (no <code>rec</code>
-  anywhere) overflows even at the default limits, with <code>observed</code> above
-  <code>limit</code>. Either way it is a property of the host, not of the message: use a shallower
-  input or schema, or run somewhere with a larger stack. Where an engine's limit falls varies, so
-  an input near it can pass on one call and report <code>stack</code> on the next.
+  JavaScript stack ran out mid-walk, which no depth of message, value or schema causes any more:
+  what does is your own code that a walk calls — a getter or Proxy trap on a value being encoded,
+  a <code>rec</code> thunk — recursing too deeply by itself. <code>limit</code> is the call's
+  <code>maxDepth</code> and <code>observed</code> the depth the walk had reached when the engine
+  refused. Tell it apart from <code>value_depth</code> by <code>resource</code>, not by comparing
+  the two numbers.
 </p>
 
 <p>

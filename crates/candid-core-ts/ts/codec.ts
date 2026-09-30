@@ -84,11 +84,21 @@
 // `maxElements` values), and `maxNumericBytes` caps a single unbounded
 // `nat`/`int` encoding. Decode stops at the first hard error: the wire
 // format cannot be resynchronized after one, so the issue list is short by
-// design. A `maxDepth` raised past what the host's own call stack holds can
-// still overflow it: the engine's stack-exhaustion exception is caught at the
-// same choke points, ahead of their catch-alls, and reported as
-// `resource_limit_exceeded` with resource `stack` — never as a value or schema
-// problem.
+// design. Every walk — the encoder's type table and value walk, the decoder's
+// value, skip and reference-subtyping walks — keeps its work on an explicit
+// stack rather than the host's (issue #192), so the configured limits are the
+// only bounds: with `maxDepth` raised, a 100,000-level value encodes and
+// decodes. The encoder's type table charges `maxDepth` for Candid nesting
+// depth — each combinator level at which it opens an entry, never a `rec`
+// hop — so any type the candid-core compiler accepts encodes through its
+// generated module at the default limits, and a hand-built static schema
+// deeper than the limit is refused with `value_depth` like a deep value.
+// What can still
+// exhaust the host stack is user code a walk calls — a getter, a Proxy trap,
+// a rec thunk that itself recurses too deeply: that exception is caught at
+// the same choke points, ahead of their catch-alls, and reported as
+// `resource_limit_exceeded` with resource `stack` — never as a value or
+// schema problem.
 //
 // Options are the exception to "never throws", deliberately (issue #190):
 // they are code, not input. An unknown key, or a limit that is not a
@@ -110,10 +120,11 @@
 // spells its fields — produce the same message. Repeated structure is
 // written once; a recursive type is canonical per knot, and every schema
 // generated from or loaded from a Contract has one knot per recursive node
-// (see `typetable.ts` for the one case left unminimised). The exception a
-// host cannot be argued out of remains: where its own stack ends varies with
-// the engine and its JIT state, so an input near that point can succeed on
-// one call and report `stack` on the next.
+// (see `typetable.ts` for the one case left unminimised). No result depends
+// on the host's stack either: the walks are iterative (issue #192), so an
+// input succeeds or fails by the configured limits alone, the same on every
+// engine and every call — the only exception being user code (a getter, a
+// rec thunk) that overflows the stack by itself.
 
 import type { AnyFieldSchema, AnySchema, Principal, Schema } from "./schema.ts";
 import { fieldIdOfKey, utf8BytesStrict, utf8Decode } from "./labels.ts";
@@ -170,12 +181,13 @@ export type CodecCode =
 /** The `{resource, limit, observed}` triple a bound failure carries. */
 export interface CodecResourceLimitInfo {
   /**
-   * `stack` means the host JavaScript stack ran out mid-walk: `limit` is the
-   * effective `maxDepth` and `observed` the deepest depth the walk had reached.
-   * Usually `observed` is below `limit`, but not always: the encoder's type
-   * table charges no depth for plain nested combinators, so a hand-built
-   * schema can overflow there with `observed` above `limit`. Read `resource`,
-   * not a comparison of the two numbers, to tell `stack` from `value_depth`.
+   * `stack` means the host JavaScript stack ran out mid-walk. The walks keep
+   * their work on explicit stacks, so no depth of message, value or schema causes
+   * it; user code a walk calls — a getter, a Proxy trap, a rec thunk —
+   * recursing too deeply itself does. `limit` is the effective `maxDepth` and
+   * `observed` the deepest depth the walk had reached, which says where the
+   * walk was, not where the host's stack ends. Read `resource`, not a
+   * comparison of the two numbers, to tell `stack` from `value_depth`.
    */
   readonly resource:
     "bytes" | "type_table_entries" | "value_depth" | "value_elements" | "numeric_bytes" | "stack";
@@ -217,7 +229,12 @@ export interface CodecOptions {
    * is merged, so the table it writes is never larger than this.
    */
   readonly maxTypeTableEntries?: number;
-  /** Traversal depth cap, mirroring `Limits::max_value_depth`. */
+  /**
+   * Traversal depth cap, mirroring `Limits::max_value_depth`. Encode's
+   * type-table walk charges it too, for Candid nesting depth: once per
+   * combinator level at which the table gains an entry, never for a `rec`
+   * hop, so a static schema nested deeper than this is refused.
+   */
   readonly maxDepth?: number;
   /** Traversal element budget, mirroring validate's accounting. */
   readonly maxElements?: number;
@@ -687,15 +704,13 @@ function encodeWith(
     for (const ref of typeRefs) {
       writeSlebBig(out, BigInt(ref));
     }
-    for (const byte of body) {
-      out.push(byte);
-    }
+    encoder.rope.flattenInto(body, out);
     return { ok: true, bytes: Uint8Array.from(out) };
   } catch (error) {
     if (isStackExhaustion(error)) {
       // A property of the host, not of the value: checked before the
-      // catch-all so it is never labelled a value problem. This branch
-      // survives an iterative rewrite for residual overflow in user code.
+      // catch-all so it is never labelled a value problem. The walks are
+      // iterative (issue #192); what overflows is user code they called.
       encoder.stackExhausted(path);
     } else if (!(error instanceof Halt)) {
       // The fail-closed choke point: a hostile value that throws while being
@@ -736,6 +751,138 @@ class EntryBuilder {
   }
 }
 
+/**
+ * A record's fields are written into their own buffers and appended to the
+ * record's output in wire (id) order. Copying each field's bytes into its
+ * parent is what the recursive encoder did, and nested records then copied
+ * their whole subtree once per level: quadratic in nesting depth, which only
+ * became reachable once depth stopped being bounded by the host stack. So a
+ * field whose bytes are few is still copied, and one that is large — or that
+ * already links others — is linked instead: recorded as "insert this buffer
+ * here" and resolved once, iteratively, when the message is assembled. The
+ * bytes are identical either way; copying stays bounded by a constant per
+ * field, so encoding is linear in the output.
+ */
+class Rope {
+  /** Per buffer, its links as flat pairs: offset in that buffer, then the buffer inserted there. */
+  private readonly links = new Map<number[], (number | number[])[]>();
+
+  /** Append `child`'s bytes (and whatever it links) to `parent`. */
+  append(parent: number[], child: number[]): void {
+    const nested = this.links.get(child);
+    if (nested === undefined && child.length <= COPY_LIMIT) {
+      for (let i = 0; i < child.length; i += 1) {
+        parent.push(child[i]);
+      }
+      return;
+    }
+    let links = this.links.get(parent);
+    if (links === undefined) {
+      links = [];
+      this.links.set(parent, links);
+    }
+    links.push(parent.length, child);
+  }
+
+  /** Copy `root` into `out` with every link resolved in place, iteratively. */
+  flattenInto(root: number[], out: number[]): void {
+    // Parallel stacks: the buffer being copied, the next byte, the next link.
+    const buffers: number[][] = [root];
+    const positions: number[] = [0];
+    const nextLinks: number[] = [0];
+    while (buffers.length > 0) {
+      const top = buffers.length - 1;
+      const buffer = buffers[top];
+      const links = this.links.get(buffer);
+      const linked = links !== undefined && nextLinks[top] < links.length;
+      const until = linked ? (links[nextLinks[top]] as number) : buffer.length;
+      for (let i = positions[top]; i < until; i += 1) {
+        out.push(buffer[i]);
+      }
+      positions[top] = until;
+      if (linked) {
+        const child = links[nextLinks[top] + 1] as number[];
+        nextLinks[top] += 2;
+        buffers.push(child);
+        positions.push(0);
+        nextLinks.push(0);
+      } else {
+        buffers.pop();
+        positions.pop();
+        nextLinks.pop();
+      }
+    }
+  }
+}
+
+/** The byte count up to which `Rope.append` copies a buffer rather than linking it. */
+const COPY_LIMIT = 64;
+
+/** A `typeStart` answer meaning "an entry was opened; its index comes later". */
+const PENDING: unique symbol = Symbol("pending");
+
+/**
+ * One type-table entry under construction — the continuation of what was a
+ * recursive `typeRef` call. `step` is where its children stand (per kind:
+ * the next element, field or method, or for a func 0 = arguments, 1 =
+ * results); `awaiting` means a child's entry is being built on top of it and
+ * its index is to be recorded on resume.
+ */
+interface TypeFrame {
+  readonly node: Exclude<SchemaNode, RecNode>;
+  readonly index: number;
+  readonly entry: EntryBuilder;
+  readonly at: number;
+  step: number;
+  awaiting: boolean;
+  /** A func frame's loop body is in flight (see `typeRef`'s catch). */
+  inBody: boolean;
+  fields?: { key: string; id: number; schema: AnySchema }[];
+  methods?: { name: string; bytes: Uint8Array }[];
+  iterator?: Iterator<AnySchema>;
+}
+
+/**
+ * One composite value being encoded — the continuation of what was a
+ * recursive `value` call: the child in flight, and for a record the field
+ * buffers written so far; `boxed` and `variant` are the key checks that
+ * follow a payload.
+ */
+type ValueFrame =
+  | {
+      readonly kind: "vec";
+      readonly node: VecNode;
+      readonly value: unknown[];
+      readonly length: number;
+      index: number;
+      readonly depth: number;
+      readonly out: number[];
+    }
+  | {
+      readonly kind: "tuple";
+      readonly node: TupleNode;
+      readonly value: unknown[];
+      index: number;
+      readonly depth: number;
+      readonly out: number[];
+    }
+  | {
+      readonly kind: "record";
+      readonly node: RecordNode;
+      readonly value: Record<string, unknown>;
+      readonly fields: readonly { key: string; id: number; schema: AnySchema }[];
+      readonly keys: readonly string[];
+      index: number;
+      readonly buffers: Map<string, number[]>;
+      /** The field in flight, whose buffer is recorded (and path popped) on resume. */
+      pendingKey: string | undefined;
+      pendingBuffer: number[] | undefined;
+      readonly depth: number;
+      readonly out: number[];
+    }
+  | { readonly kind: "boxed"; readonly value: Record<string, unknown>; readonly depth: number }
+  | { readonly kind: "variant"; readonly value: Record<string, unknown>; readonly depth: number };
+
 class Encoder {
   readonly issues: CodecIssue[] = [];
   /**
@@ -748,6 +895,13 @@ class Encoder {
   private elements = 0;
   /** The deepest depth charged so far: what a stack overflow reports. */
   private reached = 0;
+  /** The type-table walk's explicit stack, and the index a finished frame hands back. */
+  private readonly typeStack: TypeFrame[] = [];
+  private typeResult = 0;
+  /** The value walk's explicit stack. */
+  private readonly valueStack: ValueFrame[] = [];
+  /** Where records link large field buffers rather than copy them. */
+  readonly rope = new Rope();
 
   private readonly limits: Limits;
 
@@ -830,10 +984,16 @@ class Encoder {
   }
 
   /**
-   * Rec unwrapping for type-table construction: depth-guarded but never
-   * element-charged. The table is type-graph work bounded by its own entry
-   * cap; charging it against `maxElements` made encode's element accounting
-   * diverge from validate's value-walk accounting.
+   * Rec unwrapping for type-table construction. Never element-charged: the
+   * table is type-graph work bounded by its own entry cap, and charging it
+   * against `maxElements` made encode's element accounting diverge from
+   * validate's value-walk accounting. Never depth-charged either (issue #192,
+   * see `chargeTypeDepth`): a `rec` is an alias or a lazy edge, an
+   * indirection rather than a level of Candid nesting, so the returned depth
+   * is the one passed in. What bounds a chain of thunks is its own cap: more
+   * than `maxDepth` consecutive hops resolving one reference (256 by default;
+   * a generated module needs one or two, a Contract-loaded schema one) fail
+   * closed with `value_depth`, `observed` being the chain's length.
    */
   private resolveType(
     schema: SchemaNode,
@@ -841,15 +1001,12 @@ class Encoder {
     depth: number,
   ): { node: Exclude<SchemaNode, RecNode>; depth: number } {
     let node = schema;
-    let hops = depth;
-    if (hops > this.reached) {
-      this.reached = hops;
+    let hops = 0;
+    if (depth > this.reached) {
+      this.reached = depth;
     }
     while (node.kind === "rec") {
       hops += 1;
-      if (hops > this.reached) {
-        this.reached = hops;
-      }
       if (hops > this.limits.maxDepth) {
         this.fail(
           "resource_limit_exceeded",
@@ -872,7 +1029,38 @@ class Encoder {
       }
       node = body as SchemaNode;
     }
-    return { node: node as Exclude<SchemaNode, RecNode>, depth: hops };
+    return { node: node as Exclude<SchemaNode, RecNode>, depth };
+  }
+
+  /**
+   * Issue #192, decision D1 as the maintainer settled it — the one place it
+   * is made. The type-table walk charges `maxDepth` for Candid nesting depth
+   * only: one unit per combinator level at which it opens an entry (the
+   * argument's own type at 0, its children at 1, and so on), and nothing for
+   * `rec` hops, which are aliases and lazy edges rather than nesting
+   * (`resolveType` bounds those by chain instead). That is the count the
+   * candid-core compiler bounds with `max_type_depth` (default 256, the
+   * default `maxDepth` here), where an alias adds no depth either, so any
+   * type the compiler accepts encodes through its generated module at the
+   * default limits, however it is split into declarations. A hand-built
+   * schema nested deeper — no `rec` needed — is refused with `value_depth`
+   * at the first entry past the limit (Candid depth 257 by default), as ADR
+   * 0005 asks of graph work, rather than walked to any depth. Primitives open
+   * no entry and are not charged.
+   */
+  private chargeTypeDepth(path: readonly PathSegment[], depth: number): void {
+    if (depth > this.limits.maxDepth) {
+      this.fail(
+        "resource_limit_exceeded",
+        path,
+        `value_depth limit ${this.limits.maxDepth} exceeded`,
+        {
+          resource: "value_depth",
+          limit: this.limits.maxDepth,
+          observed: depth,
+        },
+      );
+    }
   }
 
   /**
@@ -885,9 +1073,56 @@ class Encoder {
    * `c.rec(() => …)` body builds fresh combinator objects on every call, so
    * memoizing only the resolved node would never see the cycle and the
    * table would grow until the entry cap. Memoizing the rec object itself
-   * (reserved before recursion) is what ties the knot.
+   * (reserved before its children are walked) is what ties the knot.
+   *
+   * The walk keeps its work on an explicit stack of `TypeFrame`s (issue
+   * #192): an entry being built is a frame, and a child reference that needs
+   * an entry of its own pushes one and hands its index back through
+   * `typeResult`. Entries are reserved, written and completed in the same
+   * pre-order, with the same schema reads, as the recursive walk this
+   * replaces, so the provisional table is identical.
    */
   typeRef(schema: SchemaNode, path: readonly PathSegment[], depth: number): number {
+    const ref = this.typeStart(schema, path, depth);
+    if (ref !== PENDING) {
+      return ref;
+    }
+    const stack = this.typeStack;
+    try {
+      while (stack.length > 0) {
+        this.resumeType(stack[stack.length - 1], path);
+      }
+    } catch (error) {
+      // A throw out of the body of `for (const arg of node.args)` closed
+      // that loop's iterator on its way out; a func frame whose child was in
+      // flight does the same, innermost first, and the original exception
+      // still propagates. (A throw from `next()` itself closes nothing.)
+      for (let i = stack.length - 1; i >= 0; i -= 1) {
+        const frame = stack[i];
+        if (frame.inBody && frame.iterator !== undefined) {
+          try {
+            frame.iterator.return?.();
+          } catch {
+            // The loop's own exception wins, as it does for `for…of`.
+          }
+        }
+      }
+      stack.length = 0;
+      throw error;
+    }
+    return this.typeResult;
+  }
+
+  /**
+   * One `typeRef` up to its children: answer from the memo or a primitive
+   * opcode, or reserve the entry, write its opening bytes, push its frame and
+   * answer `PENDING` — the index arrives in `typeResult` when the frame ends.
+   */
+  private typeStart(
+    schema: SchemaNode,
+    path: readonly PathSegment[],
+    depth: number,
+  ): number | typeof PENDING {
     const known = this.memo.get(schema);
     if (known !== undefined) {
       return known;
@@ -910,6 +1145,7 @@ class Encoder {
       this.memo.set(schema, existing);
       return existing;
     }
+    this.chargeTypeDepth(path, at);
     const index = this.table.length;
     if (index >= this.limits.maxTypeTableEntries) {
       this.fail(
@@ -927,15 +1163,14 @@ class Encoder {
     this.memo.set(schema, index);
     this.table.push({ segments: [], refs: [] });
     const entry = new EntryBuilder();
+    const frame: TypeFrame = { node, index, entry, at, step: 0, awaiting: false, inBody: false };
     switch (node.kind) {
       case "opt": {
         writeSlebBig(entry.bytes, BigInt(OP.opt));
-        entry.ref(this.typeRef(node.inner as SchemaNode, path, at + 1));
         break;
       }
       case "vec": {
         writeSlebBig(entry.bytes, BigInt(OP.vec));
-        entry.ref(this.typeRef(node.inner as SchemaNode, path, at + 1));
         break;
       }
       case "blob": {
@@ -951,44 +1186,20 @@ class Encoder {
       case "tuple": {
         writeSlebBig(entry.bytes, BigInt(OP.record));
         writeLebNumber(entry.bytes, node.elements.length);
-        for (let i = 0; i < node.elements.length; i += 1) {
-          writeLebNumber(entry.bytes, i);
-          entry.ref(this.typeRef(node.elements[i] as SchemaNode, path, at + 1));
-        }
         break;
       }
       case "record":
       case "variant": {
         const map = node.kind === "record" ? node.fields : node.arms;
-        const fields = this.sortedFields(map, path);
+        frame.fields = this.sortedFields(map, path);
         writeSlebBig(entry.bytes, BigInt(node.kind === "record" ? OP.record : OP.variant));
-        writeLebNumber(entry.bytes, fields.length);
-        for (const field of fields) {
-          writeLebNumber(entry.bytes, field.id);
-          entry.ref(this.typeRef(field.schema as SchemaNode, path, at + 1));
-        }
+        writeLebNumber(entry.bytes, frame.fields.length);
         break;
       }
       case "func": {
         writeSlebBig(entry.bytes, BigInt(OP.func));
         writeLebNumber(entry.bytes, node.args.length);
-        for (const arg of node.args) {
-          entry.ref(this.typeRef(arg as SchemaNode, path, at + 1));
-        }
-        writeLebNumber(entry.bytes, node.results.length);
-        for (const result of node.results) {
-          entry.ref(this.typeRef(result as SchemaNode, path, at + 1));
-        }
-        const annotation = MODE_ANNOTATION[node.mode];
-        if (annotation === undefined) {
-          this.fail("unsupported_schema", path, `unknown method mode ${JSON.stringify(node.mode)}`);
-        }
-        if (annotation === 0) {
-          writeLebNumber(entry.bytes, 0);
-        } else {
-          writeLebNumber(entry.bytes, 1);
-          entry.bytes.push(annotation);
-        }
+        frame.iterator = node.args[Symbol.iterator]();
         break;
       }
       case "service": {
@@ -1003,7 +1214,101 @@ class Encoder {
         methods.sort((a, b) => compareBytes(a.bytes, b.bytes));
         writeSlebBig(entry.bytes, BigInt(OP.service));
         writeLebNumber(entry.bytes, methods.length);
-        for (const method of methods) {
+        frame.methods = methods;
+        break;
+      }
+    }
+    this.typeStack.push(frame);
+    return PENDING;
+  }
+
+  /**
+   * Continue the entry on top of the type stack: record the child reference
+   * that just completed, walk children until one needs an entry of its own
+   * (then return; it is on the stack now) or none is left (then finish the
+   * entry, hand its index to the parent and pop).
+   */
+  private resumeType(frame: TypeFrame, path: readonly PathSegment[]): void {
+    const { node, entry, at } = frame;
+    if (frame.awaiting) {
+      frame.awaiting = false;
+      entry.ref(this.typeResult);
+      frame.inBody = false;
+    }
+    switch (node.kind) {
+      case "opt":
+      case "vec": {
+        if (frame.step === 0) {
+          frame.step = 1;
+          if (!this.typeChild(frame, node.inner as SchemaNode, path, at + 1)) {
+            return;
+          }
+        }
+        break;
+      }
+      case "tuple": {
+        while (frame.step < node.elements.length) {
+          const i = frame.step;
+          frame.step += 1;
+          writeLebNumber(entry.bytes, i);
+          if (!this.typeChild(frame, node.elements[i] as SchemaNode, path, at + 1)) {
+            return;
+          }
+        }
+        break;
+      }
+      case "record":
+      case "variant": {
+        const fields = frame.fields as { key: string; id: number; schema: AnySchema }[];
+        while (frame.step < fields.length) {
+          const field = fields[frame.step];
+          frame.step += 1;
+          writeLebNumber(entry.bytes, field.id);
+          if (!this.typeChild(frame, field.schema as SchemaNode, path, at + 1)) {
+            return;
+          }
+        }
+        break;
+      }
+      case "func": {
+        // `step` 0 walks the arguments, 1 the results — each through the
+        // array's own iterator, as the `for…of` loops this replaces did.
+        for (;;) {
+          const iterator = frame.iterator as Iterator<AnySchema>;
+          const next = iterator.next();
+          if (next.done === true) {
+            if (frame.step === 0) {
+              frame.step = 1;
+              writeLebNumber(entry.bytes, node.results.length);
+              frame.iterator = node.results[Symbol.iterator]();
+              continue;
+            }
+            frame.iterator = undefined;
+            break;
+          }
+          frame.inBody = true;
+          if (!this.typeChild(frame, next.value as SchemaNode, path, at + 1)) {
+            return;
+          }
+          frame.inBody = false;
+        }
+        const annotation = MODE_ANNOTATION[node.mode];
+        if (annotation === undefined) {
+          this.fail("unsupported_schema", path, `unknown method mode ${JSON.stringify(node.mode)}`);
+        }
+        if (annotation === 0) {
+          writeLebNumber(entry.bytes, 0);
+        } else {
+          writeLebNumber(entry.bytes, 1);
+          entry.bytes.push(annotation);
+        }
+        break;
+      }
+      case "service": {
+        const methods = frame.methods as { name: string; bytes: Uint8Array }[];
+        while (frame.step < methods.length) {
+          const method = methods[frame.step];
+          frame.step += 1;
           writeLebNumber(entry.bytes, method.bytes.length);
           for (const byte of method.bytes) {
             entry.bytes.push(byte);
@@ -1020,13 +1325,37 @@ class Encoder {
               `service method ${JSON.stringify(method.name)} must be a func schema`,
             );
           }
-          entry.ref(this.typeRef(node.methods[method.name] as SchemaNode, path, at + 1));
+          if (!this.typeChild(frame, node.methods[method.name] as SchemaNode, path, at + 1)) {
+            return;
+          }
         }
         break;
       }
     }
-    this.table[index] = entry.finish();
-    return index;
+    this.table[frame.index] = entry.finish();
+    this.typeResult = frame.index;
+    this.typeStack.pop();
+  }
+
+  /**
+   * Reference one child from `frame`'s entry. True when the reference was
+   * known at once and has been recorded; false when the child opened an
+   * entry of its own, whose frame is now on top — `frame` records the index
+   * when it resumes.
+   */
+  private typeChild(
+    frame: TypeFrame,
+    schema: SchemaNode,
+    path: readonly PathSegment[],
+    depth: number,
+  ): boolean {
+    const ref = this.typeStart(schema, path, depth);
+    if (ref === PENDING) {
+      frame.awaiting = true;
+      return false;
+    }
+    frame.entry.ref(ref);
+    return true;
   }
 
   /** Keys of a record/variant map with derived ids, ascending, collisions refused. */
@@ -1058,6 +1387,11 @@ class Encoder {
    * Emit one value. Validation and emission are one walk: every property is
    * read exactly once, checked, and written, so validation cannot be
    * bypassed by a getter returning different values on repeated reads.
+   *
+   * The walk keeps its work on an explicit stack of `ValueFrame`s (issue
+   * #192) rather than the host call stack, so `maxDepth` is its only depth
+   * bound. Every read, charge, check, path push and pop, and byte happens in
+   * the order the recursive walk this replaces performed them.
    */
   value(
     schema: SchemaNode,
@@ -1066,138 +1400,340 @@ class Encoder {
     path: PathSegment[],
     depth: number,
   ): void {
-    const { node, depth: at } = this.resolve(schema, path, depth);
-    this.step(path, at);
-    switch (node.kind) {
-      case "primitive":
-        this.primitive(node.primitive, value, out, path);
-        return;
-      case "opt": {
-        if (value === null) {
-          out.push(0);
+    this.enterValue(schema, value, out, path, depth);
+    const stack = this.valueStack;
+    while (stack.length > 0) {
+      this.resumeValue(stack[stack.length - 1], path);
+    }
+  }
+
+  /**
+   * Begin one value: resolve and charge it, check it, and write it — at once
+   * for a leaf, or by pushing the frame that walks its children. What were
+   * tail calls (a `rec` hop, an opt's payload, a variant's payload after the
+   * frame that checks its keys) continue in this loop, so this never calls
+   * itself.
+   */
+  private enterValue(
+    schema: SchemaNode,
+    value: unknown,
+    out: number[],
+    path: PathSegment[],
+    depth: number,
+  ): void {
+    for (;;) {
+      const { node, depth: at } = this.resolve(schema, path, depth);
+      this.step(path, at);
+      switch (node.kind) {
+        case "primitive":
+          this.primitive(node.primitive, value, out, path);
           return;
-        }
-        // Boxed or not is decided on the resolved inner node, exactly as
-        // validate decides it; resolving here charges each rec hop once,
-        // as the recursive call would have, so accounting is unchanged.
-        const inner = this.resolve(node.inner as SchemaNode, path, at + 1);
-        if (!admitsNull(inner.node)) {
+        case "opt": {
+          if (value === null) {
+            out.push(0);
+            return;
+          }
+          // Boxed or not is decided on the resolved inner node, exactly as
+          // validate decides it; resolving here charges each rec hop once,
+          // as the recursive call would have, so accounting is unchanged.
+          const inner = this.resolve(node.inner as SchemaNode, path, at + 1);
+          if (!admitsNull(inner.node)) {
+            out.push(1);
+            schema = inner.node;
+            depth = inner.depth;
+            continue;
+          }
+          if (!this.isPlainCandidate(value)) {
+            this.fail(
+              "invalid_type",
+              path,
+              `expected null or { some: … } for an opt whose inner type admits null, got ${describe(value)}`,
+            );
+          }
+          path.push("some");
+          if (!hasOwnEnumerable(value, "some")) {
+            this.fail("missing_field", path, "a present boxed opt carries { some }");
+          }
           out.push(1);
-          this.value(inner.node, value, out, path, inner.depth);
+          this.valueStack.push({ kind: "boxed", value, depth: at });
+          schema = inner.node;
+          value = (value as { some?: unknown }).some;
+          depth = inner.depth;
+          continue;
+        }
+        case "vec": {
+          if (!Array.isArray(value)) {
+            this.fail("invalid_type", path, `expected an array, got ${describe(value)}`);
+          }
+          // Snapshot once: an element getter that mutates its own array's
+          // length must not make the written count disagree with the
+          // elements actually emitted.
+          const length = value.length;
+          writeLebNumber(out, length);
+          this.valueStack.push({ kind: "vec", node, value, length, index: -1, depth: at, out });
           return;
         }
-        if (!this.isPlainCandidate(value)) {
-          this.fail(
-            "invalid_type",
-            path,
-            `expected null or { some: … } for an opt whose inner type admits null, got ${describe(value)}`,
-          );
+        case "blob": {
+          if (!isUint8Array(value)) {
+            this.fail("invalid_type", path, `expected a Uint8Array, got ${describe(value)}`);
+          }
+          const length = value.length;
+          writeLebNumber(out, length);
+          for (let i = 0; i < length; i += 1) {
+            out.push(value[i]);
+          }
+          return;
         }
-        path.push("some");
-        if (!hasOwnEnumerable(value, "some")) {
-          this.fail("missing_field", path, "a present boxed opt carries { some }");
-        }
-        out.push(1);
-        this.value(inner.node, (value as { some?: unknown }).some, out, path, inner.depth);
-        path.pop();
-        for (const key of Object.keys(value)) {
-          this.step(path, at);
-          if (key !== "some") {
+        case "unit": {
+          if (!this.isPlainCandidate(value)) {
+            this.fail("invalid_type", path, `expected an empty record, got ${describe(value)}`);
+          }
+          for (const key of Object.keys(value)) {
+            this.step(path, at);
             path.push(key);
-            this.fail("unexpected_field", path, "a present boxed opt is exactly { some }");
+            this.fail("unexpected_field", path, "the empty record has no fields");
+          }
+          return;
+        }
+        case "tuple": {
+          if (!Array.isArray(value)) {
+            this.fail("invalid_type", path, `expected a tuple array, got ${describe(value)}`);
+          }
+          if (value.length !== node.elements.length) {
+            this.fail(
+              "invalid_length",
+              path,
+              `expected ${node.elements.length} elements, got ${value.length}`,
+            );
+          }
+          this.valueStack.push({ kind: "tuple", node, value, index: -1, depth: at, out });
+          return;
+        }
+        case "record": {
+          if (!this.isPlainCandidate(value)) {
+            this.fail("invalid_type", path, `expected a record, got ${describe(value)}`);
+          }
+          const fields = this.sortedFields(node.fields, path);
+          // Validate and read in declaration order — the order validate
+          // reports in, so the first issue's path agrees — writing each
+          // field into its own buffer; the wire wants ascending-id order, so
+          // the frame's end appends the buffers in that order (see `Rope`),
+          // never the reads.
+          this.valueStack.push({
+            kind: "record",
+            node,
+            value,
+            fields,
+            keys: Object.keys(node.fields),
+            index: -1,
+            buffers: new Map<string, number[]>(),
+            pendingKey: undefined,
+            pendingBuffer: undefined,
+            depth: at,
+            out,
+          });
+          return;
+        }
+        case "variant": {
+          if (!this.isPlainCandidate(value)) {
+            this.fail("invalid_type", path, `expected a variant, got ${describe(value)}`);
+          }
+          path.push("tag");
+          if (!hasOwnEnumerable(value, "tag")) {
+            this.fail("missing_field", path, "a variant value carries a tag");
+          }
+          const tag = (value as { tag?: unknown }).tag;
+          if (typeof tag !== "string") {
+            this.fail("invalid_type", path, `expected a string tag, got ${describe(tag)}`);
+          }
+          if (!hasOwn(node.arms, tag)) {
+            this.fail("unknown_tag", path, `${JSON.stringify(tag)} is not an arm of this variant`);
+          }
+          path.pop();
+          const arms = this.sortedFields(node.arms, path);
+          const index = arms.findIndex((arm) => arm.key === tag);
+          writeLebNumber(out, index);
+          const resolved = this.resolve(arms[index].schema as SchemaNode, path, at);
+          const tagOnly = resolved.node.kind === "primitive" && resolved.node.primitive === "null";
+          if (tagOnly) {
+            // Mirror validate's walk exactly: the first non-tag key in
+            // enumeration order is the issue, whatever its name.
+            for (const key of Object.keys(value)) {
+              this.step(path, at);
+              if (key !== "tag") {
+                path.push(key);
+                this.fail("unexpected_field", path, "a null-payload arm is a bare { tag }");
+              }
+            }
+            return;
+          }
+          path.push("value");
+          if (!hasOwnEnumerable(value, "value")) {
+            this.fail("missing_field", path, "this arm carries a payload");
+          }
+          this.valueStack.push({ kind: "variant", value, depth: at });
+          schema = resolved.node;
+          value = (value as { value?: unknown }).value;
+          depth = resolved.depth + 1;
+          continue;
+        }
+        case "func": {
+          // A func value is inert reference data: { principal, method },
+          // emitted in the transparent public form (issue #104).
+          if (!this.isPlainCandidate(value)) {
+            this.fail(
+              "invalid_type",
+              path,
+              `expected a func reference ({ principal, method }), got ${describe(value)}`,
+            );
+          }
+          path.push("principal");
+          if (!hasOwnEnumerable(value, "principal")) {
+            this.fail("missing_field", path, "a func reference names a principal");
+          }
+          const principalBytes = this.principalBytes(value.principal, path);
+          path.pop();
+          path.push("method");
+          if (!hasOwnEnumerable(value, "method")) {
+            this.fail("missing_field", path, "a func reference names a method");
+          }
+          const method = value.method;
+          if (typeof method !== "string" || method.length === 0) {
+            this.fail("invalid_type", path, "a method name is a non-empty string");
+          }
+          const methodBytes = utf8BytesStrict(method);
+          if (methodBytes === undefined) {
+            this.fail("invalid_text", path, "a method name is Unicode scalar values");
+          }
+          path.pop();
+          for (const key of Object.keys(value)) {
+            this.step(path, at);
+            if (key !== "principal" && key !== "method") {
+              path.push(key);
+              this.fail("unexpected_field", path, "a func reference is { principal, method }");
+            }
+          }
+          out.push(1);
+          out.push(1);
+          writeLebNumber(out, principalBytes.length);
+          for (const byte of principalBytes) {
+            out.push(byte);
+          }
+          writeLebNumber(out, methodBytes.length);
+          for (const byte of methodBytes) {
+            out.push(byte);
+          }
+          return;
+        }
+        case "service": {
+          // A service value is the principal of a running service.
+          const bytes = this.principalBytes(value, path);
+          out.push(1);
+          writeLebNumber(out, bytes.length);
+          for (const byte of bytes) {
+            out.push(byte);
+          }
+          return;
+        }
+      }
+      return;
+    }
+  }
+
+  /**
+   * Advance the value frame on top of the stack by one child — start it
+   * (it may push a frame of its own) or, with none left, finish the frame and
+   * pop it.
+   */
+  private resumeValue(frame: ValueFrame, path: PathSegment[]): void {
+    const stack = this.valueStack;
+    switch (frame.kind) {
+      case "vec": {
+        for (;;) {
+          if (frame.index >= 0) {
+            path.pop();
+          }
+          frame.index += 1;
+          if (frame.index >= frame.length) {
+            stack.pop();
+            return;
+          }
+          path.push(frame.index);
+          this.enterValue(
+            frame.node.inner as SchemaNode,
+            frame.value[frame.index],
+            frame.out,
+            path,
+            frame.depth + 1,
+          );
+          // A child that pushed a frame runs first; a leaf is already done,
+          // and this loop carries on without a round trip through `value`.
+          if (stack[stack.length - 1] !== frame) {
+            return;
           }
         }
-        return;
-      }
-      case "vec": {
-        if (!Array.isArray(value)) {
-          this.fail("invalid_type", path, `expected an array, got ${describe(value)}`);
-        }
-        // Snapshot once: an element getter that mutates its own array's
-        // length must not make the written count disagree with the
-        // elements actually emitted.
-        const length = value.length;
-        writeLebNumber(out, length);
-        for (let i = 0; i < length; i += 1) {
-          path.push(i);
-          this.value(node.inner as SchemaNode, value[i], out, path, at + 1);
-          path.pop();
-        }
-        return;
-      }
-      case "blob": {
-        if (!isUint8Array(value)) {
-          this.fail("invalid_type", path, `expected a Uint8Array, got ${describe(value)}`);
-        }
-        const length = value.length;
-        writeLebNumber(out, length);
-        for (let i = 0; i < length; i += 1) {
-          out.push(value[i]);
-        }
-        return;
-      }
-      case "unit": {
-        if (!this.isPlainCandidate(value)) {
-          this.fail("invalid_type", path, `expected an empty record, got ${describe(value)}`);
-        }
-        for (const key of Object.keys(value)) {
-          this.step(path, at);
-          path.push(key);
-          this.fail("unexpected_field", path, "the empty record has no fields");
-        }
-        return;
       }
       case "tuple": {
-        if (!Array.isArray(value)) {
-          this.fail("invalid_type", path, `expected a tuple array, got ${describe(value)}`);
-        }
-        if (value.length !== node.elements.length) {
-          this.fail(
-            "invalid_length",
+        const { node } = frame;
+        for (;;) {
+          if (frame.index >= 0) {
+            path.pop();
+          }
+          frame.index += 1;
+          if (frame.index >= node.elements.length) {
+            stack.pop();
+            return;
+          }
+          path.push(frame.index);
+          this.enterValue(
+            node.elements[frame.index] as SchemaNode,
+            frame.value[frame.index],
+            frame.out,
             path,
-            `expected ${node.elements.length} elements, got ${value.length}`,
+            frame.depth + 1,
           );
+          if (stack[stack.length - 1] !== frame) {
+            return;
+          }
         }
-        for (let i = 0; i < node.elements.length; i += 1) {
-          path.push(i);
-          this.value(node.elements[i] as SchemaNode, value[i], out, path, at + 1);
-          path.pop();
-        }
-        return;
       }
       case "record": {
-        if (!this.isPlainCandidate(value)) {
-          this.fail("invalid_type", path, `expected a record, got ${describe(value)}`);
-        }
-        const fields = this.sortedFields(node.fields, path);
-        // Validate and read in declaration order — the order validate
-        // reports in, so the first issue's path agrees — buffering each
-        // field's bytes; the wire wants ascending-id order, so emission
-        // reorders the buffers, never the reads.
-        const buffers = new Map<string, number[]>();
-        for (const key of Object.keys(node.fields)) {
+        const { node, value } = frame;
+        for (;;) {
+          if (frame.pendingKey !== undefined) {
+            frame.buffers.set(frame.pendingKey, frame.pendingBuffer as number[]);
+            frame.pendingKey = undefined;
+            path.pop();
+          }
+          frame.index += 1;
+          if (frame.index >= frame.keys.length) {
+            break;
+          }
+          const key = frame.keys[frame.index];
           path.push(key);
           if (!hasOwnEnumerable(value, key)) {
             this.fail("missing_field", path, "required field is missing");
           }
           const buffer: number[] = [];
-          this.value(
+          frame.pendingKey = key;
+          frame.pendingBuffer = buffer;
+          this.enterValue(
             node.fields[key] as SchemaNode,
-            (value as Record<string, unknown>)[key],
+            value[key],
             buffer,
             path,
-            at + 1,
+            frame.depth + 1,
           );
-          buffers.set(key, buffer);
-          path.pop();
-        }
-        for (const field of fields) {
-          for (const byte of buffers.get(field.key) as number[]) {
-            out.push(byte);
+          if (stack[stack.length - 1] !== frame) {
+            return;
           }
         }
+        stack.pop();
+        for (const field of frame.fields) {
+          this.rope.append(frame.out, frame.buffers.get(field.key) as number[]);
+        }
         for (const key of Object.keys(value)) {
-          this.step(path, at);
+          this.step(path, frame.depth);
           if (!hasOwn(node.fields, key)) {
             path.push(key);
             this.fail("unexpected_field", path, "field is not part of this record");
@@ -1205,115 +1741,27 @@ class Encoder {
         }
         return;
       }
-      case "variant": {
-        if (!this.isPlainCandidate(value)) {
-          this.fail("invalid_type", path, `expected a variant, got ${describe(value)}`);
-        }
-        path.push("tag");
-        if (!hasOwnEnumerable(value, "tag")) {
-          this.fail("missing_field", path, "a variant value carries a tag");
-        }
-        const tag = (value as { tag?: unknown }).tag;
-        if (typeof tag !== "string") {
-          this.fail("invalid_type", path, `expected a string tag, got ${describe(tag)}`);
-        }
-        if (!hasOwn(node.arms, tag)) {
-          this.fail("unknown_tag", path, `${JSON.stringify(tag)} is not an arm of this variant`);
-        }
+      case "boxed": {
         path.pop();
-        const arms = this.sortedFields(node.arms, path);
-        const index = arms.findIndex((arm) => arm.key === tag);
-        writeLebNumber(out, index);
-        const resolved = this.resolve(arms[index].schema as SchemaNode, path, at);
-        const tagOnly = resolved.node.kind === "primitive" && resolved.node.primitive === "null";
-        if (tagOnly) {
-          // Mirror validate's walk exactly: the first non-tag key in
-          // enumeration order is the issue, whatever its name.
-          for (const key of Object.keys(value)) {
-            this.step(path, at);
-            if (key !== "tag") {
-              path.push(key);
-              this.fail("unexpected_field", path, "a null-payload arm is a bare { tag }");
-            }
+        this.valueStack.pop();
+        for (const key of Object.keys(frame.value)) {
+          this.step(path, frame.depth);
+          if (key !== "some") {
+            path.push(key);
+            this.fail("unexpected_field", path, "a present boxed opt is exactly { some }");
           }
-          return;
         }
-        path.push("value");
-        if (!hasOwnEnumerable(value, "value")) {
-          this.fail("missing_field", path, "this arm carries a payload");
-        }
-        this.value(
-          resolved.node,
-          (value as { value?: unknown }).value,
-          out,
-          path,
-          resolved.depth + 1,
-        );
+        return;
+      }
+      case "variant": {
         path.pop();
-        for (const key of Object.keys(value)) {
-          this.step(path, at);
+        this.valueStack.pop();
+        for (const key of Object.keys(frame.value)) {
+          this.step(path, frame.depth);
           if (key !== "tag" && key !== "value") {
             path.push(key);
             this.fail("unexpected_field", path, "a variant value is { tag, value }");
           }
-        }
-        return;
-      }
-      case "func": {
-        // A func value is inert reference data: { principal, method },
-        // emitted in the transparent public form (issue #104).
-        if (!this.isPlainCandidate(value)) {
-          this.fail(
-            "invalid_type",
-            path,
-            `expected a func reference ({ principal, method }), got ${describe(value)}`,
-          );
-        }
-        path.push("principal");
-        if (!hasOwnEnumerable(value, "principal")) {
-          this.fail("missing_field", path, "a func reference names a principal");
-        }
-        const principalBytes = this.principalBytes(value.principal, path);
-        path.pop();
-        path.push("method");
-        if (!hasOwnEnumerable(value, "method")) {
-          this.fail("missing_field", path, "a func reference names a method");
-        }
-        const method = value.method;
-        if (typeof method !== "string" || method.length === 0) {
-          this.fail("invalid_type", path, "a method name is a non-empty string");
-        }
-        const methodBytes = utf8BytesStrict(method);
-        if (methodBytes === undefined) {
-          this.fail("invalid_text", path, "a method name is Unicode scalar values");
-        }
-        path.pop();
-        for (const key of Object.keys(value)) {
-          this.step(path, at);
-          if (key !== "principal" && key !== "method") {
-            path.push(key);
-            this.fail("unexpected_field", path, "a func reference is { principal, method }");
-          }
-        }
-        out.push(1);
-        out.push(1);
-        writeLebNumber(out, principalBytes.length);
-        for (const byte of principalBytes) {
-          out.push(byte);
-        }
-        writeLebNumber(out, methodBytes.length);
-        for (const byte of methodBytes) {
-          out.push(byte);
-        }
-        return;
-      }
-      case "service": {
-        // A service value is the principal of a running service.
-        const bytes = this.principalBytes(value, path);
-        out.push(1);
-        writeLebNumber(out, bytes.length);
-        for (const byte of bytes) {
-          out.push(byte);
         }
         return;
       }
@@ -1605,8 +2053,8 @@ function decodeWith(
       });
     } else if (isStackExhaustion(error)) {
       // A property of the host, not of the schema: checked before the
-      // catch-all so it is never labelled a schema problem. This branch
-      // survives an iterative rewrite for residual overflow in user code.
+      // catch-all so it is never labelled a schema problem. The walks are
+      // iterative (issue #192); what overflows is user code they called.
       decoder.stackExhausted(path);
     } else if (!(error instanceof Halt)) {
       // The schema-side choke point: a rec thunk (or other schema surface)
@@ -1620,13 +2068,6 @@ function decodeWith(
     return { ok: false, issues: decoder.issues };
   }
 }
-
-/**
- * What an absorbed constituent decodes to: a sentinel rather than `null`,
- * because under a boxed opt a constituent can legitimately decode to `null`
- * (`Some(None)`), which must not read as the absorbing opt's own `None`.
- */
-const ABSORBED: unique symbol = Symbol("absorbed");
 
 /** A coercion failure: absorbed to null by the nearest expected `opt`. */
 class CoercionMismatch extends Error {
@@ -1662,6 +2103,99 @@ type WireEntry =
     }
   | { readonly kind: "future" };
 
+/** The wire entries by kind, as the walks below narrow them. */
+type VecWire = Extract<WireEntry, { readonly kind: "opt" | "vec" }>;
+type FieldsWire = Extract<WireEntry, { readonly kind: "record" | "variant" }>;
+type FuncWire = Extract<WireEntry, { readonly kind: "func" }>;
+type ServiceWire = Extract<WireEntry, { readonly kind: "service" }>;
+
+/**
+ * An expected `opt` decoding its constituent — the absorption frame. `start`
+ * has not begun the constituent; `decoding` is waiting for it, and is the
+ * phase a `CoercionMismatch` unwinds to; `absorbed` is set by that unwinding
+ * (rewind and skip next); `skipping` waits for the skip.
+ */
+interface OptFrame {
+  readonly kind: "opt";
+  readonly wire: number;
+  readonly node: Exclude<SchemaNode, RecNode>;
+  readonly depth: number;
+  readonly skipDepth: number;
+  readonly rewind: number;
+  phase: "start" | "decoding" | "absorbed" | "skipping";
+}
+
+/** A wire record decoding at an expected record, tuple or unit. */
+interface RecordFrame {
+  readonly kind: "record";
+  readonly entry: { readonly ids: readonly number[]; readonly types: readonly number[] };
+  readonly node: Exclude<SchemaNode, RecNode>;
+  readonly expected: readonly { key: string | number; id: number; schema: AnySchema }[];
+  readonly depth: number;
+  readonly out: Record<string | number, unknown>;
+  cursor: number;
+  w: number;
+  awaiting: "none" | "field" | "skip";
+}
+
+/**
+ * One value (or skip) in progress on the decoder's explicit stack — the
+ * continuation of what was a recursive call.
+ */
+type DecodeFrame =
+  | OptFrame
+  | RecordFrame
+  | {
+      readonly kind: "vec";
+      readonly inner: number;
+      readonly node: VecNode;
+      readonly depth: number;
+      readonly length: number;
+      index: number;
+      readonly out: unknown[];
+      awaiting: boolean;
+    }
+  | {
+      readonly kind: "variant";
+      readonly tag: string;
+      readonly tagOnly: boolean;
+      readonly wire: number;
+      readonly node: Exclude<SchemaNode, RecNode>;
+      readonly depth: number;
+      started: boolean;
+    }
+  | { readonly kind: "reserved"; readonly wire: number; readonly depth: number; started: boolean }
+  | { readonly kind: "skip-vec"; readonly inner: number; remaining: number; readonly depth: number }
+  | {
+      readonly kind: "skip-record";
+      readonly types: readonly number[];
+      index: number;
+      readonly depth: number;
+    };
+
+/** One pair of the subtype relation under test (see `wireSubtypeOfSchema`). */
+interface SubFrame {
+  readonly key: string;
+  readonly wire: number;
+  readonly node: Exclude<SchemaNode, RecNode>;
+  readonly wireOnLeft: boolean;
+  readonly depth: number;
+  phase: number;
+  index: number;
+  entry?: WireEntry;
+  expected?: { id: number; schema: AnySchema }[];
+  names?: string[];
+  sub?: { args: readonly unknown[]; results: readonly unknown[] };
+  sup?: { args: readonly unknown[]; results: readonly unknown[] };
+}
+
+/** A child pair a `SubFrame` needs decided before it can continue. */
+interface SubRequest {
+  readonly wire: number;
+  readonly schema: AnySchema;
+  readonly wireOnLeft: boolean;
+}
+
 /**
  * Combine 7-bit LEB groups (least significant first) into one bigint by
  * recursive halving. A linear fold shifts an ever-growing bigint once per
@@ -1694,6 +2228,9 @@ class Decoder {
   private elements = 0;
   /** The deepest depth charged so far: what a stack overflow reports. */
   private reached = 0;
+  /** The value walk's explicit stack, and the value a finished frame hands back. */
+  private readonly stack: DecodeFrame[] = [];
+  private result: unknown = undefined;
 
   private readonly bytes: Uint8Array;
   private readonly limits: Limits;
@@ -2091,15 +2628,84 @@ class Decoder {
     return { node: node as Exclude<SchemaNode, RecNode>, depth: hops };
   }
 
-  /** Decode one wire value at the expected schema, coercing per the spec. */
+  /**
+   * Decode one wire value at the expected schema, coercing per the spec.
+   *
+   * The walk keeps its work on an explicit stack of `DecodeFrame`s (issue
+   * #192), so `maxDepth` is its only depth bound: a composite value is a
+   * frame, a child value that completes at once is consumed on the spot, and
+   * one that opens a frame of its own hands its value back through `result`
+   * when that frame ends. Reads, charges, path pushes and pops and issues
+   * happen in the order the recursive walk this replaces performed them.
+   */
   valueAt(wire: number, schema: SchemaNode, path: PathSegment[], depth: number): unknown {
+    const value = this.enterValue(wire, schema, path, depth);
+    return value === PENDING ? this.run(path) : value;
+  }
+
+  /**
+   * Run the frames on the stack to completion and answer the last value
+   * delivered. This is where absorption lives: a `CoercionMismatch` thrown
+   * anywhere above an expected `opt` that is decoding its constituent
+   * unwinds the stack to that frame — the nearest one, as the recursive
+   * walk's `try`/`catch` did — which then rewinds and skips (see
+   * `resumeOpt`). With no such frame the mismatch propagates: at top level it
+   * is the spec's hard error. Nothing unwound pops a path segment, exactly as
+   * the recursive walk's unwinding did not.
+   */
+  private run(path: PathSegment[]): unknown {
+    const stack = this.stack;
+    for (;;) {
+      try {
+        while (stack.length > 0) {
+          this.resume(stack[stack.length - 1], path);
+        }
+        return this.result;
+      } catch (error) {
+        if (!(error instanceof CoercionMismatch)) {
+          throw error;
+        }
+        let at = stack.length - 1;
+        while (at >= 0) {
+          const frame = stack[at];
+          if (frame.kind === "opt" && frame.phase === "decoding") {
+            break;
+          }
+          at -= 1;
+        }
+        if (at < 0) {
+          throw error;
+        }
+        stack.length = at + 1;
+        (stack[at] as OptFrame).phase = "absorbed";
+      }
+    }
+  }
+
+  /** Finish the value frame on top of the stack, handing `value` to its parent. */
+  private deliver(value: unknown): void {
+    this.stack.pop();
+    this.result = value;
+  }
+
+  /**
+   * Begin one value: resolve and charge it, then answer it at once (a leaf, a
+   * reference, a blob) or push the frame that decodes it and answer
+   * `PENDING`. Never calls itself: children start from `resume`.
+   */
+  private enterValue(
+    wire: number,
+    schema: SchemaNode,
+    path: PathSegment[],
+    depth: number,
+  ): unknown {
     const { node, depth: at } = this.resolveSchema(schema, path, depth);
     this.step(path, at);
 
     // Expected reserved absorbs any wire value, consuming it.
     if (node.kind === "primitive" && node.primitive === "reserved") {
-      this.skipValue(wire, path, at);
-      return null;
+      this.stack.push({ kind: "reserved", wire, depth: at, started: false });
+      return PENDING;
     }
 
     if (node.kind === "opt") {
@@ -2139,6 +2745,97 @@ class Decoder {
     return this.primitiveAt(wire, node, path);
   }
 
+  /** Advance the frame on top of the stack by one child, or finish it. */
+  private resume(frame: DecodeFrame, path: PathSegment[]): void {
+    switch (frame.kind) {
+      case "opt":
+        this.resumeOpt(frame, path);
+        return;
+      case "vec": {
+        if (frame.awaiting) {
+          frame.awaiting = false;
+          frame.out.push(this.result);
+          path.pop();
+        }
+        for (;;) {
+          frame.index += 1;
+          if (frame.index >= frame.length) {
+            this.deliver(frame.out);
+            return;
+          }
+          path.push(frame.index);
+          const value = this.enterValue(
+            frame.inner,
+            frame.node.inner as SchemaNode,
+            path,
+            frame.depth + 1,
+          );
+          if (value === PENDING) {
+            frame.awaiting = true;
+            return;
+          }
+          frame.out.push(value);
+          path.pop();
+        }
+      }
+      case "record":
+        this.resumeRecord(frame, path);
+        return;
+      case "variant": {
+        if (!frame.started) {
+          frame.started = true;
+          if (!frame.tagOnly) {
+            path.push("value");
+          }
+          const value = this.enterValue(frame.wire, frame.node, path, frame.depth);
+          if (value === PENDING) {
+            return;
+          }
+          this.result = value;
+        }
+        if (frame.tagOnly) {
+          this.deliver({ tag: frame.tag });
+          return;
+        }
+        const value = this.result;
+        path.pop();
+        this.deliver({ tag: frame.tag, value });
+        return;
+      }
+      case "reserved": {
+        if (!frame.started) {
+          frame.started = true;
+          if (!this.enterSkip(frame.wire, path, frame.depth)) {
+            return;
+          }
+        }
+        this.deliver(null);
+        return;
+      }
+      case "skip-vec": {
+        while (frame.remaining > 0) {
+          frame.remaining -= 1;
+          if (!this.enterSkip(frame.inner, path, frame.depth)) {
+            return;
+          }
+        }
+        this.stack.pop();
+        return;
+      }
+      case "skip-record": {
+        while (frame.index < frame.types.length) {
+          const type = frame.types[frame.index];
+          frame.index += 1;
+          if (!this.enterSkip(type, path, frame.depth)) {
+            return;
+          }
+        }
+        this.stack.pop();
+        return;
+      }
+    }
+  }
+
   /**
    * The opportunistic opt rules: content mismatches coerce to null. A
    * present value is boxed as `{ some: v }` exactly when the resolved inner
@@ -2169,44 +2866,58 @@ class Decoder {
     // charging each rec hop as the constituent walk would have — so the
     // boxing decision reads the node the value is then decoded against.
     const inner = this.resolveSchema(node.inner as SchemaNode, path, depth + 1);
-    const decoded = this.absorbing(constituent, inner.node, path, inner.depth, depth + 1);
-    if (decoded === ABSORBED) {
-      return null;
-    }
-    return admitsNull(inner.node) ? { some: decoded } : decoded;
+    this.stack.push({
+      kind: "opt",
+      wire: constituent,
+      node: inner.node,
+      depth: inner.depth,
+      skipDepth: depth + 1,
+      rewind: this.offset,
+      phase: "start",
+    });
+    return PENDING;
   }
 
   /**
-   * Decode the constituent, absorbing *coercion* failures: the value bytes
-   * are consumed either way (rewind, then skip), and the answer is the
-   * `ABSORBED` sentinel, which the enclosing opt reads as its `None` — kept
-   * apart from a constituent that legitimately decoded to `null`. Malformed
-   * input and resource failures stay hard — absorption never hides a broken
-   * message. `skipDepth` is the depth the constituent walk began at before
-   * its rec hops were resolved, where a skip of the rewound bytes starts.
+   * An expected `opt` decoding its constituent, which is where coercion
+   * failures are absorbed: the value bytes are consumed either way (rewind,
+   * then skip), and the opt is `None` (`null`) — kept apart from a
+   * constituent that legitimately decoded to `null`. Malformed input and
+   * resource failures stay hard — absorption never hides a broken message.
+   * `skipDepth` is the depth the constituent walk began at before its rec
+   * hops were resolved, where a skip of the rewound bytes starts.
    */
-  private absorbing(
-    wire: number,
-    schema: SchemaNode,
-    path: PathSegment[],
-    depth: number,
-    skipDepth: number,
-  ): unknown {
-    const rewind = this.offset;
-    try {
-      return this.valueAt(wire, schema, path, depth);
-    } catch (error) {
-      if (!(error instanceof CoercionMismatch)) {
-        throw error;
+  private resumeOpt(frame: OptFrame, path: PathSegment[]): void {
+    switch (frame.phase) {
+      case "start": {
+        frame.phase = "decoding";
+        const value = this.enterValue(frame.wire, frame.node, path, frame.depth);
+        if (value === PENDING) {
+          return;
+        }
+        this.result = value;
+        break;
       }
-      // The cursor rewinds; the element charges do not. Refunding the
-      // failed attempt would let nested opts multiply the traversal budget
-      // by the absorption depth — charges are for work performed, and the
-      // rewound walk performed it.
-      this.offset = rewind;
-      this.skipValue(wire, path, skipDepth);
-      return ABSORBED;
+      case "decoding":
+        break;
+      case "absorbed":
+        // The cursor rewinds; the element charges do not. Refunding the
+        // failed attempt would let nested opts multiply the traversal budget
+        // by the absorption depth — charges are for work performed, and the
+        // rewound walk performed it.
+        this.offset = frame.rewind;
+        frame.phase = "skipping";
+        if (!this.enterSkip(frame.wire, path, frame.skipDepth)) {
+          return;
+        }
+        this.deliver(null);
+        return;
+      case "skipping":
+        this.deliver(null);
+        return;
     }
+    const decoded = this.result;
+    this.deliver(admitsNull(frame.node) ? { some: decoded } : decoded);
   }
 
   private vecAt(
@@ -2246,13 +2957,17 @@ class Decoder {
     if (inner === OP.nat8 && this.offset + length > this.bytes.length) {
       this.fail("truncated", path, "unexpected end of input");
     }
-    const out: unknown[] = [];
-    for (let i = 0; i < length; i += 1) {
-      path.push(i);
-      out.push(this.valueAt(inner, node.inner as SchemaNode, path, depth + 1));
-      path.pop();
-    }
-    return out;
+    this.stack.push({
+      kind: "vec",
+      inner,
+      node,
+      depth,
+      length,
+      index: -1,
+      out: [],
+      awaiting: false,
+    });
+    return PENDING;
   }
 
   private recordAt(
@@ -2287,48 +3002,88 @@ class Decoder {
         );
       }
     }
-    const out: Record<string | number, unknown> = Object.create(null);
-    let cursor = 0;
-    for (let w = 0; w < entry.ids.length; w += 1) {
+    this.stack.push({
+      kind: "record",
+      entry,
+      node,
+      expected,
+      depth,
+      out: Object.create(null) as Record<string | number, unknown>,
+      cursor: 0,
+      w: 0,
+      awaiting: "none",
+    });
+    return PENDING;
+  }
+
+  /**
+   * A wire record at an expected record, tuple or unit: wire fields in id
+   * order, each decoded at its expected field or skipped; expected fields the
+   * wire lacks follow the missing-field rule. `w` is the wire field in
+   * progress and `cursor` the next expected field; `awaiting` says which kind
+   * of child is in flight when the frame resumes.
+   */
+  private resumeRecord(frame: RecordFrame, path: PathSegment[]): void {
+    const { entry, expected, out, depth } = frame;
+    if (frame.awaiting === "field") {
+      out[expected[frame.cursor].key] = this.result;
+      path.pop();
+      frame.cursor += 1;
+      frame.w += 1;
+    } else if (frame.awaiting === "skip") {
+      frame.w += 1;
+    }
+    frame.awaiting = "none";
+    for (; frame.w < entry.ids.length; frame.w += 1) {
+      const w = frame.w;
       // Expected fields the wire skipped over, in id order.
-      while (cursor < expected.length && expected[cursor].id < entry.ids[w]) {
-        const field = expected[cursor];
+      while (frame.cursor < expected.length && expected[frame.cursor].id < entry.ids[w]) {
+        const field = expected[frame.cursor];
         path.push(field.key);
         out[field.key] = this.missingValue(field.schema as SchemaNode, path, depth + 1);
         path.pop();
-        cursor += 1;
+        frame.cursor += 1;
       }
-      if (cursor < expected.length && expected[cursor].id === entry.ids[w]) {
-        const field = expected[cursor];
+      if (frame.cursor < expected.length && expected[frame.cursor].id === entry.ids[w]) {
+        const field = expected[frame.cursor];
         path.push(field.key);
-        out[field.key] = this.valueAt(entry.types[w], field.schema as SchemaNode, path, depth + 1);
+        const value = this.enterValue(entry.types[w], field.schema as SchemaNode, path, depth + 1);
+        if (value === PENDING) {
+          frame.awaiting = "field";
+          return;
+        }
+        out[field.key] = value;
         path.pop();
-        cursor += 1;
-      } else {
+        frame.cursor += 1;
+      } else if (!this.enterSkip(entry.types[w], path, depth + 1)) {
         // Present only on the wire: ignored, but its bytes must be walked.
-        this.skipValue(entry.types[w], path, depth + 1);
+        frame.awaiting = "skip";
+        return;
       }
     }
-    while (cursor < expected.length) {
-      const field = expected[cursor];
+    while (frame.cursor < expected.length) {
+      const field = expected[frame.cursor];
       path.push(field.key);
       out[field.key] = this.missingValue(field.schema as SchemaNode, path, depth + 1);
       path.pop();
-      cursor += 1;
+      frame.cursor += 1;
     }
+    const { node } = frame;
     if (node.kind === "tuple") {
       const array: unknown[] = [];
       for (let i = 0; i < node.elements.length; i += 1) {
         array.push(out[i]);
       }
-      return array;
+      this.deliver(array);
+      return;
     }
     if (node.kind === "unit") {
-      return {};
+      this.deliver({});
+      return;
     }
     // Null-prototype construction mirrors contract.ts; hand the caller a
     // plain object so deepStrictEqual against literals behaves normally.
-    return { ...out };
+    this.deliver({ ...out });
   }
 
   private variantAt(
@@ -2385,17 +3140,20 @@ class Decoder {
       );
     }
     const resolved = this.resolveSchema(match.schema as SchemaNode, path, depth);
+    // A tag-only arm's payload still coerces at expected null — a wire arm
+    // carrying a non-null payload there is a mismatch, not something to skip
+    // over — and the value is the bare `{ tag }`.
     const tagOnly = resolved.node.kind === "primitive" && resolved.node.primitive === "null";
-    if (tagOnly) {
-      // The payload still coerces at expected null — a wire arm carrying a
-      // non-null payload here is a mismatch, not something to skip over.
-      this.valueAt(entry.types[index], resolved.node, path, resolved.depth + 1);
-      return { tag: match.key };
-    }
-    path.push("value");
-    const value = this.valueAt(entry.types[index], resolved.node, path, resolved.depth + 1);
-    path.pop();
-    return { tag: match.key, value };
+    this.stack.push({
+      kind: "variant",
+      tag: match.key,
+      tagOnly,
+      wire: entry.types[index],
+      node: resolved.node,
+      depth: resolved.depth + 1,
+      started: false,
+    });
+    return PENDING;
   }
 
   /**
@@ -2469,13 +3227,56 @@ class Decoder {
    * positions. Coinductive: a pair under test is assumed true on revisit, so
    * recursive types terminate. Depth of schema rec unwrapping is bounded by
    * the depth limit; the pair memo bounds everything else.
+   *
+   * Evaluated on an explicit stack of `SubFrame`s (issue #192): a pair whose
+   * answer needs its children's is a frame, and a child's answer flows back
+   * to it — `false` ends the parent at once, as the short-circuiting `&&`
+   * and early `return false` of the recursive relation did. Pairs are tested,
+   * memoized and assumed in the same order, with the same schema reads.
    */
   private wireSubtypeOfSchema(
     wire: number,
     schema: AnySchema,
     seen: Map<string, boolean>,
   ): boolean {
-    return this.refSubtype(wire, schema, true, seen, 0);
+    const first = this.subStart(wire, schema, true, seen, 0);
+    if (typeof first === "boolean") {
+      return first;
+    }
+    const stack: SubFrame[] = [first];
+    outer: for (;;) {
+      const frame = stack[stack.length - 1];
+      let outcome = this.subNext(frame);
+      while (typeof outcome !== "boolean") {
+        const child = this.subStart(
+          outcome.wire,
+          outcome.schema,
+          outcome.wireOnLeft,
+          seen,
+          frame.depth + 1,
+        );
+        if (typeof child !== "boolean") {
+          stack.push(child);
+          continue outer;
+        }
+        outcome = child ? this.subNext(frame) : false;
+      }
+      // The frame has its answer: memoize it and hand it down — a `false`
+      // ends each waiting parent in turn, a `true` lets the parent continue.
+      let value = outcome;
+      let done = stack.pop() as SubFrame;
+      for (;;) {
+        seen.set(done.key, value);
+        if (stack.length === 0) {
+          return value;
+        }
+        if (value) {
+          continue outer;
+        }
+        done = stack.pop() as SubFrame;
+        value = false;
+      }
+    }
   }
 
   private schemaId(schema: object): number {
@@ -2487,13 +3288,18 @@ class Decoder {
     return id;
   }
 
-  private refSubtype(
+  /**
+   * One pair's entry into the relation: bounded by depth, answered from the
+   * memo, or assumed true (the coinductive step) and returned as a frame for
+   * `subNext` to decide.
+   */
+  private subStart(
     wire: number,
     schema: AnySchema,
     wireOnLeft: boolean,
     seen: Map<string, boolean>,
     depth: number,
-  ): boolean {
+  ): boolean | SubFrame {
     if (depth > this.reached) {
       this.reached = depth;
     }
@@ -2514,10 +3320,11 @@ class Decoder {
     // Coinductive assumption for recursive pairs.
     seen.set(key, true);
     const node = this.resolveTypeNode(schema as SchemaNode);
-    const result =
-      node === undefined ? false : this.refSubtypeUncached(wire, node, wireOnLeft, seen, depth);
-    seen.set(key, result);
-    return result;
+    if (node === undefined) {
+      seen.set(key, false);
+      return false;
+    }
+    return { key, wire, node, wireOnLeft, depth, phase: 0, index: 0 };
   }
 
   /**
@@ -2546,103 +3353,165 @@ class Decoder {
     return undefined;
   }
 
-  private refSubtypeUncached(
-    wire: number,
-    node: Exclude<SchemaNode, RecNode>,
-    wireOnLeft: boolean,
-    seen: Map<string, boolean>,
-    depth: number,
-  ): boolean {
-    // The universal rules first: empty on the left, reserved or opt on the
-    // right — each true regardless of the other side.
+  /**
+   * Advance one pair: its answer, or the next child pair it needs — called
+   * again with the child's `true` (a child's `false` is the pair's answer
+   * too, and never reaches here). `phase` 0 applies the universal and
+   * primitive rules and sets the pair up; then `index` walks its obligations
+   * (a func walks arguments in phase 1 and results in phase 2).
+   */
+  private subNext(frame: SubFrame): boolean | SubRequest {
+    const { wire, node, wireOnLeft } = frame;
     const wireIsLeft = wireOnLeft;
-    if (wireIsLeft && wire === OP.empty) {
-      return true;
-    }
-    if (!wireIsLeft && node.kind === "primitive" && node.primitive === "empty") {
-      return true;
-    }
-    if (wireIsLeft && node.kind === "primitive" && node.primitive === "reserved") {
-      return true;
-    }
-    if (!wireIsLeft && wire === OP.reserved) {
-      return true;
-    }
-    if (wireIsLeft && node.kind === "opt") {
-      return true;
-    }
-    if (!wireIsLeft && wire >= 0 && this.entry(wire).kind === "opt") {
-      return true;
-    }
-    if (!wireIsLeft && wire === OP.opt) {
-      return true;
-    }
-
-    if (node.kind === "primitive") {
-      const opcode = PRIMITIVE_OPCODES[node.primitive];
-      if (opcode === undefined) {
-        return false;
-      }
-      if (wire === opcode) {
+    if (frame.phase === 0) {
+      frame.phase = 1;
+      // The universal rules first: empty on the left, reserved or opt on the
+      // right — each true regardless of the other side.
+      if (wireIsLeft && wire === OP.empty) {
         return true;
       }
-      // nat <: int, in whichever direction has nat on the left.
-      if (wireIsLeft) {
-        return wire === OP.nat && opcode === OP.int;
+      if (!wireIsLeft && node.kind === "primitive" && node.primitive === "empty") {
+        return true;
       }
-      return opcode === OP.nat && wire === OP.int;
-    }
+      if (wireIsLeft && node.kind === "primitive" && node.primitive === "reserved") {
+        return true;
+      }
+      if (!wireIsLeft && wire === OP.reserved) {
+        return true;
+      }
+      if (wireIsLeft && node.kind === "opt") {
+        return true;
+      }
+      if (!wireIsLeft && wire >= 0 && this.entry(wire).kind === "opt") {
+        return true;
+      }
+      if (!wireIsLeft && wire === OP.opt) {
+        return true;
+      }
 
-    if (wire < 0) {
-      return false;
-    }
-    const entry = this.entry(wire);
+      if (node.kind === "primitive") {
+        const opcode = PRIMITIVE_OPCODES[node.primitive];
+        if (opcode === undefined) {
+          return false;
+        }
+        if (wire === opcode) {
+          return true;
+        }
+        // nat <: int, in whichever direction has nat on the left.
+        if (wireIsLeft) {
+          return wire === OP.nat && opcode === OP.int;
+        }
+        return opcode === OP.nat && wire === OP.int;
+      }
 
-    switch (node.kind) {
-      case "opt": {
-        // Schema opt on the left (schema <: wire): only opt <: opt depth rule
-        // reaches here (wire opt on the right was handled above).
+      if (wire < 0) {
         return false;
       }
+      const entry = this.entry(wire);
+      frame.entry = entry;
+      switch (node.kind) {
+        case "opt":
+          // Schema opt on the left (schema <: wire): only opt <: opt depth
+          // rule reaches here (wire opt on the right was handled above).
+          return false;
+        case "vec":
+        case "blob":
+          if (entry.kind !== "vec") {
+            return false;
+          }
+          break;
+        case "unit":
+        case "record":
+        case "tuple":
+          if (entry.kind !== "record") {
+            return false;
+          }
+          // The empty record (unit) is the zero-field case of the same width
+          // rules: extra wire fields are fine on the wire-left side, and must
+          // be opt-like on the schema-left side — never simply forbidden.
+          frame.expected =
+            node.kind === "record"
+              ? Object.keys(node.fields).map((fieldKey) => ({
+                  id: fieldIdOfKey(fieldKey),
+                  schema: node.fields[fieldKey],
+                }))
+              : node.kind === "tuple"
+                ? node.elements.map((element, index) => ({ id: index, schema: element }))
+                : [];
+          break;
+        case "variant":
+          if (entry.kind !== "variant") {
+            return false;
+          }
+          frame.expected = Object.keys(node.arms).map((armKey) => ({
+            id: fieldIdOfKey(armKey),
+            schema: node.arms[armKey],
+          }));
+          break;
+        case "func": {
+          if (entry.kind !== "func") {
+            return false;
+          }
+          const annotation = MODE_ANNOTATION[node.mode];
+          if (annotation === undefined || entry.annotation !== annotation) {
+            return false;
+          }
+          // func t <: t' — params contravariant (t'.args <: t.args as
+          // tuples), results covariant (t.results <: t'.results), where a
+          // tuple A <: B needs every B element present in A as a subtype or
+          // opt-like; extra A elements are ignored. `wireOnLeft` decides
+          // which side is t.
+          frame.sub = wireOnLeft
+            ? { args: entry.args, results: entry.results }
+            : { args: node.args, results: node.results };
+          frame.sup = wireOnLeft
+            ? { args: node.args, results: node.results }
+            : { args: entry.args, results: entry.results };
+          break;
+        }
+        case "service":
+          if (entry.kind !== "service") {
+            return false;
+          }
+          if (wireIsLeft) {
+            frame.names = Object.keys(node.methods);
+          }
+          break;
+        default:
+          return false;
+      }
+    }
+
+    const entry = frame.entry as WireEntry;
+    switch (node.kind) {
       case "vec":
-        return (
-          entry.kind === "vec" &&
-          this.refSubtype(entry.inner, node.inner, wireOnLeft, seen, depth + 1)
-        );
+        if (frame.index === 0) {
+          frame.index = 1;
+          return { wire: (entry as VecWire).inner, schema: node.inner, wireOnLeft };
+        }
+        return true;
       case "blob":
         // blob is vec nat8: same elementwise depth rule as vec, not exact
         // opcode equality (`vec empty <: vec nat8` holds covariantly).
-        return (
-          entry.kind === "vec" &&
-          this.refSubtype(entry.inner, NAT8_NODE as AnySchema, wireOnLeft, seen, depth + 1)
-        );
+        if (frame.index === 0) {
+          frame.index = 1;
+          return { wire: (entry as VecWire).inner, schema: NAT8_NODE as AnySchema, wireOnLeft };
+        }
+        return true;
       case "unit":
       case "record":
       case "tuple": {
-        if (entry.kind !== "record") {
-          return false;
-        }
-        // The empty record (unit) is the zero-field case of the same width
-        // rules: extra wire fields are fine on the wire-left side, and must
-        // be opt-like on the schema-left side — never simply forbidden.
-        const expected =
-          node.kind === "record"
-            ? Object.keys(node.fields).map((fieldKey) => ({
-                id: fieldIdOfKey(fieldKey),
-                schema: node.fields[fieldKey],
-              }))
-            : node.kind === "tuple"
-              ? node.elements.map((element, index) => ({ id: index, schema: element }))
-              : [];
+        const fields = entry as FieldsWire;
+        const expected = frame.expected as { id: number; schema: AnySchema }[];
         if (wireIsLeft) {
           // wire <: schema: every schema field present in the wire with a
           // subtype, or opt-like.
-          for (const field of expected) {
-            const at = entry.ids.indexOf(field.id);
+          while (frame.index < expected.length) {
+            const field = expected[frame.index];
+            frame.index += 1;
+            const at = fields.ids.indexOf(field.id);
             if (at >= 0) {
-              if (!this.refSubtype(entry.types[at], field.schema, true, seen, depth + 1)) {
-                return false;
-              }
+              return { wire: fields.types[at], schema: field.schema, wireOnLeft: true };
             } else if (!this.optLikeSchema(field.schema)) {
               return false;
             }
@@ -2651,135 +3520,118 @@ class Decoder {
         }
         // schema <: wire: every wire field present in the schema with a
         // subtype, or opt-like on the wire side.
-        for (let i = 0; i < entry.ids.length; i += 1) {
-          const match = expected.find((field) => field.id === entry.ids[i]);
+        while (frame.index < fields.ids.length) {
+          const i = frame.index;
+          frame.index += 1;
+          const match = expected.find((field) => field.id === fields.ids[i]);
           if (match !== undefined) {
-            if (!this.refSubtype(entry.types[i], match.schema, false, seen, depth + 1)) {
-              return false;
-            }
-          } else if (!this.optLikeWire(entry.types[i])) {
+            return { wire: fields.types[i], schema: match.schema, wireOnLeft: false };
+          } else if (!this.optLikeWire(fields.types[i])) {
             return false;
           }
         }
         return true;
       }
       case "variant": {
-        if (entry.kind !== "variant") {
-          return false;
-        }
-        const arms = Object.keys(node.arms).map((armKey) => ({
-          id: fieldIdOfKey(armKey),
-          schema: node.arms[armKey],
-        }));
+        const fields = entry as FieldsWire;
+        const arms = frame.expected as { id: number; schema: AnySchema }[];
         if (wireIsLeft) {
           // wire <: schema: every wire arm exists in the schema.
-          for (let i = 0; i < entry.ids.length; i += 1) {
-            const match = arms.find((arm) => arm.id === entry.ids[i]);
-            if (
-              match === undefined ||
-              !this.refSubtype(entry.types[i], match.schema, true, seen, depth + 1)
-            ) {
+          while (frame.index < fields.ids.length) {
+            const i = frame.index;
+            frame.index += 1;
+            const match = arms.find((arm) => arm.id === fields.ids[i]);
+            if (match === undefined) {
               return false;
             }
+            return { wire: fields.types[i], schema: match.schema, wireOnLeft: true };
           }
           return true;
         }
         // schema <: wire: every schema arm exists on the wire.
-        for (const arm of arms) {
-          const at = entry.ids.indexOf(arm.id);
-          if (at < 0 || !this.refSubtype(entry.types[at], arm.schema, false, seen, depth + 1)) {
+        while (frame.index < arms.length) {
+          const arm = arms[frame.index];
+          frame.index += 1;
+          const at = fields.ids.indexOf(arm.id);
+          if (at < 0) {
             return false;
           }
+          return { wire: fields.types[at], schema: arm.schema, wireOnLeft: false };
         }
         return true;
       }
       case "func": {
-        if (entry.kind !== "func") {
-          return false;
-        }
-        const annotation = MODE_ANNOTATION[node.mode];
-        if (annotation === undefined || entry.annotation !== annotation) {
-          return false;
-        }
-        // func t <: t' — params contravariant (t'.args <: t.args as tuples),
-        // results covariant (t.results <: t'.results), where a tuple A <: B
-        // needs every B element present in A as a subtype or opt-like; extra
-        // A elements are ignored. `wireOnLeft` decides which side is t.
-        const sub = wireOnLeft
-          ? { args: entry.args, results: entry.results }
-          : { args: node.args, results: node.results };
-        const sup = wireOnLeft
-          ? { args: node.args, results: node.results }
-          : { args: entry.args, results: entry.results };
-        // Params: iterate the SUBTYPE side's args (B of the tuple rule).
-        for (let i = 0; i < sub.args.length; i += 1) {
-          const supArg = sup.args[i];
-          if (supArg !== undefined) {
-            // t'.args[i] <: t.args[i] — the flipped direction.
-            const holds = wireOnLeft
-              ? this.refSubtype(entry.args[i], node.args[i], false, seen, depth + 1)
-              : this.refSubtype(entry.args[i], node.args[i], true, seen, depth + 1);
-            if (!holds) {
-              return false;
+        const func = entry as FuncWire;
+        const sub = frame.sub as { args: readonly AnySchema[] | readonly number[] };
+        const sup = frame.sup as { args: readonly unknown[]; results: readonly unknown[] };
+        const subResults = (frame.sub as { results: readonly unknown[] }).results;
+        if (frame.phase === 1) {
+          // Params: iterate the SUBTYPE side's args (B of the tuple rule).
+          while (frame.index < sub.args.length) {
+            const i = frame.index;
+            frame.index += 1;
+            const supArg = sup.args[i];
+            if (supArg !== undefined) {
+              // t'.args[i] <: t.args[i] — the flipped direction.
+              return wireOnLeft
+                ? { wire: func.args[i], schema: node.args[i], wireOnLeft: false }
+                : { wire: func.args[i], schema: node.args[i], wireOnLeft: true };
             }
-          } else {
             const optLike = wireOnLeft
-              ? this.optLikeWire(entry.args[i])
+              ? this.optLikeWire(func.args[i])
               : this.optLikeSchema(node.args[i]);
             if (!optLike) {
               return false;
             }
           }
+          frame.phase = 2;
+          frame.index = 0;
         }
         // Results: iterate the SUPERTYPE side's results (B of the rule).
-        for (let i = 0; i < sup.results.length; i += 1) {
-          const subResult = sub.results[i];
+        while (frame.index < sup.results.length) {
+          const i = frame.index;
+          frame.index += 1;
+          const subResult = subResults[i];
           if (subResult !== undefined) {
-            const holds = wireOnLeft
-              ? this.refSubtype(entry.results[i], node.results[i], true, seen, depth + 1)
-              : this.refSubtype(entry.results[i], node.results[i], false, seen, depth + 1);
-            if (!holds) {
-              return false;
-            }
-          } else {
-            const optLike = wireOnLeft
-              ? this.optLikeSchema(node.results[i])
-              : this.optLikeWire(entry.results[i]);
-            if (!optLike) {
-              return false;
-            }
+            return wireOnLeft
+              ? { wire: func.results[i], schema: node.results[i], wireOnLeft: true }
+              : { wire: func.results[i], schema: node.results[i], wireOnLeft: false };
+          }
+          const optLike = wireOnLeft
+            ? this.optLikeSchema(node.results[i])
+            : this.optLikeWire(func.results[i]);
+          if (!optLike) {
+            return false;
           }
         }
         return true;
       }
       case "service": {
-        if (entry.kind !== "service") {
-          return false;
-        }
+        const service = entry as ServiceWire;
         if (wireIsLeft) {
           // wire <: schema: every expected method exists on the wire with a
           // wire func subtype of the expected func.
-          for (const name of Object.keys(node.methods)) {
-            const method = entry.methods.find((candidate) => candidate.name === name);
-            if (
-              method === undefined ||
-              !this.refSubtype(method.type, node.methods[name], true, seen, depth + 1)
-            ) {
+          const names = frame.names as string[];
+          while (frame.index < names.length) {
+            const name = names[frame.index];
+            frame.index += 1;
+            const method = service.methods.find((candidate) => candidate.name === name);
+            if (method === undefined) {
               return false;
             }
+            return { wire: method.type, schema: node.methods[name], wireOnLeft: true };
           }
           return true;
         }
         // schema <: wire: every wire method exists in the schema.
-        for (const method of entry.methods) {
+        while (frame.index < service.methods.length) {
+          const method = service.methods[frame.index];
+          frame.index += 1;
           const schemaMethod = node.methods[method.name];
-          if (
-            schemaMethod === undefined ||
-            !hasOwn(node.methods, method.name) ||
-            !this.refSubtype(method.type, schemaMethod, false, seen, depth + 1)
-          ) {
+          if (schemaMethod === undefined || !hasOwn(node.methods, method.name)) {
             return false;
           }
+          return { wire: method.type, schema: schemaMethod, wireOnLeft: false };
         }
         return true;
       }
@@ -2922,144 +3774,181 @@ class Decoder {
   }
 
   /** Walk one wire value without interpreting it, charging the budgets. */
-  skipValue(wire: number, path: readonly PathSegment[], depth: number): void {
-    this.step(path, depth);
-    if (wire >= 0) {
-      const entry = this.entry(wire);
-      switch (entry.kind) {
-        case "opt": {
-          const tag = this.byte(path);
-          if (tag === 1) {
-            this.skipValue(entry.inner, path, depth + 1);
-          } else if (tag !== 0) {
-            this.fail("invalid_tag_byte", path, "an opt value starts with 0 or 1");
+  skipValue(wire: number, path: PathSegment[], depth: number): void {
+    if (!this.enterSkip(wire, path, depth)) {
+      this.run(path);
+    }
+  }
+
+  /**
+   * Begin skipping one wire value: true when it was skipped entirely, false
+   * when a `skip-vec` or `skip-record` frame now finishes it (the caller
+   * awaits that frame). An opt's and a variant's payload — tail calls in the
+   * recursive walk — continue in this loop, so this never calls itself.
+   */
+  private enterSkip(wire: number, path: readonly PathSegment[], depth: number): boolean {
+    for (;;) {
+      this.step(path, depth);
+      if (wire >= 0) {
+        const entry = this.entry(wire);
+        switch (entry.kind) {
+          case "opt": {
+            const tag = this.byte(path);
+            if (tag === 1) {
+              wire = entry.inner;
+              depth += 1;
+              continue;
+            } else if (tag !== 0) {
+              this.fail("invalid_tag_byte", path, "an opt value starts with 0 or 1");
+            }
+            return true;
           }
-          return;
-        }
-        case "vec": {
-          const length = this.lebU32(path, "vec length");
-          for (let i = 0; i < length; i += 1) {
-            this.skipValue(entry.inner, path, depth + 1);
+          case "vec": {
+            const length = this.lebU32(path, "vec length");
+            if (length === 0) {
+              return true;
+            }
+            this.stack.push({
+              kind: "skip-vec",
+              inner: entry.inner,
+              remaining: length,
+              depth: depth + 1,
+            });
+            return false;
           }
-          return;
-        }
-        case "record": {
-          for (const type of entry.types) {
-            this.skipValue(type, path, depth + 1);
+          case "record": {
+            if (entry.types.length === 0) {
+              return true;
+            }
+            this.stack.push({
+              kind: "skip-record",
+              types: entry.types,
+              index: 0,
+              depth: depth + 1,
+            });
+            return false;
           }
-          return;
-        }
-        case "variant": {
-          const index = this.lebU32(path, "variant index");
-          if (index >= entry.types.length) {
-            this.fail(
-              "invalid_length",
-              path,
-              `variant index ${index} is outside the ${entry.types.length}-arm wire type`,
-            );
+          case "variant": {
+            const index = this.lebU32(path, "variant index");
+            if (index >= entry.types.length) {
+              this.fail(
+                "invalid_length",
+                path,
+                `variant index ${index} is outside the ${entry.types.length}-arm wire type`,
+              );
+            }
+            wire = entry.types[index];
+            depth += 1;
+            continue;
           }
-          this.skipValue(entry.types[index], path, depth + 1);
-          return;
+          case "func": {
+            const tag = this.byte(path);
+            if (tag === 0) {
+              this.fail(
+                "invalid_principal",
+                path,
+                "opaque references are unsupported in this slice",
+              );
+            }
+            if (tag !== 1) {
+              this.fail("invalid_tag_byte", path, "a func value starts with 0 or 1");
+            }
+            this.skipServiceValue(path);
+            const length = this.lebU32(path, "method name length");
+            if (utf8Decode(this.raw(length, path)) === undefined) {
+              this.fail("invalid_utf8", path, "method name is not well-formed UTF-8");
+            }
+            return true;
+          }
+          case "service": {
+            this.skipServiceValue(path);
+            return true;
+          }
+          case "future": {
+            // A future value: m bytes and n references, both self-described.
+            const byteCount = this.lebU32(path, "future value byte count");
+            const refCount = this.lebU32(path, "future value reference count");
+            this.raw(byteCount, path);
+            if (refCount > 0) {
+              this.fail(
+                "invalid_principal",
+                path,
+                "opaque references are unsupported in this slice",
+              );
+            }
+            return true;
+          }
         }
-        case "func": {
+      }
+      switch (wire) {
+        case OP.null:
+        case OP.reserved:
+          return true;
+        case OP.bool: {
+          const byte = this.byte(path);
+          if (byte > 1) {
+            this.fail("invalid_tag_byte", path, "a bool is 0 or 1");
+          }
+          return true;
+        }
+        case OP.nat:
+          this.lebBig(path);
+          return true;
+        case OP.int:
+          this.slebBig(path);
+          return true;
+        case OP.nat8:
+        case OP.int8:
+          this.raw(1, path);
+          return true;
+        case OP.nat16:
+        case OP.int16:
+          this.raw(2, path);
+          return true;
+        case OP.nat32:
+        case OP.int32:
+        case OP.float32:
+          this.raw(4, path);
+          return true;
+        case OP.nat64:
+        case OP.int64:
+        case OP.float64:
+          this.raw(8, path);
+          return true;
+        case OP.text: {
+          const length = this.lebU32(path, "text length");
+          if (utf8Decode(this.raw(length, path)) === undefined) {
+            this.fail("invalid_utf8", path, "text is not well-formed UTF-8");
+          }
+          return true;
+        }
+        case OP.principal: {
           const tag = this.byte(path);
           if (tag === 0) {
-            this.fail("invalid_principal", path, "opaque references are unsupported in this slice");
+            this.fail(
+              "invalid_principal",
+              path,
+              "opaque principal references are unsupported in this slice",
+            );
           }
           if (tag !== 1) {
-            this.fail("invalid_tag_byte", path, "a func value starts with 0 or 1");
+            this.fail("invalid_tag_byte", path, "a principal value starts with 0 or 1");
           }
-          this.skipServiceValue(path);
-          const length = this.lebU32(path, "method name length");
-          if (utf8Decode(this.raw(length, path)) === undefined) {
-            this.fail("invalid_utf8", path, "method name is not well-formed UTF-8");
+          const length = this.lebU32(path, "principal length");
+          // Skipping is not a validation exemption: the reference rejects an
+          // over-long principal id wherever it appears.
+          if (length > 29) {
+            this.fail("invalid_principal", path, "a principal id is at most 29 bytes");
           }
-          return;
+          this.raw(length, path);
+          return true;
         }
-        case "service": {
-          this.skipServiceValue(path);
-          return;
-        }
-        case "future": {
-          // A future value: m bytes and n references, both self-described.
-          const byteCount = this.lebU32(path, "future value byte count");
-          const refCount = this.lebU32(path, "future value reference count");
-          this.raw(byteCount, path);
-          if (refCount > 0) {
-            this.fail("invalid_principal", path, "opaque references are unsupported in this slice");
-          }
-          return;
-        }
+        case OP.empty:
+          this.fail("type_mismatch", path, "no value inhabits empty");
+          return true;
+        default:
+          this.fail("malformed_type_table", path, `unknown wire type ${wire}`);
       }
-    }
-    switch (wire) {
-      case OP.null:
-      case OP.reserved:
-        return;
-      case OP.bool: {
-        const byte = this.byte(path);
-        if (byte > 1) {
-          this.fail("invalid_tag_byte", path, "a bool is 0 or 1");
-        }
-        return;
-      }
-      case OP.nat:
-        this.lebBig(path);
-        return;
-      case OP.int:
-        this.slebBig(path);
-        return;
-      case OP.nat8:
-      case OP.int8:
-        this.raw(1, path);
-        return;
-      case OP.nat16:
-      case OP.int16:
-        this.raw(2, path);
-        return;
-      case OP.nat32:
-      case OP.int32:
-      case OP.float32:
-        this.raw(4, path);
-        return;
-      case OP.nat64:
-      case OP.int64:
-      case OP.float64:
-        this.raw(8, path);
-        return;
-      case OP.text: {
-        const length = this.lebU32(path, "text length");
-        if (utf8Decode(this.raw(length, path)) === undefined) {
-          this.fail("invalid_utf8", path, "text is not well-formed UTF-8");
-        }
-        return;
-      }
-      case OP.principal: {
-        const tag = this.byte(path);
-        if (tag === 0) {
-          this.fail(
-            "invalid_principal",
-            path,
-            "opaque principal references are unsupported in this slice",
-          );
-        }
-        if (tag !== 1) {
-          this.fail("invalid_tag_byte", path, "a principal value starts with 0 or 1");
-        }
-        const length = this.lebU32(path, "principal length");
-        // Skipping is not a validation exemption: the reference rejects an
-        // over-long principal id wherever it appears.
-        if (length > 29) {
-          this.fail("invalid_principal", path, "a principal id is at most 29 bytes");
-        }
-        this.raw(length, path);
-        return;
-      }
-      case OP.empty:
-        this.fail("type_mismatch", path, "no value inhabits empty");
-        return;
-      default:
-        this.fail("malformed_type_table", path, `unknown wire type ${wire}`);
     }
   }
 

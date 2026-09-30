@@ -5,7 +5,12 @@
 // declared; widening these is a deliberate act, not a convenience.
 
 declare module "node:test" {
-  export function test(name: string, fn: () => void | Promise<void>): void;
+  // Widened for the hostile-input tests (issue #192): wall time is printed
+  // with `t.diagnostic` as information, never asserted (the #39 decision).
+  interface TestContext {
+    diagnostic(message: string): void;
+  }
+  export function test(name: string, fn: (t: TestContext) => void | Promise<void>): void;
 }
 
 declare module "node:assert/strict" {

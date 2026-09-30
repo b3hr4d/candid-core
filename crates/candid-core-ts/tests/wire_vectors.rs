@@ -13,15 +13,25 @@
 //! equal the case's value — the reference implementation validates our
 //! encoder, not just the reverse.
 //!
+//! *Coercion verdicts* (issue #192, shared with the differential fuzz of
+//! #196): for each pinned `(wire types, bytes, expected types)` triple in
+//! `COERCION`, the reference decoder's verdict — accept with a value, or
+//! reject — is emitted into `tests/goldens/wire/coercion.json`, together with
+//! the Contract the TypeScript side builds its expected schemas from.
+//! `ts/tests/coercion.test.ts` holds `decodeArgs` to every verdict.
+//!
 //! The type environment comes from `candid_parser` over the fixture `.did`
 //! source directly — deliberately not through candid-core's compiler, so the
-//! reference path shares no code with the model under test. Regenerate with
-//! `UPDATE_GOLDENS=1 cargo test -p candid-core-ts --features compiler`.
+//! reference path shares no code with the model under test. (The coercion
+//! golden's Contract is compiled by candid-core, because it is the input the
+//! TypeScript loader consumes, not part of the reference verdict.) Regenerate
+//! with `UPDATE_GOLDENS=1 cargo test -p candid-core-ts --features compiler`.
 #![cfg(feature = "compiler")]
 
 use std::path::PathBuf;
 
-use candid::types::value::IDLArgs;
+use candid::types::value::{IDLArgs, IDLValue};
+use candid::types::{Label, Type, TypeInner};
 use candid::TypeEnv;
 use candid_parser::{check_prog, parse_idl_args, IDLProg};
 
@@ -674,4 +684,558 @@ fn ic_reactor_634_ts_encodings_decode_under_the_reference_implementation() {
             "{name}: reference and TS bytes differ"
         );
     }
+}
+
+// ---------------------------------------------------------------------------
+// Coercion verdicts (issue #192; the harness #196 reuses)
+// ---------------------------------------------------------------------------
+
+/// One coercion triple: a message written at `wire` (from `textual`, or given
+/// verbatim as `hex` where no value can express it), decoded at `expected`.
+struct Coercion {
+    name: &'static str,
+    wire: &'static [&'static str],
+    textual: &'static str,
+    hex: Option<&'static str>,
+    expected: &'static [&'static str],
+}
+
+const fn case(
+    name: &'static str,
+    wire: &'static [&'static str],
+    textual: &'static str,
+    expected: &'static [&'static str],
+) -> Coercion {
+    Coercion {
+        name,
+        wire,
+        textual,
+        hex: None,
+        expected,
+    }
+}
+
+const fn raw(name: &'static str, hex: &'static str, expected: &'static [&'static str]) -> Coercion {
+    Coercion {
+        name,
+        wire: &[],
+        textual: "",
+        hex: Some(hex),
+        expected,
+    }
+}
+
+/// The pinned triples, over `tests/fixtures/coercion.did`. Grouped by the
+/// rule they exercise; the verdict is never written here — it is whatever the
+/// reference decoder answers, recorded in the golden.
+const COERCION: &[Coercion] = &[
+    // Primitives: the one numeric coercion (`nat <: int`), and exact matches.
+    case("nat_at_int", &["Nat"], "(5)", &["Int"]),
+    case("int_at_nat", &["Int"], "(5)", &["Nat"]),
+    case("negative_int_at_nat", &["Int"], "(-5)", &["Nat"]),
+    case("nat_at_nat16", &["Nat"], "(5)", &["Nat16"]),
+    case("nat16_at_nat16", &["Nat16"], "(65535)", &["Nat16"]),
+    case("float32_at_float64", &["Float32"], "(1.5)", &["Float64"]),
+    case("float64_at_float64", &["Float64"], "(0.25)", &["Float64"]),
+    case("text_at_principal", &["Text"], "(\"aaaaa-aa\")", &["Principal"]),
+    case(
+        "principal_at_principal",
+        &["Principal"],
+        "(principal \"2vxsx-fae\")",
+        &["Principal"],
+    ),
+    case("bool_at_nat", &["Bool"], "(true)", &["Nat"]),
+    case("null_at_nat", &["Null"], "(null)", &["Nat"]),
+    case("null_at_null", &["Null"], "(null)", &["Null"]),
+    case("reserved_at_null", &["Reserved"], "(null)", &["Null"]),
+    case("reserved_at_nat", &["Reserved"], "(null)", &["Nat"]),
+    case("null_at_empty", &["Null"], "(null)", &["Empty"]),
+    // Expected reserved takes any value.
+    case("text_at_reserved", &["Text"], "(\"hi\")", &["Reserved"]),
+    case(
+        "record_at_reserved",
+        &["RecAB"],
+        "(record { a = 1; b = \"x\" })",
+        &["Reserved"],
+    ),
+    // Expected opt: auto-wrap, absorption, and the three boxed states.
+    case("nat_at_opt_nat", &["Nat"], "(5)", &["OptNat"]),
+    case("text_at_opt_nat", &["Text"], "(\"hi\")", &["OptNat"]),
+    case("opt_text_at_opt_nat", &["OptText"], "(opt \"hi\")", &["OptNat"]),
+    case("opt_text_none_at_opt_nat", &["OptText"], "(null)", &["OptNat"]),
+    case("null_at_opt_nat", &["Null"], "(null)", &["OptNat"]),
+    case("reserved_at_opt_nat", &["Reserved"], "(null)", &["OptNat"]),
+    case("opt_nat_at_opt_int", &["OptNat"], "(opt 5)", &["OptInt"]),
+    case("opt_int_at_opt_nat", &["OptInt"], "(opt -5)", &["OptNat"]),
+    case("opt_nat_at_nat", &["OptNat"], "(opt 5)", &["Nat"]),
+    case("opt_opt_none", &["OptOptNat"], "(null)", &["OptOptNat"]),
+    case("opt_opt_some_none", &["OptOptNat"], "(opt null)", &["OptOptNat"]),
+    case("opt_opt_some_some", &["OptOptNat"], "(opt opt 5)", &["OptOptNat"]),
+    case("nat_at_opt_opt_nat", &["Nat"], "(5)", &["OptOptNat"]),
+    case("opt_nat_at_opt_opt_nat", &["OptNat"], "(opt 5)", &["OptOptNat"]),
+    case("null_at_opt_null", &["Null"], "(null)", &["OptNull"]),
+    case("opt_null_at_opt_null", &["OptNull"], "(opt null)", &["OptNull"]),
+    case("text_at_opt_reserved", &["Text"], "(\"x\")", &["OptReserved"]),
+    case("nat_at_opt_empty", &["Nat"], "(5)", &["OptEmpty"]),
+    raw("empty_at_opt_nat", "4449444c00016f", &["OptNat"]),
+    case("vec_int_at_opt_vec_nat", &["VecInt"], "(vec { 1; -2 })", &["OptVecNat"]),
+    case(
+        "vec_nonnegative_int_at_opt_vec_nat",
+        &["VecInt"],
+        "(vec { 1; 2 })",
+        &["OptVecNat"],
+    ),
+    // Vectors and blobs.
+    case("vec_nat_at_vec_int", &["VecNat"], "(vec { 1; 2 })", &["VecInt"]),
+    case("vec_int_at_vec_nat", &["VecInt"], "(vec { 1; 2 })", &["VecNat"]),
+    case("blob_at_blob", &["Blob"], "(blob \"\\01\\02\")", &["Blob"]),
+    case("vec_text_at_blob", &["VecText"], "(vec { \"a\" })", &["Blob"]),
+    case("empty_vec_text_at_blob", &["VecText"], "(vec {})", &["Blob"]),
+    case(
+        "vec_opt_nat_mixed",
+        &["VecOptNat"],
+        "(vec { opt 1; null })",
+        &["VecOptNat"],
+    ),
+    case("vec_nat_at_vec_opt_nat", &["VecNat"], "(vec { 1; 2 })", &["VecOptNat"]),
+    case("vec_text_at_vec_opt_nat", &["VecText"], "(vec { \"a\" })", &["VecOptNat"]),
+    // Records: width, depth, tuples, and the opt fallback for a record that
+    // cannot coerce.
+    case(
+        "record_extra_field_skipped",
+        &["RecAB"],
+        "(record { a = 1; b = \"x\" })",
+        &["RecA"],
+    ),
+    case(
+        "record_missing_opt_field",
+        &["RecA"],
+        "(record { a = 1 })",
+        &["RecAOptB"],
+    ),
+    case(
+        "record_missing_required_field",
+        &["RecA"],
+        "(record { a = 1 })",
+        &["RecAB"],
+    ),
+    case("record_field_nat_at_int", &["RecA"], "(record { a = 1 })", &["RecAInt"]),
+    case(
+        "record_field_int_at_nat",
+        &["RecAInt"],
+        "(record { a = -1 })",
+        &["RecA"],
+    ),
+    case("unit_at_opt_record", &["Unit"], "(record {})", &["OptRecA"]),
+    case("unit_at_record", &["Unit"], "(record {})", &["RecA"]),
+    case(
+        "record_at_unit",
+        &["RecAB"],
+        "(record { a = 1; b = \"x\" })",
+        &["Unit"],
+    ),
+    case("pair_at_single", &["Pair"], "(record { 1; \"x\" })", &["Single"]),
+    case("single_at_pair", &["Single"], "(record { 1 })", &["Pair"]),
+    case("pair_at_named_record", &["Pair"], "(record { 1; \"x\" })", &["RecA"]),
+    // Variants: tags trap where opts absorb.
+    case("variant_known_tag", &["VOkLater"], "(variant { ok })", &["VOk"]),
+    case(
+        "variant_unknown_tag",
+        &["VOkLater"],
+        "(variant { later = 7 })",
+        &["VOk"],
+    ),
+    case(
+        "variant_unknown_tag_under_opt",
+        &["VOkLater"],
+        "(variant { later = 7 })",
+        &["OptVOk"],
+    ),
+    case(
+        "variant_known_tag_under_opt",
+        &["VOkLater"],
+        "(variant { ok })",
+        &["OptVOk"],
+    ),
+    case(
+        "variant_payload_nat_at_int",
+        &["VOkNat"],
+        "(variant { ok = 5 })",
+        &["VOkInt"],
+    ),
+    case(
+        "variant_payload_int_at_nat",
+        &["VOkInt"],
+        "(variant { ok = 5 })",
+        &["VOkNat"],
+    ),
+    case(
+        "variant_payload_int_under_opt",
+        &["VOkInt"],
+        "(variant { ok = 5 })",
+        &["OptVOkNat"],
+    ),
+    case(
+        "variant_other_arm_under_opt",
+        &["VOkInt"],
+        "(variant { err = \"e\" })",
+        &["OptVOkNat"],
+    ),
+    // Recursive types, including the ICRC-3 `Value` shape.
+    case(
+        "list_two",
+        &["List"],
+        "(opt record { head = 1; tail = opt record { head = 2; tail = null } })",
+        &["List"],
+    ),
+    case(
+        "int_list_at_list",
+        &["IntList"],
+        "(opt record { head = 1; tail = null })",
+        &["List"],
+    ),
+    case(
+        "list_at_int_list",
+        &["List"],
+        "(opt record { head = 1; tail = opt record { head = 2; tail = null } })",
+        &["IntList"],
+    ),
+    case(
+        "tree",
+        &["Tree"],
+        "(variant { node = record { left = variant { leaf = 1 }; right = variant { leaf = -2 } } })",
+        &["Tree"],
+    ),
+    case(
+        "icrc3_value",
+        &["Value"],
+        "(variant { Map = vec { record { \"k\"; variant { Array = vec { variant { Nat = 1 }; \
+         variant { Text = \"t\" } } } } } })",
+        &["Value"],
+    ),
+    // References: the one place decoding checks a static subtype relation.
+    case("func_same", &["FuncNat"], "(func \"aaaaa-aa\".\"f\")", &["FuncNat"]),
+    case(
+        "func_contravariant_param",
+        &["FuncInt"],
+        "(func \"aaaaa-aa\".\"f\")",
+        &["FuncNat"],
+    ),
+    case(
+        "func_param_not_subtype",
+        &["FuncNat"],
+        "(func \"aaaaa-aa\".\"f\")",
+        &["FuncInt"],
+    ),
+    case(
+        "func_mode_mismatch",
+        &["FuncNatUpdate"],
+        "(func \"aaaaa-aa\".\"f\")",
+        &["FuncNat"],
+    ),
+    case(
+        "func_mode_mismatch_under_opt",
+        &["FuncNatUpdate"],
+        "(func \"aaaaa-aa\".\"f\")",
+        &["OptFuncNat"],
+    ),
+    case(
+        "func_optional_extras",
+        &["FuncNat"],
+        "(func \"aaaaa-aa\".\"f\")",
+        &["FuncNatMore"],
+    ),
+    case("service_wider", &["SvcTwo"], "(service \"aaaaa-aa\")", &["SvcOne"]),
+    case("service_narrower", &["SvcOne"], "(service \"aaaaa-aa\")", &["SvcTwo"]),
+    case(
+        "service_narrower_under_opt",
+        &["SvcOne"],
+        "(service \"aaaaa-aa\")",
+        &["OptSvcTwo"],
+    ),
+    // Argument sequences: the tuple rule at top level.
+    case("missing_trailing_opt_arg", &["Nat"], "(5)", &["Nat", "OptText"]),
+    case("missing_trailing_required_arg", &["Nat"], "(5)", &["Nat", "Text"]),
+    case("extra_trailing_arg", &["Nat", "Text"], "(5, \"x\")", &["Nat"]),
+    case("no_args_at_opt", &[], "()", &["OptNat"]),
+    // Malformed messages: both sides must refuse.
+    raw("truncated_bool", "4449444c00017e", &["Bool"]),
+    raw("trailing_byte", "4449444c00017e0100", &["Bool"]),
+    raw("opt_tag_two", "4449444c016e7d010002", &["OptNat"]),
+    raw("bool_byte_two", "4449444c00017e02", &["Bool"]),
+];
+
+fn coercion_env() -> (String, TypeEnv) {
+    let source = std::fs::read_to_string(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests")
+            .join("fixtures")
+            .join("coercion.did"),
+    )
+    .expect("the coercion fixture must be readable");
+    let prog: IDLProg = source.parse().expect("the coercion fixture must parse");
+    let mut env = TypeEnv::new();
+    check_prog(&mut env, &prog).expect("the coercion fixture must type-check");
+    (source, env)
+}
+
+fn types_of(env: &TypeEnv, names: &[&str]) -> Vec<Type> {
+    names
+        .iter()
+        .map(|name| {
+            env.find_type(name)
+                .unwrap_or_else(|_| panic!("declaration {name} must exist"))
+                .clone()
+        })
+        .collect()
+}
+
+fn label_key(label: &Label) -> String {
+    match label {
+        Label::Named(name) => name.clone(),
+        Label::Id(id) | Label::Unnamed(id) => format!("_{id}_"),
+    }
+}
+
+/// Whether a resolved type's domain admits `null`: the rule behind boxed
+/// options (`opt opt`, `opt null`, `opt reserved`), as the runtime states it.
+fn admits_null(env: &TypeEnv, ty: &Type) -> bool {
+    let ty = env.trace_type(ty).expect("type must resolve");
+    matches!(
+        ty.as_ref(),
+        TypeInner::Opt(_) | TypeInner::Null | TypeInner::Reserved
+    )
+}
+
+/// The TypeScript domain value a reference-decoded value corresponds to, as
+/// JSON — the defined mapping both sides compare under. Integers of every
+/// width are decimal strings (the runtime's `number` and `bigint` alike),
+/// floats their shortest decimal, blobs `{ "blob": hex }`, principals their
+/// text; records are objects keyed by label (`_id_` when unnamed), tuples
+/// arrays, variants `{ tag, value }` or a bare `{ tag }` for a `null` payload,
+/// and an `opt` is its value or `null` — boxed as `{ some }` exactly when its
+/// inner type admits `null`. `reserved` is `null`, as the runtime decodes it.
+fn domain(env: &TypeEnv, ty: &Type, value: &IDLValue) -> serde_json::Value {
+    use serde_json::{json, Value};
+    let ty = env.trace_type(ty).expect("type must resolve");
+    match (ty.as_ref(), value) {
+        (TypeInner::Reserved, _) | (_, IDLValue::Null | IDLValue::None | IDLValue::Reserved) => {
+            Value::Null
+        }
+        (_, IDLValue::Bool(b)) => json!(b),
+        (_, IDLValue::Text(text)) => json!(text),
+        (_, IDLValue::Nat(n)) => json!(n.to_string()),
+        (_, IDLValue::Int(n)) => json!(n.to_string()),
+        (_, IDLValue::Nat8(n)) => json!(n.to_string()),
+        (_, IDLValue::Nat16(n)) => json!(n.to_string()),
+        (_, IDLValue::Nat32(n)) => json!(n.to_string()),
+        (_, IDLValue::Nat64(n)) => json!(n.to_string()),
+        (_, IDLValue::Int8(n)) => json!(n.to_string()),
+        (_, IDLValue::Int16(n)) => json!(n.to_string()),
+        (_, IDLValue::Int32(n)) => json!(n.to_string()),
+        (_, IDLValue::Int64(n)) => json!(n.to_string()),
+        (_, IDLValue::Float32(f)) => json!(f64::from(*f).to_string()),
+        (_, IDLValue::Float64(f)) => json!(f.to_string()),
+        (_, IDLValue::Principal(p) | IDLValue::Service(p)) => json!(p.to_text()),
+        (_, IDLValue::Func(p, method)) => json!({ "principal": p.to_text(), "method": method }),
+        (_, IDLValue::Blob(bytes)) => json!({ "blob": hex(bytes) }),
+        (TypeInner::Opt(inner), IDLValue::Opt(v)) => {
+            let present = domain(env, inner, v);
+            if admits_null(env, inner) {
+                json!({ "some": present })
+            } else {
+                present
+            }
+        }
+        (TypeInner::Vec(inner), IDLValue::Vec(items)) => {
+            let inner_resolved = env.trace_type(inner).expect("type must resolve");
+            if matches!(inner_resolved.as_ref(), TypeInner::Nat8) {
+                let bytes: Vec<u8> = items
+                    .iter()
+                    .map(|item| match item {
+                        IDLValue::Nat8(byte) => *byte,
+                        other => panic!("a vec nat8 element must be a nat8, got {other:?}"),
+                    })
+                    .collect();
+                return json!({ "blob": hex(&bytes) });
+            }
+            Value::Array(items.iter().map(|item| domain(env, inner, item)).collect())
+        }
+        (TypeInner::Record(fields), IDLValue::Record(values)) => {
+            let tuple = !fields.is_empty()
+                && fields
+                    .iter()
+                    .enumerate()
+                    .all(|(index, field)| field.id.get_id() == index as u32);
+            let typed = |id: u32| -> &Type {
+                &fields
+                    .iter()
+                    .find(|field| field.id.get_id() == id)
+                    .expect("a decoded field is a field of its type")
+                    .ty
+            };
+            if tuple {
+                Value::Array(
+                    values
+                        .iter()
+                        .map(|field| domain(env, typed(field.id.get_id()), &field.val))
+                        .collect(),
+                )
+            } else {
+                let mut object = serde_json::Map::new();
+                for field in values {
+                    object.insert(
+                        label_key(&field.id),
+                        domain(env, typed(field.id.get_id()), &field.val),
+                    );
+                }
+                Value::Object(object)
+            }
+        }
+        (TypeInner::Variant(fields), IDLValue::Variant(variant)) => {
+            let arm = &variant.0;
+            let arm_type = &fields
+                .iter()
+                .find(|field| field.id.get_id() == arm.id.get_id())
+                .expect("a decoded arm is an arm of its type")
+                .ty;
+            let tag = label_key(&arm.id);
+            let resolved = env.trace_type(arm_type).expect("type must resolve");
+            if matches!(resolved.as_ref(), TypeInner::Null) {
+                json!({ "tag": tag })
+            } else {
+                json!({ "tag": tag, "value": domain(env, arm_type, &arm.val) })
+            }
+        }
+        (other, value) => panic!("no domain mapping for {value:?} at {other:?}"),
+    }
+}
+
+fn unhex(text: &str) -> Vec<u8> {
+    (0..text.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&text[i..i + 2], 16).expect("valid hex"))
+        .collect()
+}
+
+/// The coercion fixture's Contract as the one-document envelope the
+/// TypeScript loader reads, normalized exactly as `golden.rs` normalizes the
+/// generator goldens' documents (a fixed producer block, a canonical reparse).
+fn coercion_envelope(source: &str) -> serde_json::Value {
+    let compilation = candid_core::compile_did(source).expect("the coercion fixture must compile");
+    let mut document =
+        serde_json::to_value(compilation.contract()).expect("contract must serialize");
+    document["producer"] = serde_json::json!({
+        "name": "candid-core",
+        "version": "0.0.0-golden",
+        "candid_version": "0.0.0-golden",
+        "candid_parser_version": "0.0.0-golden",
+    });
+    let normalized = serde_json::to_string(&document).expect("document must serialize");
+    let contract = candid_core::Contract::from_json(&normalized)
+        .expect("the normalized document must still be a valid canonical Contract");
+    let mut names: std::collections::BTreeMap<(u32, u32), String> =
+        std::collections::BTreeMap::new();
+    for provenance in compilation
+        .source_info()
+        .expect("compile_did retains provenance by default")
+        .field_labels()
+    {
+        if let candid_core::SourceLabel::Named { name } = &provenance.label {
+            names.insert((provenance.container, provenance.id), name.clone());
+        }
+    }
+    let triples: Vec<serde_json::Value> = names
+        .into_iter()
+        .map(|((container, id), name)| serde_json::json!([container, id, name]))
+        .collect();
+    let mut envelope = candid_core::ContractEnvelope::new(contract);
+    envelope
+        .insert_extension(
+            "org.candid-core.field-names/v1",
+            serde_json::Value::Array(triples),
+            &candid_core::Limits::default(),
+        )
+        .expect("the field-names extension must validate");
+    serde_json::to_value(&envelope).expect("envelope must serialize")
+}
+
+/// Emit (or verify) the coercion verdicts of the reference decoder. The TS
+/// decoder is held to every one in `ts/tests/coercion.test.ts`.
+#[test]
+fn coercion_verdicts_match_reference_decoding() {
+    let (source, env) = coercion_env();
+    let mut entries = Vec::new();
+    let mut names = std::collections::BTreeSet::new();
+    for case in COERCION {
+        assert!(names.insert(case.name), "duplicate case name {}", case.name);
+        let bytes = match case.hex {
+            Some(hex_text) => unhex(hex_text),
+            None => {
+                let wire = types_of(&env, case.wire);
+                parse_idl_args(case.textual)
+                    .expect("textual value must parse")
+                    .annotate_types(true, &env, &wire)
+                    .unwrap_or_else(|error| {
+                        panic!("{}: value must type at the wire: {error}", case.name)
+                    })
+                    .to_bytes_with_types(&env, &wire)
+                    .expect("reference encoding must succeed")
+            }
+        };
+        let expected = types_of(&env, case.expected);
+        let mut entry = serde_json::json!({
+            "name": case.name,
+            "wire": case.wire,
+            "textual": case.textual,
+            "expected": case.expected,
+            "hex": hex(&bytes),
+        });
+        match IDLArgs::from_bytes_with_types(&bytes, &env, &expected) {
+            Ok(decoded) => {
+                let values: Vec<serde_json::Value> = decoded
+                    .args
+                    .iter()
+                    .zip(&expected)
+                    .map(|(value, ty)| domain(&env, ty, value))
+                    .collect();
+                entry["verdict"] = serde_json::json!("accept");
+                entry["values"] = serde_json::Value::Array(values);
+            }
+            Err(error) => {
+                entry["verdict"] = serde_json::json!("reject");
+                // Informational only, never compared: the reference names the
+                // failing wire/expected pair on its last line (the lines above
+                // it dump the whole type table).
+                let message = error.to_string();
+                let last = message
+                    .lines()
+                    .rev()
+                    .find(|line| !line.trim().is_empty())
+                    .unwrap_or_default();
+                entry["reference_error"] = serde_json::json!(last);
+            }
+        }
+        entries.push(entry);
+    }
+    let document = serde_json::json!({
+        "about": "Reference-decoder coercion verdicts (issue #192, shared with #196). \
+                  Generated by crates/candid-core-ts/tests/wire_vectors.rs; regenerate with \
+                  UPDATE_GOLDENS=1 cargo test -p candid-core-ts --features compiler.",
+        "envelope": coercion_envelope(&source),
+        "cases": entries,
+    });
+    let mut text = serde_json::to_string_pretty(&document).expect("verdicts must serialize");
+    text.push('\n');
+    let path = goldens_dir().join("coercion.json");
+    if std::env::var_os("UPDATE_GOLDENS").is_some() {
+        std::fs::write(&path, &text).expect("golden must be writable");
+        return;
+    }
+    let golden = std::fs::read_to_string(&path)
+        .unwrap_or_else(|_| panic!("missing golden {path:?}; run with UPDATE_GOLDENS=1"));
+    assert_eq!(
+        text, golden,
+        "coercion verdicts diverged; regenerate deliberately with UPDATE_GOLDENS=1 and review"
+    );
 }

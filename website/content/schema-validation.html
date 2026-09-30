@@ -271,13 +271,18 @@ const result = validate(c.vec(c.nat8), big, { maxElements: 10 });
 </p>
 
 <p>
-  <code>resource: "stack"</code> is the odd one out: it is not a bound you configure. If you raise
-  <code>maxDepth</code> past what the host's own call stack holds, the engine can run out first, and
-  the walk reports <code>{ resource: "stack", limit, observed }</code> with <code>limit</code> the
-  <code>maxDepth</code> you set and <code>observed</code> the depth it had reached, which is below
-  <code>limit</code> here because <code>validate</code> charges every step. <code>validate</code> never
-  reports it at the default limits, and it is not a statement about the value: the same value fails
-  with <code>value_depth</code> under a lower <code>maxDepth</code>.
+  The walk keeps its work on an explicit stack rather than the JavaScript call stack, so
+  <code>maxDepth</code> is the only depth bound and the answer does not depend on the engine: raise
+  it, and a 100,000-level list validates the same way on every call.
+</p>
+
+<p>
+  <code>resource: "stack"</code> is the odd one out: it is not a bound you configure. It means the
+  host's own call stack ran out mid-walk, which no depth of value or schema causes; what does is
+  code the walk calls — a getter or Proxy trap on the value, a <code>rec</code> thunk — recursing
+  too deeply by itself. The walk reports <code>{ resource: "stack", limit, observed }</code> with
+  <code>limit</code> the <code>maxDepth</code> you set and <code>observed</code> the depth it had
+  reached. It is not a statement about the value's shape.
 </p>
 
 <callout type="warn" title="Read ok, not issues.length">
