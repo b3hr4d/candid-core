@@ -25,11 +25,15 @@
 // validation can never report `ok`. Depth counts schema traversal steps —
 // `rec` unwrapping included, which is what makes a mis-built self-referential
 // `rec` chain terminate — so linked-list-shaped data consumes depth per
-// element, exactly as it does in candid-core's value domain. A `maxDepth`
-// raised past what the host's own call stack holds can still overflow it; the
-// engine's stack-exhaustion exception is reported as `resource_limit_exceeded`
-// with resource `stack` — the host ran out, not the value or the schema —
-// rather than as an unreadable value.
+// element, exactly as it does in candid-core's value domain. The walk keeps
+// its work on an explicit stack rather than the host's (issue #192), so
+// `maxDepth` is the only depth bound: raised, it admits a 100,000-level
+// linked list, and the answer never depends on the engine or its JIT state.
+// What can still exhaust the host stack is user code the walk calls — a
+// getter, a Proxy trap, a rec thunk that itself recurses too deeply — and
+// that is reported as `resource_limit_exceeded` with resource `stack` (the
+// host ran out, not the value or the schema) rather than as an unreadable
+// value.
 //
 // The no-throw guarantee holds even against values that fight inspection —
 // own accessors that throw, Proxies with hostile traps, revoked Proxies: the
@@ -135,13 +139,14 @@ export type ValidationCode =
  * The `{resource, limit, observed}` triple, as candid-core serializes it.
  *
  * `stack` is the one resource with no candid-core counterpart: the host
- * JavaScript stack ran out mid-walk. Its `limit` is the call's effective
- * `maxDepth` and its `observed` the deepest depth the walk had reached when
- * the engine refused. Usually that is below `limit` (a `maxDepth` raised past
- * what the stack holds), but not always: `encode` builds its type table over
- * plain nested combinators without charging depth, so a hand-built schema can
- * overflow the stack there with `observed` above `limit`. Read `resource`, not
- * a comparison of the two numbers, to tell `stack` from `value_depth`.
+ * JavaScript stack ran out mid-walk. The walks keep their own work on explicit
+ * stacks, so no depth of value or schema causes it; what does is
+ * user code a walk calls — a getter, a Proxy trap, a rec thunk — recursing
+ * too deeply itself. Its `limit` is the call's effective `maxDepth` and its
+ * `observed` the deepest depth the walk had reached when the engine refused,
+ * which says where the walk was, not where the host's stack ends. Read
+ * `resource`, not a comparison of the two numbers, to tell `stack` from
+ * `value_depth`.
  */
 export interface ResourceLimitInfo {
   readonly resource: "value_depth" | "value_elements" | "stack";
@@ -234,9 +239,9 @@ function validateWith(
   } catch (error) {
     // The one place a host stack overflow is caught for the whole walk: it is
     // a property of the host, not of the value or the schema, so it must not
-    // reach the `unreadable_value` label below. When the recursive walker is
-    // replaced by an iterative one, this branch stays for residual overflow
-    // in user code (a getter or rec thunk that itself recurses too deeply).
+    // reach the `unreadable_value` label below. The walk itself is iterative
+    // (issue #192), so what overflows is user code it called — a getter, a
+    // Proxy trap or a rec thunk that itself recursed too deeply.
     if (isStackExhaustion(error)) {
       walk.stackExhausted(path);
     } else {
@@ -395,6 +400,61 @@ const NAT64_MAX = 2n ** 64n - 1n;
 const INT64_MIN = -(2n ** 63n);
 const INT64_MAX = 2n ** 63n - 1n;
 
+// The walk keeps its own work on an explicit stack (issue #192): a composite
+// value becomes a frame recording where its loop stands, and the host call
+// stack stays a few frames deep however deep the value nests, so `maxDepth`
+// is the only depth bound. Each frame is the continuation of what used to be
+// a recursive call — the loop index, and whether a child's path segment is
+// still to be popped — and resuming it performs exactly the reads, charges,
+// path pushes and pops, and issue checks the recursive walk performed, in
+// the same order. Order is observable (a getter or Proxy trap sees every
+// read, and the first issue's path is the result), so it is kept, down to
+// reads that happen after the walk has halted.
+/* eslint-disable @typescript-eslint/no-explicit-any */
+type Frame =
+  | {
+      readonly kind: "vec";
+      readonly node: VecSchema<any>;
+      readonly value: unknown[];
+      readonly depth: number;
+      /** The element in flight; -1 before the first. */
+      index: number;
+    }
+  | {
+      readonly kind: "tuple";
+      readonly node: TupleSchema<readonly AnySchema[]>;
+      readonly value: unknown[];
+      readonly depth: number;
+      index: number;
+    }
+  | {
+      readonly kind: "record";
+      readonly node: RecordSchema<FieldSchemas>;
+      readonly value: Record<string, unknown>;
+      readonly entries: readonly (readonly [string, AnyFieldSchema])[];
+      readonly depth: number;
+      index: number;
+      /** Whether the field in flight still has its path segment pushed. */
+      pending: boolean;
+    }
+  | {
+      /** A present boxed opt, after `some`: pop it, then check the keys. */
+      readonly kind: "boxed";
+      readonly value: Record<string, unknown>;
+      readonly depth: number;
+    }
+  | {
+      /** A variant, after its payload: pop `value`, then check the keys. */
+      readonly kind: "variant";
+      readonly value: Record<string, unknown>;
+      readonly depth: number;
+    };
+/* eslint-enable @typescript-eslint/no-explicit-any */
+
+/** What a walk continues with in the same loop: a node, a value, a depth. */
+type Next =
+  { readonly node: SchemaNode; readonly value: unknown; readonly depth: number } | undefined;
+
 class Walk {
   readonly issues: ValidationIssue[] = [];
   private readonly maxDepth: number;
@@ -404,6 +464,8 @@ class Walk {
   private halted = false;
   /** The deepest depth `step` has charged: what a stack overflow reports. */
   private reached = 0;
+  /** The explicit work stack: one frame per composite value in progress. */
+  private readonly stack: Frame[] = [];
 
   constructor(options: ValidateOptions) {
     this.maxDepth = options.maxDepth ?? DEFAULT_MAX_DEPTH;
@@ -411,67 +473,191 @@ class Walk {
     this.maxIssues = options.maxIssues ?? DEFAULT_MAX_ISSUES;
   }
 
+  /** Walk `value` against `schema` to completion, or until something throws. */
   visit(schema: AnyFieldSchema, value: unknown, path: PathSegment[], depth: number): void {
-    if (this.halted || !this.step(path, depth)) {
-      return;
+    this.enter(schema, value, path, depth);
+    const stack = this.stack;
+    while (stack.length > 0) {
+      this.resume(stack[stack.length - 1], path);
     }
-    const node = schema as SchemaNode;
-    switch (node.kind) {
-      case "primitive":
-        this.primitive(node, value, path);
-        return;
-      case "opt":
-        if (value !== null) {
-          this.opt(node, value, path, depth);
-        }
-        return;
-      case "vec":
-        this.vec(node, value, path, depth);
-        return;
-      case "blob":
-        if (!isUint8Array(value)) {
-          this.issue("invalid_type", path, `expected a Uint8Array, got ${describe(value)}`);
-        }
-        return;
-      case "unit":
-        this.unit(value, path, depth);
-        return;
-      case "record":
-        this.record(node, value, path, depth);
-        return;
-      case "tuple":
-        this.tuple(node, value, path, depth);
-        return;
-      case "variant":
-        this.variant(node, value, path, depth);
-        return;
-      case "func":
-        this.func(value, path, depth);
-        return;
-      case "service":
-        // A service value is the principal of a running service (issue
-        // #104) — the same check the principal primitive uses.
-        this.principalText(value, path);
-        return;
-      case "rec": {
-        const body: unknown = node.body();
-        if (
-          typeof body !== "object" ||
-          body === null ||
-          typeof (body as { kind?: unknown }).kind !== "string"
-        ) {
-          this.issue("unsupported_schema", path, "a rec thunk did not produce a schema");
-          return;
-        }
-        this.visit(body as AnySchema, value, path, depth + 1);
+  }
+
+  /**
+   * Begin one value: charge its step, check it, and either finish it on the
+   * spot (a leaf, or a composite refused before any child) or push the frame
+   * that walks its children. What were tail calls — a `rec` hop, an opt's
+   * payload, a variant's payload (after pushing the frame that checks its
+   * keys) — continue in this same loop, so `enter` never calls itself: the
+   * host stack is `visit` → `resume` → `enter` → one helper, at any depth.
+   */
+  private enter(schema: AnyFieldSchema, value: unknown, path: PathSegment[], depth: number): void {
+    let node = schema as SchemaNode;
+    let at = depth;
+    for (;;) {
+      if (this.halted || !this.step(path, at)) {
         return;
       }
-      default:
-        this.issue(
-          "unsupported_schema",
-          path,
-          `unknown schema kind ${JSON.stringify((node as { kind: unknown }).kind)}`,
-        );
+      switch (node.kind) {
+        case "primitive":
+          this.primitive(node, value, path);
+          return;
+        case "opt": {
+          if (value === null) {
+            return;
+          }
+          const next = this.opt(node, value, path, at);
+          if (next === undefined) {
+            return;
+          }
+          ({ node, value, depth: at } = next);
+          continue;
+        }
+        case "vec":
+          this.vec(node, value, path, at);
+          return;
+        case "blob":
+          if (!isUint8Array(value)) {
+            this.issue("invalid_type", path, `expected a Uint8Array, got ${describe(value)}`);
+          }
+          return;
+        case "unit":
+          this.unit(value, path, at);
+          return;
+        case "record":
+          this.record(node, value, path, at);
+          return;
+        case "tuple":
+          this.tuple(node, value, path, at);
+          return;
+        case "variant": {
+          const next = this.variant(node, value, path, at);
+          if (next === undefined) {
+            return;
+          }
+          ({ node, value, depth: at } = next);
+          continue;
+        }
+        case "func":
+          this.func(value, path, at);
+          return;
+        case "service":
+          // A service value is the principal of a running service (issue
+          // #104) — the same check the principal primitive uses.
+          this.principalText(value, path);
+          return;
+        case "rec": {
+          const body: unknown = node.body();
+          if (
+            typeof body !== "object" ||
+            body === null ||
+            typeof (body as { kind?: unknown }).kind !== "string"
+          ) {
+            this.issue("unsupported_schema", path, "a rec thunk did not produce a schema");
+            return;
+          }
+          node = body as SchemaNode;
+          at += 1;
+          continue;
+        }
+        default:
+          this.issue(
+            "unsupported_schema",
+            path,
+            `unknown schema kind ${JSON.stringify((node as { kind: unknown }).kind)}`,
+          );
+          return;
+      }
+    }
+  }
+
+  /**
+   * Advance the frame on top of the stack by one child: start the next child
+   * (which may push a frame of its own), or finish the frame and pop it.
+   */
+  private resume(frame: Frame, path: PathSegment[]): void {
+    const stack = this.stack;
+    switch (frame.kind) {
+      case "vec": {
+        const { node, value } = frame;
+        for (;;) {
+          if (frame.index >= 0) {
+            path.pop();
+          }
+          frame.index += 1;
+          if (!(frame.index < value.length && !this.halted)) {
+            stack.pop();
+            return;
+          }
+          path.push(frame.index);
+          this.enter(node.inner, value[frame.index], path, frame.depth + 1);
+          // A child that pushed a frame runs first; a leaf is already done,
+          // and this loop carries on without a round trip through `visit`.
+          if (stack[stack.length - 1] !== frame) {
+            return;
+          }
+        }
+      }
+      case "tuple": {
+        const { node, value } = frame;
+        for (;;) {
+          if (frame.index >= 0) {
+            path.pop();
+          }
+          frame.index += 1;
+          if (!(frame.index < node.elements.length && !this.halted)) {
+            stack.pop();
+            return;
+          }
+          path.push(frame.index);
+          this.enter(node.elements[frame.index], value[frame.index], path, frame.depth + 1);
+          if (stack[stack.length - 1] !== frame) {
+            return;
+          }
+        }
+      }
+      case "record": {
+        const { node, value, entries } = frame;
+        for (;;) {
+          if (frame.pending) {
+            path.pop();
+            frame.pending = false;
+          }
+          frame.index += 1;
+          if (frame.index >= entries.length) {
+            break;
+          }
+          if (this.halted) {
+            stack.pop();
+            return;
+          }
+          const entry = entries[frame.index];
+          const key = entry[0];
+          path.push(key);
+          if (!hasOwnEnumerable(value, key)) {
+            this.issue("missing_field", path, "required field is missing");
+            path.pop();
+            continue;
+          }
+          frame.pending = true;
+          this.enter(entry[1], value[key], path, frame.depth + 1);
+          if (stack[stack.length - 1] !== frame) {
+            return;
+          }
+        }
+        stack.pop();
+        this.recordKeys(node, value, path, frame.depth);
+        return;
+      }
+      case "boxed":
+        path.pop();
+        stack.pop();
+        this.boxedKeys(frame.value, path, frame.depth);
+        return;
+      case "variant":
+        path.pop();
+        stack.pop();
+        this.variantKeys(frame.value, path, frame.depth);
+        return;
     }
   }
 
@@ -624,6 +810,10 @@ class Walk {
    * would, and the resolved node is what validates the payload — so an
    * unboxed opt's accounting is unchanged. A boxed value is strict like a
    * record: a plain object whose only own enumerable key is `some`.
+   *
+   * Returns what the caller's loop visits next: the value itself at the
+   * resolved inner node, or — for a boxed value, after pushing the frame that
+   * finishes it — its `some` payload.
    */
   private opt(
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -631,14 +821,13 @@ class Walk {
     value: unknown,
     path: PathSegment[],
     depth: number,
-  ): void {
+  ): Next {
     const inner = this.resolve(node.inner, path, depth + 1);
     if (inner === undefined) {
-      return;
+      return undefined;
     }
     if (!admitsNull(inner.node)) {
-      this.visit(inner.node, value, path, inner.depth);
-      return;
+      return { node: inner.node, value, depth: inner.depth };
     }
     if (!isPlainCandidate(value)) {
       this.issue(
@@ -646,15 +835,21 @@ class Walk {
         path,
         `expected null or { some: … } for an opt whose inner type admits null, got ${describe(value)}`,
       );
-      return;
+      return undefined;
     }
     path.push("some");
     if (!hasOwnEnumerable(value, "some")) {
       this.issue("missing_field", path, "a present boxed opt carries { some }");
-    } else {
-      this.visit(inner.node, value.some, path, inner.depth);
+      path.pop();
+      this.boxedKeys(value, path, depth);
+      return undefined;
     }
-    path.pop();
+    this.stack.push({ kind: "boxed", value, depth });
+    return { node: inner.node, value: value.some, depth: inner.depth };
+  }
+
+  /** A boxed opt's keys, after `some`: anything but `some` is unexpected. */
+  private boxedKeys(value: Record<string, unknown>, path: PathSegment[], depth: number): void {
     for (const key of Object.keys(value)) {
       if (this.halted || !this.step(path, depth)) {
         return;
@@ -673,11 +868,7 @@ class Walk {
       this.issue("invalid_type", path, `expected an array, got ${describe(value)}`);
       return;
     }
-    for (let index = 0; index < value.length && !this.halted; index += 1) {
-      path.push(index);
-      this.visit(node.inner, value[index], path, depth + 1);
-      path.pop();
-    }
+    this.stack.push({ kind: "vec", node, value, depth, index: -1 });
   }
 
   private unit(value: unknown, path: PathSegment[], depth: number): void {
@@ -707,18 +898,19 @@ class Walk {
       this.issue("invalid_type", path, `expected a record, got ${describe(value)}`);
       return;
     }
-    for (const [key, field] of Object.entries(node.fields)) {
-      if (this.halted) {
-        return;
-      }
-      path.push(key);
-      if (!hasOwnEnumerable(value, key)) {
-        this.issue("missing_field", path, "required field is missing");
-      } else {
-        this.visit(field, value[key], path, depth + 1);
-      }
-      path.pop();
-    }
+    // Fields in the schema object's enumeration order; the frame then walks
+    // them one at a time (`resume`) and ends with `recordKeys`.
+    const entries = Object.entries(node.fields);
+    this.stack.push({ kind: "record", node, value, entries, depth, index: -1, pending: false });
+  }
+
+  /** A record's keys, after its fields: every key not a field is unexpected. */
+  private recordKeys(
+    node: RecordSchema<FieldSchemas>,
+    value: Record<string, unknown>,
+    path: PathSegment[],
+    depth: number,
+  ): void {
     for (const key of Object.keys(value)) {
       // Examined keys are traversal work: charge them so a hostile value
       // with millions of keys fails closed at the configured budget.
@@ -753,19 +945,16 @@ class Walk {
       );
       return;
     }
-    for (let index = 0; index < node.elements.length && !this.halted; index += 1) {
-      path.push(index);
-      this.visit(node.elements[index], value[index], path, depth + 1);
-      path.pop();
-    }
+    this.stack.push({ kind: "tuple", node, value, depth, index: -1 });
   }
 
+  /** A variant value; returns its payload for the caller's loop to visit. */
   private variant(
     node: VariantSchema<FieldSchemas>,
     value: unknown,
     path: PathSegment[],
     depth: number,
-  ): void {
+  ): Next {
     if (!isPlainCandidate(value)) {
       this.issue("invalid_type", path, `expected a variant, got ${describe(value)}`);
       return;
@@ -816,10 +1005,15 @@ class Walk {
     if (!hasOwnEnumerable(value, "value")) {
       this.issue("missing_field", path, "this arm carries a payload");
       path.pop();
-    } else {
-      this.visit(arm.node, value.value, path, arm.depth + 1);
-      path.pop();
+      this.variantKeys(value, path, depth);
+      return undefined;
     }
+    this.stack.push({ kind: "variant", value, depth });
+    return { node: arm.node, value: value.value, depth: arm.depth + 1 };
+  }
+
+  /** A variant's keys, after its payload: anything but `tag`/`value` is unexpected. */
+  private variantKeys(value: Record<string, unknown>, path: PathSegment[], depth: number): void {
     for (const key of Object.keys(value)) {
       if (this.halted || !this.step(path, depth)) {
         return;

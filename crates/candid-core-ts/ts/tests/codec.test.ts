@@ -2347,3 +2347,273 @@ test("maxTypeTableEntries still charges each distinct schema node the walk meets
     }
   }
 });
+
+// ---------------------------------------------------------------------------
+// Iterative walkers (issue #192)
+// ---------------------------------------------------------------------------
+
+type Nest = Nest[];
+const Nested: Schema<Nest> = c.rec(() => c.vec(Nested));
+const DEEP = 100_000;
+const RAISED = { maxDepth: 1e9, maxElements: 1e9 };
+
+function nestedValue(levels: number): Nest {
+  let value: Nest = [];
+  for (let level = 0; level < levels; level += 1) {
+    value = [value];
+  }
+  return value;
+}
+
+/** `vec vec … vec` wire bytes: one type-table entry, `levels` single-element vecs. */
+function nestedWire(levels: number): Uint8Array {
+  const head = [0x44, 0x49, 0x44, 0x4c, 0x01, 0x6d, 0x00, 0x01, 0x00];
+  const bytes = new Uint8Array(head.length + levels + 1);
+  bytes.set(head);
+  bytes.fill(0x01, head.length, head.length + levels);
+  bytes[head.length + levels] = 0x00;
+  return bytes;
+}
+
+/** A Motoko-style linked list, `levels` cells long, as the recursion golden's `List`. */
+function listValue(levels: number): unknown {
+  let value: unknown = null;
+  for (let level = levels; level > 0; level -= 1) {
+    value = { head: BigInt(level), tail: value };
+  }
+  return value;
+}
+
+/** An ICRC-3-shaped `Value` nested `levels` deep through its `Array` arm. */
+type IcrcValue =
+  | { tag: "Nat"; value: bigint }
+  | { tag: "Text"; value: string }
+  | { tag: "Array"; value: IcrcValue[] }
+  | { tag: "Map"; value: [string, IcrcValue][] };
+const IcrcValue: Schema<IcrcValue> = c.rec(() =>
+  c.variant({
+    Nat: c.nat,
+    Text: c.text,
+    Array: c.vec(IcrcValue),
+    Map: c.vec(c.tuple([c.text, IcrcValue])),
+  }),
+);
+function icrcValue(levels: number): IcrcValue {
+  let value: IcrcValue = { tag: "Nat", value: 7n };
+  for (let level = 0; level < levels; level += 1) {
+    value =
+      level % 2 === 0
+        ? { tag: "Array", value: [value, { tag: "Text", value: "t" }] }
+        : { tag: "Map", value: [["k", value]] };
+  }
+  return value;
+}
+
+function bytesOf(result: ReturnType<typeof encode>, what: string): Uint8Array {
+  if (!result.ok) {
+    throw new Error(`${what} must encode: ${JSON.stringify(result.issues)}`);
+  }
+  return result.bytes;
+}
+
+test("100,000-level nestings encode and decode, deterministically, once limits are raised", () => {
+  // The recursive codec overflowed the host stack from about 1.5k (encode)
+  // and 2.6k (decode) levels, at a point that moved with the engine's JIT
+  // state. Now the configured limits are the only bounds: every run of the
+  // same input gives the same bytes and the same value. Decoded values are
+  // compared by re-encoding them (the encoder is iterative too), never with a
+  // recursive deep-equal that would overflow on its own.
+  const cases: readonly [string, AnySchema, unknown][] = [
+    ["vec nesting", Nested as AnySchema, nestedValue(DEEP)],
+    ["linked list", recursion.List as AnySchema, listValue(DEEP)],
+    ["ICRC-3 value", IcrcValue as AnySchema, icrcValue(DEEP)],
+  ];
+  for (const [name, schema, value] of cases) {
+    const runs = [0, 1, 2].map((run) =>
+      bytesOf(encode(schema as Schema<unknown>, value, RAISED), `${name} (run ${run})`),
+    );
+    assert.deepStrictEqual(runs[1], runs[0], `${name}: encode is deterministic`);
+    assert.deepStrictEqual(runs[2], runs[0], `${name}: encode is deterministic`);
+    for (let run = 0; run < 3; run += 1) {
+      const decoded = decode(schema as Schema<unknown>, runs[0], RAISED);
+      if (!decoded.ok) {
+        throw new Error(`${name} must decode: ${JSON.stringify(decoded.issues)}`);
+      }
+      const again = bytesOf(
+        encode(schema as Schema<unknown>, decoded.value, RAISED),
+        `${name} (re-encode ${run})`,
+      );
+      assert.deepStrictEqual(again, runs[0], `${name}: decode is deterministic`);
+    }
+  }
+  // The vec nesting's bytes are known exactly: one table entry, DEEP ones.
+  assert.deepStrictEqual(
+    bytesOf(encode(Nested, nestedValue(DEEP), RAISED), "vec nesting"),
+    nestedWire(DEEP),
+  );
+});
+
+/**
+ * The exact element budget a refusal needed: the smallest `maxElements` at
+ * which `attempt` fails with anything but `value_elements`. One below it the
+ * budget runs out first, and the run reports what it had charged.
+ */
+function chargedBefore(attempt: (maxElements: number) => ReturnType<typeof decode>): number {
+  let low = 1;
+  let high = 1 << 24;
+  while (low < high) {
+    const middle = Math.floor((low + high) / 2);
+    const result = attempt(middle);
+    if (!result.ok && result.issues[0].resource_limit?.resource === "value_elements") {
+      low = middle + 1;
+    } else {
+      high = middle;
+    }
+  }
+  return low;
+}
+
+test("hostile deep replies are refused with work bounded by maxDepth, not by input size", (t) => {
+  // A 1,000,000-level `vec` nesting — a million bytes of `01` — at the
+  // default maxDepth and at a raised one. The refusal is `value_depth` at
+  // maxDepth + 1, and the element budget it needed is pinned exactly: the
+  // walk charged maxDepth elements (one per rec hop and one per vec, two
+  // depth units per level) and stopped, whatever lies beyond. Work, not time,
+  // is what is asserted; wall time is printed for information only (#39).
+  const hostile = nestedWire(1_000_000);
+  for (const maxDepth of [256, 10_000]) {
+    const attempt = (maxElements: number): ReturnType<typeof decode> =>
+      decode(Nested, hostile, { maxDepth, maxElements });
+    const started = performance.now();
+    const refused = decode(Nested, hostile, { maxDepth });
+    const elapsed = performance.now() - started;
+    assert(!refused.ok);
+    if (!refused.ok) {
+      assert.strictEqual(refused.issues.length, 1);
+      assert.deepStrictEqual(refused.issues[0].resource_limit, {
+        resource: "value_depth",
+        limit: maxDepth,
+        observed: maxDepth + 1,
+      });
+    }
+    assert.strictEqual(chargedBefore(attempt), maxDepth);
+    const short = attempt(maxDepth - 1);
+    assert(!short.ok);
+    if (!short.ok) {
+      assert.deepStrictEqual(short.issues[0].resource_limit, {
+        resource: "value_elements",
+        limit: maxDepth - 1,
+        observed: maxDepth,
+      });
+    }
+    // An expected `reserved` or an absorbing `opt` skips the same bytes and
+    // is refused at the same point.
+    for (const schema of [c.reserved, c.opt(Nested)] as const) {
+      const skipped = decode(schema as Schema<unknown>, hostile, { maxDepth });
+      assert(!skipped.ok);
+      if (!skipped.ok) {
+        assert.strictEqual(skipped.issues[0].resource_limit?.resource, "value_depth");
+      }
+    }
+    t.diagnostic(`maxDepth ${maxDepth}: refused in ${elapsed.toFixed(2)} ms (informational)`);
+  }
+  // With maxDepth out of the way, maxElements bounds the same reply.
+  const unbounded = decode(Nested, hostile, { maxDepth: 1e9 });
+  assert(!unbounded.ok);
+  if (!unbounded.ok) {
+    assert.deepStrictEqual(unbounded.issues[0].resource_limit, {
+      resource: "value_elements",
+      limit: 1_000_000,
+      observed: 1_000_001,
+    });
+  }
+});
+
+test("a hostile deep value is refused by encode with work bounded by maxDepth", (t) => {
+  const hostile = nestedValue(1_000_000);
+  for (const maxDepth of [256, 10_000]) {
+    const started = performance.now();
+    const refused = encode(Nested, hostile, { maxDepth });
+    const elapsed = performance.now() - started;
+    assert(!refused.ok);
+    if (!refused.ok) {
+      assert.strictEqual(refused.issues.length, 1);
+      assert.deepStrictEqual(refused.issues[0].resource_limit, {
+        resource: "value_depth",
+        limit: maxDepth,
+        observed: maxDepth + 1,
+      });
+    }
+    const charged = chargedBefore((maxElements) => {
+      const result = encode(Nested, hostile, { maxDepth, maxElements });
+      return result.ok ? { ok: true, value: undefined } : result;
+    });
+    assert.strictEqual(charged, maxDepth);
+    t.diagnostic(`maxDepth ${maxDepth}: refused in ${elapsed.toFixed(2)} ms (informational)`);
+  }
+});
+
+test("issue paths stay exact after composite siblings, in every walker", () => {
+  // Each frame pops its child's path segment when the child completes; a
+  // missed pop would leave the next sibling's issue under the wrong path.
+  // Every row fails in the element or field *after* one that walked a
+  // composite of its own.
+  const Payload = c.record({ a: c.vec(c.nat8) });
+  const decodeRows: readonly [string, AnySchema, unknown, AnySchema, string][] = [
+    [
+      "vec element",
+      c.vec(c.variant({ x: Payload, y: c.text })),
+      [
+        { tag: "x", value: { a: [1] } },
+        { tag: "y", value: "s" },
+      ],
+      c.vec(c.variant({ x: Payload, y: c.nat })),
+      "$[1].value",
+    ],
+    [
+      "record field",
+      c.record({ a: c.vec(Payload), b: c.text }),
+      { a: [{ a: [1] }], b: "s" },
+      c.record({ a: c.vec(Payload), b: c.nat }),
+      "$.b",
+    ],
+    [
+      "tuple element",
+      c.tuple([Payload, c.text]),
+      [{ a: [1, 2] }, "s"],
+      c.tuple([Payload, c.nat]),
+      "$[1]",
+    ],
+    [
+      "field after a boxed opt",
+      c.record({ a: c.opt(c.opt(Payload)), b: c.text }),
+      { a: { some: { a: [3] } }, b: "s" },
+      c.record({ a: c.opt(c.opt(Payload)), b: c.nat }),
+      "$.b",
+    ],
+  ];
+  for (const [name, wire, value, expected, path] of decodeRows) {
+    const bytes = encode(wire as Schema<unknown>, value);
+    if (!bytes.ok) {
+      throw new Error(`${name}: the wire value must encode`);
+    }
+    const decoded = decode(expected as Schema<unknown>, bytes.bytes);
+    assert(!decoded.ok, name);
+    if (!decoded.ok) {
+      assert.strictEqual(decoded.issues[0].path, path, name);
+    }
+  }
+  // Encode and validate: the same shape of mistake, on the value side.
+  const Rows = c.vec(c.record({ tags: c.vec(c.text), n: c.nat8 }));
+  const rows = [
+    { tags: ["a", "b"], n: 1 },
+    { tags: ["c"], n: 300 },
+  ];
+  const encoded = encode(Rows, rows);
+  const validated = validate(Rows, rows);
+  assert(!encoded.ok && !validated.ok);
+  if (!encoded.ok && !validated.ok) {
+    assert.strictEqual(encoded.issues[0].path, "$[1].n");
+    assert.strictEqual(validated.issues[0].path, "$[1].n");
+  }
+});

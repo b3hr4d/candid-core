@@ -1,0 +1,72 @@
+// The type environment of the Rust-reference coercion harness (issue #192,
+// shared with the differential fuzz of #196). Every declaration here is a
+// wire type, an expected type, or both, for the cases in
+// `tests/wire_vectors.rs` (`COERCION`). Not a generator golden: nothing emits
+// a `.ts` module from it; its Contract travels inside
+// `tests/goldens/wire/coercion.json` for the TypeScript decoder to load.
+//
+// No declaration of a bare `nat8`: whether a `blob` stays a `Uint8Array` when
+// a `nat8` alias is declared too is a mapping question (settled by #207), not a
+// coercion one, so these cases keep the two apart.
+
+type Nat = nat;
+type Int = int;
+type Nat16 = nat16;
+type Float32 = float32;
+type Float64 = float64;
+type Text = text;
+type Bool = bool;
+type Null = null;
+type Reserved = reserved;
+type Empty = empty;
+type Principal = principal;
+
+type OptNat = opt nat;
+type OptInt = opt int;
+type OptText = opt text;
+type OptOptNat = opt opt nat;
+type OptNull = opt null;
+type OptReserved = opt reserved;
+type OptEmpty = opt empty;
+
+type VecNat = vec nat;
+type VecInt = vec int;
+type VecText = vec text;
+type VecOptNat = vec opt nat;
+type OptVecNat = opt vec nat;
+type Blob = blob;
+
+type RecA = record { a : nat };
+type RecAInt = record { a : int };
+type RecAB = record { a : nat; b : text };
+type RecAOptB = record { a : nat; b : opt text };
+type OptRecA = opt record { a : nat };
+type Unit = record {};
+type Pair = record { nat; text };
+type Single = record { nat };
+
+type VOk = variant { ok };
+type VOkLater = variant { ok; later : nat32 };
+type OptVOk = opt variant { ok };
+type VOkNat = variant { ok : nat; err : text };
+type VOkInt = variant { ok : int; err : text };
+type OptVOkNat = opt variant { ok : nat; err : text };
+
+type List = opt record { head : nat; tail : List };
+type IntList = opt record { head : int; tail : IntList };
+type Tree = variant { leaf : int; node : record { left : Tree; right : Tree } };
+type Value = variant {
+  Nat : nat;
+  Text : text;
+  Array : vec Value;
+  Map : vec record { text; Value };
+};
+
+type FuncNat = func (nat) -> (text) query;
+type FuncInt = func (int) -> (text) query;
+type FuncNatUpdate = func (nat) -> (text);
+type FuncNatMore = func (nat, opt text) -> (text, opt nat) query;
+type OptFuncNat = opt func (nat) -> (text) query;
+type SvcOne = service { a : (nat) -> () };
+type SvcTwo = service { a : (nat) -> (); b : () -> () };
+type OptSvcTwo = opt service { a : (nat) -> (); b : () -> () };
