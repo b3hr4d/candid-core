@@ -41,9 +41,8 @@ pub fn generate_module(
   route below instead. One command in the repository does emit a module:
   <a href="cli-npm.html"><code>@candid-core/cli</code></a> is the same compiler and generator built to
   WebAssembly, and <code>candid-core-cli gen &lt;service.did&gt; [-o &lt;dir&gt;]</code> writes
-  <code>&lt;stem&gt;.ts</code> alongside <code>&lt;stem&gt;.envelope.json</code>. It has never been
-  released to npm, so today it has to be built from a clone. See
-  <a href="packages.html">Packages and crates</a>.
+  <code>&lt;stem&gt;.ts</code> alongside <code>&lt;stem&gt;.envelope.json</code>. It is published on
+  npm. See <a href="packages.html">Packages and crates</a>.
 </p>
 
 <p>
@@ -181,9 +180,9 @@ export const Items: Schema<Items> = c.rec(() => c.vec(Item));
   Or skip generation. The <code>./contract</code> subpath builds the same schemas from a compiled
   Contract JSON document. Producing that document from <code>.did</code> is a separate step, and the
   route below uses the published <code>candid-core</code> binary: two commands, whose output is data
-  you can ship, fetch or cache. The repository's <a href="cli-npm.html"><code>@candid-core/cli</code></a>
-  compiles the same sources in WebAssembly with no Rust toolchain, but it is not on npm, so that
-  route means building it from a clone first.
+  you can ship, fetch or cache. <a href="cli-npm.html"><code>@candid-core/cli</code></a> compiles
+  the same sources in WebAssembly with no Rust toolchain, and its
+  <code>&lt;stem&gt;.envelope.json</code> is the same document.
 </p>
 
 <pre data-lang="bash">

@@ -14,10 +14,10 @@
 #   toolchain and the pinned wasm-pack — the rolling `stable` of ordinary CI
 #   never touches a published byte.
 #
-# docs/releasing.md is the procedure of record. This workflow is prepared
-# per the issue #153 decision and has deliberately not been dispatched: the
-# @candid-core/cli name is recorded with owner sign-off, and the first
-# publish is the owner's explicit act.
+# docs/releasing.md is the procedure of record. This workflow was prepared
+# per the issue #153 decision, with the @candid-core/cli name recorded with
+# owner sign-off; a dispatch of it, the owner's explicit act, published
+# 0.1.0 on 2026-08-27.
 name: npm release (cli)
 
 on:

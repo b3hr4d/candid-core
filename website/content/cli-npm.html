@@ -1,17 +1,19 @@
-<callout type="danger" title="Not published — there is no install command yet">
+<callout type="note" title="Published on npm">
   <p>
-    <code>@candid-core/cli</code> has never been released to the npm registry. The registry returns
-    "not found" for the name, so there is no <code>npm install</code> line and no <code>npx</code> line
-    on this page, and any you find elsewhere will not resolve. What exists is the complete package in
-    the repository, its test suites, and a dispatch-only publish workflow that has deliberately not been
-    run: the first publish of a name is the maintainer's explicit act. Until then, build it from a clone
-    — or use <a href="cli-rust.html">the <code>candid-core</code> binary</a>, which is published and
-    does the same compilation.
+    <code>@candid-core/cli</code> <code>0.1.0</code> is on the npm registry under the
+    <code>latest</code> tag, published from this repository by its dispatch-only release workflow.
+    The registry also holds <code>0.0.0-bootstrap</code> under the <code>bootstrap</code> tag, which
+    exists only so a trusted publisher could be attached to the name; do not install it. The
+    <a href="cli-rust.html"><code>candid-core</code> binary</a> does the same compilation from Rust.
   </p>
 </callout>
 
+<pre data-lang="bash">
+npx @candid-core/cli@0.1.0 gen ./service.did -o ./generated
+</pre>
+
 <p>
-  With that stated, here is what the package is and what it will do. Everything candid-core does to a
+  Here is what the package is and what it does. Everything candid-core does to a
   <code>.did</code> file normally happens in Rust. <code>@candid-core/cli</code> is that same Rust code
   — the compiler's <span class="pill accent">compiler</span> feature surface plus the
   <a href="generator.html"><code>candid-core-ts</code></a> TypeScript generator — compiled once to
@@ -39,8 +41,8 @@
   </thead>
   <tbody>
     <tr>
-      <td>Name and declared version</td>
-      <td><code>@candid-core/cli</code>, <code>0.1.0</code> — declared in the manifest, unpublished</td>
+      <td>Name and version</td>
+      <td><code>@candid-core/cli</code>, <code>0.1.0</code> — published on npm under <code>latest</code></td>
     </tr>
     <tr>
       <td>Binary</td>
@@ -273,8 +275,8 @@ wrote generated/basic.envelope.json
 </callout>
 
 <p>
-  The examples below import from the package name as it will read once the package is published; from a
-  clone, import <code>crates/candid-core-wasm/npm/lib/index.js</code> directly.
+  The examples below import from the published package; from a clone, import
+  <code>crates/candid-core-wasm/npm/lib/index.js</code> directly.
 </p>
 
 <pre data-lang="js">
@@ -469,17 +471,15 @@ npm test
 <callout type="note" title="Pre-1.0, on both sides">
   <p>
     Until 1.0 any release may change the CLI grammar, the library API, and the request and response
-    shapes — the same warning the Rust crate carries. When the package does reach npm, pin an exact
-    version.
+    shapes — the same warning the Rust crate carries. Pin an exact version.
   </p>
 </callout>
 
 <h2>Next</h2>
 
 <p>
-  The route that works today is the published Rust binary:
-  <a href="cli-rust.html">the candid-core binary</a> produces the same envelope document, and
   <a href="schema-from-contract.html">Schemas from a Contract document</a> shows the TypeScript side
-  consuming it — which is the whole hand-off this package is designed to shorten. For where each unit
-  stands, see <a href="status.html">Status, versions and releases</a>.
+  consuming the envelope this package writes. <a href="cli-rust.html">The candid-core binary</a>
+  produces the same envelope document from Rust. For where each unit stands, see
+  <a href="status.html">Status, versions and releases</a>.
 </p>

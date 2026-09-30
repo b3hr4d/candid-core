@@ -1,4 +1,4 @@
-<p>This repository produces one crate on crates.io, one package on npm, and several units that are deliberately unpublishable. All of it is pre-1.0. This page states where each unit is, what changed in each released version, and which parts of the release machinery a consumer should care about — with no forward-looking dates, because none are promised.</p>
+<p>This repository produces one crate on crates.io, two packages on npm, and several units that are deliberately unpublishable. All of it is pre-1.0. This page states where each unit is, what changed in each released version, and which parts of the release machinery a consumer should care about — with no forward-looking dates, because none are promised.</p>
 
 <h2>What is published today</h2>
 
@@ -7,14 +7,14 @@
   <tbody>
     <tr><td><code>candid-core</code></td><td>crates.io</td><td><span class="pill ok">Published</span> — latest <code>0.1.0-beta.3</code>. Also on the registry: <code>0.1.0-beta.1</code>, <code>0.1.0-beta.2</code>. None yanked.</td></tr>
     <tr><td><code>@candid-core/schema</code></td><td>npm</td><td><span class="pill ok">Published</span> — latest <code>0.2.0</code>. Also on the registry: <code>0.0.0-bootstrap</code>, <code>0.1.0</code>, <code>0.1.1</code>.</td></tr>
-    <tr><td><code>@candid-core/cli</code></td><td>npm</td><td><span class="pill warn">Not published</span> — prepared in the repository, buildable from source.</td></tr>
+    <tr><td><code>@candid-core/cli</code></td><td>npm</td><td><span class="pill ok">Published</span> — latest <code>0.1.0</code>. Also on the registry: <code>0.0.0-bootstrap</code>.</td></tr>
     <tr><td><code>candid-core-ts</code></td><td>—</td><td><code>publish = false</code> by design. Use it as a path or git dependency from this repository, or not at all.</td></tr>
     <tr><td><code>candid-core-wasm</code></td><td>—</td><td><code>publish = false</code>. Its own workspace root; its deliverable is the npm CLI package above.</td></tr>
     <tr><td><code>candid-core-fuzz</code></td><td>—</td><td><code>publish = false</code>. Internal fuzz harness, its own workspace root and lockfile.</td></tr>
   </tbody>
 </table>
 
-<p>The two dependency lines that exist are these:</p>
+<p>The dependency lines that exist are these:</p>
 
 <pre data-lang="toml" data-file="README.md">
 # every feature on by default
@@ -23,15 +23,22 @@ candid-core = "=0.1.0-beta.3"
 
 <pre data-lang="bash">
 npm install @candid-core/schema
+npm install @candid-core/cli
 </pre>
 
 <callout type="warn" title="A caret requirement selects nothing today">
   <p>Every published version of <code>candid-core</code> is a prerelease, and Cargo only picks a prerelease when the requirement names one. So <code>candid-core = "0.1"</code> resolves to <em>nothing</em>, and a bare <code>cargo install candid-core</code> fails with <code>could not find candid-core in registry crates-io with version *</code>. Write the exact version: <code>candid-core = "=0.1.0-beta.3"</code>, or <code>cargo install candid-core --version 0.1.0-beta.3 --locked</code> for the binary. Pinning with <code>=</code> is the right choice for a second reason too — with the API and the wire format both unstable, moving to the next prerelease should be something you opt into.</p>
 </callout>
 
-<h3>The unpublished CLI</h3>
+<h3>The CLI</h3>
 
-<p><code>@candid-core/cli</code> compiles the same pipeline to WebAssembly, so a JavaScript-only project can go from a <code>.did</code> file to a generated module and a Contract envelope with no Rust toolchain. Its manifest declares version <code>0.1.0</code> and the binary name <code>candid-core-cli</code>. That version has never been published: the npm registry has no such package, and the publishing workflow has deliberately not been dispatched, because the first publish of an npm name is permanent and is treated as the owner's explicit act. There is no install line and no <code>npx</code> line to give you. What exists today is a build from source:</p>
+<p><code>@candid-core/cli</code> compiles the same pipeline to WebAssembly, so a JavaScript-only project can go from a <code>.did</code> file to a generated module and a Contract envelope with no Rust toolchain. Its binary name is <code>candid-core-cli</code>. Version <code>0.1.0</code> was published on 2026-08-27 by a dispatch of its release workflow; the first publish of an npm name is permanent, and it was the owner's explicit act.</p>
+
+<pre data-lang="bash">
+npx @candid-core/cli@0.1.0 gen ./service.did -o ./generated
+</pre>
+
+<p>From a clone, the build is:</p>
 
 <pre data-lang="bash" data-file="crates/candid-core-wasm/npm/package.json">
 # from crates/candid-core-wasm/npm
@@ -51,7 +58,7 @@ npm run build
 
 <h2>Independent versioning</h2>
 
-<p>The Rust crate and the npm package do not share a version number and are released on separate cycles, so the numbers carry no pairing information at all. Because of that, every entry in the npm changelog names the crate version it pairs with:</p>
+<p>The Rust crate and <code>@candid-core/schema</code> do not share a version number and are released on separate cycles, so the numbers carry no pairing information at all. Because of that, every entry in the schema package's changelog names the crate version it pairs with (<code>@candid-core/cli</code> pairs by the revision it embeds instead, as above):</p>
 
 <table>
   <thead><tr><th><code>@candid-core/schema</code></th><th>Released</th><th>Pairs with <code>candid-core</code></th></tr></thead>

@@ -152,7 +152,7 @@ pub fn artifact_id_with_limits(
 
 <h3><code>publish = false</code> on the generator crate, because a registry name is permanent</h3>
 
-<p>Three of the four Rust crates in the repository carry <code>publish = false</code>. For <code>candid-core-ts</code> the manifest states the reason directly: <code>candid-core-ts</code> is a <em>working</em> name, not a published one, and nothing may publish the crate until its registry name is decided deliberately, because crate names on crates.io are permanent exactly like versions. <code>candid-core-wasm</code> is unpublishable for a related reason — its real deliverable is an npm package, not a crate. The same caution governs npm: the first publish of a new npm name is treated as the owner's explicit act, which is why one of the two npm packages is prepared but not published.</p>
+<p>Three of the four Rust crates in the repository carry <code>publish = false</code>. For <code>candid-core-ts</code> the manifest states the reason directly: <code>candid-core-ts</code> is a <em>working</em> name, not a published one, and nothing may publish the crate until its registry name is decided deliberately, because crate names on crates.io are permanent exactly like versions. <code>candid-core-wasm</code> is unpublishable for a related reason — its real deliverable is an npm package, not a crate. The same caution governs npm: the first publish of a new npm name is treated as the owner's explicit act, which is why each of the two npm packages was prepared in the repository before its first publish.</p>
 
 <h3>agent-js wire compatibility is an explicit non-goal</h3>
 
