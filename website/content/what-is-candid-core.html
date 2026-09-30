@@ -393,7 +393,7 @@ export const Odd: Schema<Odd> = c.rec(() => Even);
   decoding in a browser with no Rust in the build.
 </p>
 
-<p>It is not for you, at least not yet, in four specific cases.</p>
+<p>It is not for you, at least not yet, in three specific cases.</p>
 
 <ul>
   <li>
@@ -410,12 +410,6 @@ export const Odd: Schema<Odd> = c.rec(() => Even);
     <strong>You need the Rust crate to encode and decode Candid binary.</strong> It does not.
     That is a named non-goal of the current Rust slice; the codec lives in the TypeScript
     package today.
-  </li>
-  <li>
-    <strong>You want <code>.did</code> to TypeScript with no Rust toolchain at all.</strong>
-    That path is <code>@candid-core/cli</code>, which compiles the same pipeline to
-    WebAssembly. It is prepared in the repository and not published to npm — see
-    <a href="cli-npm.html">@candid-core/cli</a> for what exists and how to build it.
   </li>
   <li>
     <strong>You need a stable format.</strong> The Contract format is explicitly not a stable
@@ -443,9 +437,11 @@ candid-core = "=0.1.0-beta.3"
 </pre>
 
 <p>
-  The npm package versions independently of the crate and installs normally with
-  <code>npm install @candid-core/schema</code>. <a href="status.html">Status, versions and
-  releases</a> has the current state of each unit.
+  The npm packages version independently of the crate and install normally:
+  <code>npm install @candid-core/schema</code> for the runtime, and
+  <a href="cli-npm.html"><code>@candid-core/cli</code></a> for <code>.did</code> to TypeScript with
+  no Rust toolchain at all. <a href="status.html">Status, versions and releases</a> has the current
+  state of each unit.
 </p>
 
 <h2>Next</h2>

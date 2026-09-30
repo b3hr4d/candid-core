@@ -380,10 +380,9 @@ v1, so it pins rather than floats.</p>
   which is this generator compiled to WebAssembly. Its one subcommand is
   <code>candid-core-cli gen &lt;service.did&gt; [-o &lt;dir&gt;]</code>, and it writes
   <code>&lt;stem&gt;.ts</code> alongside <code>&lt;stem&gt;.envelope.json</code>. That package is
-  <strong>not published on npm</strong>: it is prepared in this repository and built from source,
-  with <code>npm run build</code> in <code>crates/candid-core-wasm/npm</code> running
-  <code>wasm-pack</code>.</p>
-  <p>The route that needs no build step at all is the npm package's
+  published on npm, so <code>npx @candid-core/cli@0.1.0 gen ./service.did</code> runs it with no Rust
+  toolchain.</p>
+  <p>The route that needs no build step at all is <code>@candid-core/schema</code>'s
   <code>schemaFromContract</code>, which builds the same schemas at runtime from a compiled Contract
   document — see <a href="schema-from-contract.html">schemas at runtime</a>. What that route cannot
   give you is the static <code>export type Actor</code> interface, because that is generated

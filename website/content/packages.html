@@ -1,4 +1,4 @@
-<p>This repository ships one published Rust crate, one published npm package, and four more units that exist for good reasons but are deliberately on no registry at all. This page is the whole inventory: what each one is, who it is for, where its manifest lives, whether you can install it today, and the exact line you write to depend on it.</p>
+<p>This repository ships one published Rust crate, two published npm packages, and three more units that exist for good reasons but are deliberately on no registry at all. This page is the whole inventory: what each one is, who it is for, where its manifest lives, whether you can install it today, and the exact line you write to depend on it.</p>
 
 <p>The short version. If you write Rust, you want <code>candid-core</code>. If you write TypeScript, you want <code>@candid-core/schema</code>. Everything else on this page either produces one of those two, or tests them.</p>
 
@@ -29,7 +29,7 @@
   </div>
 </div>
 
-<p>Steps 02 and 03 are Rust. Step 04 is split. The generator is Rust; the runtime it targets is TypeScript. <code>@candid-core/cli</code> is prepared in the repository so that a JavaScript-only project can get from 01 to 04 without a Rust toolchain; it is not on npm yet. It is the same Rust code compiled to WebAssembly, not a reimplementation.</p>
+<p>Steps 02 and 03 are Rust. Step 04 is split. The generator is Rust; the runtime it targets is TypeScript. <code>@candid-core/cli</code>, published on npm, lets a JavaScript-only project get from 01 to 04 without a Rust toolchain. It is the same Rust code compiled to WebAssembly, not a reimplementation.</p>
 
 <h2>The full inventory</h2>
 
@@ -42,16 +42,16 @@
     <tr><td><code>candid-core</code> (binary)</td><td>CLI, same crate</td><td><code>Cargo.toml</code> <code>[[bin]]</code></td><td>crates.io</td><td><code>0.1.0-beta.3</code></td></tr>
     <tr><td><code>candid-core-ts</code></td><td>Rust library</td><td><code>crates/candid-core-ts/Cargo.toml</code></td><td>none, by <code>publish = false</code></td><td><code>0.0.0</code></td></tr>
     <tr><td><code>@candid-core/schema</code></td><td>npm package</td><td><code>crates/candid-core-ts/ts/package.json</code></td><td>npm</td><td><code>0.2.0</code></td></tr>
-    <tr><td><code>@candid-core/cli</code></td><td>npm package</td><td><code>crates/candid-core-wasm/npm/package.json</code></td><td>none, never released</td><td><code>0.1.0</code> declared</td></tr>
+    <tr><td><code>@candid-core/cli</code></td><td>npm package</td><td><code>crates/candid-core-wasm/npm/package.json</code></td><td>npm</td><td><code>0.1.0</code></td></tr>
     <tr><td><code>candid-core-wasm</code></td><td>Rust library</td><td><code>crates/candid-core-wasm/Cargo.toml</code></td><td>none, by <code>publish = false</code></td><td><code>0.1.0</code></td></tr>
     <tr><td><code>candid-core-fuzz</code></td><td>Fuzz harness</td><td><code>fuzz/Cargo.toml</code></td><td>none, by <code>publish = false</code></td><td><code>0.0.0</code></td></tr>
   </tbody>
 </table>
 
-<p>Three of those seven rows resolve from a package manager today, and two of them are the same crate. The rest are tracked, buildable and gated: three carry a deliberate <code>publish = false</code>, one of those because its registry name has not been decided yet, and <code>@candid-core/cli</code> has never been released at all. All of them exist in the repository; none of them will install from a registry.</p>
+<p>Four of those seven rows resolve from a package manager today, and two of them are the same crate. The rest are tracked, buildable and gated, and each carries a deliberate <code>publish = false</code>, one of them because its registry name has not been decided yet. All of them exist in the repository; none of them will install from a registry.</p>
 
 <callout type="warn" title="Everything here is pre-1.0">
-  <p>The Rust crate is a prerelease and the npm package is <code>0.2.0</code>. Until 1.0, any release may change the public API, the serialized document shapes, the canonical bytes, and therefore every identity computed over them. Pin an exact version in both ecosystems. See <a href="status.html">Status, versions and releases</a>.</p>
+  <p>The Rust crate is a prerelease, and the npm packages are <code>0.2.0</code> (<code>@candid-core/schema</code>) and <code>0.1.0</code> (<code>@candid-core/cli</code>). Until 1.0, any release may change the public API, the serialized document shapes, the canonical bytes, and therefore every identity computed over them. Pin an exact version in both ecosystems. See <a href="status.html">Status, versions and releases</a>.</p>
 </callout>
 
 <h2>Which one do I need?</h2>
@@ -67,7 +67,7 @@
     <tr><td>Validate, encode, decode or call a canister from TypeScript</td><td><code>@candid-core/schema</code></td><td><a href="quickstart-typescript.html">Quickstart: TypeScript</a></td></tr>
     <tr><td>Build schemas at runtime from a Contract document, with no code generation step</td><td><code>@candid-core/schema</code>, subpath <code>./contract</code></td><td><a href="schema-from-contract.html">Schemas at runtime</a></td></tr>
     <tr><td>Emit a TypeScript module from a Contract inside your own Rust tool</td><td><code>candid-core-ts</code>, path or git dependency</td><td><a href="generator.html">The code generator</a></td></tr>
-    <tr><td>Do all of the above from a JavaScript-only project</td><td><code>@candid-core/cli</code>, built from source; it is not on npm</td><td><a href="cli-npm.html">@candid-core/cli</a></td></tr>
+    <tr><td>Do all of the above from a JavaScript-only project</td><td><code>@candid-core/cli</code></td><td><a href="cli-npm.html">@candid-core/cli</a></td></tr>
     <tr><td>Drive an untrusted-input boundary with a fuzzer</td><td><code>candid-core-fuzz</code></td><td>the section below</td></tr>
   </tbody>
 </table>
@@ -247,11 +247,11 @@ npm install @candid-core/schema
 
 <h2>@candid-core/cli, the WebAssembly on-ramp</h2>
 
-<callout type="warn" title="Not published">
-  <p><code>@candid-core/cli</code> has never been released. The npm registry returns "Not found" for that name, so no install or <code>npx</code> line for it resolves — do not expect one to work. The package is prepared in the repository, and its release workflow exists and has deliberately not been dispatched. The <code>0.1.0</code> in its manifest is a declared version, not a published one. Until it ships, build it from source with the steps below.</p>
-</callout>
+<pre data-lang="bash">
+npx @candid-core/cli@0.1.0 gen ./service.did -o ./generated
+</pre>
 
-<p>When it ships it will give a JavaScript-only project the whole pipeline with no Rust toolchain. The <code>candid-core</code> compiler surface and the <code>candid-core-ts</code> generator are compiled together into one WebAssembly artifact, wrapped in a Node CLI and a small JS module that also runs in a browser. Both library calls are data in, data out: one JSON-serialisable request to the WebAssembly module, its parsed JSON response returned verbatim, no <code>eval</code>, and no filesystem access from the WebAssembly side.</p>
+<p>It gives a JavaScript-only project the whole pipeline with no Rust toolchain. The <code>candid-core</code> compiler surface and the <code>candid-core-ts</code> generator are compiled together into one WebAssembly artifact, wrapped in a Node CLI and a small JS module that also runs in a browser. Both library calls are data in, data out: one JSON-serialisable request to the WebAssembly module, its parsed JSON response returned verbatim, no <code>eval</code>, and no filesystem access from the WebAssembly side.</p>
 
 <ul>
   <li><strong>Manifest:</strong> <code>crates/candid-core-wasm/npm/package.json</code>.</li>
@@ -263,7 +263,7 @@ npm install @candid-core/schema
 
 <h3>Building it from source</h3>
 
-<p>The <code>wasm/</code> directory is build output and is not committed, so the first step is always to produce it. <code>wasm-pack</code> <code>0.14.0</code> is the version the repository's own workflows install.</p>
+<p>To work on the package itself, build it from a clone. The <code>wasm/</code> directory is build output and is not committed, so the first step is always to produce it. <code>wasm-pack</code> <code>0.14.0</code> is the version the repository's own workflows install.</p>
 
 <ol class="steps">
   <li>

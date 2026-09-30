@@ -264,20 +264,16 @@ closed instead of silently renaming a field. <a href="schema-from-contract.html"
 at runtime</a> covers the options and the failure modes;
 <a href="cli-rust.html">the candid-core binary</a> covers the compile side.</p>
 
-<callout type="warn" title="The JavaScript-only compiler is not on npm yet">
+<callout type="tip" title="The same compile step with no Rust toolchain">
   <p>A second package, <code>@candid-core/cli</code>, compiles the same pipeline
   to WebAssembly so that <code>.did</code> → schemas needs no Rust at all. It
-  exists in this repository under <code>crates/candid-core-wasm/</code> and its
-  <code>package.json</code> declares version <code>0.1.0</code> with the bin
-  name <code>candid-core-cli</code> — but it has <strong>never been published</strong>.
-  The npm registry has no entry under that name, so there is no install or
-  <code>npx</code> line to give you: any invocation of it fails to resolve.
-  Building it from source is <code>npm run build</code> in
-  <code>crates/candid-core-wasm/npm</code>, which shells out to
-  <code>wasm-pack</code> and therefore wants a Rust toolchain anyway. Until it
-  ships, the Rust binary above is the compile step. See
-  <a href="cli-npm.html">@candid-core/cli</a> for what it will do.</p>
+  writes the generated module and the same envelope document the Rust binary
+  prints. See <a href="cli-npm.html">@candid-core/cli</a> for what it does.</p>
 </callout>
+
+<pre data-lang="bash">
+npx @candid-core/cli@0.1.0 gen ./service.did -o ./generated
+</pre>
 
 <h2>Next: calling a canister</h2>
 

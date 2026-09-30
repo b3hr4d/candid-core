@@ -84,14 +84,22 @@ from the root — which is the truth in both directions:
 
 ## From a `.did` file
 
-There is no JavaScript-only path from Candid source to schemas yet — compiling
-`.did` needs the Rust crate — but the route that exists today produces exactly
-the schemas the generated modules carry, and it is two commands.
+Two routes compile Candid source into the document `schemaFromContract`
+consumes, and both produce exactly the schemas the generated modules carry.
 
-Install the compiler. `candid-core` is pre-1.0 with only prereleases on
-crates.io, so the version has to be explicit: a bare `cargo install
-candid-core` fails with `could not find candid-core in registry crates-io with
-version *`.
+With no Rust toolchain, [`@candid-core/cli`](https://www.npmjs.com/package/@candid-core/cli)
+runs the same compiler and generator as WebAssembly. It writes the generated
+module and a `ContractEnvelope` document, `./generated/service.envelope.json`,
+which is byte-identical to the `compile --envelope` output below:
+
+```sh
+npx @candid-core/cli@0.1.0 gen ./service.did -o ./generated
+```
+
+With the Rust crate, it is two commands. Install the compiler. `candid-core`
+is pre-1.0 with only prereleases on crates.io, so the version has to be
+explicit: a bare `cargo install candid-core` fails with `could not find
+candid-core in registry crates-io with version *`.
 
 ```sh
 cargo install candid-core --version 0.1.0-beta.3 --locked
