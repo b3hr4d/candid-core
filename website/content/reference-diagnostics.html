@@ -518,9 +518,11 @@ export type ValidateResult =
   </li>
   <li>
     <strong>Some resource names have no Rust counterpart</strong> — the codec's <code>bytes</code>,
-    <code>type_table_entries</code> and <code>numeric_bytes</code>, and the loader's
+    <code>type_table_entries</code> and <code>numeric_bytes</code>, the loader's
     <code>name_table_entries</code>, which bounds a caller-supplied field-name table that has no
-    candid-core equivalent.
+    candid-core equivalent, and <code>stack</code>, reported by <code>validate</code>,
+    <code>encode</code> and <code>decode</code> when the host JavaScript stack runs out before
+    <code>maxDepth</code> does.
   </li>
 </ul>
 

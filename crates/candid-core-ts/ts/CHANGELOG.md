@@ -13,6 +13,52 @@ entry here is [docs/releasing.md] in that repository.
 API, the inferred domain types, the codec's wire behaviour, and the codes and
 `$`-rooted paths validation reports. Pin an exact version.
 
+## Unreleased
+
+Runtime behavior changes in exactly one situation — the host JavaScript stack
+running out during `validate`, `encode` or `decode` — and one closed type union
+gains a member. No wire encoding, no validation verdict and no other issue code
+moved, and the generated bindings and goldens are untouched.
+
+- **BREAKING**: `resource_limit_exceeded` issues gain a new `resource` member,
+  `"stack"`, in both closed unions that enumerate resources —
+  `ResourceLimitInfo["resource"]` in `./validate` (now `"value_depth" |
+  "value_elements" | "stack"`) and `CodecResourceLimitInfo["resource"]` in
+  `./codec`. This is a **type-level** breaking change: a consumer's exhaustive
+  `switch` over either union stops compiling until it handles `"stack"`.
+  `ContractIssue["resource_limit"]` reuses the `./validate` type, so its
+  declared type widens too, though the contract loader is non-recursive and
+  never produces it.
+- **A host stack overflow is no longer mislabelled.** When the engine's own call
+  stack ran out mid-walk, `validate` and `encode` reported `unreadable_value`
+  ("the value threw while being inspected") and `decode` reported
+  `unsupported_schema` ("the schema threw while being traversed"). Neither was
+  true. All three now report `{ code: "resource_limit_exceeded",
+  resource_limit: { resource: "stack", limit, observed } }`, where `limit` is the
+  call's effective `maxDepth` and `observed` the deepest depth the walk had
+  charged when the engine refused — always below `limit`, which is how `stack`
+  is told apart from `value_depth`.
+- **When this can happen.** At the default `maxDepth` of 256 every walker
+  refuses with `value_depth` long before any stack runs out, and that is
+  unchanged. Overflow needs a `maxDepth` raised past what the host's stack holds,
+  or a hand-built schema deeper than any stack. Where exactly an engine's limit
+  falls varies by engine, by JIT state and between runs, so an input near that
+  point can succeed on one call and report `stack` on the next; only the label,
+  not the boundary, is fixed here.
+- **How an overflow is recognised.** The engine's error is a `RangeError`
+  reading "Maximum call stack size exceeded" (V8 and JavaScriptCore) or an
+  `InternalError` reading "too much recursion" (SpiderMonkey, which does not
+  throw a `RangeError`). Detection matches on `name` and `message`, never
+  `instanceof`, and answers no for any other `RangeError` (an invalid array
+  length, an oversized BigInt), for a plain `Error` quoting the words, and for
+  any thrown value it cannot safely read. A getter or `rec` thunk that throws an
+  error with exactly this name and message is classified the same way — the
+  label can be forged, the fail-closed outcome cannot. The detector is internal
+  and adds no export to any subpath.
+- **User-thrown errors keep their labels.** A getter that throws an ordinary
+  error is still `unreadable_value`, and a `rec` thunk that throws during decode
+  is still `unsupported_schema`; the choke points were not widened.
+
 ## 0.2.0 — 2026-08-24
 
 Pairs with `candid-core` 0.1.0-beta.3.

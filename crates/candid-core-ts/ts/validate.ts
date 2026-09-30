@@ -24,7 +24,11 @@
 // validation can never report `ok`. Depth counts schema traversal steps —
 // `rec` unwrapping included, which is what makes a mis-built self-referential
 // `rec` chain terminate — so linked-list-shaped data consumes depth per
-// element, exactly as it does in candid-core's value domain.
+// element, exactly as it does in candid-core's value domain. A `maxDepth`
+// raised past what the host's own call stack holds can still overflow it; the
+// engine's stack-exhaustion exception is reported as `resource_limit_exceeded`
+// with resource `stack` — the host ran out, not the value or the schema —
+// rather than as an unreadable value.
 //
 // The no-throw guarantee holds even against values that fight inspection —
 // own accessors that throw, Proxies with hostile traps, revoked Proxies: the
@@ -106,9 +110,18 @@ export type ValidationCode =
   | "unreadable_value"
   | "resource_limit_exceeded";
 
-/** The `{resource, limit, observed}` triple, as candid-core serializes it. */
+/**
+ * The `{resource, limit, observed}` triple, as candid-core serializes it.
+ *
+ * `stack` is the one resource with no candid-core counterpart: the host
+ * JavaScript stack ran out before `maxDepth` did, which is only possible when
+ * `maxDepth` was raised past what the engine's stack holds (or a hand-built
+ * schema is deeper than any stack). Its `limit` is the effective `maxDepth`
+ * and its `observed` the deepest depth the walk had charged when the engine
+ * refused — always below `limit`, which is how it differs from `value_depth`.
+ */
 export interface ResourceLimitInfo {
-  readonly resource: "value_depth" | "value_elements";
+  readonly resource: "value_depth" | "value_elements" | "stack";
   readonly limit: number;
   readonly observed: number;
 }
@@ -171,14 +184,68 @@ export function validate<T>(
   const path: PathSegment[] = [];
   try {
     walk.visit(schema, value, path, 0);
-  } catch {
-    walk.issues.push({
-      code: "unreadable_value",
-      path: renderPath(path),
-      message: "the value threw while being inspected",
-    });
+  } catch (error) {
+    // The one place a host stack overflow is caught for the whole walk: it is
+    // a property of the host, not of the value or the schema, so it must not
+    // reach the `unreadable_value` label below. When the recursive walker is
+    // replaced by an iterative one, this branch stays for residual overflow
+    // in user code (a getter or rec thunk that itself recurses too deeply).
+    if (isStackExhaustion(error)) {
+      walk.stackExhausted(path);
+    } else {
+      walk.issues.push({
+        code: "unreadable_value",
+        path: renderPath(path),
+        message: "the value threw while being inspected",
+      });
+    }
   }
   return walk.issues.length === 0 ? { ok: true } : { ok: false, issues: walk.issues };
+}
+
+/**
+ * True when `error` is a JavaScript engine reporting that its own call stack
+ * ran out — the exception `validate`, `encode` and `decode` turn into a
+ * `stack` resource failure rather than a value or schema problem.
+ *
+ * Deliberately not exported: no subpath of the package offers it. `codec.ts`
+ * holds a private copy of this function, kept identical by hand; the two are
+ * held in agreement by `tests/stack.test.ts`, which drives one shared table of
+ * thrown values through `validate`, `encode` and `decode`.
+ *
+ * The engines disagree on both the class and the words, so the rule reads the
+ * error's `name` and `message` and never `instanceof RangeError`:
+ *
+ * - V8 (Chrome, Node, Deno) and JavaScriptCore (Safari, Bun): a `RangeError`
+ *   reading "Maximum call stack size exceeded".
+ * - SpiderMonkey (Firefox): an `InternalError` — not a `RangeError` — reading
+ *   "too much recursion".
+ *
+ * Any other `RangeError` (`Invalid array length`, a BigInt that is too big,
+ * an oversized allocation) is not stack exhaustion and is refused, as is a
+ * plain `Error` that merely quotes the words. The read is guarded: a thrown
+ * value can be `null`, a primitive, or a Proxy whose traps throw, and none of
+ * that may escape the choke point that called this.
+ *
+ * Limitation: a value's getter or a `rec` thunk can throw an error carrying
+ * exactly this name and message, and it will be classified as stack
+ * exhaustion. The walk still fails closed either way; only the label can be
+ * forged.
+ */
+function isStackExhaustion(error: unknown): boolean {
+  try {
+    if (typeof error !== "object" || error === null) {
+      return false;
+    }
+    const { name, message } = error as { name?: unknown; message?: unknown };
+    return (
+      typeof message === "string" &&
+      ((name === "RangeError" && message.startsWith("Maximum call stack size exceeded")) ||
+        (name === "InternalError" && message.startsWith("too much recursion")))
+    );
+  } catch {
+    return false;
+  }
 }
 
 // The erased view a walker narrows on. `Schema<T>` is invariant, so `any` is
@@ -288,6 +355,8 @@ class Walk {
   private readonly maxIssues: number;
   private elements = 0;
   private halted = false;
+  /** The deepest depth `step` has charged: what a stack overflow reports. */
+  private reached = 0;
 
   constructor(options: ValidateOptions) {
     this.maxDepth = options.maxDepth ?? DEFAULT_MAX_DEPTH;
@@ -361,6 +430,9 @@ class Walk {
 
   /** Charge one traversal step; false means the walk is over. */
   private step(path: PathSegment[], depth: number): boolean {
+    if (depth > this.reached) {
+      this.reached = depth;
+    }
     if (depth > this.maxDepth) {
       this.resource("value_depth", this.maxDepth, depth, path);
       return false;
@@ -400,6 +472,23 @@ class Walk {
     });
     // A bound failure is terminal: continuing would report `ok`-shaped
     // partial results for a value that was never fully examined.
+    this.halted = true;
+  }
+
+  /**
+   * Record that the host stack ran out mid-walk. Not routed through
+   * `resource`: that method drops the issue when the walk has halted, and a
+   * caught exception must always leave a trace.
+   */
+  stackExhausted(path: PathSegment[]): void {
+    this.issues.push({
+      code: "resource_limit_exceeded",
+      path: renderPath(path),
+      message:
+        `the host stack was exhausted at depth ${this.reached}, before the configured ` +
+        `maxDepth of ${this.maxDepth}; lower maxDepth or use a host with a larger stack`,
+      resource_limit: { resource: "stack", limit: this.maxDepth, observed: this.reached },
+    });
     this.halted = true;
   }
 

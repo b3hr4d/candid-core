@@ -333,11 +333,23 @@ export interface CodecOptions {
 <pre data-lang="ts" data-file="crates/candid-core-ts/ts/codec.ts">
 export interface CodecResourceLimitInfo {
   readonly resource:
-    "bytes" | "type_table_entries" | "value_depth" | "value_elements" | "numeric_bytes";
+    "bytes" | "type_table_entries" | "value_depth" | "value_elements" | "numeric_bytes" | "stack";
   readonly limit: number;
   readonly observed: number;
 }
 </pre>
+
+<p>
+  <code>stack</code> is the one resource that is not an option you set. It means the host
+  JavaScript stack ran out before <code>maxDepth</code> did: <code>limit</code> is the call's
+  <code>maxDepth</code> and <code>observed</code> is the deepest depth the walk had charged when the
+  engine refused, always below <code>limit</code>. At the default <code>maxDepth</code> of 256 the
+  walk always stops at <code>value_depth</code> first, so you only meet <code>stack</code> after
+  raising <code>maxDepth</code> past what your engine's stack holds, or with a hand-built schema
+  deeper than any stack. It is a property of the host, not of the message or the schema: lower
+  <code>maxDepth</code> or run somewhere with a larger stack. Where an engine's limit falls varies,
+  so an input near it can pass on one call and report <code>stack</code> on the next.
+</p>
 
 <p>
   That triple is what lets a caller tell "this message is malformed" from "this message is

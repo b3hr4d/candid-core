@@ -70,9 +70,17 @@
 // `maxElements` values), and `maxNumericBytes` caps a single unbounded
 // `nat`/`int` encoding. Decode stops at the first hard error: the wire
 // format cannot be resynchronized after one, so the issue list is short by
-// design. Determinism: identical inputs produce identical bytes, values, and
+// design. A `maxDepth` raised past what the host's own call stack holds can
+// still overflow it: the engine's stack-exhaustion exception is caught at the
+// same choke points, ahead of their catch-alls, and reported as
+// `resource_limit_exceeded` with resource `stack` — never as a value or schema
+// problem.
+// Determinism: identical inputs produce identical bytes, values, and
 // issues — the type table is built in first-visit order over the schema
-// graph and nothing depends on time, environment, or map iteration order.
+// graph and nothing depends on time, environment, or map iteration order —
+// with the one exception a host cannot be argued out of: where its own stack
+// ends varies with the engine and its JIT state, so an input near that point
+// can succeed on one call and report `stack` on the next.
 
 import type { AnyFieldSchema, AnySchema, PrincipalValue, Schema } from "./schema.ts";
 import { fieldIdOfKey, utf8BytesStrict, utf8Decode } from "./labels.ts";
@@ -108,8 +116,13 @@ export type CodecCode =
 
 /** The `{resource, limit, observed}` triple a bound failure carries. */
 export interface CodecResourceLimitInfo {
+  /**
+   * `stack` means the host JavaScript stack ran out before `maxDepth` did:
+   * `limit` is the effective `maxDepth` and `observed` the deepest depth the
+   * walk had charged, always below it.
+   */
   readonly resource:
-    "bytes" | "type_table_entries" | "value_depth" | "value_elements" | "numeric_bytes";
+    "bytes" | "type_table_entries" | "value_depth" | "value_elements" | "numeric_bytes" | "stack";
   readonly limit: number;
   readonly observed: number;
 }
@@ -294,6 +307,46 @@ function describe(value: unknown): string {
 
 /** A checked halt: issues past this point must not be recorded. */
 class Halt extends Error {}
+
+/**
+ * True when `error` is an engine reporting that its own call stack ran out:
+ * a `RangeError` reading "Maximum call stack size exceeded" (V8,
+ * JavaScriptCore) or an `InternalError` reading "too much recursion"
+ * (SpiderMonkey, which does not throw a `RangeError`). Matches on `name` and
+ * `message`, never `instanceof`; any other error, and any thrown value that
+ * cannot be read safely, is not stack exhaustion.
+ *
+ * A private copy of `isStackExhaustion` in `validate.ts`, which carries the
+ * full rationale. Neither is exported; keep the two identical.
+ * `tests/stack.test.ts` asserts they agree through the entry points.
+ */
+function isStackExhaustion(error: unknown): boolean {
+  try {
+    if (typeof error !== "object" || error === null) {
+      return false;
+    }
+    const { name, message } = error as { name?: unknown; message?: unknown };
+    return (
+      typeof message === "string" &&
+      ((name === "RangeError" && message.startsWith("Maximum call stack size exceeded")) ||
+        (name === "InternalError" && message.startsWith("too much recursion")))
+    );
+  } catch {
+    return false;
+  }
+}
+
+/** The issue both walkers record when the engine reports its stack exhausted. */
+function stackIssue(path: readonly PathSegment[], limit: number, reached: number): CodecIssue {
+  return {
+    code: "resource_limit_exceeded",
+    path: renderPath(path),
+    message:
+      `the host stack was exhausted at depth ${reached}, before the configured ` +
+      `maxDepth of ${limit}; lower maxDepth or use a host with a larger stack`,
+    resource_limit: { resource: "stack", limit, observed: reached },
+  };
+}
 
 interface Limits {
   readonly maxBytes: number;
@@ -627,7 +680,12 @@ export function encodeArgs(
     }
     return { ok: true, bytes: Uint8Array.from(out) };
   } catch (error) {
-    if (!(error instanceof Halt)) {
+    if (isStackExhaustion(error)) {
+      // A property of the host, not of the value: checked before the
+      // catch-all so it is never labelled a value problem. This branch
+      // survives an iterative rewrite for residual overflow in user code.
+      encoder.stackExhausted(path);
+    } else if (!(error instanceof Halt)) {
       // The fail-closed choke point: a hostile value that throws while being
       // read becomes an issue, never an escaping exception.
       encoder.issues.push({
@@ -646,11 +704,18 @@ class Encoder {
   readonly table: number[][] = [];
   private readonly memo = new Map<SchemaNode, number>();
   private elements = 0;
+  /** The deepest depth charged so far: what a stack overflow reports. */
+  private reached = 0;
 
   private readonly limits: Limits;
 
   constructor(limits: Limits) {
     this.limits = limits;
+  }
+
+  /** Record that the host stack ran out mid-walk (see `encodeArgs`' catch). */
+  stackExhausted(path: readonly PathSegment[]): void {
+    this.issues.push(stackIssue(path, this.limits.maxDepth, this.reached));
   }
 
   fail(
@@ -668,6 +733,9 @@ class Encoder {
   }
 
   step(path: readonly PathSegment[], depth: number): void {
+    if (depth > this.reached) {
+      this.reached = depth;
+    }
     if (depth > this.limits.maxDepth) {
       this.fail(
         "resource_limit_exceeded",
@@ -732,8 +800,14 @@ class Encoder {
   ): { node: Exclude<SchemaNode, RecNode>; depth: number } {
     let node = schema;
     let hops = depth;
+    if (hops > this.reached) {
+      this.reached = hops;
+    }
     while (node.kind === "rec") {
       hops += 1;
+      if (hops > this.reached) {
+        this.reached = hops;
+      }
       if (hops > this.limits.maxDepth) {
         this.fail(
           "resource_limit_exceeded",
@@ -1459,6 +1533,11 @@ export function decodeArgs(
         path: error.path,
         message: error.detail,
       });
+    } else if (isStackExhaustion(error)) {
+      // A property of the host, not of the schema: checked before the
+      // catch-all so it is never labelled a schema problem. This branch
+      // survives an iterative rewrite for residual overflow in user code.
+      decoder.stackExhausted(path);
     } else if (!(error instanceof Halt)) {
       // The schema-side choke point: a rec thunk (or other schema surface)
       // that throws becomes an issue, never an escaping exception.
@@ -1536,6 +1615,8 @@ class Decoder {
   private readonly subtypeMemo = new Map<string, boolean>();
   private offset = 0;
   private elements = 0;
+  /** The deepest depth charged so far: what a stack overflow reports. */
+  private reached = 0;
 
   private readonly bytes: Uint8Array;
   private readonly limits: Limits;
@@ -1543,6 +1624,11 @@ class Decoder {
   constructor(bytes: Uint8Array, limits: Limits) {
     this.bytes = bytes;
     this.limits = limits;
+  }
+
+  /** Record that the host stack ran out mid-walk (see `decodeArgs`' catch). */
+  stackExhausted(path: readonly PathSegment[]): void {
+    this.issues.push(stackIssue(path, this.limits.maxDepth, this.reached));
   }
 
   fail(
@@ -1569,6 +1655,9 @@ class Decoder {
   }
 
   private step(path: readonly PathSegment[], depth: number): void {
+    if (depth > this.reached) {
+      this.reached = depth;
+    }
     if (depth > this.limits.maxDepth) {
       this.fail(
         "resource_limit_exceeded",
@@ -2302,6 +2391,9 @@ class Decoder {
     seen: Map<string, boolean>,
     depth: number,
   ): boolean {
+    if (depth > this.reached) {
+      this.reached = depth;
+    }
     if (depth > this.limits.maxDepth) {
       return false;
     }
