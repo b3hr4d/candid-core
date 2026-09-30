@@ -351,7 +351,12 @@ below. `DEFAULT_MAX_DEPTH` stays 256 and every other limit keeps its meaning.
   overflowed the stack. Now the first are accepted, and the last — `c.vec`
   nested 20,000 times, say — is refused with `value_depth` at the first
   composite at Candid depth 257 (`observed` 257, path `$`), after 257 entries.
-  Primitives open no entry and are not charged. Visible only in a schema's
+  Primitives open no entry and are not charged. A schema object reused at
+  several positions is written once but charged at each, for the depth it
+  spans there, so a composite first met shallow cannot carry a deep use past
+  the limit; a back edge closing a recursive knot (including one reached
+  again through an alias of the knot) is not charged, as Candid does not
+  expand a type inside itself. Visible only in a schema's
   type table: such an encode may now be accepted where it was refused, refused
   where it was accepted (a shallow value in a hand-built schema nested past
   the limit), or refused with a different `observed`, or ahead of a value

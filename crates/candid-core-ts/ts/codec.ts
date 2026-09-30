@@ -818,6 +818,9 @@ class Rope {
 /** The byte count up to which `Rope.append` copies a buffer rather than linking it. */
 const COPY_LIMIT = 64;
 
+/** The height of a type-table entry that is still being built (see `Encoder.heights`). */
+const OPEN = -1;
+
 /** A `typeStart` answer meaning "an entry was opened; its index comes later". */
 const PENDING: unique symbol = Symbol("pending");
 
@@ -837,6 +840,10 @@ interface TypeFrame {
   awaiting: boolean;
   /** A func frame's loop body is in flight (see `typeRef`'s catch). */
   inBody: boolean;
+  /** How many levels below this entry its deepest descendant entry sits, so far. */
+  height: number;
+  /** The `rec` objects this entry was reached through, active while it is open. */
+  recs: SchemaNode[] | undefined;
   fields?: { key: string; id: number; schema: AnySchema }[];
   methods?: { name: string; bytes: Uint8Array }[];
   iterator?: Iterator<AnySchema>;
@@ -898,6 +905,18 @@ class Encoder {
   /** The type-table walk's explicit stack, and the index a finished frame hands back. */
   private readonly typeStack: TypeFrame[] = [];
   private typeResult = 0;
+  /**
+   * Per provisional entry, how many levels below it its deepest descendant
+   * entry sits (`OPEN` while the entry is still being built), so a reuse of
+   * the entry can be charged for the depth it spans (`chargeReuse`).
+   */
+  private readonly heights: number[] = [];
+  /** The `rec` chain the last `resolveType` followed, head first. */
+  private readonly chain: SchemaNode[] = [];
+  /** `rec` objects that entries open on the path were reached through, with counts. */
+  private readonly activeRecs = new Map<SchemaNode, number>();
+  /** Whether the last memo answer of `typeStart` was a back edge (see `reuse`). */
+  private cut = false;
   /** The value walk's explicit stack. */
   private readonly valueStack: ValueFrame[] = [];
   /** Where records link large field buffers rather than copy them. */
@@ -1005,7 +1024,9 @@ class Encoder {
     if (depth > this.reached) {
       this.reached = depth;
     }
+    this.chain.length = 0;
     while (node.kind === "rec") {
+      this.chain.push(node);
       hops += 1;
       if (hops > this.limits.maxDepth) {
         this.fail(
@@ -1046,7 +1067,8 @@ class Encoder {
    * schema nested deeper — no `rec` needed — is refused with `value_depth`
    * at the first entry past the limit (Candid depth 257 by default), as ADR
    * 0005 asks of graph work, rather than walked to any depth. Primitives open
-   * no entry and are not charged.
+   * no entry and are not charged. An entry the memo answers is charged too,
+   * at the position that reuses it (`reuse`).
    */
   private chargeTypeDepth(path: readonly PathSegment[], depth: number): void {
     if (depth > this.limits.maxDepth) {
@@ -1123,8 +1145,10 @@ class Encoder {
     path: readonly PathSegment[],
     depth: number,
   ): number | typeof PENDING {
+    this.cut = false;
     const known = this.memo.get(schema);
     if (known !== undefined) {
+      this.reuse(path, depth, known, this.activeRecs.has(schema));
       return known;
     }
     const { node, depth: at } = this.resolveType(schema, path, depth);
@@ -1142,6 +1166,7 @@ class Encoder {
     }
     const existing = this.memo.get(node);
     if (existing !== undefined) {
+      this.reuse(path, at, existing, false);
       this.memo.set(schema, existing);
       return existing;
     }
@@ -1162,8 +1187,25 @@ class Encoder {
     this.memo.set(node, index);
     this.memo.set(schema, index);
     this.table.push({ segments: [], refs: [] });
+    this.heights.push(OPEN);
+    const recs = this.chain.length === 0 ? undefined : this.chain.slice();
+    if (recs !== undefined) {
+      for (const rec of recs) {
+        this.activeRecs.set(rec, (this.activeRecs.get(rec) ?? 0) + 1);
+      }
+    }
     const entry = new EntryBuilder();
-    const frame: TypeFrame = { node, index, entry, at, step: 0, awaiting: false, inBody: false };
+    const frame: TypeFrame = {
+      node,
+      index,
+      entry,
+      at,
+      step: 0,
+      awaiting: false,
+      inBody: false,
+      height: 0,
+      recs,
+    };
     switch (node.kind) {
       case "opt": {
         writeSlebBig(entry.bytes, BigInt(OP.opt));
@@ -1233,6 +1275,7 @@ class Encoder {
     if (frame.awaiting) {
       frame.awaiting = false;
       entry.ref(this.typeResult);
+      this.noteChild(frame, this.typeResult);
       frame.inBody = false;
     }
     switch (node.kind) {
@@ -1333,8 +1376,60 @@ class Encoder {
       }
     }
     this.table[frame.index] = entry.finish();
+    this.heights[frame.index] = frame.height;
+    if (frame.recs !== undefined) {
+      for (const rec of frame.recs) {
+        const count = this.activeRecs.get(rec) as number;
+        if (count === 1) {
+          this.activeRecs.delete(rec);
+        } else {
+          this.activeRecs.set(rec, count - 1);
+        }
+      }
+    }
     this.typeResult = frame.index;
     this.typeStack.pop();
+  }
+
+  /**
+   * Fold a child reference into its parent's height: a completed composite
+   * entry reaches `1 + its height` levels below the parent. A primitive
+   * opcode is no level, and neither is a back edge to an entry still open on
+   * the path — the recursion Candid cuts there too.
+   */
+  private noteChild(frame: TypeFrame, ref: number): void {
+    if (ref >= 0) {
+      const height = this.heights[ref];
+      if (height !== OPEN && height + 1 > frame.height) {
+        frame.height = height + 1;
+      }
+    }
+  }
+
+  /**
+   * The Candid-depth charge for a reference the memo answers (issue #192,
+   * the D1 rule; review of #208). An entry is written once but sits at every
+   * position that references it, so a completed entry reused at `depth` is
+   * charged as if walked there: its deepest level, `depth + height`, must be
+   * within `maxDepth`. The first level past the limit is `maxDepth + 1`, which
+   * `observed` reports, as when a walk opens an entry there.
+   *
+   * A back edge is not charged and adds no height: Candid does not expand a
+   * type inside itself. That is a reference to an entry still open on the
+   * path, and — `cut` — a `rec` object that an entry open on the path was
+   * itself reached through: the compiler's "recursive name already active"
+   * rule. It matters when an alias re-runs a knot's body (a generated
+   * `ListAlias = rec(() => $List)` does): the copy's inner reference names
+   * `$List`, whose original entry is complete but is active on this path.
+   */
+  private reuse(path: readonly PathSegment[], depth: number, ref: number, cut: boolean): void {
+    if (ref < 0 || cut || this.heights[ref] === OPEN) {
+      this.cut = true;
+      return;
+    }
+    if (depth + this.heights[ref] > this.limits.maxDepth) {
+      this.chargeTypeDepth(path, this.limits.maxDepth + 1);
+    }
   }
 
   /**
@@ -1355,6 +1450,9 @@ class Encoder {
       return false;
     }
     frame.entry.ref(ref);
+    if (!this.cut) {
+      this.noteChild(frame, ref);
+    }
     return true;
   }
 

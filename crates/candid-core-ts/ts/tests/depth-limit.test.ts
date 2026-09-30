@@ -18,7 +18,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 
-import { decode, encode } from "../codec.ts";
+import { decode, encode, encodeArgs } from "../codec.ts";
 import { schemaFromContract } from "../contract.ts";
 import { c, type AnySchema, type Schema } from "../schema.ts";
 import { validate } from "../validate.ts";
@@ -184,4 +184,97 @@ test("hostile hand-built schemas are refused after bounded, pinned work", () => 
   const tooLong = c.vec(c.record({ a: thunkChain(257, () => c.nat, longCalls) }));
   assert.deepStrictEqual(only(encode(tooLong as Schema<unknown>, [])).resource_limit, DEPTH_257);
   assert.strictEqual(longCalls.count, 256);
+});
+
+test("a reused schema object is charged at every depth it is referenced from", () => {
+  // The type table writes an entry once and references it from every later
+  // position, but the Candid depth it spans is the deepest position's. The
+  // depth of a reuse — first seen shallow, then deep — is charged as if the
+  // entry were walked there. (Review of #208: the memo used to answer the
+  // deep reference without any charge.)
+  const shared = c.unit();
+  const deep = vecs(257, shared); // `shared` at Candid depth 257
+  assert.deepStrictEqual(only(encode(deep as Schema<unknown>, [])).resource_limit, DEPTH_257);
+  // Both argument orders, one message.
+  assert.deepStrictEqual(
+    only(encodeArgs([shared, deep], [{}, []])).resource_limit,
+    DEPTH_257,
+    "shared first",
+  );
+  assert.deepStrictEqual(
+    only(encodeArgs([deep, shared], [[], {}])).resource_limit,
+    DEPTH_257,
+    "shared second",
+  );
+  // One argument, the same object reached first shallow, then deep.
+  const oneArgument = c.record({ a: shared, b: vecs(256, shared) });
+  assert.deepStrictEqual(
+    only(encode(oneArgument as Schema<unknown>, { a: {}, b: [] })).resource_limit,
+    DEPTH_257,
+  );
+  // A reused subtree spans its own height: two levels reused at 255 reach 257.
+  const subtree = vecs(2, c.unit());
+  const spanning = c.record({ a: subtree, b: vecs(254, subtree) });
+  assert.deepStrictEqual(
+    only(encode(spanning as Schema<unknown>, { a: [], b: [] })).resource_limit,
+    DEPTH_257,
+  );
+  // One level shallower, both encode — exactly as unshared schemas would.
+  assert(encodeArgs([shared, vecs(256, shared)], [{}, []]).ok);
+  assert(
+    encode(c.record({ a: subtree, b: vecs(253, subtree) }) as Schema<unknown>, {
+      a: [],
+      b: [],
+    }).ok,
+  );
+});
+
+type List = { head: bigint; tail: List } | null;
+const List: Schema<List> = c.rec(() => c.opt(c.record({ head: c.nat, tail: List })));
+
+test("a recursive knot reused deeper through an alias is charged; its own back edge is not", () => {
+  // `List` is an opt around a record whose tail closes the knot. Walked once
+  // shallow, then reached again through an alias: the reuse spans the opt and
+  // the record (the back edge adds nothing, as Candid does not expand a type
+  // inside itself), so an alias at depth 256 puts the record at 257.
+  const Alias: Schema<List> = c.rec(() => List);
+  const value = { first: null, deep: [] };
+  const at = (depth: number): Schema<unknown> =>
+    c.record({ first: List, deep: vecs(depth - 1, Alias) }) as Schema<unknown>;
+  assert(encode(at(255), value).ok, "the record at 256");
+  assert.deepStrictEqual(only(encode(at(256), value)).resource_limit, DEPTH_257);
+  // The same knot built fresh at those depths answers the same way.
+  const fresh = (depth: number): Schema<unknown> => {
+    type Fresh = { head: bigint; tail: Fresh } | null;
+    const Knot: Schema<Fresh> = c.rec(() => c.opt(c.record({ head: c.nat, tail: Knot })));
+    return c.record({ first: c.null, deep: vecs(depth - 1, Knot) }) as Schema<unknown>;
+  };
+  assert(encode(fresh(255), value).ok);
+  assert.deepStrictEqual(only(encode(fresh(256), value)).resource_limit, DEPTH_257);
+  // And a knot deep inside nothing else still encodes and round-trips.
+  const list = { head: 1n, tail: { head: 2n, tail: null } };
+  const encoded = encode(List, list);
+  assert(encoded.ok && decode(List, encoded.bytes).ok);
+});
+
+test("reuse stays deduplicated: a thousand references to one deep subtree open it once", () => {
+  // 1,000 fields reference one 200-level subtree: 1 + 201 entries, however
+  // many references, and each reference costs one height comparison.
+  const shared = vecs(200, c.unit());
+  const fields: { [key: string]: AnySchema } = {};
+  const value: { [key: string]: unknown } = {};
+  for (let i = 0; i < 1_000; i += 1) {
+    fields[`f${i}`] = shared;
+    value[`f${i}`] = [];
+  }
+  const wide = c.record(fields) as Schema<unknown>;
+  assert(encode(wide, value, { maxTypeTableEntries: 202 }).ok);
+  assert.deepStrictEqual(only(encode(wide, value, { maxTypeTableEntries: 201 })).resource_limit, {
+    resource: "type_table_entries",
+    limit: 201,
+    observed: 202,
+  });
+  // 56 levels above the record put every reference's deepest level at 257.
+  assert.deepStrictEqual(only(encode(vecs(56, wide), [])).resource_limit, DEPTH_257);
+  assert(encode(vecs(55, wide), []).ok);
 });
