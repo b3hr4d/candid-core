@@ -14,6 +14,19 @@ fixtures.
 grammar, the library API, and the request/response shapes. Pin an exact
 version.
 
+## Unreleased
+
+- **BREAKING**: the embedded `candid-core-ts` generator no longer refuses an
+  `opt` whose inner type is another `opt`, `null`, or `reserved` (its
+  `TsGenError::UnrepresentableOption` is removed). Such declarations now
+  generate, with the present value boxed: `opt opt nat` emits
+  `{ some: bigint | null } | null` with builder `c.opt(c.opt(c.nat))`.
+  Interfaces that generated before produce byte-identical modules.
+- **Release ordering**: the boxed aliases need the `@candid-core/schema`
+  release that introduces boxed options; the published 0.2.0 cannot type
+  them. The release that ships this generator must raise the
+  `@candid-core/schema` peer from `^0.2.0` to that release.
+
 ## 0.1.0 — 2026-08-27
 
 Embeds `candid-core` 0.1.0-beta.3 and the `candid-core-ts` generator from

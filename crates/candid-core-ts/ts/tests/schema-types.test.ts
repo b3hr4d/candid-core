@@ -10,10 +10,22 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { c, resolveSchema, type Schema, type SchemaNode } from "../schema.ts";
+import {
+  c,
+  isBoxedOpt,
+  resolveSchema,
+  type AnySchema,
+  type Infer,
+  type Schema,
+  type SchemaNode,
+} from "../schema.ts";
 import { validate, type ValidateResult } from "../validate.ts";
 import { encode, encodeArgs, decodeArgs } from "../codec.ts";
 import { formModel } from "../forms.ts";
+import * as schemaModule from "../schema.ts";
+import * as validateModule from "../validate.ts";
+import * as codecModule from "../codec.ts";
+import * as formsModule from "../forms.ts";
 
 import type * as ledger from "../../tests/goldens/ledger.ts";
 
@@ -44,9 +56,9 @@ type OptEmptyArmV = { tag: "a"; value: never | null } | { tag: "b"; value: bigin
 export const OptEmptyArmV: Schema<OptEmptyArmV> = c.rec(() =>
   c.variant({ a: c.opt(c.empty), b: c.nat }),
 );
-// `opt null` arms are unreachable from the generator (UnrepresentableOption)
-// but constructible by hand; the classification aligns for them too.
-type OptNullArmV = { tag: "a"; value: null };
+// An `opt null` arm carries `value` like every opt arm, and its payload is
+// boxed — `{ some: null } | null` — so the arm's two inhabitants stay apart.
+type OptNullArmV = { tag: "a"; value: { some: null } | null };
 export const OptNullArmV: Schema<OptNullArmV> = c.rec(() => c.variant({ a: c.opt(c.null) }));
 type NullArmV = { tag: "ok" } | { tag: "busy"; value: number };
 export const NullArmV: Schema<NullArmV> = c.rec(() => c.variant({ ok: c.null, busy: c.nat8 }));
@@ -176,8 +188,9 @@ test("variant classification aligns validate with the static types", () => {
     code: "uninhabited_type",
     path: "$.value",
   });
-  // opt null arm (hand-written): same alignment.
+  // opt null arm: same alignment, with the boxed Some(null) admitted too.
   assert.strictEqual(validate(OptNullArmV, { tag: "a", value: null }).ok, true);
+  assert.strictEqual(validate(OptNullArmV, { tag: "a", value: { some: null } }).ok, true);
   assert.deepStrictEqual(firstIssue(validate(OptNullArmV, { tag: "a" })), {
     code: "missing_field",
     path: "$.value",
@@ -211,6 +224,7 @@ test("formModel renders the empty leaf uninhabited", () => {
 // spirit as the ones above: the file failing to type-check is the signal.
 export const nodePrimitive: SchemaNode = c.nat;
 export const nodeOpt: SchemaNode = c.opt(c.text);
+export const nodeBoxedOpt: SchemaNode = c.opt(c.opt(c.text));
 export const nodeVec: SchemaNode = c.vec(c.nat);
 export const nodeBlob: SchemaNode = c.blob();
 export const nodeUnit: SchemaNode = c.unit();
@@ -267,3 +281,133 @@ interface ExpectedLedgerActor {
 }
 
 export const actorTypeMatchesHandWrittenInterface: Equals<ledger.Actor, ExpectedLedgerActor> = true;
+
+// Boxed options: an `opt` whose inner domain admits `null` — another opt,
+// `null`, `reserved` — infers `{ some: T } | null`; every other opt infers
+// `T | null`, `opt empty` included. `Equal` is exact (mutual assignability
+// is not enough for `any`/`never` corners), and each probe below is a
+// compile-time assertion: the harness fails to type-check if one drifts.
+type Equal<A, B> =
+  (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2 ? true : false;
+
+const optOptNat = c.opt(c.opt(c.nat));
+const optNull = c.opt(c.null);
+const optReserved = c.opt(c.reserved);
+const optEmpty = c.opt(c.empty);
+const optNat = c.opt(c.nat);
+const optOptEmpty = c.opt(c.opt(c.empty));
+const optOptOptNat = c.opt(c.opt(c.opt(c.nat)));
+export const boxedProbes: [
+  Equal<Infer<typeof optOptNat>, { some: bigint | null } | null>,
+  Equal<Infer<typeof optNull>, { some: null } | null>,
+  Equal<Infer<typeof optReserved>, { some: unknown } | null>,
+  Equal<Infer<typeof optEmpty>, null>,
+  Equal<Infer<typeof optNat>, bigint | null>,
+  Equal<Infer<typeof optOptEmpty>, { some: null } | null>,
+  Equal<Infer<typeof optOptOptNat>, { some: { some: bigint | null } | null } | null>,
+] = [true, true, true, true, true, true, true];
+
+// The same agreement under the invariant annotation generated modules use,
+// through `c.rec` recursion: `type Chain = opt Chain` and mutual recursion
+// where one side boxes and the other does not.
+type Chain = { some: Chain } | null;
+export const Chain: Schema<Chain> = c.rec(() => c.opt(Chain));
+type Ping = { pong: Pong } | null;
+type Pong = { some: Ping } | null;
+export const Ping: Schema<Ping> = c.rec(() => c.opt(c.record({ pong: Pong })));
+export const Pong: Schema<Pong> = c.rec(() => c.opt(Ping));
+
+// And the wrong readings stay compile errors.
+// @ts-expect-error opt opt collapses to T | null no longer
+export const collapsedOptOpt: Schema<bigint | null> = c.rec(() => c.opt(c.opt(c.nat)));
+// @ts-expect-error opt empty does not box
+export const boxedOptEmpty: Schema<{ some: never } | null> = c.rec(() => c.opt(c.empty));
+// @ts-expect-error opt nat does not box
+export const boxedOptNat: Schema<{ some: bigint } | null> = c.rec(() => c.opt(c.nat));
+type UnboxedChain = { next: UnboxedChain } | null;
+// @ts-expect-error a recursive opt of an opt boxes too
+export const unboxedChain: Schema<UnboxedChain> = c.rec(() => c.opt(unboxedChain));
+
+test("validate agrees with the boxed static types", () => {
+  const cases: readonly [unknown, boolean][] = [
+    [null, true],
+    [{ some: null }, true],
+    [{ some: 5n }, true],
+    [5n, false],
+    [{ some: 5 }, false],
+  ];
+  for (const [value, ok] of cases) {
+    assert.strictEqual(validate(optOptNat, value).ok, ok, JSON.stringify(String(value)));
+  }
+  assert.strictEqual(validate(Chain, { some: { some: null } }).ok, true);
+  assert.strictEqual(validate(Chain, { some: {} }).ok, false);
+  assert.strictEqual(validate(Pong, { some: { pong: { some: null } } }).ok, true);
+  assert.strictEqual(validate(Pong, { some: { pong: null } }).ok, true);
+  assert.strictEqual(validate(optEmpty, null).ok, true);
+  assert.strictEqual(validate(optEmpty, { some: null }).ok, false);
+});
+
+// The boxed-option rule has one public statement, `isBoxedOpt`; the walkers
+// that decide on an inner node they already resolved under their own budget
+// (validate, the codec) keep module-local copies, and the form model calls
+// `isBoxedOpt` itself. This pins every walker to `isBoxedOpt` over inner
+// kinds on both sides of the rule, through `rec` and aliases: an empty
+// object reports `missing_field` at `$.some` exactly when the opt boxes, and
+// the form model's `boxed` flag says the same.
+test("every walker boxes exactly when isBoxedOpt says so", () => {
+  const Inner = c.rec(() => c.opt(c.nat));
+  const NullAlias = c.rec(() => c.null);
+  const inners: readonly AnySchema[] = [
+    c.nat,
+    c.text,
+    c.opt(c.nat),
+    c.opt(c.empty),
+    c.null,
+    c.reserved,
+    c.empty as AnySchema,
+    c.record({ a: c.nat }),
+    c.unit(),
+    c.variant({}) as AnySchema,
+    Inner,
+    NullAlias,
+    c.rec(() => c.rec(() => c.reserved)),
+    c.rec(() => c.text),
+  ];
+  let boxedSeen = 0;
+  for (const inner of inners) {
+    const schema = c.opt(inner) as AnySchema;
+    const boxed = isBoxedOpt(schema);
+    boxedSeen += boxed ? 1 : 0;
+    const validated = validate(schema as Schema<unknown>, {});
+    const encoded = encode(schema as Schema<unknown>, {});
+    const atSome = (result: { ok: boolean; issues?: readonly { code: string; path: string }[] }) =>
+      !result.ok &&
+      result.issues?.[0].code === "missing_field" &&
+      result.issues[0].path === "$.some";
+    assert.strictEqual(
+      atSome(validated),
+      boxed,
+      `validate, inner ${String(resolveSchema(inner).kind)}`,
+    );
+    assert.strictEqual(
+      atSome(encoded),
+      boxed,
+      `encode, inner ${String(resolveSchema(inner).kind)}`,
+    );
+    const form = formModel(schema);
+    assert(form.control === "optional");
+    if (form.control === "optional") {
+      assert.strictEqual(form.boxed, boxed);
+    }
+  }
+  assert.strictEqual(boxedSeen, 7, "both sides of the rule are exercised");
+});
+
+// The rule's published surface is `isBoxedOpt` (and the `OptDomain` type):
+// the predicate the walkers share is not an export of any subpath.
+test("the node-level predicate stays out of every module's exports", () => {
+  for (const module of [schemaModule, validateModule, codecModule, formsModule]) {
+    assert.strictEqual("admitsNull" in module, false);
+  }
+  assert.strictEqual(typeof schemaModule.isBoxedOpt, "function");
+});

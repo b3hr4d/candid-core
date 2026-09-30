@@ -22,7 +22,9 @@
 //   exist — flagged so a UI never routes them through a `number` input;
 // - `opt` → `optional`, a presence toggle plus the inner node; a `record`'s
 //   opt field is present-with-`null`, so the toggle maps to `null`, never to
-//   a missing key;
+//   a missing key. An opt whose inner type admits `null` (`opt opt`,
+//   `opt null`, `opt reserved`) is `boxed`: its present value is
+//   `{ some: v }`, so its inner node sits one segment deeper, at `.some`;
 // - `vec` → `list` with per-index nodes on demand; `blob` → `bytes`;
 // - `record`/`unit` → `group`; tuples → `tuple`;
 // - `variant` → `choice` among arms, tag-only arms needing no payload
@@ -44,16 +46,17 @@
 //
 // Node paths use exactly `validate`'s grammar (`$.next.tail[2].tag`), so a
 // validation issue's `path` addresses a form node via `formNodeAt`: record,
-// tuple, list, opt, and func-reference paths resolve directly; a variant's
-// `.tag`/`.value` resolve to the re-pathed choice, and deeper segments
-// resolve through the arms when exactly one arm's shape describes them (the
-// model cannot know the chosen tag). Building the model never throws on any
+// tuple, list, opt (a boxed opt's `.some` included), and func-reference
+// paths resolve directly; a variant's `.tag`/`.value` resolve to the
+// re-pathed choice, and deeper segments resolve through the arms when
+// exactly one arm's shape describes them (the model cannot know the chosen
+// tag). Building the model never throws on any
 // schema a Contract can produce; a foreign schema object — or a rec chain
 // that never terminates, which no Contract builds — is a programmer error
 // and throws `TypeError`, the same stance `resolveSchema` takes.
 
 import type { AnyFieldSchema, SchemaNode } from "./schema.ts";
-import { resolveSchema } from "./schema.ts";
+import { isBoxedOpt, resolveSchema } from "./schema.ts";
 import { numericKeyId } from "./labels.ts";
 
 /** What every form node carries, wherever it sits. */
@@ -88,7 +91,14 @@ export type FormControl =
   | { readonly control: "constant" }
   /** `empty`: uninhabited — a UI must not offer an input at all. */
   | { readonly control: "uninhabited" }
-  | { readonly control: "optional"; inner(): FormNode }
+  /**
+   * A presence toggle over `inner`. Absent is `null`. Present is the inner
+   * value itself — at the same path — unless `boxed`, when it is
+   * `{ some: v }` with the inner node at `….some`: the inner type admits
+   * `null` (`opt opt`, `opt null`, `opt reserved`), so the box is what keeps
+   * `None` and `Some(None)` apart.
+   */
+  | { readonly control: "optional"; readonly boxed: boolean; inner(): FormNode }
   | { readonly control: "list"; item(index: number): FormNode }
   | { readonly control: "bytes" }
   | {
@@ -237,6 +247,11 @@ function takeSegment(rest: string): [string | number, string] | undefined {
 function descend(node: FormNode, segment: string | number): FormNode | undefined {
   switch (node.control) {
     case "optional":
+      // A boxed opt's payload is its own `.some` segment; an unboxed one's
+      // payload shares the opt's path, so the segment belongs to the inner.
+      if (node.boxed) {
+        return segment === "some" ? node.inner() : undefined;
+      }
       return descendInto(node.inner(), segment);
     case "list":
       return typeof segment === "number" ? node.item(segment) : undefined;
@@ -333,11 +348,16 @@ function build(schema: AnyFieldSchema, site: Site): FormNode {
     case "opt": {
       const inner = node.inner as AnyFieldSchema;
       // The domain shape is `T | null` with the property present, so the
-      // presence toggle edits the same path.
+      // presence toggle edits the same path — unless the inner type admits
+      // null, when the present value is boxed and the inner edits `.some`.
+      // Decided on the resolved inner node, the rule every walker applies;
+      // `node` is the opt itself, so `isBoxedOpt` resolves only its inner.
+      const boxed = isBoxedOpt(node);
       return {
         ...common,
         control: "optional",
-        inner: () => build(inner, { path: site.path }),
+        boxed,
+        inner: () => build(inner, { path: boxed ? extendPath(site.path, "some") : site.path }),
       };
     }
     case "vec": {

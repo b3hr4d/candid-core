@@ -280,6 +280,100 @@ const VECTORS: &[(&str, &[Case])] = &[
             },
         ],
     ),
+    (
+        // Collapsing options: the reference encoding of every state of a
+        // boxed opt — None, Some(None), Some(Some(x)) — decodes to three
+        // distinct `{ some }` domain values, and the TS encoder's bytes for
+        // them decode back to the same three values under `candid`.
+        "options",
+        &[
+            Case {
+                name: "double_none",
+                declaration: "DoubleOpt",
+                textual: "(null)",
+            },
+            Case {
+                name: "double_some_none",
+                declaration: "DoubleOpt",
+                textual: "(opt null)",
+            },
+            Case {
+                name: "double_some_some",
+                declaration: "DoubleOpt",
+                textual: "(opt opt 5)",
+            },
+            Case {
+                name: "triple_some_some_none",
+                declaration: "TripleOpt",
+                textual: "(opt opt null)",
+            },
+            Case {
+                name: "opt_null_none",
+                declaration: "OptNull",
+                textual: "(null)",
+            },
+            Case {
+                name: "opt_null_some",
+                declaration: "OptNull",
+                textual: "(opt null)",
+            },
+            Case {
+                name: "opt_reserved_some",
+                declaration: "OptReserved",
+                textual: "(opt null)",
+            },
+            Case {
+                name: "opt_empty_none",
+                declaration: "OptEmpty",
+                textual: "(null)",
+            },
+            Case {
+                name: "described_none",
+                declaration: "AliasedOuter",
+                textual: "(null)",
+            },
+            Case {
+                name: "described_some_none",
+                declaration: "AliasedOuter",
+                textual: "(opt null)",
+            },
+            Case {
+                name: "described_some_some",
+                declaration: "AliasedOuter",
+                textual: "(opt opt \"x\")",
+            },
+            Case {
+                name: "chain_three",
+                declaration: "Chain",
+                textual: "(opt opt opt null)",
+            },
+            Case {
+                name: "pong_some_record",
+                declaration: "Pong",
+                textual: "(opt opt record { pong = opt null })",
+            },
+            Case {
+                name: "settings_mixed",
+                declaration: "Settings",
+                textual: "(record { label = opt null; limit = opt opt 5; flag = null })",
+            },
+            Case {
+                name: "change_clear",
+                declaration: "Change",
+                textual: "(variant { clear = opt null })",
+            },
+            Case {
+                name: "change_set_none",
+                declaration: "Change",
+                textual: "(variant { set = null })",
+            },
+            Case {
+                name: "change_keep",
+                declaration: "Change",
+                textual: "(variant { keep })",
+            },
+        ],
+    ),
 ];
 
 fn goldens_dir() -> PathBuf {

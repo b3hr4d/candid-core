@@ -36,6 +36,14 @@
 // kind maps to them in this slice. A wire `nat` value is accepted at
 // expected `int` (`nat <: int`); the reverse is a hard error.
 //
+// # Boxed options
+//
+// An expected `opt` whose inner node admits `null` — `opt opt T`, `opt null`,
+// `opt reserved` — carries a present value as `{ some: v }` in both
+// directions, so `None`, `Some(None)`, and `Some(Some(x))` stay three values;
+// every other opt is `T | null`. The box is a domain shape only: wire bytes
+// and the coercion rules are exactly those of the unboxed walk.
+//
 // # Strictness decisions (recorded on issue #103)
 //
 // - Overlong (non-minimal) LEB128/SLEB128 is rejected on decode
@@ -84,6 +92,18 @@
 
 import type { AnyFieldSchema, AnySchema, PrincipalValue, Schema } from "./schema.ts";
 import { fieldIdOfKey, utf8BytesStrict, utf8Decode } from "./labels.ts";
+
+// The boxed-option rule `isBoxedOpt` states, applied to an inner node this
+// walk has already resolved under its own budget. Module-local on purpose:
+// the rule's published surface is `isBoxedOpt`, and calling it here would
+// re-resolve the inner outside the walk's accounting. The cross-walker test
+// in `tests/schema-types.test.ts` pins this copy to `isBoxedOpt`.
+function admitsNull(node: { readonly kind: string; readonly primitive?: unknown }): boolean {
+  return (
+    node.kind === "opt" ||
+    (node.kind === "primitive" && (node.primitive === "null" || node.primitive === "reserved"))
+  );
+}
 
 /** Stable machine-readable failure codes. Closed: additions are API changes. */
 export type CodecCode =
@@ -1038,8 +1058,36 @@ class Encoder {
           out.push(0);
           return;
         }
+        // Boxed or not is decided on the resolved inner node, exactly as
+        // validate decides it; resolving here charges each rec hop once,
+        // as the recursive call would have, so accounting is unchanged.
+        const inner = this.resolve(node.inner as SchemaNode, path, at + 1);
+        if (!admitsNull(inner.node)) {
+          out.push(1);
+          this.value(inner.node, value, out, path, inner.depth);
+          return;
+        }
+        if (!this.isPlainCandidate(value)) {
+          this.fail(
+            "invalid_type",
+            path,
+            `expected null or { some: … } for an opt whose inner type admits null, got ${describe(value)}`,
+          );
+        }
+        path.push("some");
+        if (!hasOwnEnumerable(value, "some")) {
+          this.fail("missing_field", path, "a present boxed opt carries { some }");
+        }
         out.push(1);
-        this.value(node.inner as SchemaNode, value, out, path, at + 1);
+        this.value(inner.node, (value as { some?: unknown }).some, out, path, inner.depth);
+        path.pop();
+        for (const key of Object.keys(value)) {
+          this.step(path, at);
+          if (key !== "some") {
+            path.push(key);
+            this.fail("unexpected_field", path, "a present boxed opt is exactly { some }");
+          }
+        }
         return;
       }
       case "vec": {
@@ -1554,6 +1602,13 @@ export function decodeArgs(
   }
 }
 
+/**
+ * What an absorbed constituent decodes to: a sentinel rather than `null`,
+ * because under a boxed opt a constituent can legitimately decode to `null`
+ * (`Some(None)`), which must not read as the absorbing opt's own `None`.
+ */
+const ABSORBED: unique symbol = Symbol("absorbed");
+
 /** A coercion failure: absorbed to null by the nearest expected `opt`. */
 class CoercionMismatch extends Error {
   readonly code: CodecCode;
@@ -2065,12 +2120,20 @@ class Decoder {
     return this.primitiveAt(wire, node, path);
   }
 
-  /** The opportunistic opt rules: content mismatches coerce to null. */
+  /**
+   * The opportunistic opt rules: content mismatches coerce to null. A
+   * present value is boxed as `{ some: v }` exactly when the resolved inner
+   * node admits `null` — the rule validate and encode apply — so `None`,
+   * `Some(None)`, and `Some(Some(x))` decode to three distinct values. The
+   * coercion itself is untouched: a mismatch the outer opt absorbs is its
+   * `None` (`null`), never `{ some: null }`.
+   */
   private optAt(wire: number, node: OptNode, path: PathSegment[], depth: number): unknown {
     // Wire null and reserved carry zero bytes and mean null here.
     if (wire === OP.null || wire === OP.reserved) {
       return null;
     }
+    let constituent = wire;
     if (wire >= 0 && this.entry(wire).kind === "opt") {
       const entry = this.entry(wire) as { kind: "opt"; inner: number };
       const tag = this.byte(path);
@@ -2080,18 +2143,36 @@ class Decoder {
       if (tag !== 1) {
         this.fail("invalid_tag_byte", path, "an opt value starts with 0 or 1");
       }
-      return this.absorbing(entry.inner, node.inner as SchemaNode, path, depth + 1);
+      constituent = entry.inner;
     }
-    // A non-nullable wire type auto-wraps: opt v when coercible, else null.
-    return this.absorbing(wire, node.inner as SchemaNode, path, depth + 1);
+    // Otherwise a non-nullable wire type auto-wraps: opt v when coercible,
+    // else null. Either way the inner schema is resolved once here —
+    // charging each rec hop as the constituent walk would have — so the
+    // boxing decision reads the node the value is then decoded against.
+    const inner = this.resolveSchema(node.inner as SchemaNode, path, depth + 1);
+    const decoded = this.absorbing(constituent, inner.node, path, inner.depth, depth + 1);
+    if (decoded === ABSORBED) {
+      return null;
+    }
+    return admitsNull(inner.node) ? { some: decoded } : decoded;
   }
 
   /**
-   * Decode the constituent, absorbing *coercion* failures to null: the value
-   * bytes are consumed either way (rewind, then skip). Malformed input and
-   * resource failures stay hard — absorption never hides a broken message.
+   * Decode the constituent, absorbing *coercion* failures: the value bytes
+   * are consumed either way (rewind, then skip), and the answer is the
+   * `ABSORBED` sentinel, which the enclosing opt reads as its `None` — kept
+   * apart from a constituent that legitimately decoded to `null`. Malformed
+   * input and resource failures stay hard — absorption never hides a broken
+   * message. `skipDepth` is the depth the constituent walk began at before
+   * its rec hops were resolved, where a skip of the rewound bytes starts.
    */
-  private absorbing(wire: number, schema: SchemaNode, path: PathSegment[], depth: number): unknown {
+  private absorbing(
+    wire: number,
+    schema: SchemaNode,
+    path: PathSegment[],
+    depth: number,
+    skipDepth: number,
+  ): unknown {
     const rewind = this.offset;
     try {
       return this.valueAt(wire, schema, path, depth);
@@ -2104,8 +2185,8 @@ class Decoder {
       // by the absorption depth — charges are for work performed, and the
       // rewound walk performed it.
       this.offset = rewind;
-      this.skipValue(wire, path, depth);
-      return null;
+      this.skipValue(wire, path, skipDepth);
+      return ABSORBED;
     }
   }
 

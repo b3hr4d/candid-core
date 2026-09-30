@@ -185,7 +185,7 @@
           "slug": "reference-mapping",
           "title": "Candid to TypeScript mapping",
           "nav": "Candid ↔ TypeScript",
-          "lead": "The complete type mapping table, including the cases that deliberately fail closed.",
+          "lead": "The complete type mapping table, including boxed options and the cases that deliberately fail closed.",
           "wide": true
         },
         {

@@ -28,6 +28,7 @@ import { readFileSync } from "node:fs";
 
 import {
   c,
+  isBoxedOpt,
   resolveSchema,
   serviceMethods,
   type AnyFieldSchema,
@@ -36,6 +37,7 @@ import {
   type FuncValue,
   type Infer,
   type MethodMode,
+  type OptDomain,
   type PrincipalValue,
   type ResolvedNode,
   type Schema,
@@ -46,6 +48,7 @@ import { formModel } from "../forms.ts";
 import {
   isResultSchema,
   unwrapResult,
+  validate,
   type ResultErr,
   type ResultOk,
   type UnwrapResult,
@@ -130,6 +133,13 @@ test("every shipped @example is mirrored verbatim in this file", () => {
 }
 
 {
+  type A = OptDomain<bigint>; // bigint | null
+  type B = OptDomain<bigint | null>; // { some: bigint | null } | null
+  const probe: [A, B] = [null, { some: null }];
+  void probe;
+}
+
+{
   const byName: Record<string, AnySchema> = { Account: c.record({ id: c.nat }) };
   void byName;
 }
@@ -169,6 +179,7 @@ test("every shipped @example is mirrored verbatim in this file", () => {
   c.record({ owner: c.principal }); // { owner: PrincipalValue }
   c.variant({ ok: c.text, never: c.empty });
   c.record({ memo: c.opt(c.text) }); // { memo: string | null }
+  c.opt(c.opt(c.nat)); // { some: bigint | null } | null
   c.vec(c.nat32); // number[]
   c.record({ payload: c.blob() }); // { payload: Uint8Array }
   c.record({ ack: c.unit() }); // { ack: Record<string, never> }
@@ -228,6 +239,11 @@ test("every shipped @example is mirrored verbatim in this file", () => {
 {
   const table = serviceMethods(c.service({ fee: c.func([], [c.nat], "query") }));
   table.get("fee")?.mode; // "query"
+}
+
+{
+  isBoxedOpt(c.opt(c.opt(c.nat))); // true
+  isBoxedOpt(c.opt(c.nat)); // false
 }
 
 // --- Mirrors: result unwrapping -------------------------------------------
@@ -292,6 +308,14 @@ test("the introspection examples read exactly what the comment claims", () => {
   assert.strictEqual(table.get("fee")?.mode, "query");
   const Account: Schema<{ balance: bigint }> = c.rec(() => c.record({ balance: c.nat }));
   assert.strictEqual(formModel(Account).control, "lazy");
+});
+
+test("the boxed-opt examples read exactly what the comment claims", () => {
+  assert.strictEqual(isBoxedOpt(c.opt(c.opt(c.nat))), true);
+  assert.strictEqual(isBoxedOpt(c.opt(c.nat)), false);
+  // The static claims are exact in schema-types.test.ts; the runtime half:
+  const boxed: Infer<ReturnType<typeof c.opt<bigint | null>>> = { some: null };
+  assert.deepStrictEqual(validate(c.opt(c.opt(c.nat)), boxed), { ok: true });
 });
 
 test("the result examples read exactly what the comment claims", () => {

@@ -149,6 +149,52 @@ test("opt admits null and the inner type, nothing else", () => {
   fails(schema, 5, "invalid_type");
 });
 
+test("an opt whose inner admits null is boxed: null or exactly { some }", () => {
+  // opt opt nat: three states — None, Some(None), Some(Some(x)).
+  const doubleOpt = c.opt(c.opt(c.nat));
+  ok(doubleOpt, null);
+  ok(doubleOpt, { some: null });
+  ok(doubleOpt, { some: 5n });
+  // The collapsed spelling is refused, not silently read as Some(Some(x)).
+  fails(doubleOpt, 5n, "invalid_type");
+  // The box is strict like a record: `some` present and alone.
+  fails(doubleOpt, {}, "missing_field", "$.some");
+  fails(doubleOpt, { some: 1n, extra: 0 }, "unexpected_field", "$.extra");
+  fails(doubleOpt, { some: undefined }, "invalid_type", "$.some");
+  fails(doubleOpt, [5n], "invalid_type");
+  fails(doubleOpt, Object.defineProperty({}, "some", { value: 1n }), "missing_field", "$.some");
+  // Nested paths name every layer.
+  fails(c.opt(c.opt(c.opt(c.nat))), { some: { some: -1n } }, "out_of_range", "$.some.some");
+  fails(c.record({ label: doubleOpt }), { label: { some: 1 } }, "invalid_type", "$.label.some");
+  // opt null and opt reserved box too; `undefined` is no Candid value.
+  ok(c.opt(c.null), { some: null });
+  fails(c.opt(c.null), { some: 0 }, "invalid_type", "$.some");
+  ok(c.opt(c.reserved), { some: "anything" });
+  fails(c.opt(c.reserved), undefined, "invalid_type");
+  // Through rec and aliases: the resolved inner node decides.
+  const Inner = c.rec(() => c.opt(c.nat));
+  ok(c.opt(Inner), { some: null });
+  fails(c.opt(Inner), 3n, "invalid_type");
+  // opt empty does not box: None is its only value.
+  ok(c.opt(c.empty), null);
+  fails(c.opt(c.empty), { some: null }, "uninhabited_type");
+});
+
+test("a self-recursive opt boxes at every level and stays bounded", () => {
+  // `type Chain = opt Chain`: each level's inner is the opt itself.
+  const Chain: Schema<ChainValue> = c.rec(() => c.opt(Chain));
+  ok(Chain, { some: { some: { some: null } } });
+  fails(Chain, { some: { some: {} } }, "missing_field", "$.some.some.some");
+  // A deep chain hits the depth limit rather than the stack.
+  let deep: ChainValue = null;
+  for (let i = 0; i < 1_000; i += 1) {
+    deep = { some: deep };
+  }
+  assert.deepStrictEqual(codesOf(validate(Chain, deep)), ["resource_limit_exceeded"]);
+});
+
+type ChainValue = { some: ChainValue } | null;
+
 test("vec validates every element with an indexed path", () => {
   const schema = c.vec(c.nat8);
   ok(schema, []);

@@ -287,7 +287,9 @@ instead.
 ## The domain shapes (a deliberate decision)
 
 Types describe the modern domain, not the agent-js runtime shapes: `opt T` is
-`T | null` (collapsing opts fail closed at generation), variants are
+`T | null` — except that an opt whose inner type admits `null` (`opt opt T`,
+`opt null`, `opt reserved`) is `{ some: T } | null`, so `None`, `Some(None)`,
+and `Some(Some(x))` stay three distinct values — variants are
 `{ tag, value }` discriminated unions, anonymous `vec nat8` is `Uint8Array`,
 `nat`/`int`/64-bit integers are `bigint`, and principals are the structural
 [`PrincipalValue`](#decoded-principal-values) the codec actually delivers.

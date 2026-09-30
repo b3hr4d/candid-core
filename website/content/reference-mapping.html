@@ -108,7 +108,7 @@
       <td><code>{"kind":"opt","inner":N}</code></td>
       <td><code>T | null</code></td>
       <td><code>c.opt(T)</code></td>
-      <td>Absence is exactly <code>null</code>, and on a record the property stays <em>present</em>. Three inner shapes fail closed — see below.</td>
+      <td>Absence is exactly <code>null</code>, and on a record the property stays <em>present</em>. When <code>T</code> admits <code>null</code> (<code>opt opt</code>, <code>opt null</code>, <code>opt reserved</code>) the present value is boxed as <code>{ some: T }</code>; see below.</td>
     </tr>
     <tr>
       <td><code>vec T</code></td>
@@ -319,52 +319,54 @@ export type Actor = {
 };
 </pre>
 
-<h2>The cases that fail closed</h2>
+<h2>Options whose inner type admits null</h2>
 
 <p>
   <code>T | null</code> is the honest reading of <code>opt T</code> only when <code>T</code> itself can
-  never be <code>null</code> in TypeScript. Three inner shapes break that, and rather than collapse
-  Candid's <code>None</code> into <code>Some(None)</code>, generation refuses. The check is on the
-  inner <em>node</em>, not its spelling, so an <code>opt</code> reached through a declared alias
-  collapses just as surely and is refused just the same.
+  never be <code>null</code> in TypeScript. Three inner shapes break that: another <code>opt</code>,
+  <code>null</code>, and <code>reserved</code>. For exactly those, the present value is boxed, so
+  Candid's <code>None</code> and <code>Some(None)</code> stay two different values:
+  <code>{ some: T } | null</code>. Every other <code>opt</code> keeps <code>T | null</code>. The test
+  is on the inner <em>node</em>, not its spelling, so an <code>opt</code> reached through a declared
+  alias, or through recursion, boxes just the same.
 </p>
 
 <table>
   <thead>
-    <tr><th>Source</th><th><code>inner</code></th><th>Why <code>T | null</code> cannot carry it</th></tr>
+    <tr><th>Source</th><th>TypeScript</th><th>Why the box is needed</th></tr>
   </thead>
   <tbody>
-    <tr><td><code>type DoubleOpt = opt opt nat;</code></td><td><code>"opt"</code></td><td>The classic <code>None</code> versus <code>Some(None)</code>: both would be <code>null</code>.</td></tr>
-    <tr><td><code>type OptNull = opt null;</code></td><td><code>"null"</code></td><td>The payload's only value is already <code>null</code>.</td></tr>
-    <tr><td><code>type OptReserved = opt reserved;</code></td><td><code>"reserved"</code></td><td><code>unknown</code> absorbs <code>null</code> entirely.</td></tr>
-    <tr><td><code>type Inner = opt nat;</code> then <code>type Outer = opt Inner;</code></td><td><code>"opt"</code></td><td>Same as the first row — the alias changes the spelling, not the node.</td></tr>
+    <tr><td><code>type DoubleOpt = opt opt nat;</code></td><td><code>{ some: bigint | null } | null</code></td><td>The classic <code>None</code> versus <code>Some(None)</code>: unboxed, both would be <code>null</code>.</td></tr>
+    <tr><td><code>type OptNull = opt null;</code></td><td><code>{ some: null } | null</code></td><td>The payload's only value is already <code>null</code>.</td></tr>
+    <tr><td><code>type OptReserved = opt reserved;</code></td><td><code>{ some: unknown } | null</code></td><td><code>unknown</code> absorbs <code>null</code> entirely.</td></tr>
+    <tr><td><code>type Inner = opt nat;</code> then <code>type Outer = opt Inner;</code></td><td><code>{ some: Inner } | null</code></td><td>Same as the first row: the alias changes the spelling, not the node.</td></tr>
+    <tr><td><code>type Chain = opt Chain;</code></td><td><code>{ some: Chain } | null</code></td><td>The inner node is the <code>opt</code> itself.</td></tr>
+    <tr><td><code>type OptEmpty = opt empty;</code></td><td><code>never | null</code></td><td>Not boxed: <code>empty</code> has no values, so <code>null</code> is the only one.</td></tr>
   </tbody>
 </table>
 
-<p>All four are valid Candid and compile to a Contract without complaint. It is generation that stops.</p>
-
-<h3>What the caller observes</h3>
-
 <p>
-  In Rust, <code>generate_module</code> returns
-  <code>Err(TsGenError::UnrepresentableOption { declaration, inner })</code>. No error path emits
-  placeholder TypeScript, so you get either a module that compiles or an error naming what could not
-  be represented. Its <code>Display</code> text is exactly:
+  The builder is <code>c.opt(…)</code> in every row. The runtime's <code>OptDomain</code> type makes
+  the same decision from the inner domain, and validation, both codec directions, and the form model
+  make it from the resolved inner node when they walk a value, so the invariant annotation proves the
+  generated alias and the builder agree. The box changes the value shape only. Wire bytes and the
+  decoding coercion rules are exactly those of any other <code>opt</code>.
 </p>
 
-<pre data-lang="text">
-declaration `DoubleOpt` wraps `opt` in `opt`: `T | null` cannot distinguish `None` from `Some(None)` there, so generation refuses rather than collapsing the two
+<pre data-lang="ts">
+// type Description = opt opt text;
+encode(Description, null);          // None: keep the setting
+encode(Description, { some: null }); // Some(None): clear it
+encode(Description, { some: "x" });  // Some(Some("x")): set it
 </pre>
 
 <p>
-  In TypeScript, <code>schemaFromContract</code> refuses the same document with a
-  <code>ContractIssue</code> whose <code>code</code> is <code>"unrepresentable_option"</code>, at the
-  path of the offending node's <code>inner</code> edge, with the message
-  <code>opt wraps `opt`: `T | null` cannot distinguish None from Some(None) there</code>. See
-  <a href="reference-diagnostics.html">Diagnostics reference</a> for the full code list.
+  <code>schemaFromContract</code> loads the same documents and builds schemas that box identically.
+  Issues inside a box carry the <code>some</code> segment: an invalid payload in
+  <code>{ label: { some: 5 } }</code> is reported at <code>$.label.some</code>.
 </p>
 
-<callout type="warn" title="One further variant-arm refusal">
+<callout type="warn" title="The one opt shape that is refused">
   <p>
     A variant arm whose payload is a <em>declared</em> <code>opt</code> of an uninhabited type — a
     declared <code>opt empty</code>, or <code>opt</code> of an empty variant — is also refused, with

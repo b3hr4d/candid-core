@@ -225,6 +225,14 @@ if (encoded.ok) {
     <strong>Extra wire record fields and extra trailing arguments are skipped</strong> — and
     charged the same budgets as decoded values.
   </li>
+  <li>
+    <strong>A boxed <code>opt</code> follows the same rules.</strong> For an <code>opt</code> whose
+    inner type admits <code>null</code> (<code>opt opt T</code>, <code>opt null</code>,
+    <code>opt reserved</code>), a present value decodes as <code>{ some: v }</code>. A mismatch the
+    <em>inner</em> <code>opt</code> absorbs is <code>{ some: null }</code>, and one the outer
+    <code>opt</code> absorbs is <code>null</code>, exactly as the <code>candid</code> crate decodes
+    them.
+  </li>
 </ul>
 
 <p>

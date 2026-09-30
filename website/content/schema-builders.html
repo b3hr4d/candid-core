@@ -87,73 +87,66 @@ type Note = Infer<typeof Note>; // string | null
 </pre>
 
 <p>
-  That reading buys ordinary JavaScript ergonomics, and it costs one thing:
-  <code>T | null</code> can carry Candid's optionality only when <code>T</code> itself can never be
-  <code>null</code> in TypeScript. Three inner types break that, and all three are refused rather
-  than collapsed.
+  That reading buys ordinary JavaScript ergonomics, and it holds only while <code>T</code> itself can
+  never be <code>null</code> in TypeScript. Three inner types break that. For exactly those, the
+  present value is boxed as <code>{ some: T }</code>, so absence and a present-but-empty value stay
+  apart. Every other <code>opt</code> is unaffected.
 </p>
 
 <table>
   <thead>
-    <tr><th>Shape</th><th>Why <code>T | null</code> cannot carry it</th></tr>
+    <tr><th>Shape</th><th>Domain</th><th>Why <code>T | null</code> could not carry it</th></tr>
   </thead>
   <tbody>
     <tr>
       <td><code>opt opt T</code></td>
+      <td><code>{ some: T | null } | null</code></td>
       <td>
         The classic case. Candid distinguishes <code>None</code> from <code>Some(None)</code>;
-        <code>(T | null) | null</code> collapses to <code>T | null</code>, so the two absences
-        become one value and the distinction is lost on the way in and on the way out.
+        <code>(T | null) | null</code> would collapse to <code>T | null</code>, losing the
+        distinction on the way in and on the way out.
       </td>
     </tr>
     <tr>
       <td><code>opt null</code></td>
+      <td><code>{ some: null } | null</code></td>
       <td>
         The inner type's only value is <code>null</code>, which is also the encoding of absence.
-        <code>null | null</code> is <code>null</code>.
       </td>
     </tr>
     <tr>
       <td><code>opt reserved</code></td>
+      <td><code>{ some: unknown } | null</code></td>
       <td><code>reserved</code> infers <code>unknown</code>, which absorbs <code>null</code> entirely.</td>
     </tr>
   </tbody>
 </table>
 
-<p>
-  Both paths that derive schemas refuse. The Rust generator returns
-  <code>TsGenError::UnrepresentableOption</code> with a message naming the declaration and the
-  offending inner:
-</p>
+<pre data-lang="ts">
+const Description = c.opt(c.opt(c.text));
+type Description = Infer<typeof Description>; // { some: string | null } | null
 
-<pre data-lang="text">
-declaration `Outer` wraps `opt` in `opt`: `T | null` cannot distinguish `None` from `Some(None)` there, so generation refuses rather than collapsing the two
+validate(Description, null);           // ok: None
+validate(Description, { some: null }); // ok: Some(None)
+validate(Description, { some: "x" });  // ok: Some(Some("x"))
+validate(Description, "x");            // invalid_type at $
 </pre>
 
 <p>
-  The runtime loader refuses the document with an <code>unrepresentable_option</code> issue whose
-  path points at the offending node inside the Contract arena:
-</p>
-
-<pre data-lang="json">
-{
-  "code": "unrepresentable_option",
-  "path": "$.types[3].inner",
-  "message": "opt wraps `opt`: `T | null` cannot distinguish None from Some(None) there"
-}
-</pre>
-
-<p>
-  Contract-side paths are rooted at <code>$.contract</code> instead when the document you passed was
-  an envelope.
+  A box is strict like a record: <code>some</code> must be present as an own enumerable property,
+  and no other key may be. Issues inside it carry the <code>some</code> segment
+  (<code>$.some</code>, <code>$.label.some.some</code>). The decision is made on the inner
+  <em>node</em>, not its spelling, so a declared alias or a recursive reference
+  (<code>type Chain = opt Chain</code>) boxes the same way. Every walker makes it when it walks a
+  value, not when <code>c.opt</code> is called, so <code>c.opt</code> over a <code>c.rec</code> whose
+  thunk names a later <code>const</code> stays safe. <code>isBoxedOpt(schema)</code> answers the
+  question for a schema you hold. <code>opt empty</code> is not boxed: <code>empty</code> has no
+  values, so its only value is <code>null</code>.
 </p>
 
 <p>
-  The check is on the inner <em>node</em>, not its spelling, so routing through a declared alias
-  does not evade it — <code>type Inner = opt nat; type Outer = opt Inner;</code> is refused all the
-  same. Nothing stops you from writing <code>c.opt(c.opt(c.text))</code> by hand, but the type you
-  get back is <code>string | null</code>: the collapse is already in the inferred type, which is
-  precisely why the derived paths refuse to produce it.
+  The generator emits the boxed alias, <code>schemaFromContract</code> loads the same documents, and
+  the codec writes exactly the bytes any other <code>opt</code> would.
 </p>
 
 <h2>Collections: vec, blob and unit</h2>

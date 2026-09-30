@@ -1,0 +1,34 @@
+// Collapsing options: an `opt` whose inner type admits `null` boxes its
+// present value as `{ some: T } | null`; every other opt stays `T | null`.
+type DoubleOpt = opt opt nat;
+type TripleOpt = opt opt opt nat;
+type OptNull = opt null;
+type OptReserved = opt reserved;
+// Unboxed control: `empty` does not admit null, so this is plain `null`.
+type OptEmpty = opt empty;
+// Boxed through declared aliases: the test is on the node, not the spelling.
+type MaybeText = opt text;
+type AliasedOuter = opt MaybeText;
+type Nothing = null;
+type OptNothing = opt Nothing;
+type OptOptEmpty = opt OptEmpty;
+// Recursion: the inner of `Chain` is `Chain`'s own opt node.
+type Chain = opt Chain;
+// Mutual recursion through opt: `Ping` wraps a record (unboxed), `Pong`
+// wraps `Ping`, an opt (boxed).
+type Ping = opt record { pong : Pong };
+type Pong = opt Ping;
+// The set/clear/keep pattern real interfaces use (Internet Identity's
+// config, Orbit's `opt opt` fields, the asset canister's property updates).
+type Settings = record {
+  label : opt opt text;
+  limit : opt opt nat64;
+  flag : opt text;
+};
+// Variant arms whose payloads are collapsing opts carry `value`.
+type Change = variant { clear : opt null; set : opt opt text; keep };
+service : {
+  settings : () -> (Settings) query;
+  update : (Settings) -> (Change);
+  describe : (opt opt text) -> (opt opt text);
+}

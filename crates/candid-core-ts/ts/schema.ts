@@ -89,13 +89,40 @@ export interface PrimitiveSchema<T> extends Schema<T> {
 }
 
 /**
- * `opt T`, whose domain is `T | null`. Absence is exactly `null`;
- * `undefined` is not a Candid value and is checked against `inner`.
+ * The domain of `opt T`: `T | null` — unless `T` itself admits `null`, in
+ * which case the present value is boxed as `{ some: T }` so that `None`
+ * (`null`) and `Some(None)` (`{ some: null }`) stay distinct.
+ *
+ * `T` admits `null` exactly for the three *collapsing* inners: another
+ * `opt` (whose domain always includes `null`), the `null` primitive, and
+ * `reserved` (`unknown`). That is the same rule the walkers apply to the
+ * inner *node* at walk time ([`isBoxedOpt`]), so the static type and the
+ * runtime value agree for every schema whose domain type is known. An inner
+ * domain of `never` (`empty`, an empty variant) does not admit `null`, so
+ * `opt empty` stays the plain `null`. An `any` domain — the erased schemas
+ * the runtime loader returns — stays `any`: the static type cannot know the
+ * node, and the walkers decide.
+ *
+ * @example
+ * type A = OptDomain<bigint>; // bigint | null
+ * type B = OptDomain<bigint | null>; // { some: bigint | null } | null
+ */
+export type OptDomain<T> = 0 extends 1 & T
+  ? // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    any
+  : [null] extends [T]
+    ? { some: T } | null
+    : T | null;
+
+/**
+ * `opt T`. Absence is exactly `null`; `undefined` is not a Candid value and
+ * is checked against `inner`. The present value is `T` itself, or the box
+ * `{ some: T }` when `T` can itself be `null` — see [`OptDomain`].
  *
  * @example
  * c.opt(c.text).inner; // the `text` schema underneath
  */
-export interface OptSchema<T> extends Schema<T | null> {
+export interface OptSchema<T> extends Schema<OptDomain<T>> {
   readonly kind: "opt";
   readonly inner: Schema<T>;
 }
@@ -222,10 +249,10 @@ export interface TupleSchema<S extends readonly AnyFieldSchema[]> extends Schema
 // The one shape these rules cannot see through — a *declared* alias of
 // `opt empty`, statically identical to a declared alias of `null` — is
 // refused at generation (`TsGenError::AmbiguousVariantArm`); a hand-built
-// `c.rec` thunk over any null-domain opt (`opt empty`, `opt null`) passed
-// directly as an arm is likewise statically invisible (rec erases
-// structure) and stays a documented limitation, classified correctly by
-// the runtime either way.
+// `c.rec` thunk over a null-domain opt (`opt empty`; `opt null` boxes, so
+// its domain is no longer `null`) passed directly as an arm is likewise
+// statically invisible (rec erases structure) and stays a documented
+// limitation, classified correctly by the runtime either way.
 type VariantInfer<A extends FieldSchemas> = {
   [K in keyof A & string]: [Infer<A[K]>] extends [never]
     ? { tag: K; value: Infer<A[K]> }
@@ -577,13 +604,18 @@ export const c = {
    * Candid `opt T`, rendered as `T | null`: absence is exactly `null`, and
    * the property stays *present* on its record rather than going missing.
    *
-   * Because `T | null` cannot tell `null` apart from a nested absent value,
-   * an inner type that can itself be null fails closed wherever schemas are
-   * derived — the generator refuses such a declaration, and the runtime
-   * loader refuses the document with `unrepresentable_option`.
+   * When the inner type can itself be `null` — another `opt`, `null`, or
+   * `reserved` — `T | null` could not tell `None` from `Some(None)`, so the
+   * present value is boxed instead: `{ some: T } | null`. `opt opt nat` is
+   * `{ some: bigint | null } | null`, and its three states are `null`,
+   * `{ some: null }`, and `{ some: 5n }`. Only those three inner shapes box;
+   * every other opt, `opt empty` included, stays `T | null`. The runtime
+   * decides by resolving the inner node when it walks a value, never here,
+   * so `c.opt` over a `c.rec` thunk stays safe at module initialization.
    *
    * @example
    * c.record({ memo: c.opt(c.text) }); // { memo: string | null }
+   * c.opt(c.opt(c.nat)); // { some: bigint | null } | null
    */
   opt<T>(inner: Schema<T>): OptSchema<T> {
     return { kind: "opt", inner };
@@ -794,6 +826,49 @@ export function resolveSchema(schema: AnyFieldSchema): ResolvedNode {
     node = (node as { body(): unknown }).body();
   }
   throw new TypeError("rec chain exceeds the depth limit");
+}
+
+// Whether a *resolved* node's domain admits `null` as a value: an `opt` (its
+// absence is `null`), the `null` primitive, and `reserved` (every value
+// inhabits it). This is the one rule behind boxed options, stated publicly
+// by `isBoxedOpt` and statically by `OptDomain`. It is deliberately not
+// exported — the published surface is `isBoxedOpt` — so the walkers in
+// `validate.ts` and `codec.ts`, which must decide on a node they already
+// resolved under their own budgets, keep module-local copies of these three
+// lines; `tests/schema-types.test.ts` pins every copy to `isBoxedOpt`.
+//
+// The node must already be resolved: a `rec` answers `false`, because the
+// answer depends on what the thunk produces. Deciding at walk time rather
+// than inside `c.opt` is deliberate — `c.opt` over a `c.rec` whose thunk
+// names a later `const` must not force that thunk during module
+// initialization.
+function admitsNull(node: { readonly kind: string; readonly primitive?: unknown }): boolean {
+  return (
+    node.kind === "opt" ||
+    (node.kind === "primitive" && (node.primitive === "null" || node.primitive === "reserved"))
+  );
+}
+
+/**
+ * Whether a schema is an `opt` whose present values are boxed as
+ * `{ some: v }` — true exactly when it resolves to an `opt` whose inner
+ * schema resolves to a node whose domain admits `null`: another `opt`, the
+ * `null` primitive, or `reserved`. That covers `opt opt T`, `opt null`, and
+ * `opt reserved`, through any number of `rec` hops and declared aliases.
+ * Every other schema, `opt empty` and non-opts included, answers `false`.
+ * This is the rule every walker in this package applies at walk time, and
+ * the one [`OptDomain`] states at the type level.
+ *
+ * Resolution is [`resolveSchema`]'s, so this raises the `TypeError`s it
+ * does, on the same programmer errors.
+ *
+ * @example
+ * isBoxedOpt(c.opt(c.opt(c.nat))); // true
+ * isBoxedOpt(c.opt(c.nat)); // false
+ */
+export function isBoxedOpt(schema: AnyFieldSchema): boolean {
+  const node = resolveSchema(schema);
+  return node.kind === "opt" && admitsNull(resolveSchema(node.inner));
 }
 
 /**

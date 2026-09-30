@@ -18,6 +18,7 @@ import * as quoting from "../../tests/goldens/quoting.ts";
 import * as deferred from "../../tests/goldens/deferred.ts";
 import * as proto from "../../tests/goldens/proto.ts";
 import * as ledger from "../../tests/goldens/ledger.ts";
+import * as options from "../../tests/goldens/options.ts";
 
 function resolveLazy(node: FormNode): FormNode {
   let current = node;
@@ -37,6 +38,7 @@ test("every golden schema yields a form model without gaps", () => {
     deferred,
     proto,
     ledger,
+    options,
   };
   let built = 0;
   for (const name of Object.keys(modules)) {
@@ -403,4 +405,62 @@ test("PR #122 review: value-named fields and malformed escapes", () => {
   // above) — and a malformed quoted escape is undefined, never a throw.
   const account = formModel(ledger.Account as AnySchema);
   assert.strictEqual(formNodeAt(account, '$["\\x"]'), undefined);
+});
+
+test("a boxed opt is an optional whose inner node sits at .some", () => {
+  // opt opt nat: two nested presence toggles. The outer is boxed (its inner
+  // admits null) and edits `$.some`; the inner is plain and shares its path.
+  const root = formModel(c.opt(c.opt(c.nat)));
+  assert.strictEqual(root.control, "optional");
+  if (root.control !== "optional") {
+    return;
+  }
+  assert.strictEqual(root.boxed, true);
+  const inner = root.inner();
+  assert.strictEqual(inner.control, "optional");
+  assert.strictEqual(inner.path, "$.some");
+  if (inner.control === "optional") {
+    assert.strictEqual(inner.boxed, false);
+    assert.strictEqual(inner.inner().path, "$.some");
+    assert.strictEqual(inner.inner().control, "bigint");
+  }
+  // An unboxed opt keeps the same-path rule and says so.
+  const plain = formModel(c.opt(c.text));
+  assert(plain.control === "optional" && plain.boxed === false);
+  // opt null and opt reserved box over their constant leaf.
+  for (const schema of [c.opt(c.null), c.opt(c.reserved)]) {
+    const node = formModel(schema);
+    assert(node.control === "optional" && node.boxed);
+    if (node.control === "optional") {
+      assert.strictEqual(node.inner().control, "constant");
+      assert.strictEqual(node.inner().path, "$.some");
+    }
+  }
+});
+
+test("validation paths through a boxed opt resolve to form nodes", () => {
+  const settings = formModel(options.Settings as AnySchema);
+  // The issue validate reports inside a boxed field addresses the leaf.
+  const result = validate(options.Settings as Schema<unknown>, {
+    label: { some: 5 },
+    limit: null,
+    flag: null,
+  });
+  assert(!result.ok);
+  if (!result.ok) {
+    assert.strictEqual(result.issues[0].path, "$.label.some");
+    const node = formNodeAt(settings, result.issues[0].path);
+    assert.strictEqual(node?.control, "optional");
+    assert.strictEqual(node?.path, "$.label.some");
+  }
+  assert.strictEqual(formNodeAt(settings, "$.limit.some")?.control, "optional");
+  // Through the inner plain opt to its payload, which shares `.some`'s path.
+  assert.strictEqual(formNodeAt(settings, "$.label")?.control, "optional");
+  // A boxed opt has no payload segment other than `.some`.
+  assert.strictEqual(formNodeAt(settings, "$.label.value"), undefined);
+  // Recursion stays lazy and addressable level by level.
+  const chain = formModel(options.Chain as AnySchema);
+  const deep = formNodeAt(chain, "$.some.some.some");
+  assert.strictEqual(deep?.control, "optional");
+  assert.strictEqual(deep?.path, "$.some.some.some");
 });

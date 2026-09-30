@@ -23,6 +23,8 @@ import { encode, encodeArgs, decode, decodeArgs } from "../codec.ts";
 import { schemaFromContract } from "../contract.ts";
 import { c, type AnySchema, type Schema } from "../schema.ts";
 
+import * as options from "../../tests/goldens/options.ts";
+
 function fromHex(hexText: string): Uint8Array {
   const out = new Uint8Array(hexText.length / 2);
   for (let i = 0; i < out.length; i += 1) {
@@ -299,20 +301,20 @@ test("ic-reactor #565: an empty vec inside an opt is some, not none", () => {
   assert.deepStrictEqual(decodes(nested, bytes), [[]]);
 });
 
-test("ic-reactor #486: opt opt T cannot yet carry three states; it fails closed", () => {
+test("ic-reactor #486: opt opt T carries three states, boxed as { some }", () => {
   // `opt opt T` has three values (none, some(none), some(some x)), and
   // canisters use all three: Internet Identity's config and Orbit's
-  // `description : opt opt text` mean "keep", "clear", and "set". The domain
-  // shape `T | null` has only two, so today this pins the fail-closed
-  // behaviour instead of a three-state round trip.
-  //
-  // WHEN COLLAPSING OPTS ARE BOXED (`{ some: X } | null`), both halves of this
-  // test must flip: the loader must accept this document, and the three wire
-  // values below must decode to three distinct domain values that re-encode
-  // to their own bytes.
+  // `description : opt opt text` mean "keep", "clear", and "set". An opt whose
+  // inner type admits null is boxed, `{ some: X } | null`, so the three wire
+  // values decode to three distinct domain values that re-encode to their own
+  // bytes. The hex is the `candid` crate's own encoding too (the `options`
+  // wire golden's `described_*` cases). This test pinned the fail-closed
+  // behaviour until boxing landed; both halves are flipped.
+  const none = "4449444c026e016e71010000";
+  const someNone = "4449444c026e016e7101000100";
+  const someSome = "4449444c026e016e71010001010178";
 
-  // 1. Schemas derived from a Contract refuse the declaration, so generated
-  //    and loaded code never meets the collapse.
+  // 1. Schemas derived from a Contract accept the declaration.
   const loaded = schemaFromContract({
     format: "candid-core",
     format_version: 1,
@@ -325,24 +327,33 @@ test("ic-reactor #486: opt opt T cannot yet carry three states; it fails closed"
     ],
     declarations: [{ name: "Description", type: 0 }],
   });
-  assert(!loaded.ok, "the loader must refuse opt opt");
+  assert(loaded.ok, "the loader accepts opt opt");
   if (!loaded.ok) {
-    assert.deepStrictEqual(
-      loaded.issues.map((issue) => [issue.code, issue.path]),
-      [["unrepresentable_option", "$.types[0].inner"]],
-    );
+    return;
   }
 
-  // 2. A hand-built `c.opt(c.opt(...))`, which nothing refuses, shows why:
-  //    none and some(none) both decode to `null`, and `null` encodes as none,
-  //    so "clear" is unsendable and reads back as "keep".
-  const description = c.opt(c.opt(c.text));
-  const none = "4449444c026e016e71010000";
-  const someNone = "4449444c026e016e7101000100";
-  const someSome = "4449444c026e016e71010001010178";
-  assert.strictEqual(decodes(description, fromHex(none)), null);
-  assert.strictEqual(decodes(description, fromHex(someNone)), null);
-  assert.strictEqual(decodes(description, fromHex(someSome)), "x");
-  encodesTo(description, null, none);
-  encodesTo(description, "x", someSome);
+  // 2. Hand-built, generated, and loaded schemas all carry keep, clear, and
+  //    set losslessly, and refuse the collapsed spelling rather than reading
+  //    it as "set".
+  for (const description of [
+    c.opt(c.opt(c.text)),
+    options.AliasedOuter as AnySchema,
+    loaded.schemas.Description,
+  ]) {
+    assert.strictEqual(decodes(description, encodesTo(description, null, none)), null);
+    assert.deepStrictEqual(decodes(description, encodesTo(description, { some: null }, someNone)), {
+      some: null,
+    });
+    assert.deepStrictEqual(decodes(description, encodesTo(description, { some: "x" }, someSome)), {
+      some: "x",
+    });
+    const collapsed = encode(description as Schema<unknown>, "x");
+    assert(!collapsed.ok, "a bare payload is not a present boxed value");
+    if (!collapsed.ok) {
+      assert.deepStrictEqual(
+        [collapsed.issues[0].code, collapsed.issues[0].path],
+        ["invalid_type", "$"],
+      );
+    }
+  }
 });

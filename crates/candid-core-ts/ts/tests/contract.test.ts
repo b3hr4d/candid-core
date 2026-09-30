@@ -1,5 +1,5 @@
 // `schemaFromContract` construction tests: the fail-closed paths, the
-// collapsing-opt rule in all four recorded forms, deferred handling, and the
+// collapsing-opt forms (which load and box), deferred handling, and the
 // bounded-input guards. The golden cross-check in crosscheck.test.ts covers
 // the happy paths against the generated builders.
 
@@ -14,6 +14,7 @@ import {
 } from "../contract.ts";
 import { validate } from "../validate.ts";
 import { candidLabelHash } from "../labels.ts";
+import { isBoxedOpt, type AnySchema } from "../schema.ts";
 
 type Json = ReturnType<typeof JSON.parse>;
 
@@ -46,47 +47,87 @@ function failsWith(result: SchemaFromContractResult, code: ContractIssueCode, pa
   assert.strictEqual(result.issues[0].path, path);
 }
 
-test("collapsing opts are rejected at construction: opt opt", () => {
-  const result = schemaFromContract(
-    document(
-      [{ kind: "opt", inner: 1 }, { kind: "opt", inner: 2 }, primitive("nat")],
-      [{ name: "DoubleOpt", type: 0 }],
+/** Build a document that must load, and return its schemas. */
+function builds(result: SchemaFromContractResult): { readonly [name: string]: AnySchema } {
+  assert(result.ok, `expected schema construction to succeed: ${JSON.stringify(codesOf(result))}`);
+  if (!result.ok) {
+    throw new Error("unreachable");
+  }
+  return result.schemas;
+}
+
+// Collapsing opts (`opt opt`, `opt null`, `opt reserved`) load and box their
+// present value as `{ some: v }`; the four forms the loader used to refuse
+// with `unrepresentable_option`, now each held to its three states.
+test("collapsing opts load and box: opt opt", () => {
+  const { DoubleOpt } = builds(
+    schemaFromContract(
+      document(
+        [{ kind: "opt", inner: 1 }, { kind: "opt", inner: 2 }, primitive("nat")],
+        [{ name: "DoubleOpt", type: 0 }],
+      ),
     ),
   );
-  failsWith(result, "unrepresentable_option", "$.types[0].inner");
+  assert.strictEqual(isBoxedOpt(DoubleOpt), true);
+  for (const value of [null, { some: null }, { some: 5n }]) {
+    assert.deepStrictEqual(validate(DoubleOpt, value), { ok: true });
+  }
+  assert.strictEqual(validate(DoubleOpt, 5n).ok, false);
 });
 
-test("collapsing opts are rejected at construction: opt null", () => {
-  const result = schemaFromContract(
-    document([{ kind: "opt", inner: 1 }, primitive("null")], [{ name: "OptNull", type: 0 }]),
-  );
-  failsWith(result, "unrepresentable_option", "$.types[0].inner");
-});
-
-test("collapsing opts are rejected at construction: opt reserved", () => {
-  const result = schemaFromContract(
-    document(
-      [{ kind: "opt", inner: 1 }, primitive("reserved")],
-      [{ name: "OptReserved", type: 0 }],
+test("collapsing opts load and box: opt null", () => {
+  const { OptNull } = builds(
+    schemaFromContract(
+      document([{ kind: "opt", inner: 1 }, primitive("null")], [{ name: "OptNull", type: 0 }]),
     ),
   );
-  failsWith(result, "unrepresentable_option", "$.types[0].inner");
+  assert.deepStrictEqual(validate(OptNull, { some: null }), { ok: true });
+  assert.deepStrictEqual(validate(OptNull, null), { ok: true });
 });
 
-test("collapsing opts are rejected at construction: the aliased form", () => {
+test("collapsing opts load and box: opt reserved", () => {
+  const { OptReserved } = builds(
+    schemaFromContract(
+      document(
+        [{ kind: "opt", inner: 1 }, primitive("reserved")],
+        [{ name: "OptReserved", type: 0 }],
+      ),
+    ),
+  );
+  assert.deepStrictEqual(validate(OptReserved, { some: "anything" }), { ok: true });
+  // `undefined` is not a Candid value, and a bare one is no box.
+  assert.strictEqual(validate(OptReserved, undefined).ok, false);
+});
+
+test("collapsing opts load and box: the aliased form", () => {
   // `type Inner = opt nat; type Outer = opt Inner` — the arena holds no alias
-  // indirection, so Outer's inner node *is* the opt node, and the check is on
-  // the node, not its spelling.
-  const result = schemaFromContract(
-    document(
-      [{ kind: "opt", inner: 1 }, { kind: "opt", inner: 2 }, primitive("nat")],
-      [
-        { name: "Inner", type: 1 },
-        { name: "Outer", type: 0 },
-      ],
+  // indirection, so Outer's inner node *is* the opt node, and the box follows
+  // the node, not its spelling. Inner itself stays `bigint | null`.
+  const { Inner, Outer } = builds(
+    schemaFromContract(
+      document(
+        [{ kind: "opt", inner: 1 }, { kind: "opt", inner: 2 }, primitive("nat")],
+        [
+          { name: "Inner", type: 1 },
+          { name: "Outer", type: 0 },
+        ],
+      ),
     ),
   );
-  failsWith(result, "unrepresentable_option", "$.types[0].inner");
+  assert.strictEqual(isBoxedOpt(Outer), true);
+  assert.strictEqual(isBoxedOpt(Inner), false);
+  assert.deepStrictEqual(validate(Outer, { some: 5n }), { ok: true });
+  assert.deepStrictEqual(validate(Inner, 5n), { ok: true });
+});
+
+test("a self-recursive opt loads and boxes at every level", () => {
+  // `type Chain = opt Chain`: the node's inner is itself. Construction is
+  // lazy, so building never forces the cycle; walking decides per level.
+  const { Chain } = builds(
+    schemaFromContract(document([{ kind: "opt", inner: 0 }], [{ name: "Chain", type: 0 }])),
+  );
+  assert.deepStrictEqual(validate(Chain, { some: { some: null } }), { ok: true });
+  assert.strictEqual(validate(Chain, { some: {} }).ok, false);
 });
 
 test("a func nested in a supported type builds (issue #104)", () => {
@@ -977,9 +1018,9 @@ test("contract-side issues inside an envelope are rooted at $.contract", () => {
   );
   failsWith(
     schemaFromContract({
-      contract: document([{ kind: "opt", inner: 1 }, primitive("null")], [{ name: "O", type: 0 }]),
+      contract: document([{ kind: "opt", inner: 7 }], [{ name: "O", type: 0 }]),
     }),
-    "unrepresentable_option",
+    "dangling_type_ref",
     "$.contract.types[0].inner",
   );
 });
