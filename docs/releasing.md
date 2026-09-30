@@ -500,6 +500,18 @@ The package versions independently of the crate (pre-1.0). Bump
 `candid-core` generator version the release pairs with, and record the pair
 in the npm release notes.
 
+Between releases, changes accumulate in an `## Unreleased` section at the
+top of `ts/CHANGELOG.md`. Release prep, in that same version-bump PR, renames
+it to `## <version> — <YYYY-MM-DD>` and adds the pairing line, leaving no
+`## Unreleased` section behind. The rename is what re-arms the packaged-
+artifact gate's measured-number check: while an `## Unreleased` section
+exists, `verify_npm_package.py` treats the tree as development past the
+packed version and does not compare figures the released entry states (such
+as the `schema.d.ts` line count) against the artifact, because that entry
+measured the artifact it shipped, not the one a later PR packs. Once the
+section is renamed, every figure the entry being released states must match
+the artifact exactly, and the gate refuses a stale one.
+
 ## npm: `@candid-core/cli`
 
 The second package under the scope (name recorded with owner sign-off on

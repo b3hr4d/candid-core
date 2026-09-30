@@ -222,10 +222,15 @@ def main():
         # some later release moving the file — a published entry describes its
         # own version forever — but against the entry being authored early and
         # the artifact drifting underneath it before the dispatch, which is
-        # exactly how the 0.1.1-era figure went stale.
-        for stated_from, stated_to in re.findall(
+        # exactly how the 0.1.1-era figure went stale. So it applies only at
+        # release: while the changelog still carries an `## Unreleased`
+        # section, the tree is development past the packed version, whose
+        # published entry measured the artifact it shipped, not this one.
+        # Release prep renames that section, which re-arms the check.
+        developing = "Unreleased" in entries
+        for stated_from, stated_to in ([] if developing else re.findall(
             r"`schema\.d\.ts` grows from (\d+) lines to (\d+)", body
-        ):
+        )):
             actual = len(
                 (extracted / "dist" / "schema.d.ts").read_text().splitlines()
             )
