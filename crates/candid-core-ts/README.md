@@ -104,7 +104,8 @@ a canonical Contract JSON document, applying every generator mapping decision
 caller-supplied name-table shape `TsNames` takes. The golden cross-check test
 proves the two paths agree: for every fixture, the dynamically built schema
 must return the identical `validate` result the generated builder returns,
-sample by sample. The suites run on Node's built-in test runner with native
+sample by sample, and both leave out the same declarations and actor methods
+for the same reasons. The suites run on Node's built-in test runner with native
 type stripping — no test framework, no `@types/node`, no npm dependency
 beyond the pinned TypeScript.
 
@@ -118,10 +119,36 @@ can shadow the import, the global types the lowerings reference (`Array`,
 `type Array`, `type delete` and `type string` all generate, and a consumer
 imports them by name (`import { delete as del } from "./service"`); a
 declaration named `default` becomes the default export. The only names still
-refused are the module's own export names `actor` and `Actor`, with
-`ReservedDeclarationName`, unconditionally. Consumers import the export
-names, which did not change; the module's local names are not a supported
-surface.
+reserved are the module's own export names `actor` and `Actor`,
+unconditionally: a declaration by either name is omitted (below). Consumers
+import the export names, which did not change; the module's local names are
+not a supported surface.
+
+**What cannot be represented is omitted, not refused (issue #189).**
+`generate_module` returns a `GeneratedModule { module, omitted }`. A
+declaration the module cannot represent — a field or arm name shaped like the
+`_N_` id rendering (`reserved_field_name`), a variant arm whose payload is a
+declared `opt` of an uninhabited type (`ambiguous_variant_arm`), a declaration
+named `actor` or `Actor` (`reserved_export_name`), or, from a Contract
+document only, a name that is not identifier-shaped
+(`invalid_declaration_name`) — is left out together with every declaration
+that references it, through any type edge up to the containing declaration:
+a record holding a `service { f : (Bad) -> () }` is omitted whole, because
+dropping `f` would change the wire type a peer sees
+(`references_omitted`, with `via` naming the omitted declaration). Only the
+actor drops individual methods, from both `actor` and `Actor` — calling a
+method never encodes the actor's own service type. Each omission is an
+`Omission { kind, name, reason, via }`, listed declarations first, then
+methods, each by name, and the module's header carries one
+`// Omitted: type Holder (references_omitted via Bad)` line per entry; a
+module that omits nothing is byte-identical to what the generator emitted
+before. The `omissions` fixture pins the closure, and a test proves that
+everything the module keeps is byte-identical to a module generated with the
+omitted declarations deleted from the source. Only an invalid Contract graph
+still refuses the whole module (`TsGenError`: a class outside the actor root,
+a dangling reference) — which no validated `Contract`, and so no `.did`
+source, can reach. `schemaFromContract` omits exactly the same entries for the
+same Contract and reports them as its result's `omitted`.
 
 **Golden tests carry the mapping decisions.** Each fixture under
 `tests/fixtures/` must generate byte-identical output to its checked-in golden

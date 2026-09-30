@@ -41,6 +41,7 @@ test("every golden fixture reproduces its reviewed module byte-for-byte", () => 
     "shadowing",
     "fidelity",
     "docs",
+    "omissions",
   ]) {
     const scratch = mkdtempSync(path.join(tmpdir(), `candid-cli-${name}-`));
     writeFileSync(
@@ -54,6 +55,41 @@ test("every golden fixture reproduces its reviewed module byte-for-byte", () => 
     const golden = readFileSync(path.join(GOLDENS, `${name}.ts`), "utf8");
     assert.strictEqual(produced, golden, `${name}: module must equal the reviewed golden`);
   }
+});
+
+// Issue #189: a module that leaves declarations out is usable, so the run
+// succeeds; each omission is a warning on stderr worded as the module's own
+// header line, and nothing about it reaches stdout's report. The library
+// returns the native generator's list verbatim.
+test("omissions are warnings, the run succeeds, and the library lists them", async () => {
+  const scratch = mkdtempSync(path.join(tmpdir(), "candid-cli-omissions-"));
+  writeFileSync(
+    path.join(scratch, "omissions.did"),
+    readFileSync(path.join(FIXTURES, "omissions.did"), "utf8"),
+  );
+  const out = path.join(scratch, "out");
+  const run = gen(["gen", path.join(scratch, "omissions.did"), "-o", out]);
+  assert.strictEqual(run.status, 0, `${run.stdout}${run.stderr}`);
+  const module = readFileSync(path.join(out, "omissions.ts"), "utf8");
+  const header = module
+    .split("\n")
+    .filter((line) => line.startsWith("// Omitted: "))
+    .map((line) => `warning: omitted ${line.slice("// Omitted: ".length)}`);
+  assert.ok(header.length > 0);
+  assert.deepStrictEqual(run.stderr.trimEnd().split("\n"), header);
+  assert.doesNotMatch(run.stdout, /omitted/);
+  assert.match(run.stdout, /^wrote .*omissions\.ts$/m);
+
+  const { didToModule } = await import("../lib/index.js");
+  const result = await didToModule(readFileSync(path.join(FIXTURES, "omissions.did"), "utf8"));
+  assert.strictEqual(result.ok, true);
+  assert.deepStrictEqual(
+    result.omitted,
+    JSON.parse(readFileSync(path.join(GOLDENS, "omissions.omitted.json"), "utf8")),
+  );
+  // A module that omits nothing says so with an empty list, not a missing key.
+  const clean = await didToModule("service : { ping : () -> () }");
+  assert.deepStrictEqual(clean.omitted, []);
 });
 
 test("the envelope is byte-identical to the native CLI's committed output", () => {

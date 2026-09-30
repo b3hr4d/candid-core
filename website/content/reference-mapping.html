@@ -189,7 +189,7 @@
       <td><code>{"kind":"class","init":[…],"service":N}</code></td>
       <td>— (unwrapped at actor position)</td>
       <td>the wrapped service's builder</td>
-      <td>A class denotes its running service. At actor position it unwraps and the module gains a note that init args are install-time metadata not exposed. A class reached through a value edge fails closed with <code>UnsupportedConstruct</code>.</td>
+      <td>A class denotes its running service. At actor position it unwraps and the module gains a note that init args are install-time metadata not exposed. A class reached through a value edge is an invalid Contract and refuses the whole module with <code>UnsupportedConstruct</code>.</td>
     </tr>
     <tr>
       <td>a declared name, including recursively</td>
@@ -395,47 +395,60 @@ encode(Description, { some: "x" });  // Some(Some("x")): set it
   <code>{ label: { some: 5 } }</code> is reported at <code>$.label.some</code>.
 </p>
 
-<callout type="warn" title="The one opt shape that is refused">
+<callout type="warn" title="The one opt shape that is omitted">
   <p>
     A variant arm whose payload is a <em>declared</em> <code>opt</code> of an uninhabited type — a
-    declared <code>opt empty</code>, or <code>opt</code> of an empty variant — is also refused, with
-    <code>TsGenError::AmbiguousVariantArm</code>. Through a reference its static type is identical to
-    an alias of <code>null</code>, which the type-level classifier must read as a bare tag, while the
-    emitter and the runtime classify it as carrying a value; no type-level rule satisfies both. The
-    anonymous form still works: <code>variant { a : opt empty }</code> renders
+    declared <code>opt empty</code>, or <code>opt</code> of an empty variant — cannot be represented.
+    Through a reference its static type is identical to an alias of <code>null</code>, which the
+    type-level classifier must read as a bare tag, while the emitter and the runtime classify it as
+    carrying a value; no type-level rule satisfies both. The variant is omitted
+    (<code>ambiguous_variant_arm</code>, below); the <code>opt</code> declaration itself generates. The
+    anonymous form works: <code>variant { a : opt empty }</code> renders
     <code>{ tag: "a"; value: never | null }</code> with builder <code>c.opt(c.empty)</code>.
   </p>
 </callout>
 
-<h3>Three more refusals, on names rather than shapes</h3>
+<h3>What is omitted rather than generated</h3>
 
 <p>
-  Generation also stops on a name it cannot emit safely. These are the remaining
-  <code>TsGenError</code> variants a well-formed Contract can reach:
+  A declaration the module cannot represent is left out, together with every declaration and actor
+  method that references it — through any type edge, nested <code>func</code> and
+  <code>service</code> types included, up to the containing declaration — and listed in the module
+  header and in the generator's <code>omitted</code> list; the rest of the module generates. Since
+  issue #189 these are omissions, not refusals of the whole interface. The reasons:
 </p>
 
 <dl>
-  <dt><code>InvalidDeclarationName</code></dt>
-  <dd>
-    A declaration name that is not identifier-shaped (<code>[A-Za-z_$][A-Za-z0-9_$]*</code>), so it
-    cannot name a binding. Candid source cannot produce one; a hand-built or JSON-loaded Contract can.
-  </dd>
-  <dt><code>ReservedDeclarationName</code></dt>
-  <dd>
-    A declaration named after one of the module's own export names, <code>actor</code> or
-    <code>Actor</code>, which the actor surface exports. Both are refused unconditionally, actor or
-    not, so adding an actor to a contract cannot start breaking a declaration name that worked
-    before. Every other name generates: declarations bind <code>$</code>-prefixed locals, so the
-    runtime's <code>c</code>, <code>Schema</code> and <code>Principal</code>, the global
-    <code>Array</code>, <code>Record</code>, <code>Uint8Array</code> and <code>Promise</code>, and
-    reserved words such as <code>delete</code> are all ordinary declaration names.
-  </dd>
-  <dt><code>ReservedFieldName</code></dt>
+  <dt><code>reserved_field_name</code></dt>
   <dd>
     A supplied field or arm name shaped like the <code>_N_</code> id rendering. Erased to a schema
     key it is indistinguishable from the rendering of numeric label id N, and the codec derives wire
     ids from keys, so such a name would send id N instead of the name's hash. The runtime's Contract
-    loader refuses the same shape in a name table.
+    loader omits the same declarations.
+  </dd>
+  <dt><code>ambiguous_variant_arm</code></dt>
+  <dd>The declared-<code>opt</code>-of-uninhabited arm above.</dd>
+  <dt><code>reserved_export_name</code></dt>
+  <dd>
+    A declaration named after one of the module's own export names, <code>actor</code> or
+    <code>Actor</code>, which the actor surface exports. Both are omitted unconditionally, actor or
+    not, so adding an actor to a contract cannot change what an unrelated declaration generates.
+    Every other name generates: declarations bind <code>$</code>-prefixed locals, so the runtime's
+    <code>c</code>, <code>Schema</code> and <code>Principal</code>, the global <code>Array</code>,
+    <code>Record</code>, <code>Uint8Array</code> and <code>Promise</code>, and reserved words such as
+    <code>delete</code> are all ordinary declaration names.
+  </dd>
+  <dt><code>invalid_declaration_name</code></dt>
+  <dd>
+    A declaration name that is not identifier-shaped (<code>[A-Za-z_$][A-Za-z0-9_$]*</code>), so it
+    cannot name a binding. Candid source cannot produce one; a hand-built or JSON-loaded Contract can.
+  </dd>
+  <dt><code>references_omitted</code></dt>
+  <dd>
+    The declaration or method references an omitted declaration, named by <code>via</code>. A record
+    holding <code>service { f : (Bad) -&gt; () }</code> is omitted whole rather than losing
+    <code>f</code>, because a service value's wire type is its full method table. Only the actor drops
+    individual methods, from both <code>actor</code> and <code>Actor</code>.
   </dd>
 </dl>
 

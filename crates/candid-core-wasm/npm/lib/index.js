@@ -57,8 +57,9 @@ export async function didToContract(sources) {
 
 /**
  * Generate the `@candid-core/schema` TypeScript module for Candid sources.
- * Returns `{ ok: true, module }` with the generated text — byte-identical to
- * what the Rust-native generator emits — or `{ ok: false, diagnostics }`.
+ * Returns `{ ok: true, module, omitted }` with the generated text —
+ * byte-identical to what the Rust-native generator emits — and the
+ * declarations and methods it left out, or `{ ok: false, diagnostics }`.
  */
 export async function didToModule(sources) {
   await init();

@@ -21,7 +21,9 @@
 
 <p>
   <code>candid-core-ts</code> is a library crate, not a command. Its entry point produces one
-  TypeScript module for the whole Contract, or refuses:
+  TypeScript module for the whole Contract, leaving out — and listing in the result's
+  <code>omitted</code> — any declaration it cannot represent, with what references it. Only an invalid
+  Contract graph refuses:
 </p>
 
 <pre data-lang="rust" data-file="crates/candid-core-ts/src/lib.rs">
@@ -29,7 +31,7 @@ pub fn generate_module(
     contract: &Contract,
     names: &TsNames,
     options: &TsOptions,
-) -> Result<String, TsGenError>
+) -> Result<GeneratedModule, TsGenError>
 </pre>
 
 <p>

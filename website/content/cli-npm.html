@@ -182,8 +182,8 @@ wrote generated/basic.envelope.json
   <tbody>
     <tr>
       <td><code>0</code></td>
-      <td>Both files written</td>
-      <td>Identities and two <code>wrote</code> lines on stdout</td>
+      <td>Both files written, including a module that omits declarations</td>
+      <td>Identities and two <code>wrote</code> lines on stdout; one <code>warning: omitted …</code> line per omission on stderr</td>
     </tr>
     <tr>
       <td><code>1</code></td>
@@ -242,8 +242,9 @@ wrote generated/basic.envelope.json
     <pre data-lang="js" data-file="crates/candid-core-wasm/npm/lib/index.js">export async function didToModule(sources)</pre>
     <p>
       Generates the <code>@candid-core/schema</code> TypeScript module for the same two source shapes.
-      Returns <code>{ ok: true, module }</code>, where <code>module</code> is the generated text, or
-      <code>{ ok: false, diagnostics }</code>.
+      Returns <code>{ ok: true, module, omitted }</code>, where <code>module</code> is the generated
+      text and <code>omitted</code> lists what it left out (empty when nothing; see
+      <a href="#omissions">Omissions</a>), or <code>{ ok: false, diagnostics }</code>.
     </p>
   </div>
 </div>
@@ -266,7 +267,7 @@ wrote generated/basic.envelope.json
 
 <callout type="warn" title="The two functions signal success differently">
   <p>
-    <code>didToModule</code> returns <code>{ ok: true, module }</code>. <code>didToContract</code> does
+    <code>didToModule</code> returns <code>{ ok: true, module, omitted }</code>. <code>didToContract</code> does
     <em>not</em> carry an <code>ok</code> key on success — it returns the envelope document, and you
     check for <code>"contract" in result</code>. This mirrors the native binary, where
     <code>compile --envelope</code> prints the envelope rather than an <code>ok</code>-wrapped response.
@@ -293,8 +294,8 @@ const generated = await didToModule({
     "types.did": "type Item = record { id : nat };",
   },
 });
-// → { ok: true, module } with the generated TypeScript text, or
-//   { ok: false, diagnostics }.
+// → { ok: true, module, omitted } with the generated TypeScript text and
+//   what it left out (empty here), or { ok: false, diagnostics }.
 </pre>
 
 <p>
@@ -311,6 +312,36 @@ import { schemaFromContract } from "@candid-core/schema/contract";
 const built = schemaFromContract(await didToContract(didText));
 </pre>
 
+<h3>Omissions</h3>
+
+<p>
+  A declaration the generator cannot represent costs only itself and what depends on it. It is left out
+  together with every declaration and actor method that references it — through nested
+  <code>func</code> and <code>service</code> types too, up to the containing declaration — and the
+  module is still a success: <code>gen</code> writes it and exits 0, printing one line per omission on
+  stderr, worded exactly as the module header lists it:
+</p>
+
+<pre data-lang="text">
+warning: omitted type Bad (reserved_field_name)
+warning: omitted type Registry (references_omitted via Bad)
+warning: omitted method bad (references_omitted via Bad)
+</pre>
+
+<p>
+  <code>didToModule</code> returns the same list as <code>omitted</code>: an array of
+  <code>{ kind, name, reason, via? }</code>, declarations first, then methods, each sorted by name.
+  <code>kind</code> is <code>"declaration"</code> or <code>"method"</code> (a method of the actor's
+  service, dropped from both <code>actor</code> and <code>Actor</code>). <code>reason</code> is one of a
+  closed set — <code>reserved_field_name</code>, <code>ambiguous_variant_arm</code>,
+  <code>reserved_export_name</code>, <code>invalid_declaration_name</code> (Contract documents only) and
+  <code>references_omitted</code> — explained on <a href="generator.html">the code generator</a> page;
+  <code>via</code>, present only for <code>references_omitted</code>, names the omitted declaration
+  referenced. Everything the module still emits is exactly what it would be had the omitted
+  declarations never been written, and <code>schemaFromContract</code> omits the same entries from the
+  envelope.
+</p>
+
 <h3>Failures</h3>
 
 <p>
@@ -319,8 +350,9 @@ const built = schemaFromContract(await didToContract(didText));
   stable codes — <code>did_parse_error</code>, resolver refusals such as
   <code>did_source_scheme_mismatch</code>, resource bounds. Two codes originate in this layer:
   <code>invalid_request</code> (phase <code>load</code>) when the request document is neither of the two
-  accepted shapes, and <code>ts_generation_refused</code> (phase <code>generate</code>) carrying the
-  generator's fail-closed refusal text. A matrix of nine malformed requests — including
+  accepted shapes, and <code>ts_generation_refused</code> (phase <code>generate</code>), kept for a
+  generator refusal of an invalid Contract graph — which a Contract compiled from Candid source never
+  is, so no <code>.did</code> reaches it: what cannot be represented is omitted instead. A matrix of nine malformed requests — including
   <code>"not json"</code>, <code>"{}"</code>, and a request carrying both <code>source</code> and
   <code>entry</code> — is pinned to return <code>invalid_request</code> rather than panicking.
 </p>

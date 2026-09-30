@@ -197,10 +197,10 @@ pub fn generate_module(
     contract: &Contract,
     names: &TsNames,
     options: &TsOptions,
-) -> Result<String, TsGenError>
+) -> Result<GeneratedModule, TsGenError>
 </pre>
 
-<p><code>TsNames</code> is the table of field and variant-arm spellings, keyed by <code>(container, label id)</code>. A Contract stores only the numeric Candid label id, so you supply the spellings yourself. Build it with <code>TsNames::new()</code> (every field renders <code>_N_</code>), <code>TsNames::from_pairs</code>, or <code>TsNames::from_source_info</code>. <code>TsOptions</code> carries one field, <code>principal_import</code>.</p>
+<p><code>TsNames</code> is the table of field and variant-arm spellings, keyed by <code>(container, label id)</code>. A Contract stores only the numeric Candid label id, so you supply the spellings yourself. Build it with <code>TsNames::new()</code> (every field renders <code>_N_</code>), <code>TsNames::from_pairs</code>, or <code>TsNames::from_source_info</code>. <code>TsOptions</code> carries one field, <code>principal_import</code>. The result is the module text plus <code>omitted</code>, the declarations and actor methods it had to leave out and why; see <a href="generator.html">The code generator</a>.</p>
 
 <table>
   <thead><tr><th>Feature</th><th>What it adds</th></tr></thead>

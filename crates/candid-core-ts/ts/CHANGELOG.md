@@ -372,6 +372,46 @@ below. `DEFAULT_MAX_DEPTH` stays 256 and every other limit keeps its meaning.
   once per enclosing record to put them in wire order, so deeply nested
   records encode in linear rather than quadratic time. Bytes are unchanged.
 
+### `schemaFromContract` omits what the generator omits
+
+The loader leaves out exactly the declarations and actor methods a generated
+module leaves out for the same Contract, with the same reasons, and says so
+(issue #189). No wire encoding, validation verdict or issue code moved; an
+invalid document still fails whole, with `issues`.
+
+- **BREAKING**: a name-table entry whose name is shaped like the `_N_`
+  numeric-id rendering and honestly hashes to its id — a Candid field
+  genuinely named `_123_` — no longer fails the document with
+  `invalid_name_table`. Such a name never becomes a schema key (as one, it
+  would read back as numeric id N and encode the wrong wire id); the
+  declaration that would render it is left out instead, with everything that
+  references it. An `_N_`-shaped name that does not hash to its id is still a
+  lying entry and still refused; an entry that names no rendered field is
+  ignored, as for any other name.
+- **BREAKING**: declarations that loaded before are now left out of
+  `schemas`, together with every declaration and actor method that
+  references them, because a generated module cannot represent them: a
+  declaration named `actor` or `Actor` (the generated module's own export
+  names), a variant whose arm payload is a declared `opt` of an uninhabited
+  type, and a declaration whose name is not identifier-shaped
+  (`[A-Za-z_$][A-Za-z0-9_$]*`) — which reverses the loader's former
+  deliberate divergence from the generator on such names, for parity.
+  Omission follows every reference, nested `func` and `service` types
+  included, up to the containing declaration; the actor loses only the listed
+  methods and is never itself omitted.
+- **BREAKING (type)**: the `ok` branch of `SchemaFromContractResult` gains a
+  required `omitted: readonly { kind, name, reason, via? }[]` — declarations
+  first, then methods, each sorted by name in code-point order, empty when
+  nothing is left out. `kind` is `"declaration"` or `"method"`; `reason` is
+  one of the closed set `reserved_field_name`, `ambiguous_variant_arm`,
+  `reserved_export_name`, `invalid_declaration_name`, `references_omitted`;
+  `via` names the omitted declaration a `references_omitted` entry
+  references. Reading results is unaffected; code that constructs an `ok`
+  result by hand must add the field. The entry types are not exported by name.
+- **Release ordering**: ship with the `@candid-core/cli` generator change
+  that omits the same entries; the golden crosscheck holds the two lists
+  equal, entry for entry, on the new `omissions` fixture.
+
 ## 0.2.0 — 2026-08-24
 
 Pairs with `candid-core` 0.1.0-beta.3.

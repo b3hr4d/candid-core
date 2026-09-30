@@ -1,0 +1,604 @@
+{
+  "contract": {
+    "actor": {
+      "kind": "service",
+      "service": 0
+    },
+    "canonicalization_profile": "candid-core-canon-1",
+    "declarations": [
+      {
+        "name": "Actor",
+        "type": 6
+      },
+      {
+        "name": "Ambiguous",
+        "type": 12
+      },
+      {
+        "name": "AnonymousBad",
+        "type": 33
+      },
+      {
+        "name": "Bad",
+        "type": 5
+      },
+      {
+        "name": "BadAlias",
+        "type": 5
+      },
+      {
+        "name": "Callback",
+        "type": 19
+      },
+      {
+        "name": "Deep",
+        "type": 25
+      },
+      {
+        "name": "Directory",
+        "type": 8
+      },
+      {
+        "name": "Good",
+        "type": 2
+      },
+      {
+        "name": "Handlers",
+        "type": 29
+      },
+      {
+        "name": "Holder",
+        "type": 36
+      },
+      {
+        "name": "List",
+        "type": 16
+      },
+      {
+        "name": "Loop",
+        "type": 37
+      },
+      {
+        "name": "NoValue",
+        "type": 13
+      },
+      {
+        "name": "Registry",
+        "type": 30
+      },
+      {
+        "name": "TwoCauses",
+        "type": 39
+      },
+      {
+        "name": "UsesActor",
+        "type": 32
+      },
+      {
+        "name": "UsesAmbiguous",
+        "type": 28
+      },
+      {
+        "name": "actor",
+        "type": 24
+      }
+    ],
+    "format": "candid-core",
+    "format_version": 1,
+    "identities": {
+      "contract": "candid-core:contract:v1:sha256:dc7fcd0add6a5cef1be1507089741d86c4ce6a583d4a53f0281731032fe367e1",
+      "interface": "candid-core:interface:v1:sha256:3e0d3b110a92bd70d763ba75f52bb87a96d6aea88a143c68f0a04d6ea43e1683"
+    },
+    "producer": {
+      "candid_parser_version": "0.0.0-golden",
+      "candid_version": "0.0.0-golden",
+      "name": "candid-core",
+      "version": "0.0.0-golden"
+    },
+    "semantics_profile": "candid-1",
+    "types": [
+      {
+        "kind": "service",
+        "methods": [
+          {
+            "function": 1,
+            "id": 24860,
+            "name": "ok"
+          },
+          {
+            "function": 4,
+            "id": 4895173,
+            "name": "bad"
+          },
+          {
+            "function": 7,
+            "id": 272953965,
+            "name": "directory"
+          },
+          {
+            "function": 11,
+            "id": 674053501,
+            "name": "two_causes"
+          },
+          {
+            "function": 15,
+            "id": 1202920542,
+            "name": "list"
+          },
+          {
+            "function": 18,
+            "id": 2131139013,
+            "name": "callback"
+          },
+          {
+            "function": 20,
+            "id": 2196784563,
+            "name": "anonymous_bad"
+          },
+          {
+            "function": 22,
+            "id": 3398701196,
+            "name": "ambiguous"
+          },
+          {
+            "function": 19,
+            "id": 3402640419,
+            "name": "by_reference"
+          },
+          {
+            "function": 23,
+            "id": 4212417922,
+            "name": "uses_actor"
+          }
+        ]
+      },
+      {
+        "args": [
+          2
+        ],
+        "kind": "func",
+        "mode": "query",
+        "results": [
+          2
+        ]
+      },
+      {
+        "fields": [
+          {
+            "id": 97,
+            "type": 3
+          }
+        ],
+        "kind": "record"
+      },
+      {
+        "kind": "primitive",
+        "primitive": "nat"
+      },
+      {
+        "args": [
+          5
+        ],
+        "kind": "func",
+        "mode": "update",
+        "results": []
+      },
+      {
+        "fields": [
+          {
+            "id": 24860,
+            "type": 6
+          },
+          {
+            "id": 4735054,
+            "type": 3
+          }
+        ],
+        "kind": "record"
+      },
+      {
+        "kind": "primitive",
+        "primitive": "text"
+      },
+      {
+        "args": [
+          8
+        ],
+        "kind": "func",
+        "mode": "update",
+        "results": []
+      },
+      {
+        "fields": [
+          {
+            "id": 5745248,
+            "type": 9
+          }
+        ],
+        "kind": "record"
+      },
+      {
+        "kind": "service",
+        "methods": [
+          {
+            "function": 10,
+            "id": 103,
+            "name": "g"
+          }
+        ]
+      },
+      {
+        "args": [
+          2
+        ],
+        "kind": "func",
+        "mode": "update",
+        "results": []
+      },
+      {
+        "args": [
+          12,
+          5
+        ],
+        "kind": "func",
+        "mode": "update",
+        "results": []
+      },
+      {
+        "fields": [
+          {
+            "id": 97,
+            "type": 13
+          },
+          {
+            "id": 98,
+            "type": 3
+          }
+        ],
+        "kind": "variant"
+      },
+      {
+        "inner": 14,
+        "kind": "opt"
+      },
+      {
+        "kind": "primitive",
+        "primitive": "empty"
+      },
+      {
+        "args": [],
+        "kind": "func",
+        "mode": "query",
+        "results": [
+          16
+        ]
+      },
+      {
+        "inner": 17,
+        "kind": "opt"
+      },
+      {
+        "fields": [
+          {
+            "id": 1158359328,
+            "type": 3
+          },
+          {
+            "id": 1291237008,
+            "type": 16
+          }
+        ],
+        "kind": "record"
+      },
+      {
+        "args": [
+          19
+        ],
+        "kind": "func",
+        "mode": "update",
+        "results": []
+      },
+      {
+        "args": [
+          5
+        ],
+        "kind": "func",
+        "mode": "query",
+        "results": []
+      },
+      {
+        "args": [
+          21
+        ],
+        "kind": "func",
+        "mode": "update",
+        "results": []
+      },
+      {
+        "fields": [
+          {
+            "id": 4735500,
+            "type": 3
+          }
+        ],
+        "kind": "record"
+      },
+      {
+        "args": [],
+        "kind": "func",
+        "mode": "query",
+        "results": [
+          12
+        ]
+      },
+      {
+        "args": [
+          24
+        ],
+        "kind": "func",
+        "mode": "update",
+        "results": []
+      },
+      {
+        "fields": [
+          {
+            "id": 23515,
+            "type": 3
+          }
+        ],
+        "kind": "record"
+      },
+      {
+        "inner": 26,
+        "kind": "vec"
+      },
+      {
+        "inner": 27,
+        "kind": "opt"
+      },
+      {
+        "fields": [
+          {
+            "id": 3189518742,
+            "type": 5
+          }
+        ],
+        "kind": "record"
+      },
+      {
+        "inner": 12,
+        "kind": "vec"
+      },
+      {
+        "fields": [
+          {
+            "id": 22175,
+            "type": 19
+          }
+        ],
+        "kind": "record"
+      },
+      {
+        "fields": [
+          {
+            "id": 5745248,
+            "type": 31
+          }
+        ],
+        "kind": "record"
+      },
+      {
+        "kind": "service",
+        "methods": [
+          {
+            "function": 4,
+            "id": 102,
+            "name": "f"
+          },
+          {
+            "function": 10,
+            "id": 103,
+            "name": "g"
+          }
+        ]
+      },
+      {
+        "fields": [
+          {
+            "id": 5941054,
+            "type": 24
+          }
+        ],
+        "kind": "record"
+      },
+      {
+        "fields": [
+          {
+            "id": 1863724791,
+            "type": 34
+          }
+        ],
+        "kind": "record"
+      },
+      {
+        "fields": [
+          {
+            "id": 4735277,
+            "type": 3
+          },
+          {
+            "id": 1136382010,
+            "type": 35
+          }
+        ],
+        "kind": "variant"
+      },
+      {
+        "kind": "primitive",
+        "primitive": "null"
+      },
+      {
+        "fields": [
+          {
+            "id": 4895173,
+            "type": 5
+          },
+          {
+            "id": 1147770173,
+            "type": 2
+          }
+        ],
+        "kind": "record"
+      },
+      {
+        "fields": [
+          {
+            "id": 4895173,
+            "type": 5
+          },
+          {
+            "id": 1224901875,
+            "type": 38
+          }
+        ],
+        "kind": "record"
+      },
+      {
+        "inner": 37,
+        "kind": "opt"
+      },
+      {
+        "fields": [
+          {
+            "id": 4895173,
+            "type": 5
+          },
+          {
+            "id": 3398701196,
+            "type": 12
+          }
+        ],
+        "kind": "record"
+      }
+    ]
+  },
+  "extensions": {
+    "org.candid-core.field-names/v1": [
+      [
+        2,
+        97,
+        "a"
+      ],
+      [
+        5,
+        24860,
+        "ok"
+      ],
+      [
+        5,
+        4735054,
+        "_0_"
+      ],
+      [
+        8,
+        5745248,
+        "svc"
+      ],
+      [
+        12,
+        97,
+        "a"
+      ],
+      [
+        12,
+        98,
+        "b"
+      ],
+      [
+        17,
+        1158359328,
+        "head"
+      ],
+      [
+        17,
+        1291237008,
+        "tail"
+      ],
+      [
+        21,
+        4735500,
+        "_2_"
+      ],
+      [
+        24,
+        23515,
+        "id"
+      ],
+      [
+        27,
+        3189518742,
+        "inner"
+      ],
+      [
+        29,
+        22175,
+        "cb"
+      ],
+      [
+        30,
+        5745248,
+        "svc"
+      ],
+      [
+        32,
+        5941054,
+        "who"
+      ],
+      [
+        33,
+        1863724791,
+        "nested"
+      ],
+      [
+        34,
+        4735277,
+        "_1_"
+      ],
+      [
+        34,
+        1136382010,
+        "fine"
+      ],
+      [
+        36,
+        4895173,
+        "bad"
+      ],
+      [
+        36,
+        1147770173,
+        "good"
+      ],
+      [
+        37,
+        4895173,
+        "bad"
+      ],
+      [
+        37,
+        1224901875,
+        "next"
+      ],
+      [
+        39,
+        4895173,
+        "bad"
+      ],
+      [
+        39,
+        3398701196,
+        "ambiguous"
+      ]
+    ]
+  }
+}

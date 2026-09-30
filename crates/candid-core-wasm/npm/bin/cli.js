@@ -14,6 +14,11 @@
 // a compile or generation failure prints its JSON diagnostics document on
 // stdout and exits 1. Determinism is enforced, not assumed: every
 // generation runs twice and the run refuses on any byte mismatch.
+//
+// A module that had to leave declarations or actor methods out is still
+// usable, so the run succeeds (exit 0): each omission is printed as
+// a `warning: omitted …` line on stderr, in the order and wording of the
+// module's own `// Omitted:` header, and stdout carries the usual report.
 
 import { readFile, readdir, mkdir, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -137,6 +142,18 @@ async function didFiles(root) {
   return files;
 }
 
+/** A name as the module header lists it: bare when identifier-shaped. */
+function listedName(name) {
+  return /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(name) ? name : JSON.stringify(name);
+}
+
+/** One omission, worded as the module header's `// Omitted:` line. */
+function describeOmission(entry) {
+  const kind = entry.kind === "method" ? "method" : "type";
+  const via = entry.via === undefined ? "" : ` via ${listedName(entry.via)}`;
+  return `${kind} ${listedName(entry.name)} (${entry.reason}${via})`;
+}
+
 /** Run a generation twice and refuse on any byte mismatch. */
 async function deterministic(label, produce) {
   const first = await produce();
@@ -195,3 +212,6 @@ if (identities.interface !== undefined) {
 }
 console.log(`wrote ${modulePath}`);
 console.log(`wrote ${envelopePath}`);
+for (const entry of generated.omitted) {
+  console.error(`warning: omitted ${describeOmission(entry)}`);
+}

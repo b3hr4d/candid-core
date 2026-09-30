@@ -1,0 +1,51 @@
+/*
+  Issue #189: per-declaration omission. A declaration the generator cannot
+  represent is omitted together with every declaration that references it,
+  through any edge (nested func and service types included) up to the
+  containing declaration; the actor drops only the methods that reference
+  one. golden.rs pins the omitted list, and that everything still emitted is
+  byte-identical to a module generated from this file with every omitted
+  declaration and method removed. Block comments only: a line comment above a
+  declaration is its documentation, and the comparison is on bare text.
+*/
+
+type Good = record { a : nat };
+type NoValue = opt empty;
+
+/* Every direct cause a Candid source can reach: an `_N_`-shaped field name, an
+   ambiguous variant arm, and the two reserved export names. */
+type Bad = record { _0_ : nat; ok : text };
+type Ambiguous = variant { a : NoValue; b : nat };
+type actor = record { id : nat };
+type Actor = text;
+
+/* Transitive, through every kind of edge. */
+type Holder = record { bad : Bad; good : Good };
+type BadAlias = Bad;
+type Deep = vec opt record { inner : Bad };
+type AnonymousBad = record { nested : variant { _1_ : nat; fine } };
+type Registry = record { svc : service { f : (Bad) -> (); g : (Good) -> () } };
+type Callback = func (Bad) -> () query;
+type Handlers = record { cb : Callback };
+type UsesActor = record { who : actor };
+type Loop = record { next : opt Loop; bad : Bad };
+type UsesAmbiguous = vec Ambiguous;
+/* Two causes one edge away: `via` names the first in edge order. */
+type TwoCauses = record { bad : Bad; ambiguous : Ambiguous };
+
+/* Kept: recursion and a nested service type beside the omitted ones. */
+type List = opt record { head : nat; tail : List };
+type Directory = record { svc : service { g : (Good) -> () } };
+
+service : {
+  ok : (Good) -> (Good) query;
+  list : () -> (List) query;
+  directory : (Directory) -> ();
+  bad : (Bad) -> ();
+  anonymous_bad : (record { _2_ : nat }) -> ();
+  uses_actor : (actor) -> ();
+  callback : (Callback) -> ();
+  by_reference : Callback;
+  ambiguous : () -> (Ambiguous) query;
+  two_causes : (Ambiguous, Bad) -> ();
+}

@@ -169,6 +169,7 @@ if (!built.ok) {
 
 built.schemas.Account; // one Schema per declaration, in declaration order
 built.actor; // the service schema, when the document has one
+built.omitted; // what was left out, and why — the list the generator reports
 ```
 
 The two-file flow also works: plain `compile` (no `--envelope`) prints
@@ -188,6 +189,19 @@ schemaFromContract(compiled.contract, { names });
 Both routes yield verdict-for-verdict identical schemas, and an explicit
 `names` option always wins over envelope-carried names — the envelope's table
 is then not consulted at all.
+
+`schemas` holds exactly the declarations a generated module exports for the
+same document. A declaration no generated module can represent is left out,
+with every declaration and actor method that references it — through nested
+`func` and `service` types too, up to the containing declaration — and listed
+in `omitted` as `{ kind, name, reason, via? }`, in the generator's order and
+with its reason codes: `reserved_field_name` (a field genuinely named like the
+`_N_` id rendering, which as a key would read back as the wrong wire id),
+`ambiguous_variant_arm`, `reserved_export_name` (a declaration named `actor`
+or `Actor`), `invalid_declaration_name` (a name that is not
+identifier-shaped), and `references_omitted`, whose `via` names the omitted
+declaration referenced. The actor is never omitted; it loses only the methods
+listed. A document that is invalid still fails whole, with `issues`.
 
 Positional and numeric labels carry no name and are skipped; those fields
 render by the ecosystem's `_id_` convention, exactly as the generator renders

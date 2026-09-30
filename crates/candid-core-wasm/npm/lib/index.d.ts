@@ -88,10 +88,50 @@ export interface ContractEnvelope {
   };
 }
 
-/** A successful module generation. */
+/**
+ * A successful module generation. A module that had to leave something out
+ * is still a success: everything it emits is exactly what it would be
+ * without the omitted declarations, and `omitted` lists what is missing.
+ */
 export interface ModuleSuccess {
   ok: true;
+  /**
+   * The generated TypeScript. With omissions, its header lists them, one
+   * `// Omitted:` line each; with none, the text is unchanged.
+   */
   module: string;
+  /**
+   * What the module leaves out: a declaration no module can
+   * represent, together with every declaration and actor method that
+   * references it — through nested `func` and `service` types too, up to the
+   * containing declaration. Only the actor drops individual methods, from
+   * both `actor` and `Actor`. Declarations first, then methods, each sorted
+   * by name; empty, never absent, when nothing is omitted.
+   * `schemaFromContract` reports the same list for the same Contract.
+   */
+  omitted: {
+    /** A named declaration, or a method of the actor's service. */
+    kind: "declaration" | "method";
+    /** The declaration or method name, as the Candid source spells it. */
+    name: string;
+    /**
+     * Why, from a closed set: `reserved_field_name` (a field or arm named
+     * like the `_N_` id rendering), `ambiguous_variant_arm` (an arm whose
+     * payload is a declared `opt` of an uninhabited type),
+     * `reserved_export_name` (a declaration named `actor` or `Actor`),
+     * `invalid_declaration_name` (a name that is not identifier-shaped;
+     * Contract documents only), or `references_omitted` (it references the
+     * omitted declaration named by `via`).
+     */
+    reason:
+      | "reserved_field_name"
+      | "ambiguous_variant_arm"
+      | "reserved_export_name"
+      | "invalid_declaration_name"
+      | "references_omitted";
+    /** For `references_omitted` only: the omitted declaration referenced. */
+    via?: string;
+  }[];
 }
 
 /**
@@ -125,10 +165,14 @@ export function didToContract(sources: Sources): Promise<ContractEnvelope | Fail
 
 /**
  * Generate the `@candid-core/schema` TypeScript module for Candid sources,
- * byte-identical to what the Rust-native generator emits.
+ * byte-identical to what the Rust-native generator emits, with the list of
+ * declarations and methods it had to leave out.
  *
  * @example
  * const result = await didToModule("service : { ping : () -> (); }");
- * if (result.ok) await writeFile("./service.ts", result.module);
+ * if (result.ok) {
+ *   for (const entry of result.omitted) console.warn("omitted", entry.name, entry.reason);
+ *   await writeFile("./service.ts", result.module);
+ * }
  */
 export function didToModule(sources: Sources): Promise<ModuleSuccess | Failure>;
