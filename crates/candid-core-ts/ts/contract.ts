@@ -43,7 +43,8 @@
 //
 // # Untrusted input, bounded and fail closed
 //
-// The document is data from outside: nothing is trusted, nothing throws, and
+// The document is data from outside: nothing is trusted, nothing throws (the
+// options object is code, and a malformed one throws `TypeError`), and
 // every malformed shape is an issue in the same `{code, path, message,
 // resource_limit?}` shape `validate.ts` documents, with codes reused from
 // candid-core's own Contract validation where the condition is the same
@@ -76,6 +77,7 @@
 import { c, type AnySchema } from "./schema.ts";
 import type { ResourceLimitInfo } from "./validate.ts";
 import { candidLabelHash, isNumericShapedName } from "./labels.ts";
+import { checkOptions } from "./options.ts";
 
 /** Stable failure codes for contract loading. Closed: additions are API changes. */
 export type ContractIssueCode =
@@ -141,7 +143,9 @@ export type FieldNameEntry = readonly [container: number, id: number, name: stri
 
 /**
  * Field label text plus explicit bounds on the document, each cap defaulting
- * to the `DEFAULT_MAX_*` below.
+ * to the `DEFAULT_MAX_*` below. Each cap is a non-negative safe integer or
+ * absent (`undefined`); any other value, and any key not listed here, makes
+ * `schemaFromContract` throw `TypeError`.
  */
 export interface ContractSchemaOptions {
   /**
@@ -253,11 +257,26 @@ function isObject(value: unknown): value is Record<string, unknown> {
  * consulted. The envelope shell itself fails closed the way the Rust loader
  * fails it: unknown envelope keys, a non-object `extensions`, and invalid
  * extension names are all refused.
+ *
+ * Never throws on any document. Throws `TypeError` on an options object with
+ * an unknown key or a limit that is not a non-negative safe integer — options
+ * are code, and a misspelled or `NaN` cap would otherwise apply a policy
+ * nobody asked for. The `names` table is document-like data: a malformed one
+ * is an `invalid_name_table` issue, as before.
  */
 export function schemaFromContract(
   contract: unknown,
   options: ContractSchemaOptions = {},
 ): SchemaFromContractResult {
+  // Options are code, not document data: checked before the choke point
+  // below, so a bad one throws rather than becoming a document issue. The
+  // `names` table is data and is validated into issues where it is used.
+  checkOptions(
+    "schemaFromContract",
+    options,
+    ["maxTypeNodes", "maxFields", "maxDeclarations"],
+    ["names"],
+  );
   // The fail-closed choke point behind the no-throw claim: a document that is
   // not plain parsed JSON — accessors that throw, hostile Proxy traps — blows
   // up inside one of the reads below, and the failure must be an issue, not

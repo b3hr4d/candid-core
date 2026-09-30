@@ -39,8 +39,9 @@ every remaining subpath compiles and runs in a scratch tree with no
 package no longer does — `./actor`, `./transport-icp`, `./forms`,
 `./labels` — must each fail to resolve, at runtime with Node's
 `ERR_PACKAGE_PATH_NOT_EXPORTED` and at compile time with a missing-module
-error, and so must a deep import of the internal `dist/labels.js` the codec
-still ships and loads.
+error, and so must a deep import of the internal modules the entry points
+still ship and load (`dist/labels.js`, `dist/options.js`,
+`dist/typetable.js`).
 """
 
 import datetime
@@ -61,7 +62,12 @@ EXPORTED = [".", "./validate", "./contract", "./codec"]
 # to resolve from the packed artifact; a deep path into `dist/` must fail the
 # same way, because `exports` is what makes the internal modules internal.
 REMOVED = ["./actor", "./transport-icp", "./forms", "./labels"]
-DEEP = ["./dist/labels.js", "./dist/forms.js"]
+DEEP = [
+    "./dist/labels.js",
+    "./dist/options.js",
+    "./dist/typetable.js",
+    "./dist/forms.js",
+]
 
 # Manifest fields that would give the package a dependency of any kind.
 DEPENDENCY_FIELDS = [
@@ -131,14 +137,17 @@ def main():
             for path in extracted.rglob("*")
             if path.is_file()
         )
-        # `labels` ships without an export: the codec and the Contract loader
-        # import it relatively, so it is part of their runtime, not an entry
-        # point. `forms` is internal and is not built at all.
+        # `labels`, `options` and `typetable` ship without an export: the
+        # codec, the Contract loader and `validate` import them relatively,
+        # so they are part of those modules' runtime, not entry points.
+        # `forms` is internal and is not built at all.
         modules = [
             "codec",
             "contract",
             "labels",
+            "options",
             "schema",
+            "typetable",
             "validate",
         ]
         expected = sorted(

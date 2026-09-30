@@ -17,6 +17,9 @@
 // 4. A deterministic property harness: seeded-PRNG random values over every
 //    golden fixture schema must round-trip decode(encode(v)) === v, and
 //    arbitrary/mutated byte buffers must produce a result, not an exception.
+// 5. Construction independence (issue #190): the same value encodes to the
+//    same bytes through generated, loaded, and variously rebuilt schemas,
+//    whatever order its keys are in.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -43,6 +46,10 @@ import * as quoting from "../../tests/goldens/quoting.ts";
 import * as deferred from "../../tests/goldens/deferred.ts";
 import * as arms from "../../tests/goldens/arms.ts";
 import * as options from "../../tests/goldens/options.ts";
+import * as ledger from "../../tests/goldens/ledger.ts";
+import * as proto from "../../tests/goldens/proto.ts";
+import * as empties from "../../tests/goldens/empties.ts";
+import { Principal } from "@icp-sdk/core/principal";
 
 const goldens = new URL("../../tests/goldens/", import.meta.url);
 
@@ -204,6 +211,51 @@ const EXPECTED: Record<string, Record<string, unknown>> = {
     change_set_none: { tag: "set", value: null },
     change_keep: { tag: "keep" },
   },
+  ledger: {
+    // Issue #190: the fixture whose generated and loaded schemas used to
+    // write different type tables (11 entries against 7 for TransferArg).
+    transfer_arg_minimal: {
+      to: { owner: principal("aaaaa-aa"), subaccount: null },
+      amount: { e8s: 1n },
+      fee: null,
+      memo: null,
+      from_subaccount: null,
+      created_at_time: null,
+    },
+    transfer_arg_full: {
+      to: { owner: principal("2vxsx-fae"), subaccount: Uint8Array.from([1, 2]) },
+      amount: { e8s: 100_000_000n },
+      fee: { e8s: 10_000n },
+      memo: Uint8Array.from([0xab, 0xcd]),
+      from_subaccount: Uint8Array.from([0]),
+      created_at_time: 1_700_000_000_000_000_000n,
+    },
+    transfer_result_ok: { tag: "ok", value: 42n },
+    transfer_result_bad_fee: {
+      tag: "err",
+      value: { tag: "bad_fee", value: { expected_fee: { e8s: 10_000n } } },
+    },
+    transaction: {
+      index: 7n,
+      timestamp: 1n,
+      from: { owner: principal("aaaaa-aa"), subaccount: null },
+      to: { owner: principal("2vxsx-fae"), subaccount: Uint8Array.from([9]) },
+      amount: { e8s: 5n },
+      fee: null,
+      memo: new Uint8Array(0),
+    },
+    transactions_response: {
+      log_length: 2n,
+      transactions: [],
+      archived_transactions: [
+        {
+          start: 0n,
+          length: 2n,
+          callback: { principal: principal("aaaaa-aa"), method: "get_blocks" },
+        },
+      ],
+    },
+  },
 };
 
 const GENERATED: Record<string, Record<string, unknown>> = {
@@ -215,6 +267,7 @@ const GENERATED: Record<string, Record<string, unknown>> = {
   deferred,
   arms,
   options,
+  ledger,
 };
 
 for (const fixture of Object.keys(EXPECTED)) {
@@ -762,7 +815,14 @@ function generate(schema: AnySchema, rand: () => number, depth: number): unknown
     case "record": {
       const out: Record<string, unknown> = {};
       for (const key of Object.keys(node.fields as object)) {
-        out[key] = generate((node.fields as Record<string, AnySchema>)[key], rand, depth - 1);
+        // Defined, not assigned: a field named `__proto__` (the proto
+        // fixture) must be an own property, not a prototype write.
+        Object.defineProperty(out, key, {
+          value: generate((node.fields as Record<string, AnySchema>)[key], rand, depth - 1),
+          enumerable: true,
+          writable: true,
+          configurable: true,
+        });
       }
       return out;
     }
@@ -1607,4 +1667,502 @@ test("validate and encode charge a boxed value identically", () => {
   // Three levels (opt, opt, nat) plus the one examined `some` key.
   assert.strictEqual(validate(schema, { some: 5n }, { maxElements: 4 }).ok, true);
   assert.strictEqual(validate(schema, { some: 5n }, { maxElements: 3 }).ok, false);
+});
+
+// ---------------------------------------------------------------------------
+// 5. Construction independence (issue #190)
+// ---------------------------------------------------------------------------
+//
+// The bytes of a message depend on the values and the Candid types only —
+// never on how the schema objects were built. A consumer keys caches on
+// `hex(encodeArgs(…))`, so one call must be one key whether its schemas came
+// from a generated module, from `schemaFromContract`, or from hand-written
+// `c.*` calls, and however those share or duplicate nodes.
+
+/** Every golden module with its Contract: generated exports, loaded schemas. */
+const ALL_GOLDENS: Record<string, Record<string, unknown>> = {
+  ...GENERATED,
+  proto,
+  empties,
+};
+
+function loadWithActor(name: string): { readonly [key: string]: AnySchema } {
+  const contract = JSON.parse(
+    readFileSync(new URL(`${name}.contract.json`, goldens), "utf8"),
+  ) as unknown;
+  const names = JSON.parse(
+    readFileSync(new URL(`${name}.names.json`, goldens), "utf8"),
+  ) as FieldNameEntry[];
+  const built = schemaFromContract(contract, { names });
+  assert(built.ok, `schemaFromContract must accept the ${name} golden`);
+  if (!built.ok) {
+    throw new Error("unreachable");
+  }
+  // The generated module exports the actor as `actor`; the loader returns it
+  // beside the declarations.
+  return built.actor === undefined ? built.schemas : { ...built.schemas, actor: built.actor };
+}
+
+function shuffled<T>(items: readonly T[], rand: () => number): T[] {
+  const out = [...items];
+  for (let i = out.length - 1; i > 0; i -= 1) {
+    const j = Math.floor(rand() * (i + 1));
+    [out[i], out[j]] = [out[j], out[i]];
+  }
+  return out;
+}
+
+/** A null-prototype map with `keys` in the given order, own and enumerable. */
+function orderedMap<V>(keys: readonly string[], valueOf: (key: string) => V): Record<string, V> {
+  const out = Object.create(null) as Record<string, V>;
+  for (const key of keys) {
+    Object.defineProperty(out, key, {
+      value: valueOf(key),
+      enumerable: true,
+      writable: true,
+      configurable: true,
+    });
+  }
+  return out;
+}
+
+/**
+ * How a rebuild shapes the schema object graph. Every mode keeps one `rec`
+ * knot per source `rec` object (so cycles stay cycles) and spells record,
+ * variant and service keys in a shuffled order:
+ * - `fresh`: every other node is a new object at every occurrence — no
+ *   sharing at all, the generator's style taken to the limit;
+ * - `shared`: structurally equal nodes are one object — sharing taken to the
+ *   limit, past what the loader does;
+ * - `wrapped`: like `fresh`, with transparent `c.rec(() => node)` wrappers
+ *   dropped in at random, the indirection every generated alias adds.
+ */
+type RebuildMode = "fresh" | "shared" | "wrapped";
+
+function rebuild(schema: AnySchema, mode: RebuildMode, rand: () => number): AnySchema {
+  return rebuilder(mode, rand)(schema);
+}
+
+/**
+ * One rebuild context: every schema passed to the returned function shares
+ * its knots (and, `shared`, its interned nodes), as one module's
+ * declarations do. Two separate contexts for one recursive type are two
+ * knots — the case the pinned-limit test below documents.
+ */
+function rebuilder(mode: RebuildMode, rand: () => number): (schema: AnySchema) => AnySchema {
+  const knots = new Map<object, AnySchema>();
+  const interned = new Map<string, AnySchema>();
+  const ids = new Map<object, number>();
+  const idOf = (node: object): number => {
+    let id = ids.get(node);
+    if (id === undefined) {
+      id = ids.size;
+      ids.set(node, id);
+    }
+    return id;
+  };
+  const visit = (source: AnySchema): AnySchema => {
+    const node = source as unknown as GenNode & {
+      readonly args?: readonly AnySchema[];
+      readonly results?: readonly AnySchema[];
+      readonly mode?: "update" | "query" | "composite_query" | "oneway";
+      readonly methods?: { readonly [name: string]: AnySchema };
+    };
+    if (node.kind === "rec") {
+      const known = knots.get(node);
+      if (known !== undefined) {
+        return known;
+      }
+      let target: AnySchema | undefined;
+      const knot: AnySchema = c.rec(() => (target ??= visit((node.body as () => AnySchema)())));
+      knots.set(node, knot);
+      return knot;
+    }
+    let built: AnySchema;
+    let key: string;
+    switch (node.kind) {
+      case "primitive":
+        // Primitive schemas are the shared constants in every construction.
+        return source;
+      case "opt":
+      case "vec": {
+        const inner = visit(node.inner as AnySchema);
+        built = node.kind === "opt" ? c.opt(inner) : c.vec(inner);
+        key = `${node.kind}(${idOf(inner)})`;
+        break;
+      }
+      case "blob":
+        built = c.blob();
+        key = "blob";
+        break;
+      case "unit":
+        built = c.unit();
+        key = "unit";
+        break;
+      case "tuple": {
+        const elements = (node.elements as readonly AnySchema[]).map(visit);
+        built = c.tuple(elements);
+        key = `tuple(${elements.map(idOf).join(",")})`;
+        break;
+      }
+      case "record":
+      case "variant": {
+        const map = (node.kind === "record" ? node.fields : node.arms) as Record<string, AnySchema>;
+        const keys = shuffled(Object.keys(map), rand);
+        const children = orderedMap(keys, (name) => visit(map[name]));
+        built = node.kind === "record" ? c.record(children) : c.variant(children);
+        key = `${node.kind}(${[...keys]
+          .sort()
+          .map((name) => `${JSON.stringify(name)}:${idOf(children[name])}`)
+          .join(",")})`;
+        break;
+      }
+      case "func": {
+        const args = (node.args as readonly AnySchema[]).map(visit);
+        const results = (node.results as readonly AnySchema[]).map(visit);
+        built = c.func(args, results, node.mode as "update");
+        key = `func(${args.map(idOf).join(",")};${results.map(idOf).join(",")};${node.mode})`;
+        break;
+      }
+      case "service": {
+        const methods = node.methods as Record<string, AnySchema>;
+        const names = shuffled(Object.keys(methods), rand);
+        const children = orderedMap(names, (name) => visit(methods[name]));
+        built = c.service(children);
+        key = `service(${[...names]
+          .sort()
+          .map((name) => `${JSON.stringify(name)}:${idOf(children[name])}`)
+          .join(",")})`;
+        break;
+      }
+      default:
+        throw new Error(`rebuild has no case for ${node.kind}`);
+    }
+    if (mode === "shared") {
+      const existing = interned.get(key);
+      if (existing !== undefined) {
+        return existing;
+      }
+      interned.set(key, built);
+    }
+    if (mode === "wrapped" && rand() < 0.5) {
+      const inner = built;
+      return c.rec(() => inner);
+    }
+    return built;
+  };
+  return visit;
+}
+
+/** The same value with every object's keys re-inserted in a shuffled order. */
+function permuteValue(value: unknown, rand: () => number): unknown {
+  if (value === null || typeof value !== "object" || value instanceof Uint8Array) {
+    return value;
+  }
+  if (Array.isArray(value)) {
+    return value.map((element) => permuteValue(element, rand));
+  }
+  const record = value as Record<string, unknown>;
+  if (typeof record.toText === "function") {
+    return value;
+  }
+  const keys = shuffled(Object.keys(record), rand);
+  const out: Record<string, unknown> = {};
+  for (const key of keys) {
+    Object.defineProperty(out, key, {
+      value: permuteValue(record[key], rand),
+      enumerable: true,
+      writable: true,
+      configurable: true,
+    });
+  }
+  return out;
+}
+
+function hexOf(result: ReturnType<typeof encodeArgs>, what: string): string {
+  assert(result.ok, `${what} must encode: ${result.ok ? "" : JSON.stringify(result.issues)}`);
+  return result.ok ? toHex(result.bytes) : "";
+}
+
+/** An uninhabited position the generator cannot fill (`empty`, issue #126). */
+function generateOrSkip(schema: AnySchema, rand: () => number): { value: unknown } | undefined {
+  try {
+    return { value: generate(schema, rand, 4) };
+  } catch (error) {
+    if (error instanceof Error && error.message.endsWith("primitive empty")) {
+      return undefined;
+    }
+    throw error;
+  }
+}
+
+test("bytes do not depend on how a schema was built (every golden, seeded)", () => {
+  const rand = mulberry32(0x190);
+  let checked = 0;
+  for (const fixture of Object.keys(ALL_GOLDENS)) {
+    const generated = ALL_GOLDENS[fixture];
+    const loaded = loadWithActor(fixture);
+    for (const declaration of Object.keys(generated)) {
+      const genSchema = generated[declaration] as AnySchema;
+      const constructions: readonly (readonly [string, AnySchema])[] = [
+        ["loaded", loaded[declaration]],
+        ["generated, rebuilt fresh", rebuild(genSchema, "fresh", rand)],
+        ["generated, rebuilt shared", rebuild(genSchema, "shared", rand)],
+        ["generated, rebuilt wrapped", rebuild(genSchema, "wrapped", rand)],
+        ["loaded, rebuilt fresh", rebuild(loaded[declaration], "fresh", rand)],
+      ];
+      assert(loaded[declaration] !== undefined, `${fixture}.${declaration} must load`);
+      for (let i = 0; i < 16; i += 1) {
+        const generatedValue = generateOrSkip(genSchema, rand);
+        if (generatedValue === undefined) {
+          continue;
+        }
+        const { value } = generatedValue;
+        const what = `${fixture}.${declaration}`;
+        const reference = hexOf(encode(genSchema as Schema<unknown>, value), `${what} generated`);
+        for (const [name, schema] of constructions) {
+          assert.strictEqual(
+            hexOf(encode(schema as Schema<unknown>, permuteValue(value, rand)), `${what} ${name}`),
+            reference,
+            `${what}: ${name} schema, permuted value keys`,
+          );
+        }
+        checked += 1;
+      }
+    }
+  }
+  assert(checked > 1000, `the construction property must actually run (${checked} checks)`);
+});
+
+test("bytes do not depend on construction across a whole argument sequence", () => {
+  // Structure repeated *between* arguments shares one table too: every
+  // declaration of a fixture as one message, generated against loaded.
+  const rand = mulberry32(0x1900);
+  for (const fixture of Object.keys(ALL_GOLDENS)) {
+    const generated = ALL_GOLDENS[fixture];
+    const loaded = loadWithActor(fixture);
+    const names: string[] = [];
+    const values: unknown[] = [];
+    for (const declaration of Object.keys(generated)) {
+      const generatedValue = generateOrSkip(generated[declaration] as AnySchema, rand);
+      if (generatedValue !== undefined) {
+        names.push(declaration);
+        values.push(generatedValue.value);
+      }
+    }
+    const fromGenerated = hexOf(
+      encodeArgs(
+        names.map((name) => generated[name] as AnySchema),
+        values,
+      ),
+      `${fixture} generated`,
+    );
+    const fromLoaded = hexOf(
+      encodeArgs(
+        names.map((name) => loaded[name]),
+        values,
+      ),
+      `${fixture} loaded`,
+    );
+    const shared = rebuilder("shared", rand);
+    const fromShared = hexOf(
+      encodeArgs(
+        names.map((name) => shared(generated[name] as AnySchema)),
+        values,
+      ),
+      `${fixture} shared`,
+    );
+    assert.strictEqual(fromLoaded, fromGenerated, `${fixture}: loaded against generated`);
+    assert.strictEqual(fromShared, fromGenerated, `${fixture}: shared against generated`);
+  }
+});
+
+/** The type-table entry count a message declares (every table here is < 128). */
+function tableSize(hexText: string): number {
+  assert(hexText.startsWith("4449444c"), "a DIDL message");
+  return parseInt(hexText.slice(8, 10), 16);
+}
+
+test("ledger TransferArg: generated, loaded and hand-built write one table, the reference's", () => {
+  // The issue #190 measurement: generated gave an 11-entry table, loaded a
+  // 7-entry one, for the same value. Hand-built here spells every repeated
+  // `opt blob` afresh and uses `vec nat8` where the generator says blob.
+  const Tokens = c.record({ e8s: c.nat64 });
+  const handBuilt = c.record({
+    created_at_time: c.opt(c.nat64),
+    memo: c.opt(c.vec(c.nat8)),
+    amount: c.record({ e8s: c.nat64 }),
+    fee: c.opt(Tokens),
+    to: c.record({ subaccount: c.opt(c.blob()), owner: c.principal }),
+    from_subaccount: c.opt(c.blob()),
+  });
+  const loaded = loadWithActor("ledger");
+  const reference = JSON.parse(
+    readFileSync(new URL("wire/ledger.wire.json", goldens), "utf8"),
+  ) as WireCase[];
+  for (const wireCase of reference.filter((entry) => entry.declaration === "TransferArg")) {
+    const value = EXPECTED.ledger[wireCase.name] as {
+      readonly memo: Uint8Array | null;
+      readonly [key: string]: unknown;
+    };
+    const generatedHex = hexOf(encode(ledger.TransferArg, value), "generated");
+    assert.strictEqual(tableSize(generatedHex), 7, "seven distinct Candid types, seven entries");
+    assert.strictEqual(hexOf(encode(loaded.TransferArg, value), "loaded"), generatedHex);
+    // `vec nat8` takes a number array where blob takes a Uint8Array; the
+    // wire type is the same, and so are the bytes.
+    const asNumbers = { ...value, memo: value.memo === null ? null : [...value.memo] };
+    assert.strictEqual(hexOf(encode(handBuilt, asNumbers), "hand-built"), generatedHex);
+    // With no recursion to unroll, the canonical table is exactly the one
+    // the `candid` crate writes for these types.
+    assert.strictEqual(generatedHex, wireCase.hex, `${wireCase.name}: the reference's bytes`);
+  }
+});
+
+test("repeated anonymous structure is written once, shared or not", () => {
+  // The issue's minimal repro: five entries fresh against three shared.
+  const fresh = c.record({ x: c.opt(c.blob()), y: c.opt(c.blob()) });
+  const once = c.opt(c.blob());
+  const shared = c.record({ x: once, y: once });
+  const value = { x: null, y: Uint8Array.from([1]) };
+  const freshHex = hexOf(encode(fresh, value), "fresh");
+  assert.strictEqual(freshHex, hexOf(encode(shared, value), "shared"));
+  assert.strictEqual(freshHex, "4449444c036c02780179016e026d7b010000010101");
+  assert.strictEqual(tableSize(freshHex), 3);
+});
+
+test("a schema with no repeated structure keeps its first-visit table order", () => {
+  // Nothing merges, so the canonical table is the identity walk's, entry for
+  // entry: record, then its fields in id order, each subtree before the next.
+  const schema = c.record({ a: c.vec(c.opt(c.text)), b: c.variant({ x: c.nat, y: c.unit() }) });
+  const encoded = hexOf(
+    encode(schema, { a: ["t", null], b: { tag: "y", value: {} } }),
+    "no repetition",
+  );
+  assert.strictEqual(encoded, "4449444c056c02610162036d026e716b02787d79046c000100020101740001");
+});
+
+test("a recursive type writes one table from generated, loaded and hand-built schemas", () => {
+  const loaded = loadWithActor("recursion");
+  const handBuilt: AnySchema = c.rec(() => c.opt(c.record({ head: c.nat, tail: handBuilt })));
+  // `ListAlias` re-runs List's rec body, so the generated walk meets an
+  // unrolled copy of the knot before the knot itself: it must merge.
+  const value = { head: 1n, tail: { head: 2n, tail: null } };
+  const reference = hexOf(encode(recursion.List, value), "generated List");
+  for (const [name, schema] of [
+    ["loaded List", loaded.List],
+    ["generated ListAlias", recursion.ListAlias as AnySchema],
+    ["loaded ListAlias", loaded.ListAlias],
+    ["hand-built", handBuilt],
+    ["rebuilt fresh", rebuild(recursion.List as AnySchema, "fresh", mulberry32(1))],
+  ] as const) {
+    assert.strictEqual(hexOf(encode(schema as Schema<unknown>, value), name), reference, name);
+  }
+  // Pinned: the knot is two entries, `opt` and its record.
+  assert.strictEqual(reference, "4449444c026e016c02a0d2aca8047d90eddae7040001000101010200");
+});
+
+test("a mutually recursive pair writes one table from generated, loaded and hand-built", () => {
+  const loaded = loadWithActor("options");
+  const Ping: AnySchema = c.rec(() => c.opt(c.record({ pong: Pong })));
+  const Pong: AnySchema = c.rec(() => c.opt(Ping));
+  const value = { some: { pong: { some: null } } };
+  const reference = hexOf(encode(options.Pong, value), "generated Pong");
+  for (const [name, schema] of [
+    ["loaded", loaded.Pong],
+    ["hand-built", Pong],
+    ["rebuilt shared", rebuild(options.Pong as AnySchema, "shared", mulberry32(2))],
+    ["rebuilt wrapped", rebuild(options.Pong as AnySchema, "wrapped", mulberry32(3))],
+  ] as const) {
+    assert.strictEqual(hexOf(encode(schema as Schema<unknown>, value), name), reference, name);
+  }
+  // Both declarations in one message: the pair is one knot of three entries.
+  const both = hexOf(
+    encodeArgs([options.Ping, options.Pong], [null, value]),
+    "generated Ping, Pong",
+  );
+  assert.strictEqual(hexOf(encodeArgs([Ping, Pong], [null, value]), "hand-built pair"), both);
+  assert.strictEqual(tableSize(both), 3);
+});
+
+test("pinned limit: two knots for one recursive type are not merged", () => {
+  // `Even` and `Odd` are the same type (each is `record { next : opt Self }`
+  // unrolled once), and the Contract canonicalizer collapses them to one
+  // node, so generated and loaded schemas agree. Spelled by hand as two
+  // knots, the encoder keeps both: cyclic minimisation is a non-goal of
+  // issue #190. The bytes differ but decode to the same value everywhere.
+  const Even: AnySchema = c.rec(() => c.record({ next: c.opt(Odd) }));
+  const Odd: AnySchema = c.rec(() => c.record({ next: c.opt(Even) }));
+  const value = { next: { next: null } };
+  const loaded = loadWithActor("recursion");
+  const collapsed = hexOf(encode(recursion.Even, value), "generated Even");
+  assert.strictEqual(hexOf(encode(loaded.Even, value), "loaded Even"), collapsed);
+  assert.strictEqual(tableSize(collapsed), 2);
+  const twoKnots = hexOf(encode(Even, value), "hand-built Even");
+  assert.strictEqual(tableSize(twoKnots), 4);
+  assert(twoKnots !== collapsed, "two knots are two tables");
+  for (const bytes of [collapsed, twoKnots]) {
+    const decoded = decode(recursion.Even, fromHex(bytes));
+    assert.deepStrictEqual(decoded, { ok: true, value });
+  }
+});
+
+test("equal principals give equal bytes whatever carries them", () => {
+  // Issue #190 criterion 3, the part testable today. Until #187 lands, a
+  // principal is any object with a canonical `toText()`; the criterion's
+  // final form (only canonical `Principal` strings are accepted, and equal
+  // strings give equal bytes) waits on that change of carrier.
+  class Carrier {
+    readonly #text: string;
+    constructor(text: string) {
+      this.#text = text;
+    }
+    toText(): string {
+      return this.#text;
+    }
+  }
+  const text = "ryjl3-tyaaa-aaaaa-aaaba-cai";
+  const decodedCarrier = decode(c.principal, hexToBytesOf(encode(c.principal, principal(text))));
+  assert(decodedCarrier.ok);
+  const carriers: readonly unknown[] = [
+    principal(text),
+    new Carrier(text),
+    Principal.fromText(text),
+    decodedCarrier.ok ? decodedCarrier.value : undefined,
+  ];
+  const account = (owner: unknown) => ({ owner, subaccount: null });
+  const hexes = carriers.map((owner) => hexOf(encode(ledger.Account, account(owner)), "account"));
+  for (const hexText of hexes) {
+    assert.strictEqual(hexText, hexes[0]);
+  }
+});
+
+function hexToBytesOf(result: ReturnType<typeof encode>): Uint8Array {
+  assert(result.ok);
+  return result.ok ? result.bytes : new Uint8Array(0);
+}
+
+test("maxTypeTableEntries still charges each distinct schema node the walk meets", () => {
+  // Merging happens after the walk, so the cap bounds the walk's work exactly
+  // as before: the generated TransferArg (11 composite nodes, 5 of them
+  // repeats) needs 11, the loaded one (7 shared nodes) needs 7, and both
+  // write the same 7-entry table. Limits semantics are unchanged.
+  const value = EXPECTED.ledger.transfer_arg_minimal;
+  const loaded = loadWithActor("ledger");
+  for (const [name, schema, needed] of [
+    ["generated", ledger.TransferArg as AnySchema, 11],
+    ["loaded", loaded.TransferArg, 7],
+  ] as const) {
+    assert(encode(schema as Schema<unknown>, value, { maxTypeTableEntries: needed }).ok, name);
+    const refused = encode(schema as Schema<unknown>, value, {
+      maxTypeTableEntries: needed - 1,
+    });
+    assert(!refused.ok, `${name} at ${needed - 1}`);
+    if (!refused.ok) {
+      assert.deepStrictEqual(refused.issues[0].resource_limit, {
+        resource: "type_table_entries",
+        limit: needed - 1,
+        observed: needed,
+      });
+    }
+  }
 });

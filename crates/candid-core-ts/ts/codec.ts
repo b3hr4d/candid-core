@@ -68,12 +68,13 @@
 //
 // # Bounded, fail-closed, no exceptions for control flow
 //
-// Nothing here throws on any input: hostile values produce issues via the
-// same choke-point pattern as `validate` (`unreadable_value`), and malformed
-// or adversarial bytes produce issues with explicit budgets in candid-core's
-// `Limits` spirit: `maxBytes` caps input size up front, `maxTypeTableEntries`
-// mirrors `max_type_nodes`, `maxDepth`/`maxElements` mirror the validate
-// walk (every decoded element, skipped value, and rec hop charges the same
+// Nothing here throws on any value or byte string: hostile values produce
+// issues via the same choke-point pattern as `validate` (`unreadable_value`),
+// and malformed or adversarial bytes produce issues with explicit budgets in
+// candid-core's `Limits` spirit: `maxBytes` caps input size up front,
+// `maxTypeTableEntries` mirrors `max_type_nodes`, `maxDepth`/`maxElements`
+// mirror the validate walk (every decoded element, skipped value, and rec hop
+// charges the same
 // budget — a zero-byte-per-element wire vector cannot decode more than
 // `maxElements` values), and `maxNumericBytes` caps a single unbounded
 // `nat`/`int` encoding. Decode stops at the first hard error: the wire
@@ -83,15 +84,36 @@
 // same choke points, ahead of their catch-alls, and reported as
 // `resource_limit_exceeded` with resource `stack` — never as a value or schema
 // problem.
-// Determinism: identical inputs produce identical bytes, values, and
-// issues — the type table is built in first-visit order over the schema
-// graph and nothing depends on time, environment, or map iteration order —
-// with the one exception a host cannot be argued out of: where its own stack
-// ends varies with the engine and its JIT state, so an input near that point
-// can succeed on one call and report `stack` on the next.
+//
+// Options are the exception to "never throws", deliberately (issue #190):
+// they are code, not input. An unknown key, or a limit that is not a
+// non-negative safe integer (`NaN`, negative, fractional, a string,
+// `Infinity`), throws `TypeError` before anything is read, rather than being
+// ignored — a misspelled limit silently applied the default, and a `NaN` one
+// switched its bound off. `0` stays a defined fail-closed limit.
+//
+// # Determinism
+//
+// Identical inputs produce identical bytes, values, and issues: nothing
+// depends on time, environment, or map iteration order. Encoded bytes are
+// also independent of how the schema objects were built (issue #190,
+// clarifying the claim recorded on #103). The walk's identity-keyed type
+// table is rewritten into a structural canonical form (`typetable.ts`)
+// before it is written, so a generated module, `schemaFromContract`, and a
+// hand-built schema for the same Candid types — however they share or
+// duplicate nodes, and in whatever key order a record's schema or value
+// spells its fields — produce the same message. Repeated structure is
+// written once; a recursive type is canonical per knot, and every schema
+// generated from or loaded from a Contract has one knot per recursive node
+// (see `typetable.ts` for the one case left unminimised). The exception a
+// host cannot be argued out of remains: where its own stack ends varies with
+// the engine and its JIT state, so an input near that point can succeed on
+// one call and report `stack` on the next.
 
 import type { AnyFieldSchema, AnySchema, PrincipalValue, Schema } from "./schema.ts";
 import { fieldIdOfKey, utf8BytesStrict, utf8Decode } from "./labels.ts";
+import { checkOptions } from "./options.ts";
+import { canonicalTypeTable, type TableEntry } from "./typetable.ts";
 
 // The boxed-option rule `isBoxedOpt` states, applied to an inner node this
 // walk has already resolved under its own budget. Module-local on purpose:
@@ -169,11 +191,20 @@ export type DecodeResult =
   | { readonly ok: true; readonly values: readonly unknown[] }
   | { readonly ok: false; readonly issues: readonly CodecIssue[] };
 
-/** Explicit budgets for one codec call; each defaults to a `DEFAULT_MAX_*`. */
+/**
+ * Explicit budgets for one codec call; each defaults to a `DEFAULT_MAX_*`.
+ * Each is a non-negative safe integer or absent (`undefined`); any other value,
+ * and any other key, makes the call throw `TypeError`.
+ */
 export interface CodecOptions {
   /** Input size ceiling for decode, in bytes. */
   readonly maxBytes?: number;
-  /** Wire type table entry cap, mirroring `Limits::max_type_nodes`. */
+  /**
+   * Wire type table entry cap, mirroring `Limits::max_type_nodes`. Decode
+   * refuses a wire table claiming more entries. Encode charges one entry per
+   * distinct composite schema node its walk meets, before repeated structure
+   * is merged, so the table it writes is never larger than this.
+   */
   readonly maxTypeTableEntries?: number;
   /** Traversal depth cap, mirroring `Limits::max_value_depth`. */
   readonly maxDepth?: number;
@@ -379,13 +410,27 @@ interface Limits {
   readonly maxNumericBytes: number;
 }
 
-function limitsOf(options: CodecOptions): Limits {
+/** Every `CodecOptions` key; anything else in an options object throws. */
+const CODEC_LIMIT_KEYS: readonly (keyof CodecOptions)[] = [
+  "maxBytes",
+  "maxTypeTableEntries",
+  "maxDepth",
+  "maxElements",
+  "maxNumericBytes",
+];
+
+/**
+ * The effective limits of one call, after `checkOptions` has refused unknown
+ * keys and invalid values with a `TypeError` naming `entry`.
+ */
+function limitsOf(entry: string, options: CodecOptions): Limits {
+  const checked = checkOptions(entry, options, CODEC_LIMIT_KEYS) as CodecOptions;
   return {
-    maxBytes: options.maxBytes ?? DEFAULT_MAX_BYTES,
-    maxTypeTableEntries: options.maxTypeTableEntries ?? DEFAULT_MAX_TYPE_TABLE_ENTRIES,
-    maxDepth: options.maxDepth ?? DEFAULT_MAX_DEPTH,
-    maxElements: options.maxElements ?? DEFAULT_MAX_ELEMENTS,
-    maxNumericBytes: options.maxNumericBytes ?? DEFAULT_MAX_NUMERIC_BYTES,
+    maxBytes: checked.maxBytes ?? DEFAULT_MAX_BYTES,
+    maxTypeTableEntries: checked.maxTypeTableEntries ?? DEFAULT_MAX_TYPE_TABLE_ENTRIES,
+    maxDepth: checked.maxDepth ?? DEFAULT_MAX_DEPTH,
+    maxElements: checked.maxElements ?? DEFAULT_MAX_ELEMENTS,
+    maxNumericBytes: checked.maxNumericBytes ?? DEFAULT_MAX_NUMERIC_BYTES,
   };
 }
 
@@ -650,29 +695,52 @@ function rerootIssues(issues: readonly CodecIssue[]): readonly CodecIssue[] {
   );
 }
 
-/** Encode one value; the message is the one-argument sequence. */
+/**
+ * Encode one value; the message is the one-argument sequence.
+ *
+ * Never throws on any value. Throws `TypeError` on an options object with an
+ * unknown key or a limit that is not a non-negative safe integer — options
+ * are code, and a misspelled or `NaN` limit would otherwise apply a policy
+ * nobody asked for.
+ */
 export function encode<T>(
   schema: Schema<T>,
   value: unknown,
   options: CodecOptions = {},
 ): EncodeResult {
-  const result = encodeArgs([schema as AnyFieldSchema], [value], options);
+  const result = encodeWith(limitsOf("encode", options), [schema as AnyFieldSchema], [value]);
   return result.ok ? result : { ok: false, issues: rerootIssues(result.issues) };
 }
 
-/** Encode an argument sequence to Candid wire bytes. */
+/**
+ * Encode an argument sequence to Candid wire bytes.
+ *
+ * The bytes depend only on the values and on the Candid types the schemas
+ * describe, never on how the schema objects were built: a generated module,
+ * `schemaFromContract`, and a hand-built schema for the same types produce
+ * the same message (see "Determinism" in this module's header). Options are
+ * checked as `encode` documents.
+ */
 export function encodeArgs(
   schemas: readonly AnyFieldSchema[],
   values: readonly unknown[],
   options: CodecOptions = {},
 ): EncodeResult {
-  const encoder = new Encoder(limitsOf(options));
+  return encodeWith(limitsOf("encodeArgs", options), schemas, values);
+}
+
+function encodeWith(
+  limits: Limits,
+  schemas: readonly AnyFieldSchema[],
+  values: readonly unknown[],
+): EncodeResult {
+  const encoder = new Encoder(limits);
   const path: PathSegment[] = [];
   try {
     if (schemas.length !== values.length) {
       encoder.fail("invalid_length", path, `${schemas.length} schemas for ${values.length} values`);
     }
-    const typeRefs = schemas.map((schema, index) => {
+    const provisionalRefs = schemas.map((schema, index) => {
       path.push(`args[${index}]` as string);
       const ref = encoder.typeRef(schema as SchemaNode, path, 0);
       path.pop();
@@ -684,12 +752,16 @@ export function encodeArgs(
       encoder.value(schemas[index] as SchemaNode, values[index], body, path, 0);
       path.pop();
     }
+    // The table the walk built is keyed by schema-object identity; the one
+    // written is its structural canonical form, so equal types written
+    // through differently built schemas produce equal bytes.
+    const { table, roots: typeRefs } = canonicalTypeTable(encoder.table, provisionalRefs);
     // Element-by-element appends, never spreads: `push(...big)` routes the
     // whole array through the engine's argument list and throws RangeError
     // past ~124k elements — a well-formed large message, not a hostile one.
     const out: number[] = [0x44, 0x49, 0x44, 0x4c];
-    writeLebNumber(out, encoder.table.length);
-    for (const entry of encoder.table) {
+    writeLebNumber(out, table.length);
+    for (const entry of table) {
       for (const byte of entry) {
         out.push(byte);
       }
@@ -721,10 +793,40 @@ export function encodeArgs(
   }
 }
 
+/**
+ * Builds one provisional `TableEntry`: literal bytes go to `bytes`, and a
+ * type reference either lands there too (a negative primitive opcode) or
+ * closes the current byte run and is recorded as a table index.
+ */
+class EntryBuilder {
+  bytes: number[] = [];
+  private readonly segments: number[][] = [];
+  private readonly refs: number[] = [];
+
+  ref(reference: number): void {
+    if (reference < 0) {
+      writeSlebBig(this.bytes, BigInt(reference));
+      return;
+    }
+    this.segments.push(this.bytes);
+    this.refs.push(reference);
+    this.bytes = [];
+  }
+
+  finish(): TableEntry {
+    this.segments.push(this.bytes);
+    return { segments: this.segments, refs: this.refs };
+  }
+}
+
 class Encoder {
   readonly issues: CodecIssue[] = [];
-  /** Serialized table entries, in first-visit order. */
-  readonly table: number[][] = [];
+  /**
+   * The provisional table: one entry per distinct composite schema node, in
+   * first-visit order, keyed by identity. `canonicalTypeTable` turns it into
+   * the structural table actually written.
+   */
+  readonly table: TableEntry[] = [];
   private readonly memo = new Map<SchemaNode, number>();
   private elements = 0;
   /** The deepest depth charged so far: what a stack overflow reports. */
@@ -736,7 +838,7 @@ class Encoder {
     this.limits = limits;
   }
 
-  /** Record that the host stack ran out mid-walk (see `encodeArgs`' catch). */
+  /** Record that the host stack ran out mid-walk (see `encodeWith`'s catch). */
   stackExhausted(path: readonly PathSegment[]): void {
     this.issues.push(stackIssue(path, this.limits.maxDepth, this.reached));
   }
@@ -858,7 +960,10 @@ class Encoder {
 
   /**
    * The wire type reference for a schema: a negative primitive opcode or a
-   * type-table index. Entries are memoized by node identity — including the
+   * *provisional* type-table index (see `table`). Identity memoization here
+   * bounds the walk and ties recursive knots; it no longer decides the bytes,
+   * which come from the structural rewrite in `canonicalTypeTable`. Entries
+   * are memoized by node identity — including the
    * *unresolved* rec node, which is the stable anchor: a generated
    * `c.rec(() => …)` body builds fresh combinator objects on every call, so
    * memoizing only the resolved node would never see the cycle and the
@@ -903,35 +1008,35 @@ class Encoder {
     }
     this.memo.set(node, index);
     this.memo.set(schema, index);
-    this.table.push([]);
-    const entry: number[] = [];
+    this.table.push({ segments: [], refs: [] });
+    const entry = new EntryBuilder();
     switch (node.kind) {
       case "opt": {
-        writeSlebBig(entry, BigInt(OP.opt));
-        writeSlebBig(entry, BigInt(this.typeRef(node.inner as SchemaNode, path, at + 1)));
+        writeSlebBig(entry.bytes, BigInt(OP.opt));
+        entry.ref(this.typeRef(node.inner as SchemaNode, path, at + 1));
         break;
       }
       case "vec": {
-        writeSlebBig(entry, BigInt(OP.vec));
-        writeSlebBig(entry, BigInt(this.typeRef(node.inner as SchemaNode, path, at + 1)));
+        writeSlebBig(entry.bytes, BigInt(OP.vec));
+        entry.ref(this.typeRef(node.inner as SchemaNode, path, at + 1));
         break;
       }
       case "blob": {
-        writeSlebBig(entry, BigInt(OP.vec));
-        writeSlebBig(entry, BigInt(OP.nat8));
+        writeSlebBig(entry.bytes, BigInt(OP.vec));
+        writeSlebBig(entry.bytes, BigInt(OP.nat8));
         break;
       }
       case "unit": {
-        writeSlebBig(entry, BigInt(OP.record));
-        writeLebNumber(entry, 0);
+        writeSlebBig(entry.bytes, BigInt(OP.record));
+        writeLebNumber(entry.bytes, 0);
         break;
       }
       case "tuple": {
-        writeSlebBig(entry, BigInt(OP.record));
-        writeLebNumber(entry, node.elements.length);
+        writeSlebBig(entry.bytes, BigInt(OP.record));
+        writeLebNumber(entry.bytes, node.elements.length);
         for (let i = 0; i < node.elements.length; i += 1) {
-          writeLebNumber(entry, i);
-          writeSlebBig(entry, BigInt(this.typeRef(node.elements[i] as SchemaNode, path, at + 1)));
+          writeLebNumber(entry.bytes, i);
+          entry.ref(this.typeRef(node.elements[i] as SchemaNode, path, at + 1));
         }
         break;
       }
@@ -939,33 +1044,33 @@ class Encoder {
       case "variant": {
         const map = node.kind === "record" ? node.fields : node.arms;
         const fields = this.sortedFields(map, path);
-        writeSlebBig(entry, BigInt(node.kind === "record" ? OP.record : OP.variant));
-        writeLebNumber(entry, fields.length);
+        writeSlebBig(entry.bytes, BigInt(node.kind === "record" ? OP.record : OP.variant));
+        writeLebNumber(entry.bytes, fields.length);
         for (const field of fields) {
-          writeLebNumber(entry, field.id);
-          writeSlebBig(entry, BigInt(this.typeRef(field.schema as SchemaNode, path, at + 1)));
+          writeLebNumber(entry.bytes, field.id);
+          entry.ref(this.typeRef(field.schema as SchemaNode, path, at + 1));
         }
         break;
       }
       case "func": {
-        writeSlebBig(entry, BigInt(OP.func));
-        writeLebNumber(entry, node.args.length);
+        writeSlebBig(entry.bytes, BigInt(OP.func));
+        writeLebNumber(entry.bytes, node.args.length);
         for (const arg of node.args) {
-          writeSlebBig(entry, BigInt(this.typeRef(arg as SchemaNode, path, at + 1)));
+          entry.ref(this.typeRef(arg as SchemaNode, path, at + 1));
         }
-        writeLebNumber(entry, node.results.length);
+        writeLebNumber(entry.bytes, node.results.length);
         for (const result of node.results) {
-          writeSlebBig(entry, BigInt(this.typeRef(result as SchemaNode, path, at + 1)));
+          entry.ref(this.typeRef(result as SchemaNode, path, at + 1));
         }
         const annotation = MODE_ANNOTATION[node.mode];
         if (annotation === undefined) {
           this.fail("unsupported_schema", path, `unknown method mode ${JSON.stringify(node.mode)}`);
         }
         if (annotation === 0) {
-          writeLebNumber(entry, 0);
+          writeLebNumber(entry.bytes, 0);
         } else {
-          writeLebNumber(entry, 1);
-          entry.push(annotation);
+          writeLebNumber(entry.bytes, 1);
+          entry.bytes.push(annotation);
         }
         break;
       }
@@ -979,12 +1084,12 @@ class Encoder {
           return { name, bytes };
         });
         methods.sort((a, b) => compareBytes(a.bytes, b.bytes));
-        writeSlebBig(entry, BigInt(OP.service));
-        writeLebNumber(entry, methods.length);
+        writeSlebBig(entry.bytes, BigInt(OP.service));
+        writeLebNumber(entry.bytes, methods.length);
         for (const method of methods) {
-          writeLebNumber(entry, method.bytes.length);
+          writeLebNumber(entry.bytes, method.bytes.length);
           for (const byte of method.bytes) {
-            entry.push(byte);
+            entry.bytes.push(byte);
           }
           const resolvedMethod = this.resolveType(
             node.methods[method.name] as SchemaNode,
@@ -998,15 +1103,12 @@ class Encoder {
               `service method ${JSON.stringify(method.name)} must be a func schema`,
             );
           }
-          writeSlebBig(
-            entry,
-            BigInt(this.typeRef(node.methods[method.name] as SchemaNode, path, at + 1)),
-          );
+          entry.ref(this.typeRef(node.methods[method.name] as SchemaNode, path, at + 1));
         }
         break;
       }
     }
-    this.table[index] = entry;
+    this.table[index] = entry.finish();
     return index;
   }
 
@@ -1515,25 +1617,41 @@ class Encoder {
 // Decode
 // ---------------------------------------------------------------------------
 
-/** Decode a one-argument message against one schema. */
+/**
+ * Decode a one-argument message against one schema.
+ *
+ * Never throws on any bytes. Throws `TypeError` on an options object with an
+ * unknown key or a limit that is not a non-negative safe integer, exactly as
+ * `encode` does.
+ */
 export function decode<T>(
   schema: Schema<T>,
   bytes: Uint8Array,
   options: CodecOptions = {},
 ): { ok: true; value: unknown } | { ok: false; issues: readonly CodecIssue[] } {
-  const result = decodeArgs([schema as AnyFieldSchema], bytes, options);
+  const result = decodeWith(limitsOf("decode", options), [schema as AnyFieldSchema], bytes);
   return result.ok
     ? { ok: true, value: result.values[0] }
     : { ok: false, issues: rerootIssues(result.issues) };
 }
 
-/** Decode a Candid message against an expected argument schema sequence. */
+/**
+ * Decode a Candid message against an expected argument schema sequence.
+ * Options are checked as `decode` documents.
+ */
 export function decodeArgs(
   schemas: readonly AnyFieldSchema[],
   bytes: Uint8Array,
   options: CodecOptions = {},
 ): DecodeResult {
-  const limits = limitsOf(options);
+  return decodeWith(limitsOf("decodeArgs", options), schemas, bytes);
+}
+
+function decodeWith(
+  limits: Limits,
+  schemas: readonly AnyFieldSchema[],
+  bytes: Uint8Array,
+): DecodeResult {
   const decoder = new Decoder(bytes, limits);
   const path: PathSegment[] = [];
   try {
@@ -1684,7 +1802,7 @@ class Decoder {
     this.limits = limits;
   }
 
-  /** Record that the host stack ran out mid-walk (see `decodeArgs`' catch). */
+  /** Record that the host stack ran out mid-walk (see `decodeWith`'s catch). */
   stackExhausted(path: readonly PathSegment[]): void {
     this.issues.push(stackIssue(path, this.limits.maxDepth, this.reached));
   }

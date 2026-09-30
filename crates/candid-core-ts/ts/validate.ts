@@ -15,8 +15,9 @@
 //
 // # Bounded, fail-closed, no exceptions for control flow
 //
-// Validation never throws on any input value: malformed values produce
-// issues, and hostile ones — cyclic objects, huge arrays, adversarially deep
+// Validation never throws on any input value (a malformed *options* object
+// is a programmer error and throws `TypeError`; see `validate`): malformed
+// values produce issues, and hostile ones — cyclic objects, huge arrays, adversarially deep
 // nesting — hit explicit limits that mirror candid-core's `Limits` defaults
 // (`maxDepth` 256 like `max_value_depth`, `maxElements` 1_000_000). A limit
 // failure is itself an issue (`resource_limit_exceeded`, resource
@@ -97,6 +98,7 @@ import type {
   VecSchema,
 } from "./schema.ts";
 import { resolveSchema } from "./schema.ts";
+import { checkOptions } from "./options.ts";
 
 // The boxed-option rule `isBoxedOpt` states, applied to an inner node this
 // walk has already resolved under its own budget. Module-local on purpose:
@@ -154,7 +156,11 @@ export interface ValidationIssue {
   readonly resource_limit?: ResourceLimitInfo;
 }
 
-/** Bounds on one validation walk; each defaults to the `DEFAULT_MAX_*` below. */
+/**
+ * Bounds on one validation walk; each defaults to the `DEFAULT_MAX_*` below.
+ * Each is a non-negative safe integer or absent (`undefined`); any other value,
+ * and any other key, makes the call throw `TypeError`.
+ */
 export interface ValidateOptions {
   /**
    * Maximum schema traversal depth, mirroring `Limits::max_value_depth`.
@@ -181,15 +187,35 @@ export const DEFAULT_MAX_ELEMENTS = 1_000_000;
 /** Default `maxIssues`: how many failures one walk collects before stopping. */
 export const DEFAULT_MAX_ISSUES = 100;
 
+/** Every `ValidateOptions` key; anything else in an options object throws. */
+const VALIDATE_LIMIT_KEYS: readonly (keyof ValidateOptions)[] = [
+  "maxDepth",
+  "maxElements",
+  "maxIssues",
+];
+
 /**
  * Validate `value` against `schema`. Never throws on any `value`; a schema
  * object that is not one this core constructs fails closed with
  * `unsupported_schema`.
+ *
+ * Throws `TypeError`, before reading the value, on an options object with an
+ * unknown key or a limit that is not a non-negative safe integer: a
+ * misspelled limit would silently apply the default, and a `NaN` one would
+ * switch its bound off. `0` is a valid, fail-closed limit.
  */
 export function validate<T>(
   schema: Schema<T>,
   value: unknown,
   options: ValidateOptions = {},
+): ValidateResult {
+  return validateWith(checkOptions("validate", options, VALIDATE_LIMIT_KEYS), schema, value);
+}
+
+function validateWith(
+  options: ValidateOptions,
+  schema: AnyFieldSchema,
+  value: unknown,
 ): ValidateResult {
   const walk = new Walk(options);
   // The fail-closed choke point behind the no-throw guarantee: a value can
@@ -1056,8 +1082,10 @@ export function isResultSchema(schema: AnyFieldSchema): boolean {
  * schema's own two arms.
  *
  * Throws `TypeError`, eagerly and before touching the value, on a schema that
- * is not a result variant. That is a programmer error, and it is the same
- * treatment `resolveSchema` and `serviceMethods` give theirs.
+ * is not a result variant, and on options `validate` refuses (an unknown key,
+ * or a limit that is not a non-negative safe integer). Both are programmer
+ * errors, and it is the same treatment `resolveSchema` and `serviceMethods`
+ * give theirs.
  *
  * @example
  * const Transfer = c.variant({ ok: c.nat, err: c.text });
@@ -1073,7 +1101,11 @@ export function unwrapResult<S extends AnyFieldSchema>(
   if (arms === undefined) {
     throw new TypeError("unwrapResult needs a result variant schema");
   }
-  const checked = validate(schema as Schema<unknown>, value, options);
+  const checked = validateWith(
+    checkOptions("unwrapResult", options, VALIDATE_LIMIT_KEYS),
+    schema,
+    value,
+  );
   if (!checked.ok) {
     return { ok: false, issues: checked.issues };
   }

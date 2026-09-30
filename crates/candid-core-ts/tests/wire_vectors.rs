@@ -374,6 +374,59 @@ const VECTORS: &[(&str, &[Case])] = &[
             },
         ],
     ),
+    (
+        // Issue #190: repeated anonymous structure (`opt vec nat8` three
+        // times, `opt Tokens` and `opt Account` twice). The generated and
+        // the Contract-loaded schemas share or duplicate those nodes
+        // differently; the TS encoder must write one table either way, and
+        // these bytes are what the reference decoder checks it against.
+        "ledger",
+        &[
+            Case {
+                name: "transfer_arg_minimal",
+                declaration: "TransferArg",
+                textual: "(record { to = record { owner = principal \"aaaaa-aa\"; \
+                          subaccount = null }; amount = record { e8s = 1 }; fee = null; \
+                          memo = null; from_subaccount = null; created_at_time = null })",
+            },
+            Case {
+                name: "transfer_arg_full",
+                declaration: "TransferArg",
+                textual: "(record { to = record { owner = principal \"2vxsx-fae\"; \
+                          subaccount = opt blob \"\\01\\02\" }; amount = record { e8s = 100000000 }; \
+                          fee = opt record { e8s = 10000 }; memo = opt blob \"\\ab\\cd\"; \
+                          from_subaccount = opt blob \"\\00\"; \
+                          created_at_time = opt 1700000000000000000 })",
+            },
+            Case {
+                name: "transfer_result_ok",
+                declaration: "TransferResult",
+                textual: "(variant { ok = 42 })",
+            },
+            Case {
+                name: "transfer_result_bad_fee",
+                declaration: "TransferResult",
+                textual: "(variant { err = variant { bad_fee = record { \
+                          expected_fee = record { e8s = 10000 } } } })",
+            },
+            Case {
+                name: "transaction",
+                declaration: "Transaction",
+                textual: "(record { index = 7; timestamp = 1; \
+                          from = opt record { owner = principal \"aaaaa-aa\"; subaccount = null }; \
+                          to = opt record { owner = principal \"2vxsx-fae\"; \
+                          subaccount = opt blob \"\\09\" }; amount = record { e8s = 5 }; \
+                          fee = null; memo = opt blob \"\" })",
+            },
+            Case {
+                name: "transactions_response",
+                declaration: "TransactionsResponse",
+                textual: "(record { log_length = 2; transactions = vec {}; \
+                          archived_transactions = vec { record { start = 0; length = 2; \
+                          callback = func \"aaaaa-aa\".\"get_blocks\" } } })",
+            },
+        ],
+    ),
 ];
 
 fn goldens_dir() -> PathBuf {

@@ -39,7 +39,16 @@ export type ValidateResult =
   it is never empty.
 </p>
 
-<p>The third argument bounds the walk. Each field has an exported default constant.</p>
+<p>
+  The third argument bounds the walk. Each field has an exported default constant. Each limit is a
+  non-negative safe integer or absent (<code>undefined</code> means the default), and
+  <code>0</code> is a valid limit that fails closed. Anything else — an unknown key such as a
+  misspelled <code>maxDeph</code>, or a limit that is <code>NaN</code>, negative, fractional, a
+  string, <code>null</code> or <code>Infinity</code> — throws <code>TypeError</code> before the value
+  is read. A misspelled key used to leave the default in force without a word, and a
+  <code>NaN</code> limit switched its bound off: a depth-300 value passed under
+  <code>maxDepth: NaN</code>.
+</p>
 
 <table>
   <thead>
@@ -295,7 +304,8 @@ validate(schema, value as never);
     <code>kind</code>, or a <code>rec</code> chain running past 256 hops, and
     <code>unwrapResult</code> throws for a schema it reads without trouble that is not a result
     variant. The classic case all of this catches is passing the decoded <em>value</em> where its
-    schema belongs.
+    schema belongs. Both <code>validate</code> and <code>unwrapResult</code> also throw
+    <code>TypeError</code> for an options object they cannot honour, as above.
   </p>
 </callout>
 
