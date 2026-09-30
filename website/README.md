@@ -142,8 +142,12 @@ a block in none of them fails the build:
 | `data-file="path"` | An excerpt of a repository file. Every run of lines must appear in that file verbatim (whitespace trimmed; a trailing `{` or `;` is ignored, so a signature can be quoted without its body). Mark an intended gap with a line `// …`, or add `data-partial` to require only that the lines appear in the file in order. |
 | `data-check` | Compiled on its own by the pinned compiler, and must have no diagnostics. It may sit beside `data-file`. |
 | `data-check="name"` | Blocks of one page with the same name are concatenated, in page order, into one file: an example built up across several blocks. |
-| `data-check-fails="TS2322"` | Must **not** compile, and the compiler must report that code. This is how the migration page proves a "before" snippet is stale rather than asserting it. |
+| `data-check-fails="TS2322@3"` | Must **not** compile: the compiler must report that code at that line of the block (1-based) and nothing else anywhere in it, so a block whose showcased line was fixed cannot stay "proven stale" because another line keeps the same error. This is how the migration page proves a "before" snippet is stale rather than asserting it. |
 | `data-unchecked="reason"` | The visible opt-out, with a reason. Every exemption is listed in the summary line. |
+
+A `js` block is written to a `.js` file and compiled with `allowJs` and
+`checkJs`, so TypeScript-only syntax in it is refused as the syntax error a
+reader copying it would get.
 
 Compilation uses the TypeScript pinned in `crates/candid-core-ts/ts`
 (`npm ci` there installs it; the site itself still takes no dependency) with

@@ -21,11 +21,20 @@
  *   data-check="name"      blocks of one page sharing a name are concatenated,
  *                          in page order, into one file: the way a page builds
  *                          an example across several blocks.
- *   data-check-fails="TS…" must NOT compile, and the compiler must report that
- *                          code. A "before" snippet in the migration notes is
- *                          proven stale this way instead of being asserted.
+ *   data-check-fails="TS2339@7"
+ *                          must NOT compile: the compiler must report that code
+ *                          at that line of the block (1-based), and nothing
+ *                          else anywhere in it. Naming the line is what stops a
+ *                          block whose showcased expression was fixed from
+ *                          staying "proven stale" on the strength of some other
+ *                          line with the same error. A "before" snippet in the
+ *                          migration notes is proven stale this way.
  *   data-unchecked="why"   the visible opt-out, with its reason. It is counted
  *                          in the summary line so an exemption cannot hide.
+ *
+ * A `js` block is written to a `.js` file and compiled with allowJs and
+ * checkJs, so TypeScript-only syntax in it (an annotation, `declare`, `as`)
+ * is refused as the syntax error a reader copying it would get.
  *
  * A compiled block may import a few stand-in modules of generated code
  * (MODULES below): the page says `./ledger.ts` and the gate supplies the
@@ -146,6 +155,8 @@ function tsconfig(root, cli) {
       module: "esnext",
       moduleResolution: "bundler",
       allowImportingTsExtensions: true,
+      allowJs: true,
+      checkJs: true,
       lib: ["es2022", "dom"],
       types: [],
       skipLibCheck: false,
@@ -157,7 +168,7 @@ function tsconfig(root, cli) {
         "@candid-core/cli": [cli],
       },
     },
-    include: ["**/*.ts"],
+    include: ["**/*.ts", "**/*.js"],
   };
 }
 
@@ -178,6 +189,7 @@ export async function checkSnippets({ pages, root, skipCompile = false }) {
       const { attrs } = block;
       const where = `ts/js block #${block.number}`;
       const isExcerpt = attrs["data-file"] !== undefined;
+      const ext = ["js", "javascript"].includes(attrs["data-lang"]) ? "js" : "ts";
       if (attrs["data-unchecked"] !== undefined) {
         // The visible opt-out wins over everything: a block that carries a
         // data-file beside it is displayed as that file's excerpt, unverified.
@@ -211,23 +223,26 @@ export async function checkSnippets({ pages, root, skipCompile = false }) {
         if (attrs["data-check"] === undefined) continue;
       }
       if (attrs["data-check-fails"] !== undefined) {
-        const code = String(attrs["data-check-fails"]);
-        if (!/^TS\d{4,5}$/.test(code)) {
-          report(page, `${where}: data-check-fails must name one compiler code such as TS2322`);
+        const named = String(attrs["data-check-fails"]).match(/^(TS\d{4,5})@(\d+)$/);
+        if (!named) {
+          report(page, `${where}: data-check-fails must name the code and the line it fails at, such as TS2322@3`);
           continue;
         }
-        files.push({ name: `${slug}-${block.number}.ts`, code: block.code, expect: code, page, origin: where });
+        files.push({ name: `${slug}-${block.number}.${ext}`, code: block.code, expect: { code: named[1], line: Number(named[2]) }, page, origin: where });
         continue;
       }
       const group = attrs["data-check"];
       if (typeof group === "string" && group.length) {
-        const key = `${slug}-${group}.ts`;
+        const key = `${slug}-${group}.${ext}`;
         if (!groups.has(key)) groups.set(key, { name: key, code: "", expect: null, page, origin: `${where} (group ${group})`, parts: [] });
         const entry = groups.get(key);
+        if (groups.has(`${slug}-${group}.${ext === "js" ? "ts" : "js"}`)) {
+          report(page, `${where}: group ${group} mixes js and ts blocks; a group is one file`);
+        }
         entry.parts.push({ start: entry.code.split("\n").length, number: block.number });
         entry.code += block.code + "\n";
       } else {
-        files.push({ name: `${slug}-${block.number}.ts`, code: block.code, expect: null, page, origin: where });
+        files.push({ name: `${slug}-${block.number}.${ext}`, code: block.code, expect: null, page, origin: where });
       }
     }
     files.push(...groups.values());
@@ -287,17 +302,24 @@ export async function checkSnippets({ pages, root, skipCompile = false }) {
 
     for (const file of files) {
       const mine = diagnostics.filter((d) => d.file === file.name || d.file.endsWith(`/${file.name}`));
+      const prefixed = !(file.code.includes("import ") || file.code.includes("export "));
+      const lineOf = (d) => (prefixed ? d.line - 1 : d.line);
       if (file.expect) {
-        if (!mine.some((d) => d.code === file.expect)) {
+        const want = file.expect;
+        const seen = mine.map((d) => `${d.code}@${lineOf(d)}`);
+        const stray = mine.filter((d) => d.code !== want.code || lineOf(d) !== want.line);
+        if (mine.length === 0) {
+          report(file.page, `${file.origin} must NOT compile (${want.code}@${want.line}) but compiles cleanly`);
+        } else if (stray.length) {
           report(
             file.page,
-            `${file.origin} must NOT compile (${file.expect}) but ${mine.length ? `reports ${[...new Set(mine.map((d) => d.code))].join(", ")} instead` : "compiles cleanly"}`,
+            `${file.origin} must fail with ${want.code}@${want.line} and nothing else, but the compiler reports ${[...new Set(seen)].join(", ")}`,
           );
         } else tally.fails += 1;
       } else if (mine.length) {
         for (const d of mine.slice(0, 5)) {
           const lines = file.code.split("\n");
-          const at = file.code.includes("import ") || file.code.includes("export ") ? d.line : d.line - 1;
+          const at = lineOf(d);
           report(file.page, `${file.origin} does not compile: ${d.code} ${d.message} — line ${at}: ${JSON.stringify((lines[at - 1] || "").trim())}`);
         }
       } else tally.compiled += 1;

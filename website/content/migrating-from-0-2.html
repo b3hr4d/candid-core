@@ -64,7 +64,7 @@
   mismatch and an id over 29 bytes all throw. <code>isPrincipal(value)</code> is the matching guard.
 </p>
 
-<pre data-lang="ts" data-check-fails="TS2339">
+<pre data-lang="ts" data-check-fails="TS2339@7">
 import { c, type Infer } from "@candid-core/schema";
 
 const Account = c.record({ owner: c.principal });
@@ -74,7 +74,7 @@ declare const account: Infer<typeof Account>;
 const text: string = account.owner.toText();
 </pre>
 
-<pre data-lang="ts" data-check-fails="TS2322">
+<pre data-lang="ts" data-check-fails="TS2322@7">
 import { c, type Infer } from "@candid-core/schema";
 
 const Account = c.record({ owner: c.principal });
@@ -124,7 +124,7 @@ isPrincipal("AAAAA-AA"); // false, so principal("AAAAA-AA") throws TypeError
   Interfaces such as Internet Identity's <code>config</code> now load.
 </p>
 
-<pre data-lang="ts" data-check-fails="TS2322">
+<pre data-lang="ts" data-check-fails="TS2322@6">
 import { c, type Infer } from "@candid-core/schema";
 
 const Description = c.opt(c.opt(c.text));
@@ -175,7 +175,7 @@ type Plain = OptDomain<bigint>; // bigint | null, unboxed
   a field reads <code>bigint</code>, not whichever alias came first.
 </p>
 
-<pre data-lang="ts" data-check-fails="TS2322">
+<pre data-lang="ts" data-check-fails="TS2322@5">
 import { c, type Schema } from "@candid-core/schema";
 
 // 0.2.0, for `type Byte = nat8; type R = record { raw : vec Byte }`.
@@ -227,11 +227,11 @@ const R: Schema<R> = c.rec(() => c.record({ raw: c.blob() }));
   16 for every subpath. The packaged-consumer gate asserts each of these against the packed tarball.
 </p>
 
-<pre data-lang="ts" data-check-fails="TS2307">
+<pre data-lang="ts" data-check-fails="TS2307@1">
 import { createActor } from "@candid-core/schema/actor";
 </pre>
 
-<pre data-lang="ts" data-check-fails="TS2307">
+<pre data-lang="ts" data-check-fails="TS2307@1">
 import { httpTransport } from "@candid-core/schema/transport-icp";
 </pre>
 
@@ -276,7 +276,7 @@ if (reply.ok) reply.values[0]; // the decoded TransferResult, as unknown until y
   byte strings and Contract documents still never make these functions throw.
 </p>
 
-<pre data-lang="ts" data-check-fails="TS2561">
+<pre data-lang="ts" data-check-fails="TS2561@6">
 import { c } from "@candid-core/schema";
 import { validate } from "@candid-core/schema/validate";
 
@@ -322,7 +322,7 @@ try {
   must follow the new layout.
 </p>
 
-<pre data-lang="ts" data-check-fails="TS2305">
+<pre data-lang="ts" data-check-fails="TS2305@2">
 // 0.2.0 layout: bare bindings, and a separate import for the principal type.
 import { c, type PrincipalValue, type Schema } from "@candid-core/schema";
 
@@ -429,7 +429,7 @@ export { $Tokens as Tokens };
   <code>unrepresentable_option</code>, because the documents it refused now load.
 </p>
 
-<pre data-lang="ts" data-check-fails="TS2322">
+<pre data-lang="ts" data-check-fails="TS2322@10">
 import type { ResourceLimitInfo } from "@candid-core/schema/validate";
 
 function describe(info: ResourceLimitInfo): string {
@@ -447,7 +447,7 @@ function describe(info: ResourceLimitInfo): string {
 void describe;
 </pre>
 
-<pre data-lang="ts" data-check-fails="TS2367">
+<pre data-lang="ts" data-check-fails="TS2367@4">
 import type { ContractIssueCode } from "@candid-core/schema/contract";
 
 function isOption(code: ContractIssueCode): boolean {
