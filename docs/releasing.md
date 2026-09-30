@@ -440,12 +440,31 @@ publishing keeps working, because OIDC is not a token.
 ### Every publish after that
 
 Publishing is `npm release` (`.github/workflows/npm-release.yml`),
-dispatch-only, with `{commit, version}`:
+dispatch-only, with `{commit, version, dist-tag}` and an optional
+`stable-off-latest`:
 
-1. The `verify` job shape-checks both inputs (`commit` must be a full
+```bash
+# A stable version: it becomes what a plain `npm i` installs.
+gh workflow run npm-release.yml \
+  --field commit=<40-character SHA> --field version=0.3.0 --field dist-tag=latest
+
+# A prerelease: it lands under its own dist-tag, and consumers opt in with
+# `npm i @candid-core/schema@beta`. `latest` does not move.
+gh workflow run npm-release.yml \
+  --field commit=<40-character SHA> --field version=0.3.0-beta.0 --field dist-tag=beta
+```
+
+1. The `verify` job shape-checks the inputs (`commit` must be a full
    40-character SHA — a branch name could resolve differently after the
    approval pause — and it must be reachable from `origin/main`, so
-   unreviewed bytes cannot be published), confirms the `npm-publish`
+   unreviewed bytes cannot be published; `dist-tag` must be lowercase
+   letters, digits and dashes) and checks the dist-tag against the version:
+   a prerelease (a version with a `-` suffix, derived exactly as `release.yml`
+   derives its prerelease flag) is refused under `latest`, and a stable
+   version is refused under any other tag unless `stable-off-latest=true`
+   says so explicitly, which is for a backport that must not move `latest`.
+   `stable-off-latest=true` with a prerelease or with `latest` is refused
+   too, so the flag cannot sit on unnoticed. It then confirms the `npm-publish`
    environment is genuinely protected, refuses a `version` input that
    differs from `ts/package.json` at that commit, then reruns the type gate,
    the runtime suites, and the packaged-consumer verification
@@ -454,10 +473,17 @@ dispatch-only, with `{commit, version}`:
    TypeScript *without* `skipLibCheck`, and execute standalone).
 2. The `publish` job sits behind the protected `npm-publish` environment;
    the owner's approval there is the explicit authorization for the
-   irreversible step. It publishes with `--provenance`.
+   irreversible step. It publishes with `--provenance` and
+   `--tag <dist-tag>`, always explicit.
 
 The pinned Node (24.18.0) ships npm 11.16.0, above both floors that matter:
-11.5.1 for OIDC publishing and 11.15.0 for the `npm trust` CLI. Trusted
+11.5.1 for OIDC publishing and 11.15.0 for the `npm trust` CLI. That npm
+refuses to publish a prerelease without an explicit `--tag` ("You must
+specify a tag using --tag when publishing a prerelease version."), but it
+accepts a prerelease with an explicit `--tag latest`. So npm's own check
+would stop a tagless beta only in the publish job, after the approval, and
+would not stop a beta tagged `latest` at all. The verify job's dist-tag
+check is what covers both cases, before the approval is requested. Trusted
 publishing also requires a GitHub-hosted runner and, for automatic
 provenance, a public repository publishing a public package — all true here.
 
@@ -480,8 +506,9 @@ The second package under the scope (name recorded with owner sign-off on
 issue #153, per the #106 precedent), publishing from
 `crates/candid-core-wasm/npm` through
 [`.github/workflows/npm-release-cli.yml`](../.github/workflows/npm-release-cli.yml)
-— a faithful mirror of `npm-release.yml`: dispatch-only `{commit, version}`,
-the same input shape checks, the same ancestor-of-main requirement, the same
+— a faithful mirror of `npm-release.yml`: dispatch-only `{commit, version,
+dist-tag}` with the optional `stable-off-latest`, the same input shape checks
+and dist-tag guard, the same ancestor-of-main requirement, the same
 protected `npm-publish` environment whose reviewers the verify job confirms
 exist, and OIDC trusted publishing with `--provenance`. Everything in the
 schema package's section above applies unchanged — the once-per-name

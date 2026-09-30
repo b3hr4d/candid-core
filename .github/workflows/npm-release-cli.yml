@@ -9,6 +9,8 @@
 #   environment, whose required reviewers the verify job checks exist;
 # - no long-lived token exists anywhere: publishing uses npm OIDC trusted
 #   publishing, and `id-token: write` is granted to that one job;
+# - the same dist-tag guard: a prerelease can never become `latest`, and a
+#   stable version moves `latest` unless `stable-off-latest` says otherwise;
 # - unlike the schema package, the artifact embeds a wasm build, so the
 #   verify and publish jobs both build it with the exact-pinned release
 #   toolchain and the pinned wasm-pack — the rolling `stable` of ordinary CI
@@ -29,6 +31,13 @@ on:
       version:
         description: Must equal the version in crates/candid-core-wasm/npm/package.json at that commit
         required: true
+      dist-tag:
+        description: npm dist-tag to publish under. `latest` for a stable version; a prerelease needs another, e.g. beta
+        required: true
+      stable-off-latest:
+        description: Publish a stable version under a non-latest dist-tag (a backport); otherwise a stable version must use latest
+        type: boolean
+        default: false
 
 permissions: {}
 
@@ -47,12 +56,49 @@ jobs:
         env:
           COMMIT: ${{ inputs.commit }}
           VERSION: ${{ inputs.version }}
+          DIST_TAG: ${{ inputs.dist-tag }}
+          STABLE_OFF_LATEST: ${{ inputs.stable-off-latest }}
         run: |
           set -euo pipefail
           printf '%s' "${COMMIT}" | grep -qE '^[0-9a-f]{40}$' \
             || { echo "commit must be a full 40-character lowercase SHA" >&2; exit 1; }
           printf '%s' "${VERSION}" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$' \
             || { echo "version must be semver, e.g. 0.1.0" >&2; exit 1; }
+          printf '%s' "${DIST_TAG}" | grep -qE '^[a-z][a-z0-9-]*$' \
+            || { echo "dist-tag must be lowercase letters, digits and dashes, e.g. latest or beta" >&2; exit 1; }
+          # The dist-tag is checked against the version, never trusted on its
+          # own: npm refuses a prerelease with no --tag, but takes one with an
+          # explicit `--tag latest`, which would make a beta what a plain
+          # `npm i` installs. The prerelease flag is derived exactly as
+          # release.yml derives it: the version regex above admits a dash only
+          # in a prerelease suffix.
+          case "${VERSION}" in
+            *-*) prerelease=true ;;
+            *)   prerelease=false ;;
+          esac
+          case "${STABLE_OFF_LATEST}" in
+            true|false) ;;
+            *) echo "stable-off-latest must be true or false" >&2; exit 1 ;;
+          esac
+          if [ "${prerelease}" = true ]; then
+            if [ "${DIST_TAG}" = latest ]; then
+              echo "${VERSION} is a prerelease; it must not be published as latest (use e.g. dist-tag=beta)" >&2
+              exit 1
+            fi
+            if [ "${STABLE_OFF_LATEST}" = true ]; then
+              echo "stable-off-latest applies to a stable version only; ${VERSION} is a prerelease" >&2
+              exit 1
+            fi
+          elif [ "${DIST_TAG}" = latest ]; then
+            if [ "${STABLE_OFF_LATEST}" = true ]; then
+              echo "stable-off-latest was set but dist-tag is latest; drop one of them" >&2
+              exit 1
+            fi
+          elif [ "${STABLE_OFF_LATEST}" != true ]; then
+            echo "${VERSION} is a stable version and must be published as latest; a stable version under ${DIST_TAG} needs stable-off-latest=true" >&2
+            exit 1
+          fi
+          printf 'version %s -> prerelease=%s, dist-tag=%s\n' "${VERSION}" "${prerelease}" "${DIST_TAG}"
 
       - name: Confirm the publish environment is protected
         env:
@@ -170,6 +216,11 @@ jobs:
         working-directory: crates/candid-core-wasm
         run: wasm-pack build --target web --out-dir npm/wasm --no-pack --release -- --locked
 
+      # The dist-tag the verify job checked against the version. Always
+      # explicit: npm would otherwise apply `latest` to a stable version and
+      # refuse a prerelease only after this job's approval.
       - name: Publish with provenance
         working-directory: crates/candid-core-wasm/npm
-        run: npm publish --provenance --access public
+        env:
+          DIST_TAG: ${{ inputs.dist-tag }}
+        run: npm publish --provenance --access public --tag "${DIST_TAG}"
