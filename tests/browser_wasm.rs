@@ -102,6 +102,15 @@ const BUNDLE_INTERFACE_ID: &str =
 const BUNDLE_SOURCE_BUNDLE_ID: &str =
     "candid-core:source-bundle:v1:sha256:cb3eebea62cdb70e945171c72d2ccb48f29c19885a4b4add278a92e49243181b";
 
+/// Pinned raw-source bundle identity of [`BUNDLE`] with every source behind a
+/// leading UTF-8 BOM. `source_bundle_id` hashes raw bytes (ADR 0001), so it
+/// differs from [`BUNDLE_SOURCE_BUNDLE_ID`] while the two semantic identities
+/// above do not. Reproduced independently of this crate: SHA-256 over the
+/// domain, a zero byte, and the sorted-key compact JSON of the raw sources and
+/// import edges, computed in Python, gives both this value and the BOM-less one.
+const BOM_BUNDLE_SOURCE_BUNDLE_ID: &str =
+    "candid-core:source-bundle:v1:sha256:aec59b9f4cf3fd718501551fe55551f86f2491d458a0ae3445e4d8b8bd4bda5c";
+
 /// Every logical source of [`BUNDLE`], in the deterministic order the sidecar
 /// records them — sorted by logical ID, not by load order, so the identity is
 /// independent of traversal.
@@ -232,6 +241,38 @@ browser_case! {
         assert!(methods.contains(&"local"), "{methods:?}");
         assert!(methods.contains(&"imported"), "{methods:?}");
         assert_eq!(methods.len(), 2, "{methods:?}");
+    }
+}
+
+browser_case! {
+    /// The same bundle with every source saved behind a leading UTF-8 BOM, as
+    /// Windows editors write it: the semantic identities are the pinned
+    /// BOM-less ones, and only the raw-source bundle identity moves.
+    fn bom_prefixed_bundle_keeps_the_semantic_identities() {
+        let marked: Vec<(&str, String)> = BUNDLE
+            .iter()
+            .map(|(id, source)| (*id, format!("\u{FEFF}{source}")))
+            .collect();
+        let marked: Vec<(&str, &str)> = marked
+            .iter()
+            .map(|(id, source)| (*id, source.as_str()))
+            .collect();
+        let compilation = compile_with_resolver(
+            "memory:/entry.did",
+            &resolver(&marked),
+            CompileOptions::default(),
+            &RuntimeContext::default(),
+        )
+        .expect("a BOM-prefixed bundle must compile");
+
+        assert_eq!(compilation.contract().contract_id(), BUNDLE_CONTRACT_ID);
+        assert_eq!(
+            compilation.contract().interface_id(),
+            Some(BUNDLE_INTERFACE_ID)
+        );
+        let info = compilation.source_info().expect("provenance is on by default");
+        assert_eq!(info.source_bundle_id(), BOM_BUNDLE_SOURCE_BUNDLE_ID);
+        assert_ne!(info.source_bundle_id(), BUNDLE_SOURCE_BUNDLE_ID);
     }
 }
 

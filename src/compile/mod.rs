@@ -42,7 +42,9 @@ pub use artifact::{Compilation, CompileOptions};
 use bundle::compile_resolved_bundle;
 #[cfg(feature = "filesystem-compiler")]
 use diagnostics::candid_file_error;
-use diagnostics::{budget_error, candid_error, lower_error, source_info_compile_error};
+use diagnostics::{
+    budget_error, candid_error, candid_error_at, lower_error, source_info_compile_error,
+};
 use loading::{accept_source, load_source_units_with_resolver, SourceUnit};
 use lower::lower_checked;
 #[cfg(feature = "filesystem-compiler")]
@@ -266,6 +268,28 @@ pub(crate) fn rederive_source_bundle_with_budget(
     )
 }
 
+/// The Candid text of a source: everything after one leading UTF-8
+/// byte-order mark, plus the byte offset that text starts at in the raw
+/// source.
+///
+/// Editors on Windows save UTF-8 with a BOM (`EF BB BF`, U+FEFF) by default,
+/// and the mark is not Candid syntax. Exactly one mark, at byte 0, is skipped
+/// here and only here — every tokenizer and parser entry calls this — while
+/// everything that describes the *raw* source keeps it: the `SourceInfo`
+/// source text, `source_bundle_id` (a raw-source bundle identity, ADR 0001),
+/// resolver digests, and the byte limits. Diagnostic offsets are shifted by
+/// the returned offset, so they keep indexing the original bytes. A second
+/// mark, a mark anywhere else, and U+FFFE stay ordinary text, which the
+/// tokenizer rejects as before; UTF-16 marks are not UTF-8 and never reach
+/// this function.
+pub(super) fn candid_text(source: &str) -> (&str, usize) {
+    const BOM: char = '\u{FEFF}';
+    match source.strip_prefix(BOM) {
+        Some(text) => (text, BOM.len_utf8()),
+        None => (source, 0),
+    }
+}
+
 pub(super) fn parse_program(
     source: &str,
     source_name: Option<String>,
@@ -274,9 +298,10 @@ pub(super) fn parse_program(
     budget
         .checkpoint()
         .map_err(|error| budget_error(error, DiagnosticPhase::Parse, "Candid parsing"))?;
-    let program = source
+    let (text, offset) = candid_text(source);
+    let program = text
         .parse::<IDLProg>()
-        .map_err(|error| candid_error(error, DiagnosticPhase::Parse, source_name))?;
+        .map_err(|error| candid_error_at(error, DiagnosticPhase::Parse, source_name, offset))?;
     budget
         .checkpoint()
         .map_err(|error| budget_error(error, DiagnosticPhase::Parse, "Candid parsing"))?;

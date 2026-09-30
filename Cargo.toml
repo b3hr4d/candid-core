@@ -255,6 +255,12 @@ required-features = ["compiler"]
 name = "provenance_bounds"
 required-features = ["compiler"]
 
+# Leading UTF-8 BOM acceptance; the native-file cases inside are gated on
+# `filesystem-compiler`.
+[[test]]
+name = "source_bom"
+required-features = ["compiler"]
+
 [[test]]
 name = "source_identity_bounds"
 required-features = ["compiler"]

@@ -239,6 +239,34 @@ fn recursive_and_mutually_recursive_imports_agree() {
 }
 
 #[test]
+fn bom_prefixed_sources_agree() {
+    // The materialized backend re-parses each unit and writes pretty-printed
+    // text, so the mark never reaches `check_file`; the in-memory backend
+    // parses the same stripped text. Both keep the raw text in the sidecar.
+    let compilation = assert_backends_agree(
+        "leading UTF-8 BOM on every source",
+        "memory:/entry.did",
+        &[
+            (
+                "memory:/entry.did",
+                "\u{FEFF}import \"types.did\";\nimport service \"api.did\";\nservice : { read: () -> (Item) query };",
+            ),
+            (
+                "memory:/types.did",
+                "\u{FEFF}type Item = record { id: nat64; label: text };",
+            ),
+            (
+                "memory:/api.did",
+                "\u{FEFF}service : { imported: () -> (nat) query };",
+            ),
+        ],
+    );
+    for source in compilation.source_info().unwrap().sources() {
+        assert!(source.source.starts_with('\u{FEFF}'), "{}", source.name);
+    }
+}
+
+#[test]
 fn actorless_imported_bundle_agrees() {
     let compilation = assert_backends_agree(
         "actorless bundle",

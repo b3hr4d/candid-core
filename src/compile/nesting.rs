@@ -10,7 +10,10 @@ pub(super) fn check_source_nesting(
     let limits = budget.limits().clone();
     let mut delimiters = 0usize;
     let mut unary = 0usize;
-    for token in Tokenizer::new(source) {
+    // Tokenize exactly the text the parser will see. A leading BOM left in
+    // would fail the first token, and the lexical-error early return below
+    // would then skip this preflight for the whole source.
+    for token in Tokenizer::new(candid_text(source).0) {
         budget
             .checkpoint()
             .map_err(|error| budget_error(error, DiagnosticPhase::Parse, "source preflight"))?;

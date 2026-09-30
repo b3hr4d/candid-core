@@ -62,6 +62,38 @@ fn envelope_matches_the_native_cli_fixture_byte_for_byte() {
     );
 }
 
+/// A Windows-saved source — the Node host reads files with `"utf8"`, which
+/// keeps a leading BOM as U+FEFF — yields the same envelope and module as
+/// its BOM-less twin, through both request shapes.
+#[test]
+fn a_leading_utf8_bom_changes_neither_envelope_nor_module() {
+    let source = repo("tests/fixtures/conformance/basic.did");
+    let marked = format!("\u{FEFF}{source}");
+    assert_eq!(
+        did_to_contract(&single(&marked)),
+        repo("tests/fixtures/envelope/basic.envelope.json"),
+    );
+    assert_eq!(
+        did_to_module(&single(&marked)),
+        did_to_module(&single(&source))
+    );
+
+    let bundle = |entry: &str, types: &str| {
+        serde_json::json!({
+            "entry": "entry.did",
+            "files": { "entry.did": entry, "types.did": types },
+        })
+        .to_string()
+    };
+    let entry = "import \"types.did\";\nservice : { get: () -> (Item) query };";
+    let types = "type Item = record { id: nat };";
+    let plain = bundle(entry, types);
+    let marked = bundle(&format!("\u{FEFF}{entry}"), &format!("\u{FEFF}{types}"));
+    assert!(did_to_contract(&plain).contains("\"contract\""));
+    assert_eq!(did_to_contract(&marked), did_to_contract(&plain));
+    assert_eq!(did_to_module(&marked), did_to_module(&plain));
+}
+
 /// The envelope triples equal the reviewed `*.names.json` goldens — the
 /// same cross-surface equality the native CLI pins.
 #[test]
