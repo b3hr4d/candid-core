@@ -546,11 +546,12 @@ test("tuple-shaped records build positionally; a lying table still fails at the 
   failsWith(lying, "invalid_name_table", "$.names[0]");
 });
 
-test("a nat8 vec whose element type is declared by name stays a vec", () => {
-  // The blob rule applies to the *anonymous* nat8 node only: `type Byte =
-  // nat8; type Bytes = vec Byte` is a deliberate abstraction and renders
-  // c.vec(Byte) in the generator, so the dynamic schema must expect number
-  // arrays, not Uint8Array.
+test("a nat8 vec is a blob whatever its element type is called (issue #191)", () => {
+  // `type Byte = nat8; type Bytes = vec Byte` is `vec nat8`, which Candid
+  // calls `blob`: the declared element name changes nothing about the value
+  // domain, so the dynamic schema expects a Uint8Array exactly as the
+  // generator's `$.c.blob()` does. Before #191 a declaration of the element
+  // turned every blob in the interface into a number array.
   const doc = document(
     [primitive("nat8"), { kind: "vec", inner: 0 }],
     [
@@ -561,9 +562,10 @@ test("a nat8 vec whose element type is declared by name stays a vec", () => {
   const result = schemaFromContract(doc);
   assert(result.ok);
   if (result.ok) {
-    assert.deepStrictEqual(validate(result.schemas.Bytes, [1, 2]), { ok: true });
-    const blobValue = validate(result.schemas.Bytes, new Uint8Array([1, 2]));
-    assert(!blobValue.ok, "a declared element type is not a blob");
+    assert.deepStrictEqual(validate(result.schemas.Bytes, new Uint8Array([1, 2])), { ok: true });
+    const numbers = validate(result.schemas.Bytes, [1, 2]);
+    assert(!numbers.ok, "a number array is not a blob");
+    assert.deepStrictEqual(validate(result.schemas.Byte, 7), { ok: true });
   }
 });
 

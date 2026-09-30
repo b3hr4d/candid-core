@@ -1,0 +1,34 @@
+[
+  {
+    "name": "memo",
+    "hex": "4449444c016c0261786278010001000000000000000200000000000000"
+  },
+  {
+    "name": "raw_full",
+    "hex": "4449444c046c06e6b4d2027be8abdb0201a8a79c1902c6adafa30403eb90e0ec0b018af4b7a40c7b6d7b6e016d010100070201020101060201050002030408"
+  },
+  {
+    "name": "raw_empty",
+    "hex": "4449444c046c06e6b4d2027be8abdb0201a8a79c1902c6adafa30403eb90e0ec0b018af4b7a40c7b6d7b6e016d0101000000000000ff"
+  },
+  {
+    "name": "timing",
+    "hex": "4449444c016c03e8abdb0274c1d2eca80374bcb082d60b740100fdffffffffffffff01000000000000000200000000000000"
+  },
+  {
+    "name": "transfer_arg",
+    "hex": "4449444c056c03fbca0101c6fcb60204d8a38ca80d7d6c02b3b0dac30368ad86ca8305026e036d7b6e7d01000100010109010a64"
+  },
+  {
+    "name": "transfer_ok",
+    "hex": "4449444c016b02bc8a017dc5fed201710100002a"
+  },
+  {
+    "name": "transfer_err",
+    "hex": "4449444c016b02bc8a017dc5fed2017101000103626164"
+  },
+  {
+    "name": "owned",
+    "hex": "4449444c016c02d7ab016890a3c58c026801000100010104"
+  }
+]

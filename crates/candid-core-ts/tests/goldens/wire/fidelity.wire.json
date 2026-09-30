@@ -1,0 +1,50 @@
+[
+  {
+    "declaration": "R",
+    "hex": "4449444c016c0261786278010001000000000000000200000000000000",
+    "name": "memo",
+    "textual": "(record { a = 1; b = 2 })"
+  },
+  {
+    "declaration": "Raw",
+    "hex": "4449444c056c06e6b4d2027be8abdb0201a8a79c1902c6adafa30404eb90e0ec0b038af4b7a40c7b6d7b6e036d7b6d030100070201020101060201050002030408",
+    "name": "raw_full",
+    "textual": "(record { raw = blob \"\\01\\02\"; bytes = blob \"\\03\\04\"; grid = vec { blob \"\\05\"; blob \"\" }; maybe = opt blob \"\\06\"; one = 7; plain = 8 })"
+  },
+  {
+    "declaration": "Raw",
+    "hex": "4449444c056c06e6b4d2027be8abdb0201a8a79c1902c6adafa30404eb90e0ec0b038af4b7a40c7b6d7b6e036d7b6d0301000000000000ff",
+    "name": "raw_empty",
+    "textual": "(record { raw = blob \"\"; bytes = vec {}; grid = vec {}; maybe = null; one = 0; plain = 255 })"
+  },
+  {
+    "declaration": "Timing",
+    "hex": "4449444c016c03e8abdb0274c1d2eca80374bcb082d60b740100fdffffffffffffff01000000000000000200000000000000",
+    "name": "timing",
+    "textual": "(record { started = 1; elapsed = 2; raw = -3 })"
+  },
+  {
+    "declaration": "TransferArg",
+    "hex": "4449444c056c03fbca0101c6fcb60204d8a38ca80d7d6c02b3b0dac30368ad86ca8305026e036d7b6e7d01000100010109010a64",
+    "name": "transfer_arg",
+    "textual": "(record { to = record { owner = principal \"aaaaa-aa\"; subaccount = opt blob \"\\09\" }; amount = 100; fee = opt 10 })"
+  },
+  {
+    "declaration": "TransferResult",
+    "hex": "4449444c016b02bc8a017dc5fed201710100002a",
+    "name": "transfer_ok",
+    "textual": "(variant { Ok = 42 })"
+  },
+  {
+    "declaration": "TransferResult",
+    "hex": "4449444c016b02bc8a017dc5fed2017101000103626164",
+    "name": "transfer_err",
+    "textual": "(variant { Err = \"bad\" })"
+  },
+  {
+    "declaration": "Owned",
+    "hex": "4449444c016c02d7ab016890a3c58c026801000100010104",
+    "name": "owned",
+    "textual": "(record { by = principal \"aaaaa-aa\"; alias = principal \"2vxsx-fae\" })"
+  }
+]

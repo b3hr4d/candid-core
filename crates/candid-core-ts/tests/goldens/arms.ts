@@ -2,14 +2,32 @@
 import * as $ from "@candid-core/schema";
 
 type $AliasArms = { tag: "tagged" } | { tag: "plain" };
-const $AliasArms: $.Schema<$AliasArms> = $.c.rec(() => $.c.variant({ tagged: $NullAlias, plain: $NullAlias }));
+const $AliasArms: $.Schema<$AliasArms> = $.c.rec(() => $.c.variant({ tagged: $.c.null, plain: $.c.null }));
 export { $AliasArms as AliasArms };
 
 type $EmptyOptArm = { tag: "a"; value: never | null } | { tag: "b"; value: bigint };
 const $EmptyOptArm: $.Schema<$EmptyOptArm> = $.c.rec(() => $.c.variant({ a: $.c.opt($.c.empty), b: $.c.nat }));
 export { $EmptyOptArm as EmptyOptArm };
 
+/**
+ * Issue #127: the variant-arm classification rows of the divergence table.
+ * An `empty` payload keeps `value: never`; an anonymous `opt empty` payload
+ * keeps `value: never | null` (it must stay anonymous here — a declared
+ * `opt empty` would dedup into the arm and be refused as AmbiguousVariantArm,
+ * which is pinned in golden.rs, not a golden); a declared alias of `null` is
+ * a bare tag through the reference, on both the aliased and the deduped
+ * plain arm.
+ */
 type $EmptyVariant = { tag: "a"; value: never } | { tag: "b"; value: bigint };
+/**
+ * Issue #127: the variant-arm classification rows of the divergence table.
+ * An `empty` payload keeps `value: never`; an anonymous `opt empty` payload
+ * keeps `value: never | null` (it must stay anonymous here — a declared
+ * `opt empty` would dedup into the arm and be refused as AmbiguousVariantArm,
+ * which is pinned in golden.rs, not a golden); a declared alias of `null` is
+ * a bare tag through the reference, on both the aliased and the deduped
+ * plain arm.
+ */
 const $EmptyVariant: $.Schema<$EmptyVariant> = $.c.rec(() => $.c.variant({ a: $.c.empty, b: $.c.nat }));
 export { $EmptyVariant as EmptyVariant };
 

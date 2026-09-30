@@ -80,6 +80,61 @@ export { $Tokens as Tokens };
   this generator must raise the `@candid-core/schema` peer to the release
   that introduces `Principal`.
 
+### A declared primitive names only itself
+
+- **BREAKING**: the embedded generator no longer renders a use of a primitive
+  by a declaration's name. The Contract arena shares one node per structure, so
+  a name recorded for `nat64` was rendered at *every* `nat64` in the interface,
+  including ones that never wrote it. A use of a primitive — a field, an array
+  element, a variant arm, a method argument — now renders structurally
+  (`bigint`, `$.c.nat64`, and `$.Principal` for `principal`); a declaration of
+  the primitive is still emitted and exported as itself. `type Memo = nat64;
+  type R = record { a : nat64; b : Memo }` now generates `R = { a: bigint; b:
+  bigint }` where it generated `{ a: Memo; b: Memo }`, and the ICRC-1
+  ledger's `TransferArg.amount`, written `Tokens` beside `type BlockIndex =
+  nat`, is `bigint` and no longer `BlockIndex`.
+- **BREAKING (value type)**: every `vec nat8` is `Uint8Array` / `$.c.blob()`,
+  whatever its element type is called. Before, a single `type Byte = nat8`
+  anywhere in the interface turned every `blob` and `vec Byte` into
+  `Array<Byte>`, a `number[]`. For an interface with a declared `nat8` alias
+  the generated blob types change from `number[]` to `Uint8Array`; the encoded
+  bytes do not change. Interfaces with no declared primitive alias generate
+  byte-identical modules, apart from the JSDoc below.
+- **Trade-off**: a declared alias no longer survives as the *spelling* of a
+  field's type (`amount : Tokens` reads `amount: bigint`); the type is the
+  same. Two structurally equal *record* declarations still collapse to the
+  first name, as before.
+- **Release ordering**: the paired `@candid-core/schema` change makes
+  `schemaFromContract` load every `vec nat8` as a blob too, so a generated
+  module and a loaded schema agree; ship them together.
+
+### `.did` doc comments become JSDoc
+
+- The embedded generator writes each `.did` doc comment as JSDoc: above the
+  generated type and const of a declaration, on a record property, on a
+  variant arm's `tag`, on a method of the `Actor` type, and on the `actor`
+  export. Docs are the `///` run (or plain `//` lines) directly above the
+  item; block comments are not docs. The doc text is escaped — `*/` becomes
+  `*\/`, an `@` that could start a tag becomes `\@`, a code fence has each
+  backtick escaped — so a comment cannot end early, forge a tag or swallow the
+  generated ones.
+- A method's `@param` tags name the `.did`'s argument names, and the `Actor`
+  method's parameters take the same names; an unnamed argument, a reserved
+  word, a name that is not identifier-shaped or a collision stays `arg{n}`.
+- A record or union with a documented member spans several lines; without
+  docs its one-line form is unchanged. Tuple elements carry no docs.
+- Which occurrence documents a node the arena has de-duplicated is one rule:
+  the declaration (or actor) whose structure is being emitted; occurrences
+  inside one declaration that disagree are dropped. No Contract, envelope,
+  identity or wire byte changes — docs are provenance — and the
+  `org.candid-core.field-names/v1` extension is untouched.
+- **Additive**, with one naming change: a module is unchanged by this entry
+  only when its `.did` has no comments beside its declarations **and** no
+  usable argument names. A method written `a : (x : nat) -> ()` now takes `x`
+  as its parameter name where it took `arg0`, and gains an `@param x` block,
+  whether or not the file has a single comment. Types, values and wire bytes
+  do not move either way.
+
 ## 0.1.0 — 2026-08-27
 
 Embeds `candid-core` 0.1.0-beta.3 and the `candid-core-ts` generator from

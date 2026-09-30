@@ -213,9 +213,9 @@ export interface VecSchema<T> extends Schema<T[]> {
 }
 
 /**
- * The anonymous `vec nat8`, whose domain is `Uint8Array` rather than
- * `number[]`. A distinct node because the byte path is worth taking
- * wholesale rather than one element at a time.
+ * `vec nat8` — Candid's `blob`, whatever its element type is called — whose
+ * domain is `Uint8Array` rather than `number[]`. A distinct node because the
+ * byte path is worth taking wholesale rather than one element at a time.
  *
  * @example
  * c.blob().kind; // "blob"
@@ -709,7 +709,7 @@ export const c = {
   },
 
   /**
-   * Candid `blob` — the anonymous `vec nat8` — as a `Uint8Array` rather than
+   * Candid `blob` — `vec nat8` — as a `Uint8Array` rather than
    * a `number[]`. The check reads the typed-array brand, so a `Uint8Array`
    * from another realm (a Node `Buffer` included) passes while a prototype
    * forgery does not.

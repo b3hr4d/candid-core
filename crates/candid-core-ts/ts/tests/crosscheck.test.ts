@@ -31,6 +31,7 @@ import * as ledger from "../../tests/goldens/ledger.ts";
 import * as empties from "../../tests/goldens/empties.ts";
 import * as arms from "../../tests/goldens/arms.ts";
 import * as options from "../../tests/goldens/options.ts";
+import * as fidelity from "../../tests/goldens/fidelity.ts";
 
 interface Fixture {
   readonly name: string;
@@ -60,6 +61,18 @@ const item = {
   label: "seven",
   payload: new Uint8Array([7]),
 };
+
+/** A valid `fidelity.Raw`: every blob position holds a `Uint8Array`. */
+function rawValue(): Record<string, unknown> {
+  return {
+    raw: new Uint8Array([1, 2]),
+    bytes: new Uint8Array([3, 4]),
+    grid: [new Uint8Array([5])],
+    maybe: new Uint8Array([6]),
+    one: 7,
+    plain: 8,
+  };
+}
 
 const FIXTURES: readonly Fixture[] = [
   {
@@ -350,6 +363,79 @@ const FIXTURES: readonly Fixture[] = [
         { tag: "set", value: { some: null } },
         { tag: "set", value: "x" },
         { tag: "clear" },
+      ],
+    },
+  },
+  {
+    // Issue #191: a declared primitive names only itself, and every `vec
+    // nat8` is a blob. Each blob position is sampled with the `Uint8Array`
+    // both paths must accept and the `number[]` both must refuse — the
+    // pre-fix generator and loader agreed with each other and were wrong the
+    // same way, so agreement alone is not the claim; the verdicts are pinned
+    // in fidelity.test.ts too.
+    name: "fidelity",
+    module: fidelity,
+    samples: {
+      Memo: [0n, 5n, 5, -1n, 2n ** 64n],
+      R: [{ a: 1n, b: 2n }, { a: 1n, b: 2 }, { a: 1, b: 2n }, { a: 1n }],
+      Byte: [0, 255, 256, -1, 1n],
+      Raw: [
+        rawValue(),
+        { ...rawValue(), raw: [1, 2] },
+        { ...rawValue(), bytes: [3, 4] },
+        { ...rawValue(), grid: [[5]] },
+        { ...rawValue(), maybe: [6] },
+        { ...rawValue(), maybe: null },
+        { ...rawValue(), one: 256 },
+      ],
+      Seconds: [0n, 5n, 5, -(2n ** 63n), 2n ** 63n],
+      Millis: [0n, 5n, "5"],
+      Timing: [
+        { started: 1n, elapsed: 2n, raw: 3n },
+        { started: 1n, elapsed: 2n, raw: 3 },
+        { started: 1, elapsed: 2n, raw: 3n },
+      ],
+      Tokens: [0n, 2n ** 100n, -1n, 5],
+      BlockIndex: [0n, 2n ** 100n, -1n, 5],
+      Account: [
+        { owner: principal, subaccount: null },
+        { owner: principal, subaccount: new Uint8Array([1]) },
+        { owner: principal, subaccount: [1] },
+        { owner: carrier, subaccount: null },
+      ],
+      TransferArg: [
+        { to: { owner: principal, subaccount: null }, amount: 1n, fee: null },
+        { to: { owner: principal, subaccount: null }, amount: 1n, fee: 2n },
+        { to: { owner: principal, subaccount: null }, amount: 1, fee: null },
+        { to: { owner: principal, subaccount: null }, amount: 1n, fee: 2 },
+      ],
+      TransferResult: [
+        { tag: "Ok", value: 1n },
+        { tag: "Err", value: "e" },
+        { tag: "Ok", value: "x" },
+        { tag: "Err", value: 1n },
+      ],
+      Nothing: [null, 0],
+      Never: [null, 0, undefined],
+      Anything: [null, 5, {}, undefined, [1]],
+      Odd: [
+        { tag: "a" },
+        { tag: "a", value: null },
+        { tag: "b", value: 1 },
+        { tag: "c", value: 5 },
+        { tag: "d", value: null },
+        { tag: "d", value: { some: null } },
+        { tag: "d", value: 5 },
+        { tag: "e", value: null },
+        { tag: "e", value: 1 },
+        { tag: "f", value: [1, "x", null] },
+        { tag: "f", value: "x" },
+      ],
+      Owner: [principal, "2vxsx-fae", carrier, 5],
+      Owned: [
+        { by: principal, alias: principal },
+        { by: principal, alias: 5 },
+        { by: carrier, alias: principal },
       ],
     },
   },

@@ -5,19 +5,33 @@ type $AliasedOuter = { some: $MaybeText } | null;
 const $AliasedOuter: $.Schema<$AliasedOuter> = $.c.rec(() => $.c.opt($MaybeText));
 export { $AliasedOuter as AliasedOuter };
 
+/** Recursion: the inner of `Chain` is `Chain`'s own opt node. */
 type $Chain = { some: $Chain } | null;
+/** Recursion: the inner of `Chain` is `Chain`'s own opt node. */
 const $Chain: $.Schema<$Chain> = $.c.rec(() => $.c.opt($Chain));
 export { $Chain as Chain };
 
+/** Variant arms whose payloads are collapsing opts carry `value`. */
 type $Change = { tag: "set"; value: $AliasedOuter } | { tag: "keep" } | { tag: "clear"; value: $OptNothing };
-const $Change: $.Schema<$Change> = $.c.rec(() => $.c.variant({ set: $AliasedOuter, keep: $Nothing, clear: $OptNothing }));
+/** Variant arms whose payloads are collapsing opts carry `value`. */
+const $Change: $.Schema<$Change> = $.c.rec(() => $.c.variant({ set: $AliasedOuter, keep: $.c.null, clear: $OptNothing }));
 export { $Change as Change };
 
+/**
+ * Collapsing options: an `opt` whose inner type admits `null` boxes its
+ * present value as `{ some: T } | null`; every other opt stays `T | null`.
+ */
 type $DoubleOpt = { some: bigint | null } | null;
+/**
+ * Collapsing options: an `opt` whose inner type admits `null` boxes its
+ * present value as `{ some: T } | null`; every other opt stays `T | null`.
+ */
 const $DoubleOpt: $.Schema<$DoubleOpt> = $.c.rec(() => $.c.opt($.c.opt($.c.nat)));
 export { $DoubleOpt as DoubleOpt };
 
+/** Boxed through declared aliases: the test is on the node, not the spelling. */
 type $MaybeText = string | null;
+/** Boxed through declared aliases: the test is on the node, not the spelling. */
 const $MaybeText: $.Schema<$MaybeText> = $.c.rec(() => $.c.opt($.c.text));
 export { $MaybeText as MaybeText };
 
@@ -25,12 +39,14 @@ type $Nothing = null;
 const $Nothing: $.Schema<$Nothing> = $.c.rec(() => $.c.null);
 export { $Nothing as Nothing };
 
+/** Unboxed control: `empty` does not admit null, so this is plain `null`. */
 type $OptEmpty = never | null;
+/** Unboxed control: `empty` does not admit null, so this is plain `null`. */
 const $OptEmpty: $.Schema<$OptEmpty> = $.c.rec(() => $.c.opt($.c.empty));
 export { $OptEmpty as OptEmpty };
 
-type $OptNothing = { some: $Nothing } | null;
-const $OptNothing: $.Schema<$OptNothing> = $.c.rec(() => $.c.opt($Nothing));
+type $OptNothing = { some: null } | null;
+const $OptNothing: $.Schema<$OptNothing> = $.c.rec(() => $.c.opt($.c.null));
 export { $OptNothing as OptNothing };
 
 type $OptNull = $OptNothing;
@@ -45,7 +61,15 @@ type $OptReserved = { some: unknown } | null;
 const $OptReserved: $.Schema<$OptReserved> = $.c.rec(() => $.c.opt($.c.reserved));
 export { $OptReserved as OptReserved };
 
+/**
+ * Mutual recursion through opt: `Ping` wraps a record (unboxed), `Pong`
+ * wraps `Ping`, an opt (boxed).
+ */
 type $Ping = { pong: $Pong } | null;
+/**
+ * Mutual recursion through opt: `Ping` wraps a record (unboxed), `Pong`
+ * wraps `Ping`, an opt (boxed).
+ */
 const $Ping: $.Schema<$Ping> = $.c.rec(() => $.c.opt($.c.record({ pong: $Pong })));
 export { $Ping as Ping };
 
@@ -53,7 +77,15 @@ type $Pong = { some: $Ping } | null;
 const $Pong: $.Schema<$Pong> = $.c.rec(() => $.c.opt($Ping));
 export { $Pong as Pong };
 
+/**
+ * The set/clear/keep pattern real interfaces use (Internet Identity's
+ * config, Orbit's `opt opt` fields, the asset canister's property updates).
+ */
 type $Settings = { flag: $MaybeText; label: $AliasedOuter; limit: { some: bigint | null } | null };
+/**
+ * The set/clear/keep pattern real interfaces use (Internet Identity's
+ * config, Orbit's `opt opt` fields, the asset canister's property updates).
+ */
 const $Settings: $.Schema<$Settings> = $.c.rec(() => $.c.record({ flag: $MaybeText, label: $AliasedOuter, limit: $.c.opt($.c.opt($.c.nat64)) }));
 export { $Settings as Settings };
 

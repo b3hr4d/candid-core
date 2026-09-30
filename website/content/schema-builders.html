@@ -165,7 +165,7 @@ unit(): UnitSchema
   </dd>
   <dt><code>c.blob()</code> — infers <code>Uint8Array</code></dt>
   <dd>
-    The anonymous <code>vec nat8</code>, taken wholesale rather than one element at a time. The
+    Every <code>vec nat8</code> — Candid&rsquo;s <code>blob</code> — taken wholesale rather than one element at a time. The
     check reads the typed-array brand, so a <code>Uint8Array</code> from another realm (a Node
     <code>Buffer</code> included) passes while a prototype forgery does not.
   </dd>

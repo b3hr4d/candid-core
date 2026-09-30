@@ -399,7 +399,7 @@ export { $Odd as Odd };
     <strong>You want a drop-in replacement for the agent-js runtime.</strong> It is not one.
     <code>@candid-core/schema</code> deliberately produces modern domain shapes —
     <code>opt T</code> is <code>T | null</code>, variants are <code>{ tag, value }</code>
-    unions, anonymous <code>vec nat8</code> is <code>Uint8Array</code>, <code>nat</code> /
+    unions, every <code>vec nat8</code> (<code>blob</code>) is <code>Uint8Array</code>, <code>nat</code> /
     <code>int</code> and the 64-bit integers are <code>bigint</code> — not the
     <code>[] | [T]</code> options and single-key variant objects agent-js produces.
     Compatibility with agent-js value shapes is an explicit non-goal, so using these types

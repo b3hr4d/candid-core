@@ -213,6 +213,27 @@ fn golden_shadowing() {
     assert_golden("shadowing");
 }
 
+/// Issue #191: a declared primitive names only itself. The fixture pins the
+/// capture cases — `Memo` beside a bare `nat64`, `Byte` beside `blob`, two
+/// aliases of one primitive side by side, and the ICRC-1 ledger's `Tokens` and
+/// `BlockIndex` — through the tsc equality gate, and its Contract, names and
+/// envelope goldens feed the loader crosscheck (`ts/tests/crosscheck.test.ts`),
+/// which holds the loaded schemas to the same value domains.
+#[test]
+fn golden_fidelity() {
+    assert_golden("fidelity");
+}
+
+/// Issue #191: `.did` doc comments and argument names as JSDoc — on types,
+/// consts, record properties, union arms and `Actor` methods — including the
+/// hostile and degenerate texts the escaping rules exist for. The golden is
+/// compiled by the tsc equality gate and read back through the TypeScript
+/// compiler's own doc queries by `ts/tests/jsdoc.test.ts`.
+#[test]
+fn golden_docs() {
+    assert_golden("docs");
+}
+
 /// The schema runtime (issue #102) consumes these same fixtures as data: each
 /// fixture's Contract JSON document and field-name table are goldens too,
 /// read by `ts/tests/crosscheck.test.ts` to prove the dynamically built
@@ -240,6 +261,7 @@ fn golden_runtime_contract_documents() {
         "empties",
         "arms",
         "options",
+        "fidelity",
     ] {
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests");
         let source = std::fs::read_to_string(root.join("fixtures").join(format!("{name}.did")))
@@ -750,6 +772,412 @@ fn actor_emission_covers_class_unwrap_and_proto_methods() {
         output.contains("$.c.service({ [\"__proto__\"]: $.c.func"),
         "the method key must be computed: {output}"
     );
+}
+
+/// Generate a module from Candid text through the real provenance bridge.
+fn generate_source(source: &str) -> String {
+    let compilation = compile_did(source).unwrap_or_else(|error| panic!("{source}: {error:?}"));
+    let names = TsNames::from_source_info(compilation.source_info().expect("provenance"));
+    generate_module(compilation.contract(), &names, &TsOptions::default())
+        .unwrap_or_else(|error| panic!("{source} must generate: {error}"))
+}
+
+/// Issue #191: a declaration of a primitive names only itself. The arena
+/// de-duplicates every use of a primitive into one node, so a name recorded
+/// for it used to be rendered at every use — `type Memo = nat64` renamed an
+/// unrelated `nat64` field, `type Tokens = nat` beside `type BlockIndex = nat`
+/// rendered both as whichever came first, and `type Byte = nat8` turned each
+/// `blob` in the interface into `Array<Byte>`. The three measured repros from
+/// the issue, each with its declaration still exported.
+#[test]
+fn a_declared_primitive_names_only_itself() {
+    let output = generate_source("type Memo = nat64; type R = record { a : nat64; b : Memo };");
+    assert!(
+        output.contains("type $R = { a: bigint; b: bigint };"),
+        "{output}"
+    );
+    assert!(
+        output.contains("$.c.record({ a: $.c.nat64, b: $.c.nat64 })"),
+        "{output}"
+    );
+    assert!(output.contains("type $Memo = bigint;"), "{output}");
+    assert!(output.contains("export { $Memo as Memo };"), "{output}");
+
+    let output =
+        generate_source("type Byte = nat8; type R = record { raw : blob; bytes : vec Byte };");
+    assert!(output.contains("raw: Uint8Array"), "{output}");
+    assert!(output.contains("bytes: Uint8Array"), "{output}");
+    assert_eq!(output.matches("$.c.blob()").count(), 2, "{output}");
+    assert!(!output.contains("Array<"), "{output}");
+    assert!(
+        !output.contains("$Byte;") && !output.contains("$Byte,"),
+        "{output}"
+    );
+    assert!(output.contains("type $Byte = number;"), "{output}");
+
+    // The ICRC-1 ledger shape, verbatim from the issue.
+    let output = generate_source(
+        "type Tokens = nat;\n\
+         type BlockIndex = nat;\n\
+         type Account = record { owner : principal; subaccount : opt blob };\n\
+         type TransferArg = record { to : Account; amount : Tokens; fee : opt Tokens };\n\
+         type TransferResult = variant { Ok : BlockIndex; Err : text };\n\
+         service : { icrc1_transfer : (TransferArg) -> (TransferResult); \
+         icrc1_balance_of : (Account) -> (Tokens) query };",
+    );
+    assert!(
+        output
+            .contains("type $TransferArg = { to: $Account; fee: bigint | null; amount: bigint };"),
+        "{output}"
+    );
+    assert!(output.contains("type $Tokens = bigint;"), "{output}");
+    assert!(output.contains("type $BlockIndex = bigint;"), "{output}");
+    assert!(output.contains("export { $Tokens as Tokens };"), "{output}");
+    assert!(
+        output.contains("export { $BlockIndex as BlockIndex };"),
+        "{output}"
+    );
+    assert!(
+        output.contains("icrc1_balance_of: (arg0: $Account) => Promise<bigint>;"),
+        "{output}"
+    );
+    assert!(
+        output.contains("type $TransferResult = { tag: \"Ok\"; value: bigint } | { tag: \"Err\"; value: string };"),
+        "{output}"
+    );
+    // Never one alias standing in for the other.
+    assert!(!output.contains("= $BlockIndex"), "{output}");
+    assert!(!output.contains("= $Tokens"), "{output}");
+}
+
+/// Every position of a primitive alias — `vec`, `opt`, nested, tuple, variant
+/// arm, func argument, actor method — renders structurally, and a declared
+/// principal is the runtime's principal type.
+#[test]
+fn a_declared_primitive_renders_structurally_everywhere() {
+    let output = generate_source(
+        "type Id = nat; type Bin = nat8; type Who = principal; type Nothing = null;\n\
+         type V = record { ids : vec Id; maybe : opt Id; nested : vec vec Bin; who : Who; \
+         pair : record { Id; Bin } };\n\
+         type A = variant { a : Id; b : Nothing; c : opt Nothing };\n\
+         type F = func (Id, vec Bin) -> (Who);\n\
+         service : { m : (Id, Bin, vec Bin) -> (Who, Nothing) };",
+    );
+    for (needle, why) in [
+        ("ids: Array<bigint>", "vec of an alias"),
+        ("maybe: bigint | null", "opt of an alias"),
+        ("nested: Array<Uint8Array>", "vec vec of an alias"),
+        ("who: $.Principal", "principal alias"),
+        ("pair: [bigint, number]", "tuple of aliases"),
+        ("{ tag: \"a\"; value: bigint }", "variant arm"),
+        ("{ tag: \"b\" }", "an alias of null is a bare tag"),
+        ("{ some: null } | null", "opt of an alias of null boxes"),
+        (
+            "m: (arg0: bigint, arg1: number, arg2: Uint8Array) => Promise<[$.Principal, null]>;",
+            "actor method",
+        ),
+        (
+            "$.c.func([$.c.nat, $.c.blob()], [$.c.principal], \"update\")",
+            "func builder",
+        ),
+    ] {
+        assert!(output.contains(needle), "{why}: {needle}\n{output}");
+    }
+    // Only the four declarations themselves carry the names.
+    for name in ["Id", "Bin", "Who", "Nothing"] {
+        let uses = output.matches(&format!("${name}")).count();
+        assert_eq!(
+            uses, 4,
+            "${name} appears only in its own four lines:\n{output}"
+        );
+    }
+}
+
+/// The locality rule of #116 applied to value shapes: adding an unrelated
+/// declaration of `nat8` never changes another declaration's rendering.
+#[test]
+fn an_unrelated_primitive_declaration_changes_nothing_else() {
+    let without = generate_source(
+        "type R = record { raw : blob; a : nat8; big : nat64 }; type G = vec vec nat8;",
+    );
+    let with = generate_source(
+        "type Byte = nat8; type Word = nat64;\n\
+         type R = record { raw : blob; a : nat8; big : nat64 }; type G = vec vec nat8;",
+    );
+    for line in without.lines().filter(|line| {
+        line.starts_with("type $R") || line.starts_with("const $R") || line.contains("$G")
+    }) {
+        assert!(
+            with.contains(line),
+            "`{line}` changed when unrelated aliases were declared"
+        );
+    }
+}
+
+/// Docs are provenance: the compiler-free base surface has none, so a table
+/// built from pairs (or empty) emits no JSDoc for the very same Contract.
+#[test]
+fn without_provenance_no_docs_are_emitted() {
+    let source = std::fs::read_to_string(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/docs.did"),
+    )
+    .expect("fixture must be readable");
+    let compilation = compile_did(&source).expect("compile");
+    let bare = generate_module(
+        compilation.contract(),
+        &TsNames::new(),
+        &TsOptions::default(),
+    )
+    .expect("generate");
+    assert!(!bare.contains("/**"), "{bare}");
+    assert!(
+        bare.contains("arg0: "),
+        "argument names are provenance too: {bare}"
+    );
+    let documented = generate_fixture("docs");
+    assert!(documented.contains("/**"));
+    // Same Contract, same types: removing the JSDoc and the layout it forces
+    // leaves one declaration set.
+    assert_eq!(
+        bare.matches("export { $").count(),
+        documented.matches("export { $").count()
+    );
+}
+
+/// Byte-identical output across runs, and across the Contract's serialized
+/// form: the docs, the layout they force and the parameter names are all
+/// functions of the Contract and the sidecar, never of time or map order.
+#[test]
+fn documented_generation_is_deterministic() {
+    let source = std::fs::read_to_string(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/docs.did"),
+    )
+    .expect("fixture must be readable");
+    let first = generate_source(&source);
+    for _ in 0..3 {
+        assert_eq!(first, generate_source(&source));
+    }
+    let compilation = compile_did(&source).expect("compile");
+    let names = TsNames::from_source_info(compilation.source_info().expect("provenance"));
+    let json = serde_json::to_string(compilation.contract()).expect("serialize");
+    let reparsed = candid_core::Contract::from_json(&json).expect("reparse");
+    let again = generate_module(&reparsed, &names, &TsOptions::default()).expect("generate");
+    assert_eq!(first, again);
+}
+
+/// What the module's text is outside its block comments, so a test can prove
+/// nothing a `.did` comment said escaped into code. Valid only for modules
+/// with no quoted name that contains `/*`.
+fn outside_comments(module: &str) -> String {
+    let mut code = String::new();
+    let mut rest = module;
+    while let Some(start) = rest.find("/*") {
+        code.push_str(&rest[..start]);
+        let end = rest[start + 2..]
+            .find("*/")
+            .unwrap_or_else(|| panic!("an unterminated comment:\n{module}"));
+        rest = &rest[start + 2 + end + 2..];
+    }
+    code.push_str(rest);
+    code
+}
+
+/// Issue #191, JSDoc safety: doc text that says `*/`, opens tags, fences,
+/// smuggles code, or is enormous or spans thousands of lines neither ends its
+/// comment early nor reaches the module's code.
+#[test]
+fn hostile_doc_text_stays_inside_its_comment() {
+    let hostile: Vec<String> = [
+        "*/ export const pwned = 1; /*",
+        "**/ pwned();",
+        "*/*/ pwned",
+        "ends with * and then */",
+        "/** nested opener */ pwned",
+        "@param pwned forged",
+        "@deprecated pwned",
+        "text @returns pwned",
+        "{@link pwned",
+        "```pwned",
+        "` ` ` pwned `",
+        "\\*/ pwned",
+        "\\",
+        "\u{2028}pwned\u{2029}pwned",
+        "a\tb\u{85}c\u{feff}d",
+    ]
+    .iter()
+    .map(|line| line.to_string())
+    .collect();
+    let mut source = String::new();
+    for line in &hostile {
+        source.push_str(&format!("//{line}\n"));
+    }
+    source.push_str("type Documented = record {\n");
+    for line in &hostile {
+        source.push_str(&format!("  //{line}\n"));
+    }
+    source.push_str("  field : nat;\n};\n");
+    let output = generate_source(&source);
+    assert!(output.contains("type $Documented ="), "{output}");
+    assert!(
+        !outside_comments(&output).contains("pwned"),
+        "escaped into code:\n{output}"
+    );
+    // Exactly the generator's own openers and closers, one closer each: an
+    // opener is a line that begins a block, and a `/**` said inside a doc is
+    // text mid-line, not the start of one.
+    let openers = output
+        .lines()
+        .filter(|line| line.trim_start().starts_with("/**"))
+        .count();
+    assert_eq!(openers, output.matches("*/").count(), "{output}");
+    // Neither `*/` nor a naked tag survives in any doc line.
+    for line in output
+        .lines()
+        .filter(|line| line.trim_start().starts_with('*'))
+    {
+        assert!(!line.contains("*/") || line.trim() == "*/", "{line}");
+        assert!(!line.trim_start().starts_with("* @"), "{line}");
+    }
+    // Line separators cannot split a doc line: no stray U+2028/U+2029/NEL.
+    assert!(
+        !output.contains('\u{2028}') && !output.contains('\u{2029}') && !output.contains('\u{85}')
+    );
+}
+
+/// A 400 KB doc line and a 300-line doc block are emitted whole, with one terminator, and identically on every run.
+#[test]
+fn very_long_and_very_many_doc_lines_are_emitted_whole() {
+    let long = "x".repeat(200_000);
+    let source = format!("// {long}*/{long}\ntype T = nat;\n");
+    let output = generate_source(&source);
+    assert!(
+        output.contains(&format!("/** {long}*\\/{long} */\n")),
+        "long line kept"
+    );
+    assert_eq!(
+        output.matches("*/").count(),
+        2,
+        "one closer each for the type and the const"
+    );
+    assert_eq!(
+        output.matches("*\\/").count(),
+        2,
+        "the said terminator, escaped on both"
+    );
+    assert_eq!(output, generate_source(&source));
+
+    // Many lines: 300, because upstream's `candid_parser` reads a run of doc
+    // lines recursively and a debug-build test thread's stack gives out
+    // somewhere past 500 consecutive `//` lines, in the compiler before the
+    // generator is reached. That limit is not this slice's to lift.
+    let mut many = String::new();
+    for index in 0..300 {
+        many.push_str(&format!("// line {index} */\n"));
+    }
+    many.push_str("type T = nat;\n");
+    let output = generate_source(&many);
+    assert_eq!(output.matches("/**").count(), 2);
+    assert!(output.contains(" * line 0 *\\/\n"));
+    assert!(output.contains(" * line 299 *\\/\n"));
+}
+
+/// CRLF sources document the same as LF ones: the parser keeps a `\r` at the
+/// end of a line comment, and the generator trims it.
+#[test]
+fn crlf_sources_document_identically() {
+    let source = std::fs::read_to_string(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/docs.did"),
+    )
+    .expect("fixture must be readable");
+    assert_eq!(
+        generate_source(&source),
+        generate_source(&source.replace('\n', "\r\n"))
+    );
+}
+
+/// Argument names: the parameters of an `Actor` method take the `.did`'s own
+/// names when they are usable TypeScript names, and fall back to `arg{n}` —
+/// with no `@param` — for an unnamed argument, a reserved word, a
+/// non-identifier, or a fallback that would collide. Two methods that share
+/// one function node keep their own names.
+#[test]
+fn argument_names_become_parameters_and_param_tags() {
+    let output = generate_source(
+        "service : {\n\
+           a : (x : nat) -> ();\n\
+           b : (y : nat) -> ();\n\
+           c : (nat, text) -> ();\n\
+           d : (\"delete\" : nat, \"has space\" : nat, \"ok\" : nat) -> ();\n\
+           e : (\"arg1\" : nat, text) -> ();\n\
+         };",
+    );
+    for (needle, why) in [
+        ("  /**\n   * @param x\n   */\n  a: (x: bigint) => Promise<void>;", "a"),
+        ("  /**\n   * @param y\n   */\n  b: (y: bigint) => Promise<void>;", "b shares a's node"),
+        ("  c: (arg0: bigint, arg1: string) => Promise<void>;", "unnamed"),
+        (
+            "  /**\n   * @param ok\n   */\n  d: (arg0: bigint, arg1: bigint, ok: bigint) => Promise<void>;",
+            "reserved and non-identifier names fall back",
+        ),
+        (
+            "  /**\n   * @param arg1\n   */\n  e: (arg1: bigint, arg1_: string) => Promise<void>;",
+            "a fallback never steals a declared name",
+        ),
+    ] {
+        assert!(output.contains(needle), "{why}: {needle}\n{output}");
+    }
+}
+
+/// Where an `Actor` method's docs and argument names come from when the
+/// actor's service is not written inline: an actor typed by a declared
+/// service (`service : S`) takes the declaration's occurrence; a class actor
+/// takes its own; and an actor written inline beside an identical declared
+/// service documents itself, not the declaration.
+#[test]
+fn actor_methods_take_docs_from_the_right_occurrence() {
+    let by_reference = generate_source(
+        "type S = service {\n  /// from S\n  f : (x : nat) -> ();\n};\n/// the actor\nservice : S;",
+    );
+    assert!(
+        by_reference.contains(
+            "  /**\n   * from S\n   * @param x\n   */\n  f: (x: bigint) => Promise<void>;"
+        ),
+        "{by_reference}"
+    );
+    assert!(
+        by_reference.contains("/** the actor */\nconst $actor"),
+        "{by_reference}"
+    );
+
+    let class = generate_source(
+        "service : (init : nat) -> {\n  /// from the class body\n  g : (y : text) -> ();\n};",
+    );
+    assert!(
+        class.contains("  /**\n   * from the class body\n   * @param y\n   */\n  g: (y: string) => Promise<void>;"),
+        "{class}"
+    );
+
+    // The inline actor and the declared service are one node: the actor's
+    // signature is the actor's own occurrence, the declaration keeps its.
+    let both = generate_source(
+        "type S = service {\n  /// declared\n  f : (a : nat) -> ();\n};\n\
+         service : {\n  /// inline\n  f : (b : nat) -> ();\n};",
+    );
+    assert!(
+        both.contains("   * inline\n   * @param b\n"),
+        "the actor documents itself: {both}"
+    );
+    assert!(!both.contains("declared\n   * @param a"), "{both}");
+    assert!(both.contains("type $S = $.Principal;"), "{both}");
+
+    // A method typed by a declared func takes the declaration's names, and
+    // its anonymous argument types the declaration's field docs.
+    let by_func = generate_source(
+        "type H = func (arg : record {\n  /// the id\n  id : nat;\n}) -> ();\n\
+         service : { h : H };",
+    );
+    assert!(by_func.contains("   * @param arg\n"), "{by_func}");
+    assert!(by_func.contains("/** the id */\n"), "{by_func}");
 }
 
 /// Without a name table every field renders by the `_id_` convention — the

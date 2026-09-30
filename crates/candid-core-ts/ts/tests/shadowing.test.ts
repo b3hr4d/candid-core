@@ -17,6 +17,7 @@ import assert from "node:assert/strict";
 
 import { decode, encode } from "../codec.ts";
 import {
+  c as builders,
   principal as toPrincipal,
   serviceMethods,
   type Principal as RuntimePrincipal,
@@ -136,16 +137,25 @@ test("the declarations round-trip through the codec by export name", () => {
   assert.strictEqual(value.w.p, "aaaaa-aa");
 });
 
-test("the actor's service schema references the renamed declarations", () => {
+test("the actor's service schema references composite declarations, not primitive ones", () => {
+  // Issue #191: a declared primitive names only itself. `c` (int8), `string`
+  // (nat16) and `delete` (float64) are declarations of a primitive, so a use
+  // of that primitive in a signature is the runtime's own builder — not the
+  // declaration's schema — while the composite `Promise` stays referenced.
   const methods = serviceMethods(actor);
   assert.deepStrictEqual([...methods.keys()].sort(), ["all", "get", "ping"]);
   const ping = methods.get("ping");
   if (ping === undefined) throw new Error("ping must be a method");
-  assert.strictEqual(ping.args[0], C);
+  assert.strictEqual(ping.args[0], builders.int8);
+  assert(ping.args[0] !== (C as unknown), "the use is not the declaration's schema");
   assert.strictEqual(ping.results[0], PromiseSchema);
   const get = methods.get("get");
   if (get === undefined) throw new Error("get must be a method");
-  assert.strictEqual(get.args[0], StringSchema);
-  assert.strictEqual(get.results[0], Delete);
+  assert.strictEqual(get.args[0], builders.nat16);
+  assert.strictEqual(get.results[0], builders.float64);
   assert.strictEqual(get.mode, "query");
+  // The declarations are still exported, and describe the same domains.
+  const use = ping.args[0] as Parameters<typeof validate>[0];
+  assert.strictEqual(validate(C, -1).ok, validate(use, -1).ok);
+  assert.strictEqual(validate(C, 128).ok, validate(use, 128).ok);
 });

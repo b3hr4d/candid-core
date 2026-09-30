@@ -47,6 +47,7 @@ import * as deferred from "../../tests/goldens/deferred.ts";
 import * as arms from "../../tests/goldens/arms.ts";
 import * as options from "../../tests/goldens/options.ts";
 import * as ledger from "../../tests/goldens/ledger.ts";
+import * as fidelity from "../../tests/goldens/fidelity.ts";
 import * as proto from "../../tests/goldens/proto.ts";
 import * as empties from "../../tests/goldens/empties.ts";
 import { Principal as SdkPrincipal } from "@icp-sdk/core/principal";
@@ -212,6 +213,36 @@ const EXPECTED: Record<string, Record<string, unknown>> = {
     change_set_none: { tag: "set", value: null },
     change_keep: { tag: "keep" },
   },
+  fidelity: {
+    // Issue #191: blobs behind a `nat8` alias are still `Uint8Array`, and a
+    // declared primitive is just its primitive on the wire.
+    memo: { a: 1n, b: 2n },
+    raw_full: {
+      raw: Uint8Array.from([1, 2]),
+      bytes: Uint8Array.from([3, 4]),
+      grid: [Uint8Array.from([5]), new Uint8Array(0)],
+      maybe: Uint8Array.from([6]),
+      one: 7,
+      plain: 8,
+    },
+    raw_empty: {
+      raw: new Uint8Array(0),
+      bytes: new Uint8Array(0),
+      grid: [],
+      maybe: null,
+      one: 0,
+      plain: 255,
+    },
+    timing: { started: 1n, elapsed: 2n, raw: -3n },
+    transfer_arg: {
+      to: { owner: principal("aaaaa-aa"), subaccount: Uint8Array.from([9]) },
+      amount: 100n,
+      fee: 10n,
+    },
+    transfer_ok: { tag: "Ok", value: 42n },
+    transfer_err: { tag: "Err", value: "bad" },
+    owned: { by: principal("aaaaa-aa"), alias: principal("2vxsx-fae") },
+  },
   ledger: {
     // Issue #190: the fixture whose generated and loaded schemas used to
     // write different type tables (11 entries against 7 for TransferArg).
@@ -268,6 +299,7 @@ const GENERATED: Record<string, Record<string, unknown>> = {
   deferred,
   arms,
   options,
+  fidelity,
   ledger,
 };
 

@@ -1,0 +1,66 @@
+// Issue #191: a declared primitive names only itself. The arena shares one
+// node per structure, so every use of `nat64` is the same node whether or not
+// a declaration spelled it; before the fix the first declaration's name was
+// rendered at every use, and `type Byte = nat8` turned each `blob` in the
+// interface into `number[]`.
+
+// One declaration, one unrelated use of the same primitive.
+
+type Memo = nat64;
+type R = record { a : nat64; b : Memo };
+
+// `Byte` is `nat8`: `blob` and `vec Byte` are one type, and every blob stays
+// a `Uint8Array` beside it.
+
+type Byte = nat8;
+type Raw = record {
+  raw : blob;
+  bytes : vec Byte;
+  grid : vec vec Byte;
+  maybe : opt vec Byte;
+  one : Byte;
+  plain : nat8;
+};
+
+// Two distinct aliases of one primitive, side by side with a bare use.
+
+type Seconds = int64;
+type Millis = int64;
+type Timing = record { started : Seconds; elapsed : Millis; raw : int64 };
+
+// The ICRC-1 ledger shape that surfaced it: `amount` said `Tokens` in the
+// `.did` and was emitted as `BlockIndex`.
+
+type Tokens = nat;
+type BlockIndex = nat;
+type Account = record { owner : principal; subaccount : opt blob };
+type TransferArg = record { to : Account; amount : Tokens; fee : opt Tokens };
+type TransferResult = variant { Ok : BlockIndex; Err : text };
+
+// A declared principal names only itself as well.
+
+type Owner = principal;
+type Owned = record { by : principal; alias : Owner };
+
+// The primitives whose aliases the type level treats specially: an alias of
+// `null` is a bare tag as a variant arm, `empty` keeps its `value: never`, and
+// `opt` of `null` boxes. Each renders as its primitive, and the tsc equality
+// gate proves the builder still infers the alias.
+
+type Nothing = null;
+type Never = empty;
+type Anything = reserved;
+type Odd = variant {
+  a : Nothing;
+  b : Never;
+  c : Anything;
+  d : opt Nothing;
+  e : opt Never;
+  f : vec Anything;
+};
+
+service : {
+  icrc1_transfer : (TransferArg) -> (TransferResult);
+  icrc1_balance_of : (Account) -> (Tokens) query;
+  put : (blob, vec Byte, Byte) -> (Memo, nat64);
+}
