@@ -140,9 +140,10 @@ export { $Items as Items };
   <li>An anonymous <code>vec nat8</code> is a <code>Uint8Array</code>, not a <code>number[]</code>.</li>
   <li><code>nat</code>, <code>int</code> and the 64-bit widths are <code>bigint</code>.</li>
   <li>
-    <code>principal</code> is the structural <code>PrincipalValue</code> — an object whose only
-    member is <code>toText()</code> — because the codec is self-contained and never constructs an
-    SDK class.
+    <code>principal</code> is <code>Principal</code>: its canonical text as a branded string —
+    plain data that serializes, clones and compares with <code>===</code>. The codec is
+    self-contained and never constructs or accepts an SDK class; <code>principal(value)</code>
+    converts one.
   </li>
 </ul>
 
@@ -151,10 +152,10 @@ export { $Items as Items };
     Handing these types to a live agent through the classic bindings path needs a conversion at the
     boundary. The supported route is this package's own codec: encode with the generated schemas
     and hand the agent only bytes. Likewise, a decoded principal is not an <code>@icp-sdk/core</code>
-    <code>Principal</code>: <code>instanceof</code> is <code>false</code> and
-    <code>.toUint8Array()</code> does not exist on it. Re-wrap with
-    <code>Principal.fromText(value.toText())</code> when you need the class. Input is structural, so
-    SDK instances you build encode unchanged.
+    <code>Principal</code> but its canonical text; convert with the SDK's
+    <code>Principal.fromText(value)</code> when you need the class. In the other direction, validation
+    and encoding accept exactly canonical text, so an SDK instance you built goes through
+    <code>principal(sdkPrincipal)</code> once, at your boundary.
   </p>
 </callout>
 
@@ -262,8 +263,8 @@ for (const sample of samples) {
       <td><span class="pill accent">.</span></td>
       <td>
         The <code>c</code> builders, <code>Schema&lt;in out T&gt;</code>, <code>Infer</code>,
-        <code>PrincipalValue</code>, the node interfaces, <code>resolveSchema</code> and
-        <code>serviceMethods</code>.
+        <code>Principal</code> with <code>principal</code> and <code>isPrincipal</code>, the node
+        interfaces, <code>resolveSchema</code> and <code>serviceMethods</code>.
       </td>
     </tr>
     <tr>

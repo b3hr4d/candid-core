@@ -5,7 +5,7 @@ type $EmptyField = { f: never; g: bigint };
 const $EmptyField: $.Schema<$EmptyField> = $.c.rec(() => $.c.record({ f: $.c.empty, g: $.c.nat }));
 export { $EmptyField as EmptyField };
 
-type $EmptyFunc = { principal: $.PrincipalValue; method: string };
+type $EmptyFunc = { principal: $.Principal; method: string };
 const $EmptyFunc: $.Schema<$EmptyFunc> = $.c.rec(() => $.c.func([$.c.empty], [$.c.empty], "update"));
 export { $EmptyFunc as EmptyFunc };
 

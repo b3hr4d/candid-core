@@ -36,7 +36,7 @@ import {
 } from "../codec.ts";
 import { schemaFromContract, type FieldNameEntry } from "../contract.ts";
 import { validate } from "../validate.ts";
-import { c, type AnySchema, type Schema } from "../schema.ts";
+import { c, principal, type AnySchema, type Principal, type Schema } from "../schema.ts";
 
 import * as primitives from "../../tests/goldens/primitives.ts";
 import * as collections from "../../tests/goldens/collections.ts";
@@ -49,9 +49,16 @@ import * as options from "../../tests/goldens/options.ts";
 import * as ledger from "../../tests/goldens/ledger.ts";
 import * as proto from "../../tests/goldens/proto.ts";
 import * as empties from "../../tests/goldens/empties.ts";
-import { Principal } from "@icp-sdk/core/principal";
+import { Principal as SdkPrincipal } from "@icp-sdk/core/principal";
 
 const goldens = new URL("../../tests/goldens/", import.meta.url);
+
+// Non-canonical principal texts for the encode/validate agreement matrix:
+// an id one byte over the 29-byte maximum, and the ledger canister's text
+// with one id character changed, so the checksum no longer matches. The
+// boundary itself is pinned in principal-value.test.ts.
+const THIRTY_BYTE_TEXT = principalTextFromBytes(new Uint8Array(30));
+const CRC_MISMATCH_TEXT = "ryjl3-tyaaa-aaaaa-aaaca-cai";
 
 function loadContractSchemas(name: string): { readonly [key: string]: AnySchema } {
   const contract = JSON.parse(
@@ -81,9 +88,10 @@ function toHex(bytes: Uint8Array): string {
 }
 
 /**
- * Structural comparison form: decoded principals are `{ toText }` closures,
- * which never compare equal as functions, so both sides normalize a
- * principal-shaped object to its canonical text.
+ * Structural comparison form. Decoded principals are canonical-text strings
+ * (issue #187), so nothing needs normalizing for them — deliberately: a
+ * decoder that handed back an object for a principal fails these comparisons.
+ * What remains is a plain structural copy.
  */
 function normalize(value: unknown): unknown {
   if (value === null || typeof value !== "object") {
@@ -97,18 +105,11 @@ function normalize(value: unknown): unknown {
   }
   const record = value as Record<string, unknown>;
   const keys = Object.keys(record);
-  if (keys.length === 1 && keys[0] === "toText" && typeof record.toText === "function") {
-    return `principal:${(record as { toText(): string }).toText()}`;
-  }
   const out: Record<string, unknown> = {};
   for (const key of keys) {
     out[key] = normalize(record[key]);
   }
   return out;
-}
-
-function principal(text: string): { toText(): string } {
-  return { toText: () => text };
 }
 
 // ---------------------------------------------------------------------------
@@ -686,9 +687,12 @@ test("encode-side strictness decisions", () => {
   assert(encode(c.float32, Number.NaN).ok);
   // Lone surrogates have no UTF-8 encoding.
   failsEncode(c.text, "a\ud800b", "invalid_text");
-  // Non-canonical principal text fails closed.
-  failsEncode(c.principal, principal("AAAAA-AA"), "invalid_principal");
-  failsEncode(c.principal, principal("aaaaa-ab"), "invalid_principal");
+  // Encode is strict about principals (issue #187): only canonical text, the
+  // exact set validate accepts, with validate's code — never a repair, and
+  // never a `{ toText }` object read through.
+  failsEncode(c.principal, "AAAAA-AA", "invalid_type");
+  failsEncode(c.principal, "aaaaa-ab", "invalid_type");
+  failsEncode(c.principal, { toText: () => "aaaaa-aa" }, "invalid_type");
   // Two keys deriving one wire id: hash("a") is 97, the id `_97_` renders.
   failsEncode(c.record({ a: c.nat8, _97_: c.nat8 }), { a: 1, _97_: 2 }, "duplicate_field_id");
   // A hostile getter cannot out-run validation: encode reads once.
@@ -722,6 +726,23 @@ test("encode-side strictness decisions", () => {
     [c.tuple([c.nat]), [1n, 2n]],
     [c.blob(), [1, 2]],
     [c.empty as AnySchema, 5],
+    // Principals (issue #187): every refusal, in every position a principal
+    // occupies, is the same code at the same path in both walks.
+    [c.principal, "garbage"],
+    [c.principal, { toText: () => "aaaaa-aa" }],
+    [c.principal, "AAAAA-AA"],
+    [c.principal, "aaaaaaa"],
+    [c.principal, "aaaaa-ab"],
+    [c.principal, THIRTY_BYTE_TEXT],
+    [c.principal, CRC_MISMATCH_TEXT],
+    [c.principal, ""],
+    [c.principal, 5],
+    [c.principal, null],
+    [c.func([], [], "query"), { principal: { toText: () => "aaaaa-aa" }, method: "m" }],
+    [c.func([], [], "query"), { principal: "AAAAA-AA", method: "m" }],
+    [c.service({}), { toText: () => "aaaaa-aa" }],
+    [c.service({}), "garbage"],
+    [c.record({ owner: c.principal }), { owner: "2VXSX-FAE" }],
   ];
   for (const [schema, value] of cases) {
     const validated = validate(schema as Schema<unknown>, value);
@@ -739,8 +760,91 @@ test("encode-side strictness decisions", () => {
 });
 
 function describeCase(schema: AnySchema, value: unknown): string {
-  return `${(schema as { kind: string }).kind}/${typeof value}`;
+  const shown = typeof value === "string" ? JSON.stringify(value) : typeof value;
+  return `${(schema as { kind: string }).kind}/${shown}`;
 }
+
+// ---------------------------------------------------------------------------
+// Principal values (issue #187)
+// ---------------------------------------------------------------------------
+
+test("principal values: every position decodes to canonical text, plain data", () => {
+  const ledgerText = "ryjl3-tyaaa-aaaaa-aaaba-cai";
+  const Holder = c.record({
+    owner: c.principal,
+    callback: c.func([], [c.nat], "query"),
+    registry: c.service({}),
+    all: c.vec(c.principal),
+  });
+  const input = {
+    owner: principal(ledgerText),
+    callback: { principal: principal("aaaaa-aa"), method: "get" },
+    registry: principal("2vxsx-fae"),
+    all: [principal(ledgerText), principal("aaaaa-aa")],
+  };
+  const encoded = encode(Holder, input);
+  assert(encoded.ok, "a Holder of canonical principals encodes");
+  if (!encoded.ok) {
+    return;
+  }
+  const first = decode(Holder, encoded.bytes);
+  const second = decode(Holder, encoded.bytes);
+  assert(first.ok && second.ok);
+  if (!first.ok || !second.ok) {
+    return;
+  }
+  const a = first.value as typeof input;
+  const b = second.value as typeof input;
+
+  // The primitive, a func reference's `principal`, and a service reference
+  // are each the canonical text string itself — nothing wraps it.
+  assert.strictEqual(typeof a.owner, "string");
+  assert.strictEqual(a.owner, ledgerText);
+  assert.strictEqual(typeof a.callback.principal, "string");
+  assert.strictEqual(a.callback.principal, "aaaaa-aa");
+  assert.strictEqual(typeof a.registry, "string");
+  assert.strictEqual(a.registry, "2vxsx-fae");
+  assert.deepStrictEqual(a.all, [ledgerText, "aaaaa-aa"]);
+  const bare = encode(c.principal, principal(ledgerText));
+  assert(bare.ok);
+  if (bare.ok) {
+    assert.deepStrictEqual(decode(c.principal, bare.bytes), { ok: true, value: ledgerText });
+  }
+
+  // `===`: two decodes of the same bytes hold identical principals.
+  assert(a.owner === b.owner);
+  assert(a.callback.principal === b.callback.principal);
+  assert(a.registry === b.registry);
+
+  // node:test deep equality: two decodes are deep-equal to each other and
+  // to the value that was encoded — no closure to defeat the comparison.
+  assert.deepStrictEqual(a, b);
+  assert.deepStrictEqual(a, input);
+
+  // JSON: a principal serializes as its text (not `{}`), and the parsed
+  // copy is the same value — it validates and re-encodes to the same bytes.
+  assert.strictEqual(JSON.stringify(a.owner), JSON.stringify(ledgerText));
+  assert.strictEqual(JSON.stringify(a.registry), '"2vxsx-fae"');
+  const parsed: unknown = JSON.parse(JSON.stringify(a));
+  assert.deepStrictEqual(parsed, a);
+  assert.deepStrictEqual(validate(Holder, parsed), { ok: true });
+  const reEncoded = encode(Holder as Schema<unknown>, parsed);
+  assert(reEncoded.ok);
+  if (reEncoded.ok) {
+    assert.deepStrictEqual(reEncoded.bytes, encoded.bytes);
+  }
+
+  // structuredClone: no DataCloneError, and the clone is the same value.
+  const cloned = structuredClone(a);
+  assert.deepStrictEqual(cloned, a);
+  assert(cloned.owner === a.owner);
+  assert(cloned.callback.principal === a.callback.principal);
+
+  // Map and Set keys: principals from separate decodes find each other.
+  const byOwner = new Map<Principal, string>([[a.owner, "ledger"]]);
+  assert.strictEqual(byOwner.get(b.owner), "ledger");
+  assert.strictEqual(new Set<Principal>([...a.all, ...b.all, a.callback.principal]).size, 2);
+});
 
 // ---------------------------------------------------------------------------
 // 4. Property harness
@@ -863,7 +967,7 @@ function resolveGen(schema: AnySchema): GenNode {
   return node;
 }
 
-function randomPrincipal(rand: () => number): { toText(): string } {
+function randomPrincipal(rand: () => number): Principal {
   return principal(
     principalTextFromBytes(
       Uint8Array.from({ length: Math.floor(rand() * 8) }, () => Math.floor(rand() * 256)),
@@ -1862,10 +1966,9 @@ function permuteValue(value: unknown, rand: () => number): unknown {
   if (Array.isArray(value)) {
     return value.map((element) => permuteValue(element, rand));
   }
+  // A principal is its canonical text (issue #187), so it is a string and
+  // returned above like every other leaf.
   const record = value as Record<string, unknown>;
-  if (typeof record.toText === "function") {
-    return value;
-  }
   const keys = shuffled(Object.keys(record), rand);
   const out: Record<string, unknown> = {};
   for (const key of keys) {
@@ -2106,11 +2209,14 @@ test("pinned limit: two knots for one recursive type are not merged", () => {
   }
 });
 
-test("equal principals give equal bytes whatever carries them", () => {
-  // Issue #190 criterion 3, the part testable today. Until #187 lands, a
-  // principal is any object with a canonical `toText()`; the criterion's
-  // final form (only canonical `Principal` strings are accepted, and equal
-  // strings give equal bytes) waits on that change of carrier.
+test("equal principal text gives equal bytes, whatever built the schema", () => {
+  // Issue #190 criterion 3, in its final form now that #187 has landed: a
+  // principal is canonical text branded `Principal`, the only principal
+  // value encode accepts. Every route to one — the literal text, an SDK
+  // instance or any object with toText() converted once by principal(), a
+  // decoded value, its JSON round trip — is the same string, and the same
+  // string encodes to the same bytes under generated, loaded, hand-built and
+  // rec-wrapped schemas, in every position a principal occupies.
   class Carrier {
     readonly #text: string;
     constructor(text: string) {
@@ -2121,18 +2227,61 @@ test("equal principals give equal bytes whatever carries them", () => {
     }
   }
   const text = "ryjl3-tyaaa-aaaaa-aaaba-cai";
-  const decodedCarrier = decode(c.principal, hexToBytesOf(encode(c.principal, principal(text))));
-  assert(decodedCarrier.ok);
-  const carriers: readonly unknown[] = [
+  const decoded = decode(c.principal, hexToBytesOf(encode(c.principal, principal(text))));
+  assert(decoded.ok);
+  const values: readonly unknown[] = [
     principal(text),
-    new Carrier(text),
-    Principal.fromText(text),
-    decodedCarrier.ok ? decodedCarrier.value : undefined,
+    principal(new Carrier(text)),
+    principal(SdkPrincipal.fromText(text)),
+    decoded.ok ? decoded.value : undefined,
+    decoded.ok ? JSON.parse(JSON.stringify(decoded.value)) : undefined,
+  ];
+  for (const value of values) {
+    assert.strictEqual(value, text, "every route yields the one canonical string");
+  }
+
+  const loaded = loadWithActor("ledger");
+  const handBuilt = c.record({ owner: c.principal, subaccount: c.opt(c.blob()) });
+  const accountSchemas: readonly (readonly [string, AnySchema])[] = [
+    ["generated", ledger.Account as AnySchema],
+    ["loaded", loaded.Account],
+    ["hand-built", handBuilt],
+    ["rec-wrapped", c.rec(() => handBuilt)],
   ];
   const account = (owner: unknown) => ({ owner, subaccount: null });
-  const hexes = carriers.map((owner) => hexOf(encode(ledger.Account, account(owner)), "account"));
-  for (const hexText of hexes) {
-    assert.strictEqual(hexText, hexes[0]);
+  const accountHex = hexOf(encode(ledger.Account, account(principal(text))), "account");
+  for (const [name, schema] of accountSchemas) {
+    for (const value of values) {
+      assert.strictEqual(
+        hexOf(encode(schema as Schema<unknown>, account(value)), name),
+        accountHex,
+        `${name}: equal principal text must give equal bytes`,
+      );
+    }
+  }
+
+  // The func-reference and service positions, generated against loaded.
+  const callback = { principal: principal(text), method: "get_blocks" };
+  assert.strictEqual(
+    hexOf(encode(loaded.ArchiveCallback as Schema<unknown>, callback), "loaded callback"),
+    hexOf(encode(ledger.ArchiveCallback, callback), "generated callback"),
+  );
+  for (const value of values) {
+    assert.strictEqual(
+      hexOf(encode(loaded.actor as Schema<unknown>, value), "loaded actor"),
+      hexOf(encode(ledger.actor, principal(text)), "generated actor"),
+    );
+  }
+
+  // The unconverted carriers are not principals: encode is strict and
+  // refuses them exactly as validate does.
+  for (const raw of [new Carrier(text), SdkPrincipal.fromText(text), { toText: () => text }]) {
+    const refused = encode(ledger.Account as Schema<unknown>, account(raw));
+    assert(!refused.ok, "an object with toText() is not a Principal");
+    if (!refused.ok) {
+      assert.strictEqual(refused.issues[0].code, "invalid_type");
+      assert.strictEqual(refused.issues[0].path, "$.owner");
+    }
   }
 });
 

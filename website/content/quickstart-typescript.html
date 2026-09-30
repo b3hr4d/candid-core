@@ -62,7 +62,7 @@ type TransferResult = variant { ok : nat; err : text; pending };</pre>
 
 const Account = c.record({ owner: c.principal, balance: c.nat });
 type Account = Infer<typeof Account>;
-// { owner: PrincipalValue; balance: bigint }
+// { owner: Principal; balance: bigint }
 
 const TransferResult = c.variant({ ok: c.nat, err: c.text, pending: c.null });
 type TransferResult = Infer<typeof TransferResult>;
@@ -77,16 +77,17 @@ type TransferResult = Infer<typeof TransferResult>;
     <code>null</code> — Candid's <code>pending</code> and
     <code>pending : null</code> are the same arm — is a bare
     <code>{ tag }</code> with no <code>value</code> key at all.
-    <code>c.principal</code> is the structural
-    <code>PrincipalValue</code>, which is <code>{ toText(): string }</code> and
-    nothing more, because that is exactly what the codec produces on decode.</p>
+    <code>c.principal</code> is <code>Principal</code>: the canonical principal
+    text as a branded string, because that is exactly what the codec produces
+    on decode — plain data that serializes, clones and compares with
+    <code>===</code>.</p>
 
     <p>You do not have to take the comments on faith. Annotate the schema with
     the type you would have written by hand and let <code>tsc</code> check
     them against each other:</p>
-    <pre data-lang="ts">import { c, type PrincipalValue, type Schema } from "@candid-core/schema";
+    <pre data-lang="ts">import { c, type Principal, type Schema } from "@candid-core/schema";
 
-type Account = { owner: PrincipalValue; balance: bigint };
+type Account = { owner: Principal; balance: bigint };
 
 // Compiles only if the builder's inferred type and the alias are the same
 // type in both directions.
@@ -107,9 +108,12 @@ const Account: Schema<Account> = c.rec(() => c.record({ owner: c.principal, bala
     <code>{ ok: false, issues }</code>, and it never throws for any value you
     hand it — a getter that throws or a revoked <code>Proxy</code> comes back as
     an <code>unreadable_value</code> issue instead.</p>
-    <pre data-lang="ts">import { validate } from "@candid-core/schema/validate";
+    <pre data-lang="ts">import { principal } from "@candid-core/schema";
+import { validate } from "@candid-core/schema/validate";
 
-const owner = { toText: () => "aaaaa-aa" };
+// The one way to make a Principal: canonical text, or an SDK Principal.
+// Non-canonical text such as "AAAAA-AA" throws a TypeError.
+const owner = principal("aaaaa-aa");
 
 validate(Account, { owner, balance: 5n });
 // { ok: true }
@@ -187,7 +191,7 @@ const decoded = decode(Account, encoded.bytes);
 if (decoded.ok) {
   const account = decoded.value as Account;
   account.balance; // 5n
-  account.owner.toText(); // "aaaaa-aa"
+  account.owner; // "aaaaa-aa", the principal's canonical text
 }</pre>
     <p>Two things to note. <code>decode</code> hands back
     <code>value: unknown</code>, so the assertion above is yours to make — the

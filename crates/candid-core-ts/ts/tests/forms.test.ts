@@ -186,7 +186,7 @@ test("validation issues address form nodes through the shared path grammar", () 
   const schema = ledger.TransferArg as AnySchema;
   const model = formModel(schema);
   const invalid = {
-    to: { owner: { toText: () => "aaaaa-aa" }, subaccount: null },
+    to: { owner: "aaaaa-aa", subaccount: null },
     fee: null,
     memo: null,
     from_subaccount: null,
@@ -357,7 +357,7 @@ test("the path resolver's remaining branches: indices, opts, and dead ends", () 
   // A wrong-typed opt value reports at the opt's own path and maps to the
   // optional node itself...
   const atOpt = validate(ledger.Account as Schema<unknown>, {
-    owner: { toText: () => "aaaaa-aa" },
+    owner: "aaaaa-aa",
     subaccount: [1, 2],
   });
   assert(!atOpt.ok);

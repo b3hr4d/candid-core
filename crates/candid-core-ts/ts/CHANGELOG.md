@@ -108,9 +108,9 @@ packaged-consumer gate asserts both.
 
 - **BREAKING**: the optional `@icp-sdk/core >= 6` peer is dropped; only
   `./transport-icp` ever used it. The package now declares no runtime
-  dependency and no peer of any kind. SDK `Principal` values are still
-  accepted wherever a principal is, because principal typing is the
-  structural `PrincipalValue`.
+  dependency and no peer of any kind. SDK `Principal` values convert to this
+  package's principal type with `principal()`; see "Principals are canonical
+  text" below.
 - The Node support matrix loses its `>= 20.19` row, which applied only to
   `./transport-icp`; the ESM floor of every remaining subpath is Node 16.
 
@@ -217,6 +217,80 @@ verdict, an issue code, a decoded value, or a generated binding.
 - Two internal modules ship in `dist/` without an export: `options.js` (the
   shared option check) and `typetable.js` (the structural table). Deep
   imports of them fail like every other internal module.
+
+### Principals are canonical text
+
+A principal's domain value is now its canonical text, as a branded string.
+The `{ toText }` closure it replaces could not be serialized
+(`JSON.stringify` gave `{}`), cloned (`structuredClone` threw
+`DataCloneError`, so a decoded reply could not cross `postMessage`, a
+persisted query cache, or a server/client boundary), or compared (two decodes
+of one principal were not `===`). Wire bytes are unchanged for every
+principal that encoded before; Contract JSON and identities are untouched.
+
+- **BREAKING**: the root export `PrincipalValue` (`{ toText(): string }`) is
+  removed, and so is its alias `DecodedPrincipal` in `./codec`. No
+  deprecation alias remains: one would keep the object shape alive. In their
+  place the root exports:
+  - `Principal` — `string & { readonly [brand]: true }`: canonical principal
+    text, branded in the type system only;
+  - `principal(input)` — the one conversion point. It takes a string or an
+    object with `toText()` (an `@icp-sdk/core` `Principal`, for one) and
+    returns the text as a `Principal`, or throws `TypeError`. It refuses
+    rather than repairs: upper case, a missing, misplaced, leading, trailing
+    or doubled dash, a checksum mismatch, non-zero padding bits in the last
+    character, an id over 29 bytes, and the empty string all throw, as does
+    an input that is neither a string nor an object with `toText()`.
+    `"aaaaa-aa"` (the management canister) and `"2vxsx-fae"` (the anonymous
+    principal) are canonical;
+  - `isPrincipal(value)` — the matching guard: a string whose text is
+    canonical.
+- **BREAKING**: `c.principal` is `PrimitiveSchema<Principal>`,
+  `FuncValue.principal` is `Principal`, and `ServiceSchema` extends
+  `Schema<Principal>`, so `Infer` yields `Principal` in all three places.
+- **BREAKING**: decoding returns the canonical text string — for the
+  primitive, a func reference's `principal`, and a service reference —
+  instead of a `{ toText }` object. Code that called `.toText()` on a decoded
+  value now holds the text itself; code that needs an SDK instance converts
+  with the SDK's `Principal.fromText(value)`. `JSON.stringify` of a decoded
+  principal is now its text, the portable form candid-core's host-value ABI
+  specifies.
+- **BREAKING**: validation checks the text. A principal must be a string
+  holding canonical text; an object with `toText()`, an SDK `Principal`
+  instance included, and a non-canonical string fail with `invalid_type`.
+  Before, `validate` accepted any object with a `toText` function, even one
+  returning garbage that `encode` then refused.
+- **BREAKING**: encoding is strict and agrees with validation case for case:
+  it accepts exactly the strings `validate` accepts and refuses everything
+  else with the same code (`invalid_type`) at the same path. It no longer
+  calls `toText()`, so SDK values go through `principal()` once, at the
+  caller's boundary. `invalid_principal` is now reported only by decoding (an
+  id over 29 bytes, an opaque reference).
+- Equal principal text encodes to equal bytes whatever built the schema —
+  generated, loaded, hand-built or `rec`-wrapped — in the primitive, func and
+  service positions alike: the structural-table guarantee above, completed for
+  principals now that the value is the text itself.
+- A string longer than 63 characters — the longest canonical text — is
+  refused before any work proportional to its length.
+- The principal text form moves out of the codec into an internal module,
+  `dist/principal-text.js`, shared by the root entry, the validator and the
+  codec; it is not an entry point. `./codec` still exports
+  `principalTextFromBytes` and `principalBytesFromText`, unchanged. The root
+  entry now loads that one dependency-free module at runtime, where it
+  imported nothing before; the validator is still not in its runtime graph.
+- The internal forms model documents the `principal` control's value as the
+  `Principal` string.
+- **Generated modules**: `@candid-core/cli`'s generator types principals as
+  `$.Principal` where it emitted `$.PrincipalValue` — principal fields, func
+  references (`{ principal: $.Principal; method: string }`), service
+  references, and the `actor` schema. A declaration named `Principal` still
+  generates. With `TsOptions::principal_import` set to another module, the
+  generator imports `Principal` from it, and that module must re-export this
+  package's `Principal`: the brand makes the type nominal, so the generated
+  `Schema<…>` annotations compile against no other type.
+- **Release ordering**: generated modules need the `Principal` export, which
+  0.2.0 does not have, so the `@candid-core/cli` release that ships this
+  generator must raise its peer to the release carrying this entry.
 
 ## 0.2.0 — 2026-08-24
 

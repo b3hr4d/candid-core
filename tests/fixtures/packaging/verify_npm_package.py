@@ -41,7 +41,13 @@ package no longer does — `./actor`, `./transport-icp`, `./forms`,
 `ERR_PACKAGE_PATH_NOT_EXPORTED` and at compile time with a missing-module
 error, and so must a deep import of the internal modules the entry points
 still ship and load (`dist/labels.js`, `dist/options.js`,
-`dist/typetable.js`).
+`dist/principal-text.js`, `dist/typetable.js`).
+
+Principals are canonical text, branded `Principal`: the consumer below converts
+an SDK-style object once through `principal()`, proves the unconverted object
+is refused by `validate` and `encode` alike, and proves a decoded principal is
+a plain string that survives `JSON.stringify` and `structuredClone` and
+compares with `===` — all against the packed artifact.
 """
 
 import datetime
@@ -65,6 +71,7 @@ REMOVED = ["./actor", "./transport-icp", "./forms", "./labels"]
 DEEP = [
     "./dist/labels.js",
     "./dist/options.js",
+    "./dist/principal-text.js",
     "./dist/typetable.js",
     "./dist/forms.js",
 ]
@@ -137,15 +144,17 @@ def main():
             for path in extracted.rglob("*")
             if path.is_file()
         )
-        # `labels`, `options` and `typetable` ship without an export: the
-        # codec, the Contract loader and `validate` import them relatively,
-        # so they are part of those modules' runtime, not entry points.
-        # `forms` is internal and is not built at all.
+        # `labels`, `options`, `principal-text` and `typetable` ship without
+        # an export: the codec, the Contract loader, `validate` and (for
+        # `principal-text`) the root entry's `principal()` and `isPrincipal()`
+        # import them relatively, so they are part of those modules' runtime,
+        # not entry points. `forms` is internal and is not built at all.
         modules = [
             "codec",
             "contract",
             "labels",
             "options",
+            "principal-text",
             "schema",
             "typetable",
             "validate",
@@ -325,17 +334,18 @@ def main():
         # `@icp-sdk/core` at all — nothing installs one, and the assertion
         # below makes that a checked fact rather than an assumption. The
         # nominal `SdkStylePrincipal` class stands in for an SDK `Principal`:
-        # a class with a private member and `toText()` must be accepted where
-        # the schemas ask for the structural `PrincipalValue`, which is what
-        # lets SDK values encode unchanged (the repository's own suite runs
-        # the same claim against the real pinned SDK).
+        # a class with a private member and `toText()` converts through
+        # `principal()` into the branded canonical text the schemas ask for,
+        # while the unconverted instance is refused — encode is strict (the
+        # repository's own suite runs the same claims against the real pinned
+        # SDK). A decoded principal is then checked to be plain data.
         if (scratch / "node_modules" / "@icp-sdk").exists():
             raise SystemExit("the scratch consumer tree must not contain @icp-sdk")
         consumer = scratch / "consumer"
         consumer.mkdir()
         (consumer / "package.json").write_text('{ "type": "module" }\n')
         (consumer / "main.ts").write_text(
-            'import { c, type Infer, type PrincipalValue } from "@candid-core/schema";\n'
+            'import { c, isPrincipal, principal, type Infer, type Principal } from "@candid-core/schema";\n'
             'import { validate, unwrapResult } from "@candid-core/schema/validate";\n'
             'import { encode, decode } from "@candid-core/schema/codec";\n'
             'import { schemaFromContract } from "@candid-core/schema/contract";\n'
@@ -347,8 +357,9 @@ def main():
             "\n"
             "const Account = c.record({ owner: c.principal, balance: c.nat });\n"
             "type Account = Infer<typeof Account>;\n"
-            'const structural: PrincipalValue = { toText: () => "ryjl3-tyaaa-aaaaa-aaaba-cai" };\n'
-            "for (const owner of [structural, new SdkStylePrincipal()]) {\n"
+            'const text: Principal = principal("ryjl3-tyaaa-aaaaa-aaaba-cai");\n'
+            "const sdk = new SdkStylePrincipal();\n"
+            "for (const owner of [text, principal(sdk)]) {\n"
             "  const value: Account = { owner, balance: 5n };\n"
             "  const checked = validate(Account, value);\n"
             '  if (!checked.ok) throw new Error("validate");\n'
@@ -356,8 +367,20 @@ def main():
             '  if (!bytes.ok) throw new Error("encode");\n'
             "  const back = decode(Account, bytes.bytes);\n"
             '  if (!back.ok) throw new Error("decode");\n'
-            '  if ((back.value as Account).balance !== 5n) throw new Error("round trip");\n'
+            "  const decoded = back.value as Account;\n"
+            '  if (decoded.balance !== 5n) throw new Error("round trip");\n'
+            "  // A decoded principal is the canonical text: plain, comparable data.\n"
+            '  if (decoded.owner !== owner || !isPrincipal(decoded.owner)) throw new Error("principal text");\n'
+            '  if (JSON.stringify(decoded.owner) !== JSON.stringify(owner)) throw new Error("json");\n'
+            '  if (structuredClone(decoded).owner !== owner) throw new Error("clone");\n'
             "}\n"
+            "// Encode is strict: an unconverted object with toText() is refused,\n"
+            "// exactly as validate refuses it.\n"
+            "const raw = { owner: sdk, balance: 5n } as unknown as Account;\n"
+            'if (validate(Account, raw).ok || encode(Account, raw).ok) throw new Error("strict");\n'
+            "let refused = false;\n"
+            'try { principal("AAAAA-AA"); } catch (error) { refused = error instanceof TypeError; }\n'
+            'if (!refused) throw new Error("principal() must refuse non-canonical text");\n'
             "const Reply = c.variant({ ok: c.nat, err: c.text });\n"
             'const outcome = unwrapResult(Reply, { tag: "ok", value: 1n });\n'
             'if (!outcome.ok || outcome.value !== 1n) throw new Error("unwrap");\n'

@@ -20,6 +20,7 @@
     "./contract.ts",
     "./labels.ts",
     "./options.ts",
+    "./principal-text.ts",
     "./typetable.ts",
     "./codec.ts",
     "./forms.ts",

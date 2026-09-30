@@ -62,6 +62,24 @@ export { $Tokens as Tokens };
   `PrincipalValue` exports `@candid-core/schema` 0.2.0 already has; the
   goldens without collapsing options type-check against 0.2.0 unchanged.
 
+### Generated modules type principals as `$.Principal`
+
+- **BREAKING**: the embedded generator emits `$.Principal` wherever it
+  emitted `$.PrincipalValue`: principal fields, func reference aliases
+  (`{ principal: $.Principal; method: string }`), service aliases, and the
+  `actor` schema (`$.Schema<$.Principal>`). Nothing else in any generated
+  module changes. The paired `@candid-core/schema` release replaces
+  `PrincipalValue` (`{ toText(): string }`) with `Principal`, canonical
+  principal text as a branded string: a decoded principal is that text, and
+  encoding accepts only it, so an SDK `Principal` converts once with
+  `principal(sdkPrincipal)`.
+- A declaration named `Principal` still generates, bound as `$Principal` and
+  exported as `Principal`.
+- **Release ordering**: the emitted modules need the `Principal` export,
+  which `@candid-core/schema` 0.2.0 does not have. The release that ships
+  this generator must raise the `@candid-core/schema` peer to the release
+  that introduces `Principal`.
+
 ## 0.1.0 — 2026-08-27
 
 Embeds `candid-core` 0.1.0-beta.3 and the `candid-core-ts` generator from

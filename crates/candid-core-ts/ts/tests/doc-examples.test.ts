@@ -29,6 +29,8 @@ import { readFileSync } from "node:fs";
 import {
   c,
   isBoxedOpt,
+  isPrincipal,
+  principal,
   resolveSchema,
   serviceMethods,
   type AnyFieldSchema,
@@ -38,7 +40,7 @@ import {
   type Infer,
   type MethodMode,
   type OptDomain,
-  type PrincipalValue,
+  type Principal,
   type ResolvedNode,
   type Schema,
   type SchemaNode,
@@ -66,6 +68,7 @@ const SHIPPED_SOURCES = [
   "../contract.ts",
   "../codec.ts",
   "../labels.ts",
+  "../principal-text.ts",
   "../forms.ts",
 ];
 
@@ -108,13 +111,23 @@ test("every shipped @example is mirrored verbatim in this file", () => {
 }
 
 {
-  const owner: PrincipalValue = { toText: () => "ryjl3-tyaaa-aaaaa-aaaba-cai" };
+  const owner: Principal = principal("ryjl3-tyaaa-aaaaa-aaaba-cai");
   void owner;
 }
 
 {
+  const ledger = principal("ryjl3-tyaaa-aaaaa-aaaba-cai");
+  void ledger;
+}
+
+{
+  isPrincipal("aaaaa-aa"); // true
+  isPrincipal("AAAAA-AA"); // false
+}
+
+{
   const Account = c.record({ owner: c.principal, balance: c.nat });
-  type Account = Infer<typeof Account>; // { owner: PrincipalValue; balance: bigint }
+  type Account = Infer<typeof Account>; // { owner: Principal; balance: bigint }
   void Account;
 }
 
@@ -155,7 +168,7 @@ test("every shipped @example is mirrored verbatim in this file", () => {
 }
 
 {
-  const archive = { toText: () => "aaaaa-aa" };
+  const archive = principal("aaaaa-aa");
   const nextPage: FuncValue = { principal: archive, method: "get_blocks" };
   void nextPage;
 }
@@ -176,7 +189,7 @@ test("every shipped @example is mirrored verbatim in this file", () => {
   c.variant({ ok: c.null }); // { tag: "ok" }
   c.record({ active: c.bool }); // { active: boolean }
   c.record({ memo: c.text }); // { memo: string }
-  c.record({ owner: c.principal }); // { owner: PrincipalValue }
+  c.record({ owner: c.principal }); // { owner: Principal }
   c.variant({ ok: c.text, never: c.empty });
   c.record({ memo: c.opt(c.text) }); // { memo: string | null }
   c.opt(c.opt(c.nat)); // { some: bigint | null } | null
@@ -300,6 +313,16 @@ test("the node-interface examples read exactly what the comment claims", () => {
   assert.strictEqual(c.rec(() => c.nat).body(), c.nat);
   assert.strictEqual(c.func([c.principal], [c.nat], "query").mode, "query");
   assert(c.service({ balance: c.func([], [c.nat], "query") }).methods.balance !== undefined);
+});
+
+test("the principal examples read exactly what the comment claims", () => {
+  assert.strictEqual(isPrincipal("aaaaa-aa"), true);
+  assert.strictEqual(isPrincipal("AAAAA-AA"), false);
+  assert.strictEqual(principal("ryjl3-tyaaa-aaaaa-aaaba-cai"), "ryjl3-tyaaa-aaaaa-aaaba-cai");
+  // The `Account` example's inferred owner is exactly `Principal`.
+  const Account = c.record({ owner: c.principal, balance: c.nat });
+  const exact: Schema<{ owner: Principal; balance: bigint }> = Account;
+  void exact;
 });
 
 test("the introspection examples read exactly what the comment claims", () => {

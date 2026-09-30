@@ -1,6 +1,7 @@
 // Issue #188: a generated module binds every declaration as a `$`-prefixed
 // local and exports it under its Candid name, so a declaration may be named
-// after the schema runtime's bindings (`c`, `Schema`, `PrincipalValue`), an
+// after the schema runtime's bindings (`c`, `Schema`, and `PrincipalValue`,
+// the runtime's principal type until issue #187 replaced it with `Principal`), an
 // ambient type the lowerings reference (`Array`, `Record`, `Uint8Array`,
 // `Promise`), or a TypeScript reserved word (`delete`, `string`, `default`).
 // Before, the generator refused every one of them (#116, #130).
@@ -15,7 +16,11 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import { decode, encode } from "../codec.ts";
-import { serviceMethods, type PrincipalValue as RuntimePrincipal } from "../schema.ts";
+import {
+  principal as toPrincipal,
+  serviceMethods,
+  type Principal as RuntimePrincipal,
+} from "../schema.ts";
 import { validate } from "../validate.ts";
 
 import * as shadowing from "../../tests/goldens/shadowing.ts";
@@ -37,7 +42,7 @@ import Default, {
   type Actor,
 } from "../../tests/goldens/shadowing.ts";
 
-const principal: RuntimePrincipal = { toText: () => "aaaaa-aa" };
+const principal: RuntimePrincipal = toPrincipal("aaaaa-aa");
 
 // Type level: each export carries its reviewed alias, and the ambient types
 // the lowerings reference kept their global meaning inside the module.
@@ -95,7 +100,12 @@ test("the renamed exports validate exactly their declared domains", () => {
     ["string (nat16)", StringSchema, str, -1],
     ["default (nat32)", Default, def, 2 ** 32],
     ["Promise (record)", PromiseSchema, { id: 42n }, { id: 42 }],
-    ["PrincipalValue (record)", PrincipalRecord, { p: principal }, { p: "aaaaa-aa" }],
+    [
+      "PrincipalValue (record)",
+      PrincipalRecord,
+      { p: principal },
+      { p: { toText: () => "aaaaa-aa" } },
+    ],
     ["Texts (vec text)", Texts, texts, [1]],
     ["Bytes (blob)", Bytes, bytes, [1, 2]],
     ["Unit (empty record)", Unit, unit, null],
@@ -120,10 +130,10 @@ test("the declarations round-trip through the codec by export name", () => {
   assert(decoded.ok, "Uses must decode");
   if (!decoded.ok) return;
   const value = decoded.value as Uses;
-  assert.deepStrictEqual(
-    { ...value, w: { p: value.w.p.toText() } },
-    { ...uses, w: { p: "aaaaa-aa" } },
-  );
+  // A decoded principal is the canonical text itself (issue #187), so the
+  // whole value compares directly.
+  assert.deepStrictEqual(value, uses);
+  assert.strictEqual(value.w.p, "aaaaa-aa");
 });
 
 test("the actor's service schema references the renamed declarations", () => {

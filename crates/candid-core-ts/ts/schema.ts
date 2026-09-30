@@ -21,30 +21,103 @@
 // package is its own future slice: npm names are as permanent as crates.io
 // names, and the name is not yet decided.
 
+import { principalBytesFromText } from "./principal-text.ts";
+
 declare const phantom: unique symbol;
+declare const principalBrand: unique symbol;
 
 /**
- * The principal value this runtime describes, delivers, and accepts — the
- * decoded-value contract, stated once:
+ * A Candid `principal` value: its canonical text, as a branded string. This
+ * is the one principal contract, in every direction:
  *
- * - **Decoded values carry exactly this surface.** The codec is
- *   self-contained by design (no runtime dependency on any Principal
- *   implementation), so decoding produces a minimal structural carrier of
- *   the canonical text — an object whose only member is `toText()`. It is
- *   *not* an `@icp-sdk/core` `Principal` instance: `instanceof` is `false`
- *   and class methods like `toUint8Array()` do not exist on it. Code that
- *   needs the class re-wraps: `Principal.fromText(value.toText())`.
- * - **SDK `Principal` instances are accepted on input.** Validation and
- *   encoding are structural — any object with a `toText()` method whose
- *   text is a canonical principal — and the SDK class satisfies that
- *   shape, so values you built with `Principal.fromText(…)` encode
- *   unchanged.
+ * - **Decoding delivers it.** A decoded principal — the `principal`
+ *   primitive, the `principal` of a func reference, a service reference —
+ *   is the canonical text itself: lowercase base32 of a CRC-32 checksum and
+ *   the id bytes, dash-grouped by five, such as
+ *   `"ryjl3-tyaaa-aaaaa-aaaba-cai"`. At runtime it is a plain string, so it
+ *   survives `JSON.stringify`, `structuredClone` and `postMessage`, compares
+ *   with `===`, and works as a `Map` key or inside a cache key.
+ * - **Validation and encoding accept exactly it.** A string holding
+ *   canonical text passes; anything else — a non-canonical spelling, an
+ *   object with a `toText()` method, an `@icp-sdk/core` `Principal`
+ *   instance — fails with `invalid_type`. Encode refuses exactly what
+ *   validate refuses.
+ * - **[`principal`] is the one way in.** It checks a string, or the
+ *   `toText()` of an object such as an SDK `Principal`, and returns the
+ *   text branded; non-canonical text throws `TypeError` and is never
+ *   repaired. [`isPrincipal`] is the matching guard.
+ *
+ * The brand exists only in the type system, so an arbitrary string cannot
+ * stand in for a principal without a check, at no runtime cost. The name
+ * matches the SDK's class: code that imports both aliases one, as in
+ * `import type { Principal as CandidPrincipal } from "@candid-core/schema"`,
+ * and code that needs an SDK instance converts at its own boundary with the
+ * SDK's `Principal.fromText(value)`.
  *
  * @example
- * const owner: PrincipalValue = { toText: () => "ryjl3-tyaaa-aaaaa-aaaba-cai" };
+ * const owner: Principal = principal("ryjl3-tyaaa-aaaaa-aaaba-cai");
  */
-export interface PrincipalValue {
-  toText(): string;
+export type Principal = string & { readonly [principalBrand]: true };
+
+/**
+ * The one conversion point into [`Principal`]. Takes a string, or an object
+ * with a `toText()` method — an `@icp-sdk/core` `Principal` instance, for
+ * example — and returns its text branded as a `Principal`.
+ *
+ * Refuses rather than repairs: the text must already be canonical — lower
+ * case, dash-grouped by five with no leading, trailing or doubled dash, a
+ * matching checksum, zero padding bits, and an id of at most 29 bytes — or
+ * this throws `TypeError`, the convention for a programmer error. So does an
+ * input that is neither a string nor an object with `toText()`, and a
+ * `toText()` that returns something other than a string. `"AAAAA-AA"` and
+ * `"aaaaaaa"` are refused; `"aaaaa-aa"` (the management canister) and
+ * `"2vxsx-fae"` (the anonymous principal) are accepted.
+ *
+ * @example
+ * const ledger = principal("ryjl3-tyaaa-aaaaa-aaaba-cai");
+ */
+export function principal(input: string | { toText(): string }): Principal {
+  let text: string;
+  if (typeof input === "string") {
+    text = input;
+  } else if (
+    (typeof input === "object" || typeof input === "function") &&
+    input !== null &&
+    typeof (input as { toText?: unknown }).toText === "function"
+  ) {
+    const read: unknown = (input as { toText(): unknown }).toText();
+    if (typeof read !== "string") {
+      throw new TypeError(`principal(): toText() returned ${typeName(read)}, not a string`);
+    }
+    text = read;
+  } else {
+    throw new TypeError(
+      `principal() takes principal text or an object with toText(), got ${typeName(input)}`,
+    );
+  }
+  if (!isPrincipal(text)) {
+    const shown = text.length <= 63 ? JSON.stringify(text) : `a ${text.length}-character string`;
+    throw new TypeError(`principal(): ${shown} is not canonical principal text`);
+  }
+  return text;
+}
+
+/**
+ * Whether a value is a [`Principal`]: a string whose text is canonical
+ * principal text. Exactly the check `validate` and the encoder apply, so a
+ * value this accepts validates and encodes as a principal, and one it
+ * refuses does neither.
+ *
+ * @example
+ * isPrincipal("aaaaa-aa"); // true
+ * isPrincipal("AAAAA-AA"); // false
+ */
+export function isPrincipal(value: unknown): value is Principal {
+  return typeof value === "string" && principalBytesFromText(value) !== undefined;
+}
+
+function typeName(value: unknown): string {
+  return value === null ? "null" : typeof value;
 }
 
 /**
@@ -72,7 +145,7 @@ export interface Schema<in out T> {
  *
  * @example
  * const Account = c.record({ owner: c.principal, balance: c.nat });
- * type Account = Infer<typeof Account>; // { owner: PrincipalValue; balance: bigint }
+ * type Account = Infer<typeof Account>; // { owner: Principal; balance: bigint }
  */
 export type Infer<S> = S extends Schema<infer T> ? T : never;
 
@@ -296,15 +369,17 @@ export interface RecSchema<T> extends Schema<T> {
  * A Candid `func` *value*: a reference to a method on some service, as the
  * `{ principal, method }` pair candid-core's value domain uses. Invoking one
  * is the job of whatever call layer sits on top of this package — the value
- * itself stays inert data, so it round-trips validation and the codec
- * symmetrically. Validation is strict: both fields required, no other own
- * enumerable key, and the method name a non-empty string.
+ * itself stays inert data — a plain object of two strings, so it serializes,
+ * clones and compares field by field like the rest of a decoded value — and
+ * it round-trips validation and the codec symmetrically. Validation is
+ * strict: both fields required, no other own enumerable key, `principal` a
+ * [`Principal`] (canonical text), and the method name a non-empty string.
  *
  * @example
  * const nextPage: FuncValue = { principal: archive, method: "get_blocks" };
  */
 export interface FuncValue {
-  readonly principal: PrincipalValue;
+  readonly principal: Principal;
   readonly method: string;
 }
 
@@ -338,13 +413,14 @@ export interface FuncSchema extends Schema<FuncValue> {
 
 /**
  * A Candid `service` *type*. The value it describes is the principal of a
- * running service; the method map, read with [`serviceMethods`], is what a
- * call layer walks to build a typed call surface.
+ * running service, a [`Principal`] like any other; the method map, read with
+ * [`serviceMethods`], is what a call layer walks to build a typed call
+ * surface.
  *
  * @example
  * c.service({ balance: c.func([], [c.nat], "query") }).methods.balance;
  */
-export interface ServiceSchema extends Schema<PrincipalValue> {
+export interface ServiceSchema extends Schema<Principal> {
   readonly kind: "service";
   /**
    * `AnySchema`, not `FuncSchema`: the runtime loader wraps every method in
@@ -588,17 +664,17 @@ export const c = {
   empty: primitive<never>("empty"),
 
   /**
-   * Candid `principal`, typed as the structural [`PrincipalValue`] — the
-   * type surface telling the truth about what the self-contained codec
-   * delivers. Validation is structural (an object carrying a `toText`
-   * method), encoding parses `toText()` and refuses non-canonical text, and
-   * an `@icp-sdk/core` `Principal` instance satisfies the shape, so SDK
-   * values encode unchanged. See [`PrincipalValue`] for the full contract.
+   * Candid `principal`, whose domain is [`Principal`]: canonical principal
+   * text as a branded string. Decoding produces it, and validation and
+   * encoding accept exactly it — a non-canonical string or an object with
+   * `toText()` fails with `invalid_type`. Convert an SDK `Principal` or
+   * unchecked text with [`principal`]. See [`Principal`] for the full
+   * contract.
    *
    * @example
-   * c.record({ owner: c.principal }); // { owner: PrincipalValue }
+   * c.record({ owner: c.principal }); // { owner: Principal }
    */
-  principal: primitive<PrincipalValue>("principal"),
+  principal: primitive<Principal>("principal"),
 
   /**
    * Candid `opt T`, rendered as `T | null`: absence is exactly `null`, and

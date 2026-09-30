@@ -69,6 +69,6 @@ type $P16 = never;
 const $P16: $.Schema<$P16> = $.c.rec(() => $.c.empty);
 export { $P16 as P16 };
 
-type $P17 = $.PrincipalValue;
+type $P17 = $.Principal;
 const $P17: $.Schema<$P17> = $.c.rec(() => $.c.principal);
 export { $P17 as P17 };

@@ -147,14 +147,17 @@ export interface ResourceLimitInfo {
 
 <p>All three use the same two schemas, hand-written here so the shapes are visible.</p>
 
-<pre data-lang="ts">const Tokens = c.record({ e8s: c.nat64 });
+<pre data-lang="ts">import { c, principal } from "@candid-core/schema";
+import { validate } from "@candid-core/schema/validate";
+
+const Tokens = c.record({ e8s: c.nat64 });
 const Account = c.record({ owner: c.principal, subaccount: c.opt(c.blob()) });
 const TransferArg = c.record({ to: Account, amount: Tokens, memo: c.opt(c.blob()) });</pre>
 
 <p>A value the schema describes:</p>
 
 <pre data-lang="ts">validate(TransferArg, {
-  to: { owner: { toText: () => "aaaaa-aa" }, subaccount: null },
+  to: { owner: principal("aaaaa-aa"), subaccount: null },
   amount: { e8s: 100_000n },
   memo: null,
 });
@@ -169,7 +172,7 @@ const TransferArg = c.record({ to: Account, amount: Tokens, memo: c.opt(c.blob()
 <p>Two failures at once, each addressed to its own path:</p>
 
 <pre data-lang="ts">const result = validate(TransferArg, {
-  to: { owner: "aaaaa-aa", subaccount: null },
+  to: { owner: "AAAAA-AA", subaccount: null },
   amount: { e8s: -1n },
   memo: null,
 });
@@ -180,7 +183,7 @@ const TransferArg = c.record({ to: Account, amount: Tokens, memo: c.opt(c.blob()
 //     {
 //       code: "invalid_type",
 //       path: "$.to.owner",
-//       message: "expected a Principal (an object with a toText method), got string"
+//       message: "expected a Principal, got a string that is not canonical principal text"
 //     },
 //     {
 //       code: "out_of_range",
@@ -191,16 +194,20 @@ const TransferArg = c.record({ to: Account, amount: Tokens, memo: c.opt(c.blob()
 // }</pre>
 
 <p>
-  The first is the structural principal check: <code>c.principal</code> is satisfied by any object
-  with a <code>toText</code> function, because this package deliberately has no runtime dependency
-  on a <code>Principal</code> implementation. A bare text principal is a string, and a string is
-  not that shape.
+  The first is the principal check. A principal is its canonical text, typed as the branded
+  <code>Principal</code>, so <code>c.principal</code> is satisfied by exactly a string holding
+  canonical text — lowercase, dash-grouped by five, with a matching checksum. Upper case is not
+  canonical, and neither is an object with a <code>toText</code> method (an
+  <code>@icp-sdk/core</code> <code>Principal</code> included): both are <code>invalid_type</code>,
+  and <code>encode</code> refuses them with the same code at the same path. Convert once with
+  <code>principal(value)</code>, which throws <code>TypeError</code> on non-canonical text rather
+  than repairing it.
 </p>
 
 <p>And the omitted-versus-null case, plus an unknown key:</p>
 
 <pre data-lang="ts">validate(TransferArg, {
-  to: { owner: { toText: () => "aaaaa-aa" }, subaccount: null },
+  to: { owner: principal("aaaaa-aa"), subaccount: null },
   amount: { e8s: 1n },
   reference: "abc",
 });

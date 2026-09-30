@@ -50,7 +50,7 @@ const PAGE = `<!doctype html>
         // Envelope-carried names must have rendered: a keyed value passes
         // only if "owner"/"amount" are the schema's field keys.
         named: validate(built.schemas.Payload, {
-          owner: { toText: () => "aaaaa-aa" },
+          owner: "aaaaa-aa",
           amount: 5n,
         }),
       };

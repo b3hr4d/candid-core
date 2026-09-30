@@ -86,6 +86,11 @@ export type FormControl =
   | { readonly control: "integer"; readonly min: number; readonly max: number }
   | { readonly control: "bigint"; readonly min?: bigint; readonly max?: bigint }
   | { readonly control: "float"; readonly bits: 32 | 64 }
+  /**
+   * A principal editor. Its value is a `Principal`: canonical principal text
+   * as a string, which a text input can hold directly — `isPrincipal` (or
+   * `validate`) tells a UI whether what was typed is canonical.
+   */
   | { readonly control: "principal" }
   /** `null` and `reserved`: nothing to edit, the value is fixed. */
   | { readonly control: "constant" }

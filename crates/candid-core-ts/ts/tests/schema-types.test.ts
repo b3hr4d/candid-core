@@ -129,7 +129,7 @@ test("an empty variant payload rejects every carried value", () => {
 });
 
 test("a func value with empty args is still an inert reference", () => {
-  const principal = { toText: () => "aaaa-aa" };
+  const principal = "aaaaa-aa";
   assert.strictEqual(validate(emptyInFunc, { principal, method: "m" }).ok, true);
 });
 

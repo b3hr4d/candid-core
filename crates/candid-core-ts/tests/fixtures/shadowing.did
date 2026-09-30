@@ -1,6 +1,7 @@
 // Declaration names that collided with a generated module's own bindings
 // before the `$` layout (issue #188) and were refused (#116, #130): the
-// runtime's `c`, `Schema` and `PrincipalValue`, the ambient types the
+// runtime's `c`, `Schema` and `PrincipalValue` (the principal type then; it is
+// `Principal` since issue #187, covered in golden.rs), the ambient types the
 // lowerings reference, and TypeScript reserved words. Each binds as a
 // `$`-prefixed local and leaves under its Candid name. Every one uses a
 // primitive no other declaration uses, so no alias captures a lowering.

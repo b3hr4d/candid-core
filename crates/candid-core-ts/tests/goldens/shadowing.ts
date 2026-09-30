@@ -9,7 +9,7 @@ type $Bytes = Uint8Array;
 const $Bytes: $.Schema<$Bytes> = $.c.rec(() => $.c.blob());
 export { $Bytes as Bytes };
 
-type $PrincipalValue = { p: $.PrincipalValue };
+type $PrincipalValue = { p: $.Principal };
 const $PrincipalValue: $.Schema<$PrincipalValue> = $.c.rec(() => $.c.record({ p: $.c.principal }));
 export { $PrincipalValue as PrincipalValue };
 
@@ -57,7 +57,7 @@ type $string = number;
 const $string: $.Schema<$string> = $.c.rec(() => $.c.nat16);
 export { $string as string };
 
-const $actor: $.Schema<$.PrincipalValue> = $.c.rec(() => $.c.service({ all: $.c.func([$Uses], [$default, $Bytes, $Unit], "query"), get: $.c.func([$string], [$delete], "query"), ping: $.c.func([$c], [$Promise], "update") }));
+const $actor: $.Schema<$.Principal> = $.c.rec(() => $.c.service({ all: $.c.func([$Uses], [$default, $Bytes, $Unit], "query"), get: $.c.func([$string], [$delete], "query"), ping: $.c.func([$c], [$Promise], "update") }));
 type $Actor = {
   all: (arg0: $Uses) => Promise<[$default, $Bytes, $Unit]>;
   get: (arg0: $string) => Promise<$delete>;

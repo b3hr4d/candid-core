@@ -55,7 +55,7 @@ export type Infer<S> = S extends Schema<infer T> ? T : never;
     <tr><td><code>text</code></td><td><code>c.text</code></td><td><code>string</code></td><td>Validation checks the JavaScript type; encoding refuses a lone surrogate.</td></tr>
     <tr><td><code>reserved</code></td><td><code>c.reserved</code></td><td><code>unknown</code></td><td>Asserts nothing, so a consumer must narrow before use.</td></tr>
     <tr><td><code>empty</code></td><td><code>c.empty</code></td><td><code>never</code></td><td>Uninhabited. No value passes; every one fails with <code>uninhabited_type</code>.</td></tr>
-    <tr><td><code>principal</code></td><td><code>c.principal</code></td><td><code>PrincipalValue</code></td><td>The structural <code>{ toText(): string }</code>, not the SDK <code>Principal</code> class.</td></tr>
+    <tr><td><code>principal</code></td><td><code>c.principal</code></td><td><code>Principal</code></td><td>Canonical principal text as a branded string, not the SDK <code>Principal</code> class. Make one with <code>principal(…)</code>.</td></tr>
   </tbody>
 </table>
 
@@ -293,7 +293,7 @@ service(methods: { readonly [name: string]: AnySchema }): ServiceSchema
 <p>
   A Candid <code>func</code> <em>value</em> is a reference, not a closure — an address you can put
   in a record and send over the wire. So <code>c.func(...)</code> infers <code>FuncValue</code>,
-  which is <code>{ principal: PrincipalValue; method: string }</code>, and the signature lives in
+  which is <code>{ principal: Principal; method: string }</code>, and the signature lives in
   the node instead of in the type. <code>MethodMode</code> is a closed union:
   <code>"update"</code>, <code>"query"</code>, <code>"composite_query"</code>,
   <code>"oneway"</code>; an unannotated Candid method is <code>"update"</code>, made explicit.
@@ -301,26 +301,39 @@ service(methods: { readonly [name: string]: AnySchema }): ServiceSchema
 
 <p>
   A <code>service</code> <em>value</em> is the principal of a running service, so
-  <code>c.service(...)</code> infers <code>PrincipalValue</code>. The method table it carries is
+  <code>c.service(...)</code> infers <code>Principal</code>. The method table it carries is
   what <code>serviceMethods</code> reads back. Both appear in a generated module as ordinary declarations:
 </p>
 
 <pre data-lang="ts" data-file="crates/candid-core-ts/tests/goldens/deferred.ts">
-type $Callback = { principal: $.PrincipalValue; method: string };
+type $Callback = { principal: $.Principal; method: string };
 const $Callback: $.Schema<$Callback> = $.c.rec(() => $.c.func([$.c.nat], [$.c.text], "query"));
 export { $Callback as Callback };
 
-type $Registry = $.PrincipalValue;
+type $Registry = $.Principal;
 const $Registry: $.Schema<$Registry> = $.c.rec(() => $.c.service({ register: $.c.func([$.c.text], [$.c.nat], "update") }));
 export { $Registry as Registry };
 </pre>
 
 <p>
   <code>c.principal</code> is the primitive for a bare principal value, listed in the table above.
-  Its type is structural — <code>{ toText(): string }</code> — which is the honest type of what the
-  codec delivers, and it accepts an <code>@icp-sdk/core</code> <code>Principal</code> on input
-  because validation and encoding are structural too.
+  Its type is <code>Principal</code>: the canonical principal text as a branded string, which is
+  exactly what the codec delivers — plain data that serializes with <code>JSON.stringify</code>,
+  survives <code>structuredClone</code>, and compares with <code>===</code>. Validation and encoding
+  accept exactly canonical text. <code>principal(input)</code> is the one way to make a
+  <code>Principal</code>: it takes a string or an object with <code>toText()</code>, such as an
+  <code>@icp-sdk/core</code> <code>Principal</code>, and throws <code>TypeError</code> on
+  non-canonical text rather than repairing it. <code>isPrincipal(value)</code> is the matching guard.
 </p>
+
+<pre data-lang="ts">
+import { c, isPrincipal, principal, type Principal } from "@candid-core/schema";
+
+const ledger: Principal = principal("ryjl3-tyaaa-aaaaa-aaaba-cai");
+isPrincipal("aaaaa-aa"); // true: the management canister
+isPrincipal("AAAAA-AA"); // false: not canonical, so principal("AAAAA-AA") throws
+c.record({ owner: c.principal }); // { owner: Principal }
+</pre>
 
 <h2>rec: the lazy indirection</h2>
 
@@ -360,7 +373,7 @@ const List: Schema<List> = c.rec(() => c.record({ head: c.nat, tail: c.opt(List)
 
 <pre data-lang="ts" data-file="crates/candid-core-ts/ts/README.md">
 const Account = c.record({ owner: c.principal, balance: c.nat });
-type Account = Infer<typeof Account>; // { owner: PrincipalValue; balance: bigint }
+type Account = Infer<typeof Account>; // { owner: Principal; balance: bigint }
 </pre>
 
 <p>

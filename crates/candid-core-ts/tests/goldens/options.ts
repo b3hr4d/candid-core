@@ -61,7 +61,7 @@ type $TripleOpt = { some: $DoubleOpt } | null;
 const $TripleOpt: $.Schema<$TripleOpt> = $.c.rec(() => $.c.opt($DoubleOpt));
 export { $TripleOpt as TripleOpt };
 
-const $actor: $.Schema<$.PrincipalValue> = $.c.rec(() => $.c.service({ describe: $.c.func([$AliasedOuter], [$AliasedOuter], "update"), update: $.c.func([$Settings], [$Change], "update"), settings: $.c.func([], [$Settings], "query") }));
+const $actor: $.Schema<$.Principal> = $.c.rec(() => $.c.service({ describe: $.c.func([$AliasedOuter], [$AliasedOuter], "update"), update: $.c.func([$Settings], [$Change], "update"), settings: $.c.func([], [$Settings], "query") }));
 type $Actor = {
   describe: (arg0: $AliasedOuter) => Promise<$AliasedOuter>;
   update: (arg0: $Settings) => Promise<$Change>;

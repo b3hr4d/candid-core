@@ -50,7 +50,10 @@ function load(name: string): { contract: unknown; names: FieldNameEntry[]; envel
   };
 }
 
-const principal = { toText: () => "aaaa-aa" };
+// A principal is canonical text (issue #187); the non-canonical spellings and
+// the former `{ toText }` carrier appear below as samples both paths refuse.
+const principal = "aaaaa-aa";
+const carrier = { toText: () => "aaaaa-aa" };
 
 const item = {
   id: 7,
@@ -80,7 +83,7 @@ const FIXTURES: readonly Fixture[] = [
       P14: ["", "hi", 5],
       P15: [null, 5, {}, undefined, [1]],
       P16: [null, 0, undefined, {}],
-      P17: [principal, "aaaa-aa", {}, null],
+      P17: [principal, "2vxsx-fae", "aaaa-aa", "AAAAA-AA", carrier, {}, null],
     },
   },
   {
@@ -169,11 +172,13 @@ const FIXTURES: readonly Fixture[] = [
     samples: {
       Kept: [{ value: 1n }, { value: 1 }, {}],
       Callback: [
-        { principal: { toText: () => "aaaaa-aa" }, method: "go" },
-        { principal: { toText: () => "aaaaa-aa" } },
+        { principal, method: "go" },
+        { principal: carrier, method: "go" },
+        { principal: "AAAAA-AA", method: "go" },
+        { principal },
         "nope",
       ],
-      Registry: [{ toText: () => "aaaaa-aa" }, "aaaaa-aa", null],
+      Registry: [principal, carrier, "AAAAA-AA", null],
     },
   },
   {
@@ -199,7 +204,7 @@ const FIXTURES: readonly Fixture[] = [
       Account: [
         { owner: principal, subaccount: null },
         { owner: principal, subaccount: new Uint8Array(32) },
-        { owner: "aaaaa-aa", subaccount: null },
+        { owner: carrier, subaccount: null },
         {},
       ],
       ArchiveCallback: [
@@ -373,7 +378,7 @@ for (const fixture of FIXTURES) {
       "both paths agree on whether the contract carries an actor",
     );
     if (built.actor !== undefined && generatedActor !== undefined) {
-      const principalSample = { toText: () => "aaaaa-aa" };
+      const principalSample = "aaaaa-aa";
       assert.deepStrictEqual(
         validate(built.actor, principalSample),
         validate(generatedActor, principalSample),
@@ -429,7 +434,7 @@ for (const fixture of FIXTURES) {
       "both paths agree on whether the contract carries an actor",
     );
     if (oneDocument.actor !== undefined && twoFile.actor !== undefined) {
-      const principalSample = { toText: () => "aaaaa-aa" };
+      const principalSample = "aaaaa-aa";
       assert.deepStrictEqual(
         validate(oneDocument.actor, principalSample),
         validate(twoFile.actor, principalSample),
