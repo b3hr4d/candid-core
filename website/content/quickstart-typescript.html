@@ -9,8 +9,12 @@ hand-writing the description, and those routes do involve the Rust crate.</p>
 currently at <code>0.2.0</code>. It is a schema runtime for Candid in the shape
 Zod made familiar: a builder object called <code>c</code>, one combinator per
 Candid type, and a type-level <code>Infer</code> that reads the domain type
-back out of a schema. It has no runtime dependencies and no peers, so the
-install below pulls in nothing else.</p>
+back out of a schema. It has no runtime dependencies, so the install below
+pulls in nothing else. <code>0.2.0</code> declares one peer,
+<code>@icp-sdk/core</code>, marked optional and needed only by its
+<span class="pill">./transport-icp</span> subpath; the next release removes
+that subpath and the peer (see <a href="packages.html">Packages and
+crates</a>).</p>
 
 <callout type="note" title="Pre-1.0, on purpose">
   <p><code>@candid-core/schema</code> is below 1.0 and versions independently of
@@ -34,13 +38,17 @@ install below pulls in nothing else.</p>
     <code>nodenext</code> or <code>bundler</code>; <code>node10</code> cannot
     see the package at all and fails every import with <code>TS2307</code>.
     TypeScript 5.0 is a hard floor, and Node 16 is the oldest runtime the
-    package is exercised on.</p>
+    subpaths below are exercised on.</p>
     <p>Each module is a separate subpath export, and you import from the one you
     need: <span class="pill">.</span> for the builders,
     <span class="pill">./validate</span>,
     <span class="pill">./codec</span> and
     <span class="pill">./contract</span>. Nothing is re-exported from the root
-    barrel, so importing the builders never drags the codec in behind them.</p>
+    barrel, so importing the builders never drags the codec in behind them.
+    <code>0.2.0</code> also exports <span class="pill">./actor</span>,
+    <span class="pill">./transport-icp</span>, <span class="pill">./forms</span>
+    and <span class="pill">./labels</span>; the next release removes all four,
+    so this guide does not use them.</p>
   </li>
 
   <li>
@@ -276,7 +284,11 @@ hand-written, generated, or loaded from a Contract document —
 <code>serviceMethods</code> reads its method table and the codec encodes each
 method's arguments and decodes its reply. Sending those bytes to a canister —
 the agent, identity, polling and certificate verification — is the job of the
-call layer you build on top.</p>
+call layer you build on top. (<code>0.2.0</code> still ships a
+<code>createActor</code> in <span class="pill">./actor</span> and an
+<code>@icp-sdk/core</code> transport in
+<span class="pill">./transport-icp</span>; the next release removes both, and
+the package changelog lists every removed name.)</p>
 
 <div class="card-grid">
   <a class="card" href="schema-codec.html">

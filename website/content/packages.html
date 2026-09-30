@@ -225,11 +225,11 @@ pub fn generate_module(
 npm install @candid-core/schema
 </pre>
 
-<p>That is the whole install: no runtime dependencies and no peers, principal typing included.</p>
+<p>That is the whole install: no runtime dependencies. <code>0.2.0</code> declares one peer, <code>@icp-sdk/core &gt;= 6</code>, marked <strong>optional</strong> in <code>peerDependenciesMeta</code> because only its <code>./transport-icp</code> subpath imports it; every other module is self-contained, principal typing included. The next release drops the peer.</p>
 
-<h3>The four subpath exports</h3>
+<h3>The subpath exports</h3>
 
-<p>The <code>exports</code> map has exactly these entries, each resolving to a <code>.d.ts</code> and a <code>.js</code> under <code>dist/</code>. There are no others, and nothing outside the map is importable. <code>0.2.0</code>, the current release, also exports <code>./actor</code>, <code>./transport-icp</code>, <code>./forms</code> and <code>./labels</code>, and declares an optional <code>@icp-sdk/core</code> peer for the transport. The next release removes those four subpaths and the peer: the package is the Candid layer only, and calling a canister belongs to the layer built on top of it. The package changelog lists every removed name.</p>
+<p>Each entry resolves to a <code>.d.ts</code> and a <code>.js</code> under <code>dist/</code>, and nothing outside the map is importable. <code>0.2.0</code>, the current release, exports the four below plus <code>./actor</code>, <code>./transport-icp</code>, <code>./forms</code> and <code>./labels</code>. The next release removes those four and the peer, leaving exactly the four below: the package becomes the Candid layer only, and calling a canister belongs to the layer built on top of it. The package changelog lists every removed name.</p>
 
 <table>
   <thead><tr><th>Subpath</th><th>What it is</th></tr></thead>

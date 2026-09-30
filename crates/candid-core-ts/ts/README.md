@@ -15,6 +15,11 @@ That is the whole install: no runtime dependencies and no peers, principal
 typing included ([the decoded-value contract](#decoded-principal-values)
 below).
 
+This README describes the package from the release after 0.2.0 on. 0.2.0
+itself also exports `./actor`, `./transport-icp`, `./forms`, and `./labels`
+and declares an optional `@icp-sdk/core` peer for the transport; the
+[changelog](./CHANGELOG.md) lists what was removed and why.
+
 ```ts
 import { c, type Infer } from "@candid-core/schema";
 import { validate } from "@candid-core/schema/validate";
@@ -49,17 +54,17 @@ Modules, each a subpath export:
   spec's coercion relation on decode and explicit resource budgets. Verified
   bidirectionally against the reference implementation's vectors.
 
-Those four are the whole export map. Earlier releases also exported
-`./actor`, `./transport-icp`, `./forms`, and `./labels`; they are gone — see
+Those four are the whole export map. 0.2.0 also exported `./actor`,
+`./transport-icp`, `./forms`, and `./labels`; they are gone — see
 [CHANGELOG.md](./CHANGELOG.md).
 
 ## Principals and `@icp-sdk/core`
 
-This package does not depend on `@icp-sdk/core` — not at runtime, not in its
-declarations, and not as a peer — so everything compiles and runs with no SDK
-installed, under strict TypeScript with `skipLibCheck` off included. SDK
-values still work where the schemas take a principal, because principal
-typing is structural.
+From the release after 0.2.0 on, this package does not depend on
+`@icp-sdk/core` — not at runtime, not in its declarations, and not as a
+peer — so everything compiles and runs with no SDK installed, under strict
+TypeScript with `skipLibCheck` off included. SDK values still work where the
+schemas take a principal, because principal typing is structural.
 
 ### Decoded principal values
 

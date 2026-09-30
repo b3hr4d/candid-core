@@ -300,7 +300,9 @@ export type SchemaFromContractResult =
     <h3>Install the runtime</h3>
     <pre data-lang="bash">npm install @candid-core/schema</pre>
     <p>
-      No other dependency is needed: the package has no runtime dependencies and no peers.
+      No other dependency is needed. <code>0.2.0</code>'s one optional peer,
+      <code>@icp-sdk/core</code>, is used only by its <code>./transport-icp</code> subpath, and the
+      next release removes both.
     </p>
   </li>
   <li>

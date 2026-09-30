@@ -108,6 +108,9 @@ export const Items: Schema<Items> = c.rec(() => c.vec(Item));
   schemas — and <code>encodeArgs</code>/<code>decodeArgs</code> turn a call's arguments and reply
   into Candid bytes. Sending them — the agent, identity, polling and certificate verification — is
   the job of the call layer you build on top, and that agent never sees a schema.
+  <code>0.2.0</code> still ships a <code>createActor</code> in <code>./actor</code> and an
+  <code>@icp-sdk/core</code> transport in <code>./transport-icp</code>; the next release removes
+  both.
 </p>
 
 <p>
@@ -239,7 +242,9 @@ for (const sample of samples) {
 
 <p>
   Every module is a subpath export, so importing the validator does not drag in the codec or an
-  agent.
+  agent. The four below are the whole map from the next release on; <code>0.2.0</code>, the
+  current release, also exports <code>./actor</code>, <code>./transport-icp</code>,
+  <code>./forms</code> and <code>./labels</code>, which that release removes.
 </p>
 
 <table>
@@ -279,21 +284,22 @@ for (const sample of samples) {
   </tbody>
 </table>
 
-<h2>No dependencies, no peers</h2>
+<h2>The @icp-sdk/core peer</h2>
 
 <p>
-  The package declares no runtime dependency and no peer. No shipped module imports
-  <code>@icp-sdk/core</code> — not at runtime and not in its declarations — so every subpath
-  compiles and runs with no SDK installed, under strict TypeScript with <code>skipLibCheck</code>
-  off included. SDK <code>Principal</code> values are still accepted wherever a principal is,
-  because principal typing is structural.
+  <code>0.2.0</code>, the current release, declares one peer, <code>@icp-sdk/core &gt;= 6</code>,
+  marked optional. Only <code>./transport-icp</code> imports it, at runtime, for whoever imports
+  that subpath; no other shipped module references the SDK — not at runtime and not in its
+  declarations — so the other subpaths compile and run with no <code>@icp-sdk/core</code>
+  installed, under strict TypeScript with <code>skipLibCheck</code> off included.
 </p>
 
 <p>
-  <code>0.2.0</code>, the current release, also exports <code>./actor</code>,
-  <code>./transport-icp</code>, <code>./forms</code> and <code>./labels</code>, and declares an
-  optional <code>@icp-sdk/core</code> peer for the transport. The next release removes those four subpaths and the peer;
-  the package changelog lists every removed name.
+  The next release removes <code>./transport-icp</code> and the peer, together with
+  <code>./actor</code>, <code>./forms</code> and <code>./labels</code>; from then on the package
+  declares no runtime dependency and no peer at all. SDK <code>Principal</code> values are accepted
+  wherever a principal is, in both versions, because principal typing is structural. The package
+  changelog lists every removed name.
 </p>
 
 <callout type="warn" title="Pin the version">
