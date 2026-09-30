@@ -253,6 +253,50 @@ fn compile_envelope_emits_the_pinned_document() {
     );
 }
 
+/// A Windows-saved `.did` — the same text behind a leading UTF-8 BOM —
+/// compiles to the pinned envelope unchanged: the mark is not Candid syntax
+/// and moves neither the Contract nor the field names. Plain `compile` keeps
+/// the raw file, mark included, in the sidecar.
+#[test]
+fn compile_accepts_a_leading_utf8_bom() {
+    let did = fs::read(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/conformance/basic.did"
+    ))
+    .unwrap();
+    let fixture = Fixture::new();
+    let path = fixture.write("basic.did", [b"\xEF\xBB\xBF".as_slice(), &did].concat());
+
+    let envelope = json_stdout(
+        &run([
+            OsStr::new("compile"),
+            path.as_os_str(),
+            OsStr::new("--envelope"),
+        ]),
+        0,
+    );
+    let pinned: Value = serde_json::from_str(
+        &fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/envelope/basic.envelope.json"
+        ))
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(envelope, pinned);
+
+    let response = json_stdout(&run([OsStr::new("compile"), path.as_os_str()]), 0);
+    assert_eq!(response["contract"], pinned["contract"]);
+    let source = response["source_info"]["sources"][0]["source"]
+        .as_str()
+        .unwrap();
+    assert!(
+        source.starts_with('\u{FEFF}'),
+        "the sidecar keeps the raw file"
+    );
+    assert_eq!(source.as_bytes()[3..], did[..]);
+}
+
 /// Hash-colliding spellings collapse to one entry per `(container, id)` —
 /// `cemxzwyk` and `amxawvks` share a Candid label hash, so the two
 /// structurally identical records deduplicate to one semantic node with two

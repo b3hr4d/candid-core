@@ -81,6 +81,17 @@ byte-identical Contracts, identities, and provenance for every valid bundle and
 identical stable diagnostic codes, phases, and resource triples for invalid
 ones.
 
+Source bytes are UTF-8, and a single leading UTF-8 byte-order mark (`EF BB BF`,
+the default in Windows editors) is accepted. It is not Candid syntax, so the
+compiler skips it immediately before tokenizing and parsing — on every entry
+point, since all of them share one parse helper — and nowhere else: the bundle
+keeps the raw bytes, so resolver digests, the byte limits, the `SourceInfo`
+source text, and `source_bundle_id` all cover the mark, while `contract_id` and
+`interface_id` equal those of the mark-less twin. Parse diagnostics stay exact
+for the original bytes: their offsets count the mark. A second mark, a mark
+after any other byte, and U+FFFE remain unknown tokens, and UTF-16 marks remain
+invalid UTF-8. `tests/source_bom.rs` pins each of these.
+
 The supported browser boundary is synchronous immutable source data supplied by
 the host. Asynchronous resolution, network access, and registry semantics stay
 out of scope here; the "future content-addressed registry resolvers" line above

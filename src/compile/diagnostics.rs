@@ -118,13 +118,16 @@ fn code_for_phase(phase: &DiagnosticPhase) -> &'static str {
     }
 }
 
-fn report_parts(error: &candid_parser::Error) -> (Vec<ReportLabel>, Vec<String>) {
+/// Report labels with every range shifted by `offset`: the byte position, in
+/// the raw source, of the text the report's ranges index. Only a skipped
+/// leading BOM makes it nonzero; see `candid_text`.
+fn report_parts(error: &candid_parser::Error, offset: usize) -> (Vec<ReportLabel>, Vec<String>) {
     let report = error.report();
     let labels = report
         .labels
         .into_iter()
         .map(|label| ReportLabel {
-            range: label.range,
+            range: label.range.start.saturating_add(offset)..label.range.end.saturating_add(offset),
             message: label.message,
         })
         .collect();
@@ -159,7 +162,7 @@ pub(super) fn candid_file_error(
             DiagnosticPhase::TypeCheck
         }
     };
-    let (labels, notes) = report_parts(&error);
+    let (labels, notes) = report_parts(&error, 0);
     let (message, span, related) = match &error {
         // Never render a `Parse` error through `Display`; see
         // `parse_error_message`. The range is withheld from the message too —
@@ -235,7 +238,20 @@ pub(super) fn candid_error(
     phase: DiagnosticPhase,
     source_name: Option<String>,
 ) -> CompileError {
-    let (labels, notes) = report_parts(&error);
+    candid_error_at(error, phase, source_name, 0)
+}
+
+/// [`candid_error`] for an error over text that starts `offset` bytes into
+/// the original source `source_name` identifies — the text after a skipped
+/// leading BOM. Spans and the rendered `at bytes` range are shifted back
+/// onto the original bytes, so they stay exact for the source as stored.
+pub(super) fn candid_error_at(
+    error: candid_parser::Error,
+    phase: DiagnosticPhase,
+    source_name: Option<String>,
+    offset: usize,
+) -> CompileError {
+    let (labels, notes) = report_parts(&error, offset);
     let message = match &error {
         // Never render a `Parse` error through `Display`; see above.
         candid_parser::Error::Parse(_) => {
