@@ -128,8 +128,12 @@ export { $Tokens as Tokens };
   inside one declaration that disagree are dropped. No Contract, envelope,
   identity or wire byte changes — docs are provenance — and the
   `org.candid-core.field-names/v1` extension is untouched.
-- **Additive**: modules for `.did` files with no comments beside their
-  declarations are unchanged by this entry.
+- **Additive**, with one naming change: a module is unchanged by this entry
+  only when its `.did` has no comments beside its declarations **and** no
+  usable argument names. A method written `a : (x : nat) -> ()` now takes `x`
+  as its parameter name where it took `arg0`, and gains an `@param x` block,
+  whether or not the file has a single comment. Types, values and wire bytes
+  do not move either way.
 
 ## 0.1.0 — 2026-08-27
 
