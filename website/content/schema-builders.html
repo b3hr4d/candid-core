@@ -181,11 +181,13 @@ unit(): UnitSchema
 </p>
 
 <pre data-lang="ts" data-file="crates/candid-core-ts/tests/goldens/collections.ts">
-export type Grid = Array<Uint8Array>;
-export const Grid: Schema<Grid> = c.rec(() => c.vec(c.blob()));
+type $Grid = Array<Uint8Array>;
+const $Grid: $.Schema<$Grid> = $.c.rec(() => $.c.vec($.c.blob()));
+export { $Grid as Grid };
 
-export type Unit = Record<string, never>;
-export const Unit: Schema<Unit> = c.rec(() => c.unit());
+type $Unit = Record<string, never>;
+const $Unit: $.Schema<$Unit> = $.c.rec(() => $.c.unit());
+export { $Unit as Unit };
 </pre>
 
 <h2>record and tuple</h2>
@@ -212,8 +214,9 @@ tuple<const S extends readonly AnyFieldSchema[]>(elements: S): TupleSchema<S>
 </p>
 
 <pre data-lang="ts" data-file="crates/candid-core-ts/tests/goldens/collections.ts">
-export type Pair = [bigint, string];
-export const Pair: Schema<Pair> = c.rec(() => c.tuple([c.nat, c.text]));
+type $Pair = [bigint, string];
+const $Pair: $.Schema<$Pair> = $.c.rec(() => $.c.tuple([$.c.nat, $.c.text]));
+export { $Pair as Pair };
 </pre>
 
 <callout type="warn" title="c.tuple sets the TypeScript floor at 5.0">
@@ -244,8 +247,9 @@ variant<A extends FieldSchemas>(arms: A): VariantSchema<A>
 </p>
 
 <pre data-lang="ts" data-file="crates/candid-core-ts/tests/goldens/variants.ts">
-export type Status = { tag: "ok" } | { tag: "busy"; value: number } | { tag: "failed"; value: string };
-export const Status: Schema<Status> = c.rec(() => c.variant({ ok: c.null, busy: c.nat32, failed: c.text }));
+type $Status = { tag: "ok" } | { tag: "busy"; value: number } | { tag: "failed"; value: string };
+const $Status: $.Schema<$Status> = $.c.rec(() => $.c.variant({ ok: $.c.null, busy: $.c.nat32, failed: $.c.text }));
+export { $Status as Status };
 </pre>
 
 <p>
@@ -302,11 +306,13 @@ service(methods: { readonly [name: string]: AnySchema }): ServiceSchema
 </p>
 
 <pre data-lang="ts" data-file="crates/candid-core-ts/tests/goldens/deferred.ts">
-export type Callback = { principal: PrincipalValue; method: string };
-export const Callback: Schema<Callback> = c.rec(() => c.func([c.nat], [c.text], "query"));
+type $Callback = { principal: $.PrincipalValue; method: string };
+const $Callback: $.Schema<$Callback> = $.c.rec(() => $.c.func([$.c.nat], [$.c.text], "query"));
+export { $Callback as Callback };
 
-export type Registry = PrincipalValue;
-export const Registry: Schema<Registry> = c.rec(() => c.service({ register: c.func([c.text], [c.nat], "update") }));
+type $Registry = $.PrincipalValue;
+const $Registry: $.Schema<$Registry> = $.c.rec(() => $.c.service({ register: $.c.func([$.c.text], [$.c.nat], "update") }));
+export { $Registry as Registry };
 </pre>
 
 <p>
@@ -363,8 +369,9 @@ type Account = Infer<typeof Account>; // { owner: PrincipalValue; balance: bigin
 </p>
 
 <pre data-lang="ts" data-file="crates/candid-core-ts/tests/goldens/ledger.ts">
-export type Tokens = { e8s: bigint };
-export const Tokens: Schema<Tokens> = c.rec(() => c.record({ e8s: c.nat64 }));
+type $Tokens = { e8s: bigint };
+const $Tokens: $.Schema<$Tokens> = $.c.rec(() => $.c.record({ e8s: $.c.nat64 }));
+export { $Tokens as Tokens };
 </pre>
 
 <p>

@@ -152,6 +152,18 @@ and wire bytes.
   must raise its peer to the release carrying this entry. Interfaces without
   collapsing opts generate byte-identical modules.
 
+### Generated modules bind `$`-prefixed locals
+
+Nothing in this package changes: no export, type, verdict or byte. The
+generator in `@candid-core/cli` now emits modules that import this package as
+a namespace (`import * as $ from "@candid-core/schema"`) and bind every
+declaration as a `$`-prefixed local exported under its Candid name, so a
+Candid declaration named `c`, `Schema`, `Array` or `delete` no longer
+collides with the module's own bindings. Such a module uses only
+the `c`, `Schema` and `PrincipalValue` exports 0.2.0 already has. The
+`Schema` documentation comment that quoted the old generated line is
+updated.
+
 ## 0.2.0 — 2026-08-24
 
 Pairs with `candid-core` 0.1.0-beta.3.

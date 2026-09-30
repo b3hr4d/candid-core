@@ -88,7 +88,7 @@ python3 tests/fixtures/artifact-identity/verify_artifact_ids.py
 
 <h3>The tsc equality gate over the generated goldens</h3>
 
-<p>The generator emits, for each declaration, a line of the form <code>export const X: Schema&lt;X&gt; = c.rec(() =&gt; …)</code>. Because <code>Schema&lt;in out T&gt;</code> is invariant, that line compiles only if the type the builder infers is equal to the reviewed alias <em>in both directions</em>. Running <code>tsc --noEmit</code> over the checked-in goldens with the exact-pinned TypeScript is therefore a proof about the mapping, not a lint. Alongside it, the schema runtime's own suite includes a cross-check that schemas built dynamically from the golden Contract JSON documents validate exactly the values the generated builders describe — same verdicts, same issue codes, same paths, same messages, asserted by deep equality on the whole result.</p>
+<p>The generator emits, for each declaration, a line of the form <code>const $X: $.Schema&lt;$X&gt; = $.c.rec(() =&gt; …)</code>, exported under the Candid name <code>X</code>. Because <code>Schema&lt;in out T&gt;</code> is invariant, that line compiles only if the type the builder infers is equal to the reviewed alias <em>in both directions</em>. Running <code>tsc --noEmit</code> over the checked-in goldens with the exact-pinned TypeScript is therefore a proof about the mapping, not a lint. Alongside it, the schema runtime's own suite includes a cross-check that schemas built dynamically from the golden Contract JSON documents validate exactly the values the generated builders describe — same verdicts, same issue codes, same paths, same messages, asserted by deep equality on the whole result.</p>
 
 <h2>Fuzzing: <code>candid-core-fuzz</code></h2>
 

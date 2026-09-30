@@ -37,6 +37,8 @@ test("every golden fixture reproduces its reviewed module byte-for-byte", () => 
     "ledger",
     "empties",
     "arms",
+    "options",
+    "shadowing",
   ]) {
     const scratch = mkdtempSync(path.join(tmpdir(), `candid-cli-${name}-`));
     writeFileSync(
@@ -82,7 +84,7 @@ test("multi-file bundles compile through the directory walk", () => {
   const run = gen(["gen", path.join(scratch, "entry.did"), "-o", scratch]);
   assert.strictEqual(run.status, 0, `${run.stdout}${run.stderr}`);
   const produced = readFileSync(path.join(scratch, "entry.ts"), "utf8");
-  assert.match(produced, /export type Item/);
+  assert.match(produced, /export \{ \$Item as Item \};/);
   const envelope = JSON.parse(readFileSync(path.join(scratch, "entry.envelope.json"), "utf8"));
   assert.ok(envelope.contract, "the envelope carries the contract");
   const names = envelope.extensions["org.candid-core.field-names/v1"];

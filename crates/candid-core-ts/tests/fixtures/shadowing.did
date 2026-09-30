@@ -1,0 +1,36 @@
+// Declaration names that collided with a generated module's own bindings
+// before the `$` layout (issue #188) and were refused (#116, #130): the
+// runtime's `c`, `Schema` and `PrincipalValue`, the ambient types the
+// lowerings reference, and TypeScript reserved words. Each binds as a
+// `$`-prefixed local and leaves under its Candid name. Every one uses a
+// primitive no other declaration uses, so no alias captures a lowering.
+type c = int8;
+type Schema = int16;
+type PrincipalValue = record { p : principal };
+type Array = int32;
+type Record = int64;
+type Uint8Array = float32;
+type Promise = record { id : nat };
+type delete = float64;
+type string = nat16;
+type default = nat32;
+// The lowerings that reference the ambient types, beside the declarations
+// that used to shadow them: `Array<T>`, `Record<string, never>`,
+// `Uint8Array`, and `Promise<T>` on every actor method.
+type Texts = vec text;
+type Unit = record {};
+type Bytes = blob;
+type Uses = record {
+  a : Array;
+  s : Schema;
+  d : delete;
+  p : Promise;
+  w : PrincipalValue;
+  x : c;
+  t : Texts;
+};
+service : {
+  ping : (c) -> (Promise);
+  get : (string) -> (delete) query;
+  all : (Uses) -> (default, Bytes, Unit) query;
+}

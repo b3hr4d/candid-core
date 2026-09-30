@@ -10,7 +10,7 @@
 // consumer (issue #149).
 //
 // `Schema<in out T>` is deliberately invariant. The generator annotates every
-// declaration as `export const X: Schema<X> = …`, so the TypeScript compiler
+// declaration as `const $X: $.Schema<$X> = …`, so the TypeScript compiler
 // itself proves, on every golden, that the builder's inferred type is exactly
 // the reviewed alias — assignable in both directions, not merely compatible in
 // one. A mapping regression in either the emitter or this core turns the
@@ -53,7 +53,7 @@ export interface PrincipalValue {
  * type system — a schema is plain inert data at runtime.
  *
  * Deliberately **invariant** (`in out T`). Generated modules annotate every
- * declaration as `export const X: Schema<X> = …`, so the compiler itself
+ * declaration as `const $X: $.Schema<$X> = …`, so the compiler itself
  * proves the builder's inferred type is exactly the reviewed alias:
  * assignable in both directions, not merely compatible in one.
  *
