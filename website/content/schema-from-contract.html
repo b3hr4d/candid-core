@@ -252,14 +252,15 @@ export type SchemaFromContractResult =
     with keys from the name table, falling back to <code>_&lt;id&gt;_</code>.
   </dd>
 
-  <dt>Collapsing options are rejected</dt>
+  <dt>Collapsing options are boxed</dt>
   <dd>
     An <code>opt</code> whose inner node is <code>opt</code>, <code>null</code> or
-    <code>reserved</code> is refused with <code>unrepresentable_option</code> before anything is
-    built. The decoded shape of <code>opt T</code> is <code>T | null</code>, which cannot
-    distinguish <code>None</code> from <code>Some(None)</code>. The check is on the arena
-    <em>node</em>, so <code>type Inner = opt nat; type Outer = opt Inner</code> collapses the same
-    way — an alias is not indirection in the arena.
+    <code>reserved</code> builds like any other <code>opt</code>, and its present values are
+    <code>{ some: v }</code>, because <code>T | null</code> cannot distinguish <code>None</code>
+    from <code>Some(None)</code> there. The decision is on the arena <em>node</em>, so
+    <code>type Inner = opt nat; type Outer = opt Inner</code> boxes the same way (an alias is not
+    indirection in the arena), and so does a self-referential <code>type Chain = opt Chain</code>.
+    It is the generator's rule, so a loaded schema and a generated one accept the same values.
   </dd>
 
   <dt>Reference types build like everything else</dt>
@@ -433,7 +434,6 @@ built.actor; // the service schema, when the document has one
     <tr><td><code>invalid_contract_document</code></td><td>Malformed shape, an unknown node kind, an unknown primitive name, or a structurally invalid reference.</td></tr>
     <tr><td><code>unsupported_contract_format</code>, <code>unsupported_format_version</code>, <code>unsupported_semantics_profile</code>, <code>unsupported_canonicalization_profile</code></td><td>One of the four markers does not match.</td></tr>
     <tr><td><code>dangling_type_ref</code></td><td>A type reference points outside the arena.</td></tr>
-    <tr><td><code>unrepresentable_option</code></td><td><code>opt opt</code>, <code>opt null</code> or <code>opt reserved</code>.</td></tr>
     <tr><td><code>unsupported_construct</code></td><td>A <code>class</code> node nests inside a supported type.</td></tr>
     <tr><td><code>duplicate_field_id</code>, <code>duplicate_field_name</code></td><td>Two fields of one node share an id, or two ids render to the same key.</td></tr>
     <tr><td><code>empty_declaration_name</code>, <code>duplicate_declaration_name</code></td><td>A declaration has no name, or two share one.</td></tr>

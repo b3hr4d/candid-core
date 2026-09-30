@@ -609,7 +609,10 @@ test("the root entry still imports nothing at runtime, which is why these live h
   assert.deepStrictEqual(runtimeImports, [], "the root entry must import only types");
   // And the direction this module depends on it: walker to core, never back.
   const walker = readFileSync(new URL("../validate.ts", import.meta.url), "utf8");
-  assert(walker.includes('import { resolveSchema } from "./schema.ts";'));
+  assert.strictEqual(
+    /^import \{[^}]*\bresolveSchema\b[^}]*\} from "\.\/schema\.ts";$/m.test(walker),
+    true,
+  );
 });
 
 // ---------------------------------------------------------------------------

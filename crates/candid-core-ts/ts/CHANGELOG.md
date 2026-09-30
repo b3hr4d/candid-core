@@ -114,6 +114,44 @@ packaged-consumer gate asserts both.
 - The Node support matrix loses its `>= 20.19` row, which applied only to
   `./transport-icp`; the ESM floor of every remaining subpath is Node 16.
 
+### Options whose inner type admits `null` are boxed
+
+An `opt` whose inner type is another `opt`, `null`, or `reserved` could not
+be carried by `T | null`: `None` and `Some(None)` were the same `null`. Such
+interfaces used to be refused outright, and a hand-built `c.opt(c.opt(…))`
+silently decoded `Some(None)` as `None`. Exactly those opts now carry their
+present value as `{ some: v }`; every other opt is unchanged in type, value,
+and wire bytes.
+
+- **BREAKING**: `opt opt T`, `opt null`, and `opt reserved` are
+  `{ some: T } | null` in both value and type shape, for hand-built,
+  Contract-loaded, and generated schemas alike: `Infer<typeof
+  c.opt(c.opt(c.nat))>` is `{ some: bigint | null } | null`, validation and
+  encoding require `{ some: v }` for a present value (a bare `v` is
+  `invalid_type`, and `undefined` is no longer read as present under
+  `opt reserved`), and decoding returns `{ some: v }`. The decision is made
+  on the resolved inner node, so declared aliases and recursive types
+  (`type Chain = opt Chain`) box too, while `opt empty` stays `null`. Wire
+  bytes and the decoding coercion rules are unchanged.
+- **BREAKING**: `ContractIssueCode` in `./contract` loses
+  `unrepresentable_option`; `schemaFromContract` now loads the documents it
+  used to refuse with it.
+- **BREAKING**: `OptSchema<T>` now extends `Schema<OptDomain<T>>` rather
+  than `Schema<T | null>`. The root export gains the `OptDomain<T>` type
+  and the runtime predicate `isBoxedOpt(schema)`, which answers whether a
+  schema is an opt whose present values are boxed.
+- The internal forms model's `optional` control gains `boxed: boolean`; a
+  boxed optional's inner node sits at `….some`, which `formNodeAt` resolves.
+  (`./forms` is no longer exported; see above.)
+  Code that only reads the model is unaffected; code that constructs
+  `FormControl` values must add the field.
+- **Release ordering**: `@candid-core/cli` declares this package as a peer
+  (`^0.2.0`). A CLI built with this change emits boxed aliases for
+  collapsing opts, which the published 0.2.0 cannot type (and whose runtime
+  would collapse them), so the CLI release that ships the generator change
+  must raise its peer to the release carrying this entry. Interfaces without
+  collapsing opts generate byte-identical modules.
+
 ## 0.2.0 — 2026-08-24
 
 Pairs with `candid-core` 0.1.0-beta.3.

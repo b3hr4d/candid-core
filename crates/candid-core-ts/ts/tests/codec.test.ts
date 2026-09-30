@@ -42,6 +42,7 @@ import * as recursion from "../../tests/goldens/recursion.ts";
 import * as quoting from "../../tests/goldens/quoting.ts";
 import * as deferred from "../../tests/goldens/deferred.ts";
 import * as arms from "../../tests/goldens/arms.ts";
+import * as options from "../../tests/goldens/options.ts";
 
 const goldens = new URL("../../tests/goldens/", import.meta.url);
 
@@ -180,6 +181,29 @@ const EXPECTED: Record<string, Record<string, unknown>> = {
     opt_empty_arm_none: { tag: "a", value: null },
     alias_arm_plain: { tag: "plain" },
   },
+  options: {
+    // Boxed options: None is `null`, Some(v) is `{ some: v }` — three
+    // distinct values for every nesting level the wire distinguishes.
+    double_none: null,
+    double_some_none: { some: null },
+    double_some_some: { some: 5n },
+    triple_some_some_none: { some: { some: null } },
+    opt_null_none: null,
+    opt_null_some: { some: null },
+    // `reserved` decodes to null, so Some(reserved) is `{ some: null }`.
+    opt_reserved_some: { some: null },
+    // `opt empty` does not box: its only inhabitant is None.
+    opt_empty_none: null,
+    described_none: null,
+    described_some_none: { some: null },
+    described_some_some: { some: "x" },
+    chain_three: { some: { some: { some: null } } },
+    pong_some_record: { some: { pong: { some: null } } },
+    settings_mixed: { label: { some: null }, limit: { some: 5n }, flag: null },
+    change_clear: { tag: "clear", value: { some: null } },
+    change_set_none: { tag: "set", value: null },
+    change_keep: { tag: "keep" },
+  },
 };
 
 const GENERATED: Record<string, Record<string, unknown>> = {
@@ -190,6 +214,7 @@ const GENERATED: Record<string, Record<string, unknown>> = {
   quoting,
   deferred,
   arms,
+  options,
 };
 
 for (const fixture of Object.keys(EXPECTED)) {
@@ -702,12 +727,21 @@ function generate(schema: AnySchema, rand: () => number, depth: number): unknown
   switch (node.kind) {
     case "primitive":
       return generatePrimitive(node.primitive as string, rand);
-    case "opt":
+    case "opt": {
       // An uninhabited inner leaves None as the only inhabitant.
-      if (depth <= 0 || rand() < 0.4 || uninhabited(resolveGen(node.inner as AnySchema))) {
+      const inner = resolveGen(node.inner as AnySchema);
+      if (depth <= 0 || rand() < 0.4 || uninhabited(inner)) {
         return null;
       }
-      return generate(node.inner as AnySchema, rand, depth - 1);
+      const present = generate(node.inner as AnySchema, rand, depth - 1);
+      // An inner that admits null boxes the present value (`opt opt`,
+      // `opt null`, `opt reserved`), so Some(None) stays distinct from None.
+      const boxes =
+        inner.kind === "opt" ||
+        (inner.kind === "primitive" &&
+          (inner.primitive === "null" || inner.primitive === "reserved"));
+      return boxes ? { some: present } : present;
+    }
     case "vec": {
       // No fuzzed fixture holds a `vec` of an uninhabited element; if one
       // ever does, the element generation below throws loudly and the
@@ -1406,4 +1440,171 @@ test("a wire func value with an empty method name fails closed on decode", () =>
     0x44, 0x49, 0x44, 0x4c, 0x01, 0x6a, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01, 0x01, 0x00, 0x00,
   ]);
   failsDecode(c.func([], [], "update"), bytes, "invalid_length");
+});
+
+// ---------------------------------------------------------------------------
+// Boxed options: `opt opt T`, `opt null`, `opt reserved`
+// ---------------------------------------------------------------------------
+
+/** Encode, pin the hex, decode back, and return the decoded value. */
+function threeStateRoundTrip(schema: AnySchema, value: unknown, hexText: string): unknown {
+  const encoded = encode(schema as Schema<unknown>, value);
+  assert(encoded.ok, `encode must succeed: ${encoded.ok ? "" : JSON.stringify(encoded.issues)}`);
+  if (!encoded.ok) {
+    throw new Error("unreachable");
+  }
+  assert.strictEqual(toHex(encoded.bytes), hexText);
+  const decoded = decode(schema as Schema<unknown>, encoded.bytes);
+  assert(decoded.ok, "decode must succeed");
+  if (!decoded.ok) {
+    throw new Error("unreachable");
+  }
+  assert.deepStrictEqual(validate(schema as Schema<unknown>, decoded.value), { ok: true });
+  return decoded.value;
+}
+
+test("hand-built collapsing opts carry none, some(none), and some(some x) losslessly", () => {
+  // opt opt nat: table 0 = opt 1, 1 = opt nat. The bytes are the reference
+  // encoding the `options` wire golden holds for DoubleOpt.
+  const doubleOpt = c.opt(c.opt(c.nat));
+  const states: readonly [unknown, string][] = [
+    [null, "4449444c026e016e7d010000"],
+    [{ some: null }, "4449444c026e016e7d01000100"],
+    [{ some: 5n }, "4449444c026e016e7d0100010105"],
+  ];
+  const seen = states.map(([value, hexText]) => threeStateRoundTrip(doubleOpt, value, hexText));
+  assert.deepStrictEqual(seen, [null, { some: null }, { some: 5n }]);
+
+  // opt null: None and Some(null) are the type's two values.
+  const optNull = c.opt(c.null);
+  assert.strictEqual(threeStateRoundTrip(optNull, null, "4449444c016e7f010000"), null);
+  assert.deepStrictEqual(threeStateRoundTrip(optNull, { some: null }, "4449444c016e7f010001"), {
+    some: null,
+  });
+
+  // opt reserved: Some carries any value and decodes as Some(null); a bare
+  // `undefined` is no longer read as "present".
+  const optReserved = c.opt(c.reserved);
+  assert.strictEqual(threeStateRoundTrip(optReserved, null, "4449444c016e70010000"), null);
+  assert.deepStrictEqual(
+    threeStateRoundTrip(optReserved, { some: { anything: true } }, "4449444c016e70010001"),
+    { some: null },
+  );
+  failsEncode(optReserved, undefined, "invalid_type");
+  failsEncode(optReserved, 5, "invalid_type");
+
+  // opt opt opt nat: four states, each its own value.
+  const triple = c.opt(c.opt(c.opt(c.nat)));
+  const tripleStates = [null, { some: null }, { some: { some: null } }, { some: { some: 7n } }];
+  const tripleHex = new Set<string>();
+  for (const value of tripleStates) {
+    const encoded = encode(triple, value);
+    assert(encoded.ok);
+    if (encoded.ok) {
+      tripleHex.add(toHex(encoded.bytes));
+      assert.deepStrictEqual(decode(triple, encoded.bytes), { ok: true, value });
+    }
+  }
+  assert.strictEqual(tripleHex.size, 4, "four states, four encodings");
+
+  // opt empty does not box: its only value is None, and a box is refused.
+  assert.deepStrictEqual(decode(c.opt(c.empty), fromHex("4449444c016e6f010000")), {
+    ok: true,
+    value: null,
+  });
+  failsEncode(c.opt(c.empty), { some: null }, "uninhabited_type");
+});
+
+test("boxing changes the value shape, never the coercion rules", () => {
+  // Auto-wrap: a wire `nat` at expected `opt opt nat` is Some(Some(5)).
+  const nat5 = encode(c.nat, 5n);
+  // An absorbed inner mismatch is the *inner* opt's None, so the outer opt
+  // is present: Some(None). Reference (candid 0.10.30):
+  // Decode!(bytes-of-text, Option<Option<Nat>>) == Ok(Some(None)).
+  const textX = encode(c.text, "x");
+  // Wire null and reserved at an expected boxed opt are its None.
+  const wireNull = encode(c.null, null);
+  // A wire `opt nat` Some(5) at expected `opt opt nat`: the depth rule, then
+  // auto-wrap inside — Some(Some(5)).
+  const optNat = encode(c.opt(c.nat), 5n);
+  assert(nat5.ok && textX.ok && wireNull.ok && optNat.ok);
+  if (!(nat5.ok && textX.ok && wireNull.ok && optNat.ok)) {
+    return;
+  }
+  const doubleOpt = c.opt(c.opt(c.nat));
+  assert.deepStrictEqual(decode(doubleOpt, nat5.bytes), { ok: true, value: { some: 5n } });
+  assert.deepStrictEqual(decode(doubleOpt, textX.bytes), { ok: true, value: { some: null } });
+  assert.deepStrictEqual(decode(doubleOpt, wireNull.bytes), { ok: true, value: null });
+  assert.deepStrictEqual(decode(doubleOpt, optNat.bytes), { ok: true, value: { some: 5n } });
+  // The outer opt's own absorption stays None: a wire opt text Some("x") at
+  // expected opt(opt nat) — the depth rule reaches `text` at `opt nat`, which
+  // absorbs to None inside, so Some(None); while a wire variant at an
+  // expected boxed `opt null` fails the null coercion outright: None.
+  const optText = encode(c.opt(c.text), "x");
+  const variantArm = encode(c.variant({ a: c.nat }), { tag: "a", value: 1n });
+  assert(optText.ok && variantArm.ok);
+  if (optText.ok && variantArm.ok) {
+    assert.deepStrictEqual(decode(doubleOpt, optText.bytes), { ok: true, value: { some: null } });
+    assert.deepStrictEqual(decode(c.opt(c.null), variantArm.bytes), { ok: true, value: null });
+  }
+  // A missing record field of a boxed opt type reads as None.
+  const empty = encode(c.unit(), {});
+  assert(empty.ok);
+  if (empty.ok) {
+    assert.deepStrictEqual(decode(c.record({ label: doubleOpt }), empty.bytes), {
+      ok: true,
+      value: { label: null },
+    });
+  }
+});
+
+test("encode and validate agree on boxed-opt refusals, code and path", () => {
+  const doubleOpt = c.opt(c.opt(c.nat));
+  const inRecord = c.record({ label: doubleOpt });
+  const cases: readonly [AnySchema, unknown, string, string][] = [
+    [doubleOpt, 5n, "invalid_type", "$"],
+    [doubleOpt, {}, "missing_field", "$.some"],
+    [doubleOpt, { some: undefined }, "invalid_type", "$.some"],
+    [doubleOpt, { some: 5 }, "invalid_type", "$.some"],
+    [doubleOpt, { some: 1n, extra: 0 }, "unexpected_field", "$.extra"],
+    [doubleOpt, { some: { some: 1n } }, "invalid_type", "$.some"],
+    [doubleOpt, [1n], "invalid_type", "$"],
+    [c.opt(c.null), { some: 0 }, "invalid_type", "$.some"],
+    [c.opt(c.reserved), undefined, "invalid_type", "$"],
+    [inRecord, { label: { some: -1n } }, "out_of_range", "$.label.some"],
+    [c.opt(c.opt(c.opt(c.nat))), { some: { some: "x" } }, "invalid_type", "$.some.some"],
+  ];
+  for (const [schema, value, code, path] of cases) {
+    const validated = validate(schema as Schema<unknown>, value);
+    const encoded = encode(schema as Schema<unknown>, value);
+    assert(!validated.ok && !encoded.ok, `both must refuse ${String(value)}`);
+    if (!validated.ok && !encoded.ok) {
+      assert.deepStrictEqual(
+        [validated.issues[0].code, validated.issues[0].path],
+        [code, path],
+        `validate for ${JSON.stringify(value, (_k, v: unknown) => (typeof v === "bigint" ? `${v}n` : v))}`,
+      );
+      assert.deepStrictEqual(
+        [encoded.issues[0].code, encoded.issues[0].path],
+        [code, path],
+        "encode must agree with validate",
+      );
+    }
+  }
+});
+
+test("validate and encode charge a boxed value identically", () => {
+  // The box costs what a record's key scan costs: one element per examined
+  // key, on top of the per-level steps an unboxed opt already charged — and
+  // validate and encode agree at every budget, so neither refuses a value
+  // the other accepts. Unboxed opts are untouched by this change.
+  const schema = c.opt(c.opt(c.nat));
+  for (const budget of [1, 2, 3, 4, 5]) {
+    const validated = validate(schema, { some: 5n }, { maxElements: budget }).ok;
+    const encoded = encode(schema, { some: 5n }, { maxElements: budget }).ok;
+    assert.strictEqual(validated, encoded, `budget ${budget}`);
+  }
+  // Three levels (opt, opt, nat) plus the one examined `some` key.
+  assert.strictEqual(validate(schema, { some: 5n }, { maxElements: 4 }).ok, true);
+  assert.strictEqual(validate(schema, { some: 5n }, { maxElements: 3 }).ok, false);
 });

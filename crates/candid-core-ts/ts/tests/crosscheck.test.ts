@@ -30,6 +30,7 @@ import * as proto from "../../tests/goldens/proto.ts";
 import * as ledger from "../../tests/goldens/ledger.ts";
 import * as empties from "../../tests/goldens/empties.ts";
 import * as arms from "../../tests/goldens/arms.ts";
+import * as options from "../../tests/goldens/options.ts";
 
 interface Fixture {
   readonly name: string;
@@ -295,6 +296,56 @@ const FIXTURES: readonly Fixture[] = [
       ],
       NullAlias: [null, 0],
       AliasArms: [{ tag: "tagged" }, { tag: "tagged", value: null }, { tag: "plain" }],
+    },
+  },
+  {
+    // Collapsing options box as `{ some: v }`; the rest stay `T | null`.
+    // Each boxed declaration gets its three states plus the shapes the box
+    // must refuse (a bare payload, an empty box, an extra key, `undefined`).
+    name: "options",
+    module: options,
+    samples: {
+      DoubleOpt: [null, { some: null }, { some: 5n }, 5n, {}, { some: 5n, extra: 0 }, undefined],
+      TripleOpt: [
+        null,
+        { some: null },
+        { some: { some: null } },
+        { some: { some: 1n } },
+        { some: 1n },
+      ],
+      OptNull: [null, { some: null }, { some: 0 }, { some: undefined }],
+      OptNothing: [null, { some: null }, "x"],
+      OptReserved: [null, { some: null }, { some: "anything" }, "anything", undefined],
+      OptEmpty: [null, { some: null }, 0],
+      OptOptEmpty: [null, { some: null }, { some: { some: null } }],
+      MaybeText: [null, "x", { some: "x" }],
+      AliasedOuter: [null, { some: null }, { some: "x" }, "x", { some: 5 }],
+      Nothing: [null, 0],
+      Chain: [null, { some: null }, { some: { some: { some: null } } }, { some: {} }, { some: 1 }],
+      Ping: [
+        null,
+        { pong: null },
+        { pong: { some: null } },
+        { pong: { some: { pong: null } } },
+        { some: null },
+      ],
+      Pong: [null, { some: null }, { some: { pong: { some: null } } }, { pong: null }],
+      Settings: [
+        { label: null, limit: null, flag: null },
+        { label: { some: null }, limit: { some: 5n }, flag: "f" },
+        { label: { some: "x" }, limit: { some: null }, flag: null },
+        { label: "x", limit: null, flag: null },
+        { label: null, limit: { some: 5 }, flag: null },
+      ],
+      Change: [
+        { tag: "keep" },
+        { tag: "clear", value: null },
+        { tag: "clear", value: { some: null } },
+        { tag: "set", value: { some: "x" } },
+        { tag: "set", value: { some: null } },
+        { tag: "set", value: "x" },
+        { tag: "clear" },
+      ],
     },
   },
 ];

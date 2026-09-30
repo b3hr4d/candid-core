@@ -541,17 +541,15 @@ export type ValidateResult =
     </tr>
     <tr>
       <td><code>@candid-core/schema/contract</code></td>
-      <td><code>invalid_contract_document</code>, <code>unsupported_contract_format</code>, <code>unsupported_format_version</code>, <code>unsupported_semantics_profile</code>, <code>unsupported_canonicalization_profile</code>, <code>dangling_type_ref</code>, <code>unrepresentable_option</code>, <code>unsupported_construct</code>, <code>duplicate_field_id</code>, <code>duplicate_field_name</code>, <code>empty_declaration_name</code>, <code>duplicate_declaration_name</code>, <code>invalid_name_table</code>, <code>invalid_extension_name</code>, <code>resource_limit_exceeded</code></td>
+      <td><code>invalid_contract_document</code>, <code>unsupported_contract_format</code>, <code>unsupported_format_version</code>, <code>unsupported_semantics_profile</code>, <code>unsupported_canonicalization_profile</code>, <code>dangling_type_ref</code>, <code>unsupported_construct</code>, <code>duplicate_field_id</code>, <code>duplicate_field_name</code>, <code>empty_declaration_name</code>, <code>duplicate_declaration_name</code>, <code>invalid_name_table</code>, <code>invalid_extension_name</code>, <code>resource_limit_exceeded</code></td>
     </tr>
   </tbody>
 </table>
 
 <p>
-  <code>unrepresentable_option</code> is the runtime's counterpart to the generator's
-  <code>TsGenError::UnrepresentableOption</code>: the same <code>opt opt</code> /
-  <code>opt null</code> / <code>opt reserved</code> refusal, applied to a document at load time
-  instead of to a Contract at generation time. See
-  <a href="reference-mapping.html">Candid to TypeScript mapping</a>.
+  There is no code for <code>opt opt</code>, <code>opt null</code> or <code>opt reserved</code>:
+  both the loader and the generator accept them and box their present values as
+  <code>{ some: v }</code>. See <a href="reference-mapping.html">Candid to TypeScript mapping</a>.
 </p>
 
 <pre data-lang="ts">

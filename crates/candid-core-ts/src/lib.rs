@@ -39,11 +39,15 @@
 //! is `T | null`, variants are discriminated `{ tag, value }` unions, and
 //! anonymous `vec nat8` is `Uint8Array`. Two consequences are deliberate.
 //! An `opt` whose inner type can itself be `null` — another `opt`, `null`,
-//! `reserved` — fails closed with [`TsGenError::UnrepresentableOption`],
-//! because `T | null` cannot carry `None` versus `Some(None)`. And consuming
-//! these types against a live agent needs a boundary conversion, which is
-//! future work recorded on the issue — the types describe the domain, not the
-//! transport.
+//! `reserved` — is *boxed*: `{ some: T } | null`, because `T | null` cannot
+//! carry `None` versus `Some(None)` there. Only those opts box; `opt opt nat`
+//! is `{ some: bigint | null } | null` while `opt nat` stays
+//! `bigint | null`. The test is on the inner *node*, so an opt reached
+//! through a declared alias — or through recursion, as in `type L = opt L` —
+//! boxes exactly as the schema runtime's walkers and its `OptDomain` type do.
+//! And consuming these types against a live agent needs a boundary
+//! conversion, which is future work recorded on the issue — the types
+//! describe the domain, not the transport.
 //!
 //! # Determinism
 //!
@@ -169,13 +173,6 @@ pub enum TsGenError {
     /// one field to a contract cannot start breaking a previously-working
     /// declaration name.
     ReservedDeclarationName { name: String },
-    /// An `opt` whose inner type can itself be `null` in TypeScript — another
-    /// `opt`, `null`, or `reserved` — cannot be carried by `T | null` without
-    /// collapsing `None` into `Some(None)`. Fail closed rather than corrupt.
-    UnrepresentableOption {
-        declaration: String,
-        inner: &'static str,
-    },
     /// A variant arm whose payload is a *declared* `opt` of a never-domain
     /// type (`opt empty`, `opt` of an empty variant). The arm renders as a
     /// bare reference whose static type is `Schema<null>` —
@@ -218,12 +215,6 @@ impl fmt::Display for TsGenError {
                  generated module itself references (its imports and the \
                  ambient types its lowerings use), so the module could \
                  never compile; generation refuses (issue #116)"
-            ),
-            Self::UnrepresentableOption { declaration, inner } => write!(
-                f,
-                "declaration `{declaration}` wraps `{inner}` in `opt`: `T | null` \
-                 cannot distinguish `None` from `Some(None)` there, so generation \
-                 refuses rather than collapsing the two"
             ),
             Self::AmbiguousVariantArm { declaration, arm } => write!(
                 f,
@@ -276,9 +267,9 @@ fn first_names(contract: &Contract) -> BTreeMap<TypeRef, String> {
 
 /// One traversal, two syntaxes. `Alias` renders the static type expression;
 /// `Builder` renders the runtime schema expression the alias annotates. Every
-/// guard — deferred constructs, collapsing options, dangling refs — runs
-/// before this dispatch, so the two outputs can never disagree about what is
-/// representable.
+/// guard — deferred constructs, dangling refs — and every shape decision —
+/// boxed options included — runs before this dispatch, so the two outputs
+/// can never disagree about what is representable.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Target {
     Alias,
@@ -485,28 +476,19 @@ impl Generator<'_> {
                 // carry Candid's optionality when `T` itself can never be
                 // `null`. Three inner shapes break that: another `opt` (the
                 // classic `None` vs `Some(None)`), `null` itself, and
-                // `reserved`, whose `unknown` absorbs `null` entirely. The
-                // check is on the inner *node*, not its spelling, so an alias
-                // of an opt collapses just as surely and is refused just the
-                // same.
-                let collapsing = match self.node(inner)? {
-                    TypeNode::Opt { .. } => Some("opt"),
-                    TypeNode::Primitive {
-                        primitive: PrimitiveType::Null,
-                    } => Some("null"),
-                    TypeNode::Primitive {
-                        primitive: PrimitiveType::Reserved,
-                    } => Some("reserved"),
-                    _ => None,
-                };
-                if let Some(inner_kind) = collapsing {
-                    return Err(TsGenError::UnrepresentableOption {
-                        declaration: declaration.to_string(),
-                        inner: inner_kind,
-                    });
-                }
+                // `reserved`, whose `unknown` absorbs `null` entirely. Those
+                // box the present value as `{ some: T }`; nothing else does.
+                // The test is on the inner *node*, not its spelling: the arena
+                // shares one node per declaration, so an alias of an opt — or
+                // a recursive `type L = opt L`, whose inner is the opt node
+                // itself — boxes just the same, with no reference to chase.
+                // The builder is `c.opt(…)` either way: the runtime's
+                // `OptDomain` type and its walkers apply the identical rule,
+                // and the invariant annotation makes `tsc` prove agreement.
+                let boxed = admits_null(self.node(inner)?);
                 let inner = self.render(inner, declaration, target)?;
                 Ok(match target {
+                    Target::Alias if boxed => format!("{{ some: {inner} }} | null"),
                     Target::Alias => format!("{inner} | null"),
                     Target::Builder => format!("c.opt({inner})"),
                 })
@@ -815,6 +797,22 @@ impl Generator<'_> {
             None => format!("_{id}_"),
         }
     }
+}
+
+/// Whether a node's TypeScript domain admits `null` as a value — the rule
+/// that boxes an `opt` over it. Mirrors the schema runtime exactly (its
+/// `isBoxedOpt`, its `OptDomain` type, and the walkers' node test): another
+/// `opt` (its absence is `null`), the `null` primitive, and `reserved`
+/// (`unknown`). A never-domain node (`empty`, an empty variant) does not, so
+/// `opt empty` stays the plain `null`.
+fn admits_null(node: &TypeNode) -> bool {
+    matches!(
+        node,
+        TypeNode::Opt { .. }
+            | TypeNode::Primitive {
+                primitive: PrimitiveType::Null | PrimitiveType::Reserved,
+            }
+    )
 }
 
 /// Candid tuple lowering assigns the sequential numeric labels `0..n`, so a

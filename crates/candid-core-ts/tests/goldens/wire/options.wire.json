@@ -1,0 +1,104 @@
+[
+  {
+    "declaration": "DoubleOpt",
+    "hex": "4449444c026e016e7d010000",
+    "name": "double_none",
+    "textual": "(null)"
+  },
+  {
+    "declaration": "DoubleOpt",
+    "hex": "4449444c026e016e7d01000100",
+    "name": "double_some_none",
+    "textual": "(opt null)"
+  },
+  {
+    "declaration": "DoubleOpt",
+    "hex": "4449444c026e016e7d0100010105",
+    "name": "double_some_some",
+    "textual": "(opt opt 5)"
+  },
+  {
+    "declaration": "TripleOpt",
+    "hex": "4449444c036e016e026e7d0100010100",
+    "name": "triple_some_some_none",
+    "textual": "(opt opt null)"
+  },
+  {
+    "declaration": "OptNull",
+    "hex": "4449444c016e7f010000",
+    "name": "opt_null_none",
+    "textual": "(null)"
+  },
+  {
+    "declaration": "OptNull",
+    "hex": "4449444c016e7f010001",
+    "name": "opt_null_some",
+    "textual": "(opt null)"
+  },
+  {
+    "declaration": "OptReserved",
+    "hex": "4449444c016e70010001",
+    "name": "opt_reserved_some",
+    "textual": "(opt null)"
+  },
+  {
+    "declaration": "OptEmpty",
+    "hex": "4449444c016e6f010000",
+    "name": "opt_empty_none",
+    "textual": "(null)"
+  },
+  {
+    "declaration": "AliasedOuter",
+    "hex": "4449444c026e016e71010000",
+    "name": "described_none",
+    "textual": "(null)"
+  },
+  {
+    "declaration": "AliasedOuter",
+    "hex": "4449444c026e016e7101000100",
+    "name": "described_some_none",
+    "textual": "(opt null)"
+  },
+  {
+    "declaration": "AliasedOuter",
+    "hex": "4449444c026e016e71010001010178",
+    "name": "described_some_some",
+    "textual": "(opt opt \"x\")"
+  },
+  {
+    "declaration": "Chain",
+    "hex": "4449444c026e016e01010001010100",
+    "name": "chain_three",
+    "textual": "(opt opt opt null)"
+  },
+  {
+    "declaration": "Pong",
+    "hex": "4449444c046e016e026c01f8fff1d204036e01010001010100",
+    "name": "pong_some_record",
+    "textual": "(opt opt record { pong = opt null })"
+  },
+  {
+    "declaration": "Settings",
+    "hex": "4449444c056c03ac97f89d0401f49bbcfd0602bbbe84a807036e716e016e046e78010000010001010500000000000000",
+    "name": "settings_mixed",
+    "textual": "(record { label = opt null; limit = opt opt 5; flag = null })"
+  },
+  {
+    "declaration": "Change",
+    "hex": "4449444c046b03a2b7de020185a19bb8047f8de3edc204036e026e716e7f01000201",
+    "name": "change_clear",
+    "textual": "(variant { clear = opt null })"
+  },
+  {
+    "declaration": "Change",
+    "hex": "4449444c046b03a2b7de020185a19bb8047f8de3edc204036e026e716e7f01000000",
+    "name": "change_set_none",
+    "textual": "(variant { set = null })"
+  },
+  {
+    "declaration": "Change",
+    "hex": "4449444c046b03a2b7de020185a19bb8047f8de3edc204036e026e716e7f010001",
+    "name": "change_keep",
+    "textual": "(variant { keep })"
+  }
+]

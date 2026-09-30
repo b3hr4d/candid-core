@@ -189,6 +189,16 @@ fn golden_arms() {
     assert_golden("arms");
 }
 
+/// Collapsing options — `opt opt`, `opt null`, `opt reserved`, through
+/// declared aliases, recursion (`type Chain = opt Chain`), mutual recursion,
+/// variant arms, and an actor — box as `{ some: T } | null`, while
+/// `opt empty` stays the plain `null`. The tsc equality gate proves every
+/// boxed alias equals what `c.opt` infers through `OptDomain`.
+#[test]
+fn golden_options() {
+    assert_golden("options");
+}
+
 /// The schema runtime (issue #102) consumes these same fixtures as data: each
 /// fixture's Contract JSON document and field-name table are goldens too,
 /// read by `ts/tests/crosscheck.test.ts` to prove the dynamically built
@@ -215,6 +225,7 @@ fn golden_runtime_contract_documents() {
         "ledger",
         "empties",
         "arms",
+        "options",
     ] {
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests");
         let source = std::fs::read_to_string(root.join("fixtures").join(format!("{name}.did")))
@@ -337,30 +348,44 @@ fn nested_func_generates() {
 }
 
 /// `T | null` cannot carry Candid optionality when the inner type can itself
-/// be `null` in TypeScript. Every collapsing shape fails closed — including an
-/// opt reached through a declared alias, because the check is on the node, not
-/// its spelling.
+/// be `null` in TypeScript, so every collapsing shape boxes its present value
+/// as `{ some: T } | null` — including an opt reached through a declared
+/// alias, because the test is on the node, not its spelling — and nothing
+/// else boxes: `opt empty` and `opt nat` keep `T | null`.
 #[test]
-fn collapsing_options_fail_closed() {
-    for (source, inner) in [
-        ("type DoubleOpt = opt opt nat;", "opt"),
-        ("type OptNull = opt null;", "null"),
-        ("type OptReserved = opt reserved;", "reserved"),
-        ("type Inner = opt nat;\ntype Outer = opt Inner;", "opt"),
+fn collapsing_options_box() {
+    for (source, alias) in [
+        (
+            "type DoubleOpt = opt opt nat;",
+            "export type DoubleOpt = { some: bigint | null } | null;",
+        ),
+        (
+            "type OptNull = opt null;",
+            "export type OptNull = { some: null } | null;",
+        ),
+        (
+            "type OptReserved = opt reserved;",
+            "export type OptReserved = { some: unknown } | null;",
+        ),
+        (
+            "type Inner = opt nat;\ntype Outer = opt Inner;",
+            "export type Outer = { some: Inner } | null;",
+        ),
+        ("type L = opt L;", "export type L = { some: L } | null;"),
+        ("type E = opt empty;", "export type E = never | null;"),
+        ("type N = opt nat;", "export type N = bigint | null;"),
     ] {
         let compilation = compile_did(source).expect("source must compile");
-        let error = generate_module(
+        let output = generate_module(
             compilation.contract(),
             &TsNames::new(),
             &TsOptions::default(),
         )
-        .expect_err(source);
-        match error {
-            TsGenError::UnrepresentableOption { inner: got, .. } => {
-                assert_eq!(got, inner, "{source}")
-            }
-            other => panic!("expected UnrepresentableOption for {source}, got {other:?}"),
-        }
+        .unwrap_or_else(|error| panic!("{source} must generate: {error}"));
+        assert!(output.contains(alias), "{source}: {output}");
+        // The builder is `c.opt` either way; the box is a domain shape the
+        // runtime's `OptDomain` and walkers derive from the same node rule.
+        assert!(output.contains("c.opt("), "{source}: {output}");
     }
 }
 

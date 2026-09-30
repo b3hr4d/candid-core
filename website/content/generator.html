@@ -216,14 +216,6 @@ that compiles or an error explaining what could not be represented.</p>
   </thead>
   <tbody>
     <tr>
-      <td><code>UnrepresentableOption { declaration, inner }</code></td>
-      <td>An <code>opt</code> whose inner type can itself be <code>null</code> in TypeScript —
-      another <code>opt</code>, <code>null</code>, or <code>reserved</code>. <code>T | null</code>
-      cannot distinguish <code>None</code> from <code>Some(None)</code>, so generation refuses rather
-      than collapsing the two. The check is on the type <em>node</em>, so an <code>opt</code> reached
-      through an alias is refused just the same.</td>
-    </tr>
-    <tr>
       <td><code>ReservedDeclarationName { name }</code></td>
       <td>A declaration named after a binding the emitted module itself references. Nine names are
       refused unconditionally: <code>c</code>, <code>Schema</code>, <code>PrincipalValue</code>,

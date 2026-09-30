@@ -50,6 +50,9 @@
 //   `JSON.stringify`, spread, and structured clone all see. A non-enumerable
 //   property neither satisfies a required field nor counts as unknown, so a
 //   validated value never serializes to something the schema rejects.
+// - An `opt` whose inner type admits `null` (`opt opt`, `opt null`,
+//   `opt reserved`) is boxed: a present value is exactly `{ some: v }`,
+//   strict like a record, with issues inside it at `$.….some`.
 // - Tag-only variant arms (`null` payload) reject a present `value` key; the
 //   one domain shape is `{ tag }`, not `{ tag, value: null }`.
 // - `float32` accepts any JavaScript number: f32 representability is a codec
@@ -94,6 +97,18 @@ import type {
   VecSchema,
 } from "./schema.ts";
 import { resolveSchema } from "./schema.ts";
+
+// The boxed-option rule `isBoxedOpt` states, applied to an inner node this
+// walk has already resolved under its own budget. Module-local on purpose:
+// the rule's published surface is `isBoxedOpt`, and calling it here would
+// re-resolve the inner outside the walk's accounting. The cross-walker test
+// in `tests/schema-types.test.ts` pins this copy to `isBoxedOpt`.
+function admitsNull(node: { readonly kind: string; readonly primitive?: unknown }): boolean {
+  return (
+    node.kind === "opt" ||
+    (node.kind === "primitive" && (node.primitive === "null" || node.primitive === "reserved"))
+  );
+}
 
 /** Stable machine-readable failure codes. Closed: additions are API changes. */
 export type ValidationCode =
@@ -376,7 +391,7 @@ class Walk {
         return;
       case "opt":
         if (value !== null) {
-          this.visit(node.inner, value, path, depth + 1);
+          this.opt(node, value, path, depth);
         }
         return;
       case "vec":
@@ -572,6 +587,56 @@ class Walk {
         return;
       default:
         this.issue("unsupported_schema", path, `unknown primitive ${JSON.stringify(name)}`);
+    }
+  }
+
+  /**
+   * A present `opt` value. Whether it is boxed is decided here, on the
+   * resolved inner node (the `isBoxedOpt` rule), never on the schema object: the
+   * inner is resolved once, charging each rec hop exactly as visiting it
+   * would, and the resolved node is what validates the payload — so an
+   * unboxed opt's accounting is unchanged. A boxed value is strict like a
+   * record: a plain object whose only own enumerable key is `some`.
+   */
+  private opt(
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    node: OptSchema<any>,
+    value: unknown,
+    path: PathSegment[],
+    depth: number,
+  ): void {
+    const inner = this.resolve(node.inner, path, depth + 1);
+    if (inner === undefined) {
+      return;
+    }
+    if (!admitsNull(inner.node)) {
+      this.visit(inner.node, value, path, inner.depth);
+      return;
+    }
+    if (!isPlainCandidate(value)) {
+      this.issue(
+        "invalid_type",
+        path,
+        `expected null or { some: … } for an opt whose inner type admits null, got ${describe(value)}`,
+      );
+      return;
+    }
+    path.push("some");
+    if (!hasOwnEnumerable(value, "some")) {
+      this.issue("missing_field", path, "a present boxed opt carries { some }");
+    } else {
+      this.visit(inner.node, value.some, path, inner.depth);
+    }
+    path.pop();
+    for (const key of Object.keys(value)) {
+      if (this.halted || !this.step(path, depth)) {
+        return;
+      }
+      if (key !== "some") {
+        path.push(key);
+        this.issue("unexpected_field", path, "a present boxed opt is exactly { some }");
+        path.pop();
+      }
     }
   }
 

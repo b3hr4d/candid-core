@@ -81,9 +81,10 @@ documents validate exactly the values the generated builders describe.
 Regenerate goldens deliberately with `UPDATE_GOLDENS=1 cargo test -p
 candid-core-ts --features compiler`, then review the diff — goldens are where
 the owner-reviewed mapping decisions live (modern domain shapes: `T | null`
-opts with `opt opt`/`opt null`/`opt reserved` failing closed, `{ tag, value }`
-variants, `Uint8Array`, `bigint`; agent-js wire compatibility is an explicit
-non-goal, recorded on #38).
+opts, with `opt opt`/`opt null`/`opt reserved` — an opt whose inner type admits
+`null` — boxed as `{ some: T } | null`, `{ tag, value }` variants,
+`Uint8Array`, `bigint`; agent-js wire compatibility is an explicit non-goal,
+recorded on #38).
 
 TypeScript formatting is Prettier, exact-pinned in `ts/package-lock.json` and
 configured *only* by `/.prettierrc.json` at the repository root — stating every

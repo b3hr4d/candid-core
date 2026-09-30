@@ -23,10 +23,11 @@
 // - a record whose ids are exactly `0..n-1` is a tuple; an empty record is
 //   the unit schema; label text comes from a caller-supplied name table and
 //   an unnamed field renders by the `_id_` convention;
-// - an `opt` whose inner node is `opt`, `null`, or `reserved` is rejected
-//   with `unrepresentable_option` — `T | null` cannot carry `None` versus
-//   `Some(None)`, and the check is on the node, so an aliased opt collapses
-//   just as surely;
+// - an `opt` whose inner node is `opt`, `null`, or `reserved` builds like
+//   any other opt; its present values are boxed as `{ some: v }` because
+//   `T | null` cannot carry `None` versus `Some(None)` there. The walkers
+//   decide that on the resolved inner node at walk time, so an aliased or
+//   recursive opt boxes exactly as the generator's alias says it does;
 // - reference types build like everything else (issue #104): a func schema
 //   carries its signature and describes `{ principal, method }` values, a
 //   service schema carries its methods and describes principal values, and
@@ -84,7 +85,6 @@ export type ContractIssueCode =
   | "unsupported_semantics_profile"
   | "unsupported_canonicalization_profile"
   | "dangling_type_ref"
-  | "unrepresentable_option"
   | "unsupported_construct"
   | "duplicate_field_id"
   | "duplicate_field_name"
@@ -763,9 +763,8 @@ function buildFromContract(
     }
   }
 
-  // Pass two, on sound nodes only: the one-hop node checks the generator
-  // performs during rendering — collapsing opts and the declaration-only rule
-  // for classes.
+  // Pass two, on sound nodes only: the one-hop node check the generator
+  // performs during rendering — the declaration-only rule for classes.
   for (let index = 0; index < types.length; index += 1) {
     const node = parsed[index];
     if (node === undefined) {
@@ -776,23 +775,6 @@ function buildFromContract(
       const inner = parsed[node.inner];
       if (inner === undefined) {
         continue;
-      }
-      if (node.kind === "opt") {
-        const collapsing =
-          inner.kind === "opt"
-            ? "opt"
-            : inner.kind === "primitive" &&
-                (inner.primitive === "null" || inner.primitive === "reserved")
-              ? inner.primitive
-              : undefined;
-        if (collapsing !== undefined) {
-          push(
-            "unrepresentable_option",
-            `${base}.inner`,
-            `opt wraps \`${collapsing}\`: \`T | null\` cannot distinguish None from Some(None) there`,
-          );
-          continue;
-        }
       }
       if (inner.kind === "class") {
         push(

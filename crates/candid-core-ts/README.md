@@ -48,9 +48,14 @@ shapes the agent-js runtime produces (`[] | [T]` opts, single-key variant
 objects — what `@icp-sdk/bindgen` emits, verified against its 0.4.0 output):
 compatibility is a non-goal for now, and consuming these types against a live
 agent needs a boundary conversion, recorded on the issue as future work. One
-consequence is enforced rather than papered over: an `opt` whose inner type
+consequence is handled rather than papered over: an `opt` whose inner type
 can itself be `null` in TypeScript — `opt opt`, `opt null`, `opt reserved` —
-fails closed, because `T | null` cannot distinguish `None` from `Some(None)`.
+boxes its present value as `{ some: T } | null`, because `T | null` cannot
+distinguish `None` from `Some(None)` there. Only those opts box (`opt opt nat`
+is `{ some: bigint | null } | null`; `opt nat` stays `bigint | null`), the
+test is on the inner node so aliases and recursion (`type L = opt L`) box
+alike, and the runtime's `OptDomain` type and its walkers apply the same
+rule.
 
 **The generated artifact is a runtime schema, not just types.** Each
 declaration emits an invariantly-annotated builder alongside its alias —
@@ -68,8 +73,8 @@ with path-addressed issues in candid-core's own diagnostic shape
 (`{code, path, message, resource_limit?}`, stable snake_case codes,
 `$`-rooted paths). `ts/contract.ts` builds the same schemas dynamically from
 a canonical Contract JSON document, applying every generator mapping decision
-(anonymous `vec nat8` → blob, tuple-shaped records, the collapsing-`opt`
-rejection, reference types and the actor included) with label text from the same
+(anonymous `vec nat8` → blob, tuple-shaped records, boxed collapsing
+`opt`s, reference types and the actor included) with label text from the same
 caller-supplied name-table shape `TsNames` takes. The golden cross-check test
 proves the two paths agree: for every fixture, the dynamically built schema
 must return the identical `validate` result the generated builder returns,
