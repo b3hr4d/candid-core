@@ -76,7 +76,7 @@ export interface ValidationIssue {
 }
 
 export interface ResourceLimitInfo {
-  readonly resource: "value_depth" | "value_elements";
+  readonly resource: "value_depth" | "value_elements" | "stack";
   readonly limit: number;
   readonly observed: number;
 }
@@ -253,6 +253,16 @@ const result = validate(c.vec(c.nat8), big, { maxElements: 10 });
   hand-built <code>rec</code> chain that never resolves — a schema no validated Contract produces,
   because the compiler refuses a degenerate cycle such as <code>type A = A</code>. The bound is what
   makes a hand-assembled one end.
+</p>
+
+<p>
+  <code>resource: "stack"</code> is the odd one out: it is not a bound you configure. If you raise
+  <code>maxDepth</code> past what the host's own call stack holds, the engine can run out first, and
+  the walk reports <code>{ resource: "stack", limit, observed }</code> with <code>limit</code> the
+  <code>maxDepth</code> you set and <code>observed</code> the depth it had reached, which is below
+  <code>limit</code> here because <code>validate</code> charges every step. <code>validate</code> never
+  reports it at the default limits, and it is not a statement about the value: the same value fails
+  with <code>value_depth</code> under a lower <code>maxDepth</code>.
 </p>
 
 <callout type="warn" title="Read ok, not issues.length">
