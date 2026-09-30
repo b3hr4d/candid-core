@@ -175,6 +175,12 @@
           "title": "The code generator",
           "nav": "Code generator",
           "lead": "candid-core-ts: how a Contract graph becomes a TypeScript module that tsc itself proves correct."
+        },
+        {
+          "slug": "migrating-from-0-2",
+          "title": "Migrating from 0.2.0",
+          "nav": "Migrating from 0.2.0",
+          "lead": "What changes in the next release for code written against the published @candid-core/schema 0.2.0 and @candid-core/cli 0.1.0, each with a before and an after the compiler checks."
         }
       ]
     },
@@ -185,7 +191,7 @@
           "slug": "reference-mapping",
           "title": "Candid to TypeScript mapping",
           "nav": "Candid ↔ TypeScript",
-          "lead": "The complete type mapping table, including boxed options and the cases that deliberately fail closed.",
+          "lead": "The complete type mapping table, including boxed options and the declarations that are left out.",
           "wide": true
         },
         {

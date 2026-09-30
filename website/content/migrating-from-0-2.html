@@ -1,0 +1,501 @@
+<p>
+  This page is for code written against the published <code>@candid-core/schema</code>
+  <code>0.2.0</code> or <code>@candid-core/cli</code> <code>0.1.0</code>. Every other page on this
+  site describes the surface the repository builds now, which is the surface of the next release of
+  both packages. That release is not published and this site promises no number or date for it. The
+  record of each change, with the reasoning, is the <code>## Unreleased</code> section of the
+  <a href="https://github.com/b3hr4d/candid-core/blob/main/crates/candid-core-ts/ts/CHANGELOG.md#unreleased"><code>@candid-core/schema</code> changelog</a>
+  and of the
+  <a href="https://github.com/b3hr4d/candid-core/blob/main/crates/candid-core-wasm/npm/CHANGELOG.md#unreleased"><code>@candid-core/cli</code> changelog</a>.
+</p>
+
+<p>
+  Removing published subpaths is a breaking change, so the next release is a minor: under npm's
+  pre-1.0 caret rules a <code>^0.2.0</code> dependency does not select it, and moving to it is a
+  deliberate edit. Nothing on the wire moved. No byte a <code>0.2.0</code> encoder wrote is read
+  differently, and Contract JSON and every identity are untouched; what changed is the TypeScript
+  value shapes, the package's exports, what the generator emits, and what throws.
+</p>
+
+<callout type="tip" title="The snippets below are compiled">
+  <p>
+    Each <em>before</em> block is 0.2.0-era code, and the site's check compiles it against this
+    tree and requires the compiler to reject it with the error shown. Each <em>after</em> block must
+    compile. The claim that a spelling stopped working is therefore the compiler's, not this page's.
+  </p>
+</callout>
+
+<table>
+  <thead>
+    <tr><th>What changed</th><th>What it breaks</th><th>Where</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>A principal is canonical text, branded <code>Principal</code></td><td>Code that calls <code>.toText()</code> on a decoded principal, or hands an SDK object to <code>encode</code></td><td><a href="#principals">Principals</a></td></tr>
+    <tr><td><code>opt opt T</code>, <code>opt null</code> and <code>opt reserved</code> are <code>{ some: T } | null</code></td><td>Code that read or wrote those as a bare <code>T | null</code></td><td><a href="#boxed-options">Boxed options</a></td></tr>
+    <tr><td>Every <code>vec nat8</code> is a <code>Uint8Array</code></td><td>Code typed for <code>number[]</code> beside a declared <code>nat8</code> alias</td><td><a href="#blobs">Blobs</a></td></tr>
+    <tr><td>Four subpaths are gone, and the optional SDK peer</td><td>Any import of them</td><td><a href="#removed-subpaths">Removed subpaths</a></td></tr>
+    <tr><td>Bad options throw <code>TypeError</code>; encoded bytes do not depend on how a schema was built</td><td>A misspelled or non-integer limit that used to be ignored</td><td><a href="#strict-options">Strict options</a></td></tr>
+    <tr><td>Generated modules bind <code>$</code>-prefixed locals and carry JSDoc</td><td>Code that parses or patches generated source</td><td><a href="#generated-modules">Generated modules</a></td></tr>
+    <tr><td>A declaration that cannot be represented is omitted, not refused</td><td>A script that relied on the generator's non-zero exit</td><td><a href="#omission">Omission</a></td></tr>
+    <tr><td>Closed unions gain or lose a member</td><td>An exhaustive <code>switch</code> over a resource or a contract code</td><td><a href="#unions">Closed unions</a></td></tr>
+  </tbody>
+</table>
+
+<h2>Principals</h2>
+
+<p>
+  A principal's domain value was <code>{ toText(): string }</code>. It is now its canonical text, a
+  plain string branded <code>Principal</code> in the type system only. The object could not be
+  serialized (<code>JSON.stringify</code> gave <code>{}</code>), cloned
+  (<code>structuredClone</code> threw), or compared with <code>===</code>. The string does all
+  three. Decoding returns the text, for a <code>principal</code>, for a func reference's
+  <code>principal</code> and for a service reference alike. The root export
+  <code>PrincipalValue</code> and its <code>./codec</code> alias <code>DecodedPrincipal</code> are removed, with
+  no deprecated alias left, because an alias would keep the object shape alive.
+</p>
+
+<p>
+  In the other direction encoding is strict: it accepts exactly the strings <code>validate</code>
+  accepts, a string holding canonical text, and refuses everything else with
+  <code>invalid_type</code> at the same path. It no longer calls <code>toText()</code>.
+  <code>principal(value)</code> is the one conversion point. It takes a string or an object with
+  <code>toText()</code>, an SDK <code>Principal</code> for one, and returns the text branded, or throws
+  <code>TypeError</code>. It refuses rather than repairs: upper case, a misplaced dash, a checksum
+  mismatch and an id over 29 bytes all throw. <code>isPrincipal(value)</code> is the matching guard.
+</p>
+
+<pre data-lang="ts" data-check-fails="TS2339">
+import { c, type Infer } from "@candid-core/schema";
+
+const Account = c.record({ owner: c.principal });
+declare const account: Infer<typeof Account>;
+
+// 0.2.0: a decoded principal was an object with toText().
+const text: string = account.owner.toText();
+</pre>
+
+<pre data-lang="ts" data-check-fails="TS2322">
+import { c, type Infer } from "@candid-core/schema";
+
+const Account = c.record({ owner: c.principal });
+declare const sdkPrincipal: { toText(): string }; // an @icp-sdk/core Principal, say
+
+// 0.2.0: any object with toText() was a principal, to validate and to encode.
+const account: Infer<typeof Account> = { owner: sdkPrincipal };
+</pre>
+
+<pre data-lang="ts" data-check>
+import { c, isPrincipal, principal, type Infer } from "@candid-core/schema";
+import { encode } from "@candid-core/schema/codec";
+
+const Account = c.record({ owner: c.principal });
+declare const sdkPrincipal: { toText(): string }; // an @icp-sdk/core Principal, say
+
+// Convert once, at your boundary. The result is the canonical text.
+const owner = principal(sdkPrincipal);
+const account: Infer<typeof Account> = { owner };
+const text: string = account.owner; // no toText(): it is already the text
+
+encode(Account, account); // { ok: true, bytes }
+isPrincipal("AAAAA-AA"); // false, so principal("AAAAA-AA") throws TypeError
+</pre>
+
+<p>
+  The other direction needs the SDK, which this package no longer knows about: code that wants a
+  class instance from a decoded value converts with the SDK's own
+  <code>Principal.fromText(value)</code>. <code>Principal</code> is exported from the root with the
+  same name as the SDK's class; import one of them under an alias. Equal principal text encodes to
+  equal bytes whatever built the schema, and a string over 63 characters, the longest canonical
+  text, is refused before any work proportional to its length. Source:
+  <code>schema.ts</code>, the doc comments on <code>Principal</code>, <code>principal</code> and
+  <code>isPrincipal</code>; the changelog entry <em>Principals are canonical text</em>.
+</p>
+
+<h2 id="boxed-options">Boxed options</h2>
+
+<p>
+  <code>opt T</code> is <code>T | null</code> unless <code>T</code> itself admits <code>null</code>.
+  For exactly the three collapsing inners, <code>opt opt T</code>, <code>opt null</code> and
+  <code>opt reserved</code>, the present value is boxed as <code>{ some: v }</code>, so
+  <code>None</code>, <code>Some(None)</code> and <code>Some(Some(x))</code> stay three values. Every
+  other <code>opt</code> is unchanged in type, value and wire bytes. In 0.2.0 an interface
+  containing one of the three was refused at generation and at load, and a hand-built
+  <code>c.opt(c.opt(…))</code> silently decoded <code>Some(None)</code> as <code>None</code>.
+  Interfaces such as Internet Identity's <code>config</code> now load.
+</p>
+
+<pre data-lang="ts" data-check-fails="TS2322">
+import { c, type Infer } from "@candid-core/schema";
+
+const Description = c.opt(c.opt(c.text));
+
+// 0.2.0: the present value was the bare inner value.
+const present: Infer<typeof Description> = "x";
+</pre>
+
+<pre data-lang="ts" data-check>
+import { c, isBoxedOpt, type Infer, type OptDomain } from "@candid-core/schema";
+import { decode, encode } from "@candid-core/schema/codec";
+
+const Description = c.opt(c.opt(c.text));
+type Description = Infer<typeof Description>; // { some: string | null } | null
+
+const none: Description = null; // None
+const cleared: Description = { some: null }; // Some(None)
+const set: Description = { some: "x" }; // Some(Some("x"))
+
+const bytes = encode(Description, cleared); // the bytes any other opt would write
+if (bytes.ok) decode(Description, bytes.bytes); // { ok: true, value: { some: null } }
+
+isBoxedOpt(Description); // true; isBoxedOpt(c.opt(c.text)) is false
+type Plain = OptDomain<bigint>; // bigint | null, unboxed
+</pre>
+
+<p>
+  The decision is made on the resolved inner node, so a declared alias and a recursive type
+  (<code>type Chain = opt Chain</code>) box the same way, and <code>opt empty</code> stays
+  <code>null</code>. Validation and encoding require <code>{ some: v }</code> for a present value (a
+  bare <code>v</code> is <code>invalid_type</code>, and under <code>opt reserved</code>
+  <code>undefined</code> is no longer read as present), and issues inside a box carry the
+  <code>some</code> segment. <code>OptSchema&lt;T&gt;</code> now extends
+  <code>Schema&lt;OptDomain&lt;T&gt;&gt;</code>. See
+  <a href="reference-mapping.html#options-whose-inner-type-admits-null">the mapping reference</a>.
+</p>
+
+<h2>Blobs</h2>
+
+<p>
+  A declared alias of <code>nat8</code> (<code>type Byte = nat8</code>) used to turn every
+  <code>blob</code> and <code>vec Byte</code> in the interface into <code>number[]</code>, because the
+  generator and the loader gave a declaration's name to every use of the node it named. A
+  declaration of a primitive now names only itself, and every <code>vec nat8</code> is a
+  <code>Uint8Array</code>, in generated modules and in <code>schemaFromContract</code> alike. The
+  encoded bytes are the same, since <code>blob</code> and <code>vec nat8</code> are one wire type. The
+  same change stops <code>type Tokens = nat; type BlockIndex = nat</code> renaming each other's uses:
+  a field reads <code>bigint</code>, not whichever alias came first.
+</p>
+
+<pre data-lang="ts" data-check-fails="TS2322">
+import { c, type Schema } from "@candid-core/schema";
+
+// 0.2.0, for `type Byte = nat8; type R = record { raw : vec Byte }`.
+type R = { raw: number[] };
+const R: Schema<R> = c.rec(() => c.record({ raw: c.blob() }));
+</pre>
+
+<pre data-lang="ts" data-check>
+import { c, type Schema } from "@candid-core/schema";
+
+type R = { raw: Uint8Array };
+const R: Schema<R> = c.rec(() => c.record({ raw: c.blob() }));
+</pre>
+
+<h2 id="removed-subpaths">Removed subpaths</h2>
+
+<p>
+  The package is the Candid layer only: schemas, validation, the codec and the Contract loader. The
+  export map is exactly <code>.</code>, <code>./validate</code>, <code>./contract</code> and
+  <code>./codec</code>. Four subpaths that 0.2.0 exported are gone:
+</p>
+
+<ul>
+  <li>
+    <code>./actor</code>, with its actor factory, its call helper for a decoded func reference, its
+    error class, and the <code>Transport</code>, <code>CallTarget</code> and
+    <code>ActorOptions</code> types. Calling a canister is the job of the call layer built on this
+    package. A func value stays the inert <code>{ principal, method }</code> pair.
+  </li>
+  <li>
+    <code>./transport-icp</code>, the <code>@icp-sdk/core</code> adapter. It built an agent with no
+    identity, a second call path beside whatever identity-aware transport an application uses.
+  </li>
+  <li>
+    <code>./forms</code>, the form-model builder. The code stays in the repository, compiled and
+    tested, but is not built into the tarball.
+  </li>
+  <li>
+    <code>./labels</code>, the label-hash and UTF-8 helpers. The module still ships because the codec
+    and the loader import it, but it is not an entry point.
+  </li>
+</ul>
+
+<p>
+  An import of any of them now fails at resolution, with <code>ERR_PACKAGE_PATH_NOT_EXPORTED</code> in
+  Node and <code>TS2307</code> in TypeScript, and so does a deep import into <code>dist/</code>. The
+  optional <code>@icp-sdk/core &gt;= 6</code> peer is dropped with them, since only the transport
+  used it. The package declares no runtime dependency and no peer of any kind, and the Node floor is
+  16 for every subpath. The packaged-consumer gate asserts each of these against the packed tarball.
+</p>
+
+<pre data-lang="ts" data-check-fails="TS2307">
+import { createActor } from "@candid-core/schema/actor";
+</pre>
+
+<pre data-lang="ts" data-check-fails="TS2307">
+import { httpTransport } from "@candid-core/schema/transport-icp";
+</pre>
+
+<p>
+  What replaces them is what a call layer already needed from this package and still has: the method
+  table, and the codec that moves a call's arguments and reply as bytes. Sending those bytes, with
+  the agent, the identity, polling and certificate verification, is not done here.
+</p>
+
+<pre data-lang="ts" data-check>
+import { serviceMethods } from "@candid-core/schema";
+import { decodeArgs, encodeArgs } from "@candid-core/schema/codec";
+import { actor, type TransferArg } from "./ledger.ts";
+
+declare const arg: TransferArg;
+declare function send(method: string, payload: Uint8Array): Promise<Uint8Array>; // your agent
+
+const transfer = serviceMethods(actor).get("transfer");
+if (transfer === undefined) throw new Error("the interface has no transfer method");
+
+const request = encodeArgs(transfer.args, [arg]);
+if (!request.ok) throw new Error(request.issues[0].message);
+
+const reply = decodeArgs(transfer.results, await send(transfer.name, request.bytes));
+if (reply.ok) reply.values[0]; // the decoded TransferResult, as unknown until you narrow it
+</pre>
+
+<h2 id="strict-options">Strict options, and bytes that do not depend on the schema</h2>
+
+<p>
+  Every entry point that takes an options object, <code>validate</code> and <code>unwrapResult</code>,
+  <code>encode</code>, <code>encodeArgs</code>, <code>decode</code> and <code>decodeArgs</code>, and
+  <code>schemaFromContract</code>, throws <code>TypeError</code> on an own key it does not define and on
+  a limit that is not a non-negative safe integer: <code>NaN</code>, a negative, a fraction, a string,
+  <code>null</code> and <code>Infinity</code> all throw, and so does <code>maxIssues</code> passed to
+  <code>encode</code>, which only <code>validate</code> defines. In 0.2.0 a misspelled limit applied the default
+  silently, and a <code>NaN</code> limit switched its bound off: a depth-300 value validated under
+  <code>maxDepth: NaN</code>. <code>undefined</code> still means the default and <code>0</code> is
+  still a valid, fail-closed limit. A host that wants no practical bound passes a large safe integer.
+  Each option is read from your object exactly once, into a frozen snapshot the whole call reads
+  instead, so a getter or a Proxy cannot pass the check with one value and run with another. Values,
+  byte strings and Contract documents still never make these functions throw.
+</p>
+
+<pre data-lang="ts" data-check-fails="TS2561">
+import { c } from "@candid-core/schema";
+import { validate } from "@candid-core/schema/validate";
+
+// A typed caller now meets the misspelling at compile time; a caller with
+// an untyped options object meets a TypeError at run time.
+validate(c.nat, 1n, { maxDeph: 10 });
+</pre>
+
+<pre data-lang="ts" data-check>
+import { c } from "@candid-core/schema";
+import { validate } from "@candid-core/schema/validate";
+
+declare const limit: number; // read from your configuration
+try {
+  validate(c.vec(c.nat8), [], { maxDepth: limit });
+} catch (error) {
+  if (!(error instanceof TypeError)) throw error; // a NaN, a fraction, a string: the caller's bug
+}
+</pre>
+
+<p>
+  The second change is to bytes. <code>encode</code> and <code>encodeArgs</code> write a structural type
+  table, so the same value encoded through a generated module, through
+  <code>schemaFromContract</code> and through a hand-built schema produces one byte string, however
+  each shares or duplicates nodes and in whatever order a record's schema or value spells its keys.
+  Anything that keys a cache or deduplicates requests on argument bytes now sees one key for one call.
+  A schema with no repeated structure writes the bytes it always wrote, and one with repeated
+  anonymous structure writes a smaller table that every decoder still reads. Two separately
+  hand-built knots for one recursive type are not merged. Source: <code>options.ts</code> and
+  <code>typetable.ts</code> headers, and the codec header's <em>Determinism</em> section.
+</p>
+
+<h2 id="generated-modules">Generated modules</h2>
+
+<p>
+  The generator changes the text of every module it emits, and nothing about what a module exports.
+  The schema runtime is imported as the namespace <code>$</code>, and every declaration is bound as a
+  <code>$</code>-prefixed local exported under its Candid name. A Candid name cannot contain
+  <code>$</code>, so a declaration named <code>c</code>, <code>Schema</code>, <code>Array</code> or
+  <code>delete</code> generates instead of being refused, and you import it by name
+  (<code>import { delete as del } from "./service"</code>). Code that imports the generated names is
+  unaffected; code that parses or patches the generated source, or relied on its module-scope names,
+  must follow the new layout.
+</p>
+
+<pre data-lang="ts" data-check-fails="TS2305">
+// 0.2.0 layout: bare bindings, and a separate import for the principal type.
+import { c, type PrincipalValue, type Schema } from "@candid-core/schema";
+
+export type Tokens = { e8s: bigint };
+export const Tokens: Schema<Tokens> = c.rec(() => c.record({ e8s: c.nat64 }));
+</pre>
+
+<pre data-lang="ts" data-file="crates/candid-core-ts/tests/goldens/ledger.ts" data-check>
+import * as $ from "@candid-core/schema";
+// …
+type $Tokens = { e8s: bigint };
+const $Tokens: $.Schema<$Tokens> = $.c.rec(() => $.c.record({ e8s: $.c.nat64 }));
+export { $Tokens as Tokens };
+</pre>
+
+<pre data-lang="ts" data-check>
+import { Tokens, actor, type Actor } from "./ledger.ts"; // the same import as before
+import { Array as Arrays, delete as del } from "./shadowing.ts"; // names that used to be refused
+
+void [Tokens, actor, Arrays, del];
+declare const ledger: Actor;
+void ledger.fee;
+</pre>
+
+<p>
+  Principals follow the change above: the generated type is <code>$.Principal</code> where it was
+  <code>PrincipalValue</code>, for principal fields, func references
+  (<code>{ principal: $.Principal; method: string }</code>), service references and the
+  <code>actor</code> schema. A declaration named <code>Principal</code> still generates. Two more things
+  came with the layout. The <code>.did</code>'s doc comments and argument names become JSDoc, above
+  each exported type and const, on record properties and variant arms, and on the methods of
+  <code>Actor</code> with a <code>@param</code> per named argument, so an editor hover shows what the
+  interface says. And a use of a primitive renders structurally (see <a href="#blobs">Blobs</a>).
+</p>
+
+<pre data-lang="ts" data-file="crates/candid-core-ts/tests/goldens/docs.ts" data-check>
+import * as $ from "@candid-core/schema";
+// …
+/** The amount of a transfer, in e8s. */
+type $Tokens = bigint;
+/** The amount of a transfer, in e8s. */
+const $Tokens: $.Schema<$Tokens> = $.c.rec(() => $.c.nat);
+export { $Tokens as Tokens };
+</pre>
+
+<p>
+  Declarations named <code>actor</code> or <code>Actor</code> are the module's own export names and stay
+  reserved. The generated <code>actor</code> schema and <code>Actor</code> interface type are still
+  emitted, under those names.
+</p>
+
+<h2 id="omission">Omission instead of refusal</h2>
+
+<p>
+  The generator no longer refuses a whole interface for one declaration it cannot represent. It leaves
+  that declaration out, with every declaration and actor method that references it, and lists what it
+  left out. Four causes remain: a field or arm named like the <code>_N_</code> id rendering, a
+  variant arm whose payload is a declared <code>opt</code> of an uninhabited type, a declaration named
+  <code>actor</code> or <code>Actor</code>, and, from a Contract document only, a name that is not
+  identifier-shaped. The exact rules, the reason codes and the closure are on
+  <a href="generator.html#what-cannot-be-represented-is-omitted">the code generator</a> page.
+  What changes for a consumer:
+</p>
+
+<ul>
+  <li>
+    <strong>Exit status.</strong> <code>candid-core-cli gen</code> used to print a
+    <code>ts_generation_refused</code> document and exit 1 for such an interface. It now writes the
+    module, prints one <code>warning: omitted …</code> line per entry on stderr, and exits 0. A script
+    that relied on the non-zero exit to reject the interface must read the warnings or the list.
+  </li>
+  <li>
+    <strong>Library result.</strong> <code>didToModule</code> returns
+    <code>{ ok: true, module, omitted }</code> for those inputs, where it returned
+    <code>{ ok: false, diagnostics }</code>. <code>omitted</code> is always present, and empty when
+    nothing is left out. <code>ts_generation_refused</code> is now reserved for an invalid Contract graph,
+    which Candid source never produces.
+  </li>
+  <li>
+    <strong>The loader.</strong> <code>schemaFromContract</code> omits exactly what the generator omits,
+    with the same reasons, and its success carries the same <code>omitted</code> list. A name-table entry
+    shaped like <code>_N_</code> that honestly hashes to its id no longer fails the document. A
+    declaration whose name is not identifier-shaped is now omitted there, where 0.2.0 loaded it.
+    An invalid document still fails whole.
+  </li>
+  <li>
+    <strong>The header.</strong> The module lists each entry as a <code>// Omitted:</code> line under
+    its first line. A module that omits nothing has no such line and is byte-identical to what it
+    would have been.
+  </li>
+</ul>
+
+<h2 id="unions">Closed unions</h2>
+
+<p>
+  Three closed unions changed, and an exhaustive <code>switch</code> over them stops compiling until it
+  is updated. <code>resource_limit_exceeded</code> issues gain a <code>"stack"</code> resource in both
+  <code>ResourceLimitInfo["resource"]</code> (<code>./validate</code>) and
+  <code>CodecResourceLimitInfo["resource"]</code> (<code>./codec</code>). It means the host's own call
+  stack ran out, and only user code a walk calls, a getter, a Proxy trap or a <code>rec</code> thunk
+  that itself recurses too deeply, can cause it: the walkers keep their work on explicit stacks.
+  Before, such an overflow was mislabelled <code>unreadable_value</code> or
+  <code>unsupported_schema</code>. <code>ContractIssueCode</code> loses
+  <code>unrepresentable_option</code>, because the documents it refused now load.
+</p>
+
+<pre data-lang="ts" data-check-fails="TS2322">
+import type { ResourceLimitInfo } from "@candid-core/schema/validate";
+
+function describe(info: ResourceLimitInfo): string {
+  switch (info.resource) {
+    case "value_depth":
+      return "too deep";
+    case "value_elements":
+      return "too many elements";
+    default: {
+      const unhandled: never = info.resource; // 0.2.0: exhaustive with two cases
+      return unhandled;
+    }
+  }
+}
+void describe;
+</pre>
+
+<pre data-lang="ts" data-check-fails="TS2367">
+import type { ContractIssueCode } from "@candid-core/schema/contract";
+
+function isOption(code: ContractIssueCode): boolean {
+  return code === "unrepresentable_option";
+}
+void isOption;
+</pre>
+
+<pre data-lang="ts" data-check>
+import type { ResourceLimitInfo } from "@candid-core/schema/validate";
+
+function describe(info: ResourceLimitInfo): string {
+  switch (info.resource) {
+    case "value_depth":
+      return "too deep";
+    case "value_elements":
+      return "too many elements";
+    case "stack":
+      return "user code recursed past the host stack";
+    default: {
+      const unhandled: never = info.resource;
+      return unhandled;
+    }
+  }
+}
+void describe;
+</pre>
+
+<p>
+  Two behaviours changed without changing a type. The limits are the only bounds on a walk:
+  <code>DEFAULT_MAX_DEPTH</code> stays 256, and with <code>maxDepth</code> raised a 100,000-level value
+  validates, encodes and decodes on any engine, where the recursive walkers used to overflow the host
+  stack from about 1,500 to 2,600 levels. And <code>encode</code> charges <code>maxDepth</code> for
+  Candid nesting depth only, never for a <code>rec</code> hop, so any type the candid-core compiler
+  accepts encodes through its generated module at the default limits, however it is split into
+  declarations. <a href="schema-codec.html#the-budgets-and-what-a-caller-observes">The codec page</a>
+  states both with their numbers.
+</p>
+
+<h2>Order of upgrade</h2>
+
+<p>
+  The pieces are released together and depend on each other. A module the new generator emits imports
+  <code>Principal</code> from <code>@candid-core/schema</code>, which 0.2.0 does not export, and may
+  contain boxed aliases 0.2.0 cannot type. The <code>@candid-core/cli</code> that ships the generator
+  therefore must raise its <code>@candid-core/schema</code> peer range to the release that carries these
+  changes, and a generated module and a loader from opposite sides of the blob change disagree about
+  <code>vec Byte</code>. Move both packages in one step, regenerate committed modules, and then fix what
+  the compiler reports with the sections above. The generated module and the loader are held to the
+  same verdicts by the repository's cross-check, so regenerating and loading agree with each other.
+</p>

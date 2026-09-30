@@ -54,6 +54,10 @@
   <p>The Rust crate is a prerelease, and the npm packages are <code>0.2.0</code> (<code>@candid-core/schema</code>) and <code>0.1.0</code> (<code>@candid-core/cli</code>). Until 1.0, any release may change the public API, the serialized document shapes, the canonical bytes, and therefore every identity computed over them. Pin an exact version in both ecosystems. See <a href="status.html">Status, versions and releases</a>.</p>
 </callout>
 
+<callout type="note" title="Not yet released">
+  <p>Versions in this table are what the registries hold. The sections below describe the packages as the repository builds them, which is the next release of <code>@candid-core/schema</code> and <code>@candid-core/cli</code>: the published <code>0.2.0</code> still has two more subpaths and an optional peer, and the published <code>0.1.0</code> still emits the old module layout. <a href="migrating-from-0-2.html">Migrating from 0.2.0</a> lists every difference, and each is recorded under <code>## Unreleased</code> in the package changelogs.</p>
+</callout>
+
 <h2>Which one do I need?</h2>
 
 <table>
@@ -216,7 +220,7 @@ pub fn generate_module(
 
 <ul>
   <li><strong>Manifest:</strong> <code>crates/candid-core-ts/ts/package.json</code>.</li>
-  <li><strong>Published:</strong> yes, on <a href="https://www.npmjs.com/package/@candid-core/schema">npm</a>. Released versions are <code>0.0.0-bootstrap</code>, <code>0.1.0</code>, <code>0.1.1</code> and <code>0.2.0</code>; <code>0.2.0</code> is current and pairs with <code>candid-core</code> <code>0.1.0-beta.3</code>.</li>
+  <li><strong>Published:</strong> yes, on <a href="https://www.npmjs.com/package/@candid-core/schema">npm</a>. Released versions are <code>0.0.0-bootstrap</code>, <code>0.1.0</code>, <code>0.1.1</code> and <code>0.2.0</code>; <code>0.2.0</code> is the latest and pairs with <code>candid-core</code> <code>0.1.0-beta.3</code>.</li>
   <li><strong>ESM only</strong> (<code>"type": "module"</code>), <code>sideEffects: false</code>, Apache-2.0. The tarball ships <code>dist</code>, <code>README.md</code>, <code>CHANGELOG.md</code> and <code>LICENSE</code>.</li>
   <li><strong>Versions independently</strong> of the Rust crate. Its changelog names the <code>candid-core</code> version each release pairs with.</li>
 </ul>
@@ -225,16 +229,16 @@ pub fn generate_module(
 npm install @candid-core/schema
 </pre>
 
-<p>That is the whole install: no runtime dependencies. <code>0.2.0</code> declares one peer, <code>@icp-sdk/core &gt;= 6</code>, marked <strong>optional</strong> in <code>peerDependenciesMeta</code> because only its <code>./transport-icp</code> subpath imports it; every other module is self-contained, principal typing included. The next release drops the peer.</p>
+<p>That is the whole install: no runtime dependencies and no peers. Every module is self-contained, principal typing included, so nothing needs the Internet Computer SDK to exist.</p>
 
 <h3>The subpath exports</h3>
 
-<p>Each entry resolves to a <code>.d.ts</code> and a <code>.js</code> under <code>dist/</code>, and nothing outside the map is importable. <code>0.2.0</code>, the current release, exports the four below plus <code>./actor</code>, <code>./transport-icp</code>, <code>./forms</code> and <code>./labels</code>. The next release removes those four and the peer, leaving exactly the four below: the package becomes the Candid layer only, and calling a canister belongs to the layer built on top of it. The package changelog lists every removed name.</p>
+<p>Each entry resolves to a <code>.d.ts</code> and a <code>.js</code> under <code>dist/</code>, and nothing outside the map is importable. The map is exactly the four below: the package is the Candid layer only, and calling a canister belongs to the layer built on top of it.</p>
 
 <table>
   <thead><tr><th>Subpath</th><th>What it is</th></tr></thead>
   <tbody>
-    <tr><td><span class="pill accent">.</span></td><td>The schema core: the <code>c</code> builders, the deliberately invariant <code>Schema&lt;in out T&gt;</code>, <code>Infer</code>, the node interfaces walkers narrow on, plus <code>resolveSchema</code> and <code>serviceMethods</code> for reading a schema back, and the <code>Principal</code> type (canonical principal text) with <code>principal</code> and <code>isPrincipal</code>. See <a href="schema-builders.html">Builders and inference</a>.</td></tr>
+    <tr><td><span class="pill accent">.</span></td><td>The schema core: the <code>c</code> builders, the deliberately invariant <code>Schema&lt;in out T&gt;</code>, <code>Infer</code>, the node interfaces walkers narrow on, plus <code>resolveSchema</code> and <code>serviceMethods</code> for reading a schema back, the <code>Principal</code> type (canonical principal text) with <code>principal</code> and <code>isPrincipal</code>, and <code>OptDomain</code> with <code>isBoxedOpt</code> for the boxed-option rule. See <a href="schema-builders.html">Builders and inference</a>.</td></tr>
     <tr><td><span class="pill accent">./validate</span></td><td>Structural validation that never throws on any value. Issues carry stable codes and <code>$</code>-rooted paths, plus <code>isResultSchema</code> and <code>unwrapResult</code> for the <code>variant { ok; err }</code> convention. See <a href="schema-validation.html">Validation</a>.</td></tr>
     <tr><td><span class="pill accent">./contract</span></td><td><code>schemaFromContract</code>: build the same schemas at runtime from a canonical Contract JSON document, or from a one-document <code>ContractEnvelope</code> carrying its field-name table. See <a href="schema-from-contract.html">Schemas at runtime</a>.</td></tr>
     <tr><td><span class="pill accent">./codec</span></td><td>The Candid binary wire format, schema-directed, with the specification's coercion relation on decode and explicit resource budgets. See <a href="schema-codec.html">Binary codec</a>.</td></tr>
@@ -335,7 +339,7 @@ cargo +nightly fuzz run contract_json \
   <a class="card" href="ts-overview.html">
     <span class="card-kicker">TypeScript</span>
     <span class="card-title">How the TypeScript side fits together</span>
-    <p>Generator, schema runtime, codec and actors, and the order to read them in.</p>
+    <p>Generator, schema runtime, codec and Contract loader, and the order to read them in.</p>
   </a>
   <a class="card" href="status.html">
     <span class="card-kicker">Project</span>

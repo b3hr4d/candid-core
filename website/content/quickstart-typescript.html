@@ -5,16 +5,24 @@ code generation — you describe the interface once with the builder API, and
 TypeScript infers the rest. The two sections after them show how to stop
 hand-writing the description, and those routes do involve the Rust crate.</p>
 
-<p>The package is <a href="https://www.npmjs.com/package/@candid-core/schema"><code>@candid-core/schema</code></a>,
-currently at <code>0.2.0</code>. It is a schema runtime for Candid in the shape
+<p>The package is <a href="https://www.npmjs.com/package/@candid-core/schema"><code>@candid-core/schema</code></a>.
+It is a schema runtime for Candid in the shape
 Zod made familiar: a builder object called <code>c</code>, one combinator per
 Candid type, and a type-level <code>Infer</code> that reads the domain type
-back out of a schema. It has no runtime dependencies, so the install below
-pulls in nothing else. <code>0.2.0</code> declares one peer,
-<code>@icp-sdk/core</code>, marked optional and needed only by its
-<span class="pill">./transport-icp</span> subpath; the next release removes
-that subpath and the peer (see <a href="packages.html">Packages and
-crates</a>).</p>
+back out of a schema. It has no runtime dependencies and no peers, so the
+install below pulls in nothing else.</p>
+
+<callout type="note" title="Not yet released">
+  <p>This guide describes the surface the repository builds, which is the surface of the next
+  release. The published <code>@candid-core/schema</code> <code>0.2.0</code> and
+  <code>@candid-core/cli</code> <code>0.1.0</code> still have the old one: a principal is an object with
+  <code>toText()</code>, there is no <code>principal()</code> function, and the generated modules use
+  the old layout, so the install and <code>npx</code> lines below give you the old one until the next
+  release is published. To try this one sooner, build the package from the repository
+  (<code>npm ci &amp;&amp; npm run build</code> in <code>crates/candid-core-ts/ts</code>). What changes,
+  with before and after code, is on <a href="migrating-from-0-2.html">Migrating from 0.2.0</a>, and each
+  change is recorded under <code>## Unreleased</code> in the package changelog.</p>
+</callout>
 
 <callout type="note" title="Pre-1.0, on purpose">
   <p><code>@candid-core/schema</code> is below 1.0 and versions independently of
@@ -45,10 +53,8 @@ crates</a>).</p>
     <span class="pill">./codec</span> and
     <span class="pill">./contract</span>. Nothing is re-exported from the root
     barrel, so importing the builders never drags the codec in behind them.
-    <code>0.2.0</code> also exports <span class="pill">./actor</span>,
-    <span class="pill">./transport-icp</span>, <span class="pill">./forms</span>
-    and <span class="pill">./labels</span>; the next release removes all four,
-    so this guide does not use them.</p>
+    Those four are the whole export map, and nothing else in the package is
+    importable.</p>
   </li>
 
   <li>
@@ -58,7 +64,7 @@ crates</a>).</p>
     way the source nests.</p>
     <pre data-lang="candid" data-file="service.did">type Account = record { owner : principal; balance : nat };
 type TransferResult = variant { ok : nat; err : text; pending };</pre>
-    <pre data-lang="ts">import { c, type Infer } from "@candid-core/schema";
+    <pre data-lang="ts" data-check>import { c, type Infer } from "@candid-core/schema";
 
 const Account = c.record({ owner: c.principal, balance: c.nat });
 type Account = Infer<typeof Account>;
@@ -85,7 +91,7 @@ type TransferResult = Infer<typeof TransferResult>;
     <p>You do not have to take the comments on faith. Annotate the schema with
     the type you would have written by hand and let <code>tsc</code> check
     them against each other:</p>
-    <pre data-lang="ts">import { c, type Principal, type Schema } from "@candid-core/schema";
+    <pre data-lang="ts" data-check="flow">import { c, type Principal, type Schema } from "@candid-core/schema";
 
 type Account = { owner: Principal; balance: bigint };
 
@@ -108,11 +114,12 @@ const Account: Schema<Account> = c.rec(() => c.record({ owner: c.principal, bala
     <code>{ ok: false, issues }</code>, and it never throws for any value you
     hand it — a getter that throws or a revoked <code>Proxy</code> comes back as
     an <code>unreadable_value</code> issue instead.</p>
-    <pre data-lang="ts">import { principal } from "@candid-core/schema";
+    <pre data-lang="ts" data-check="flow">import { principal } from "@candid-core/schema";
 import { validate } from "@candid-core/schema/validate";
 
-// The one way to make a Principal: canonical text, or an SDK Principal.
-// Non-canonical text such as "AAAAA-AA" throws a TypeError.
+// The one way to make a Principal: canonical text, or an object with toText()
+// such as an SDK Principal. Non-canonical text such as "AAAAA-AA" throws a
+// TypeError.
 const owner = principal("aaaaa-aa");
 
 validate(Account, { owner, balance: 5n });
@@ -137,17 +144,18 @@ validate(Account, { owner, balance: 5 });
     Paths are <code>$</code>-rooted, using <code>.name</code> for an
     identifier-shaped key, <code>[0]</code> for an index, and a quoted
     <code>["odd key"]</code> otherwise.</p>
-    <pre data-lang="ts">declare const incoming: unknown; // whatever arrived over the network
-
-const result = validate(Account, incoming);
-if (!result.ok) {
-  for (const issue of result.issues) {
-    console.error(`${issue.path}: ${issue.code} — ${issue.message}`);
+    <pre data-lang="ts" data-check="flow">function handle(incoming: unknown): void {
+  // `incoming` is whatever arrived over the network.
+  const result = validate(Account, incoming);
+  if (!result.ok) {
+    for (const issue of result.issues) {
+      console.error(`${issue.path}: ${issue.code} — ${issue.message}`);
+    }
+    return;
   }
-  return;
-}
-// `incoming` is still `unknown` here: the verdict says the value fits, it does
-// not narrow the binding. Assert or re-read it deliberately.</pre>
+  // `incoming` is still `unknown` here: the verdict says the value fits, it
+  // does not narrow the binding. Assert or re-read it deliberately.
+}</pre>
     <p>The closed set of codes is
     <code>invalid_type</code>, <code>not_integer</code>,
     <code>out_of_range</code>, <code>missing_field</code>,
@@ -171,14 +179,20 @@ if (!result.ok) {
     <p>The codec is schema-directed and self-contained — it builds the wire type
     table from the schema you pass and constructs no SDK classes. Both
     directions return a result object rather than throwing.</p>
-    <pre data-lang="ts" data-file="crates/candid-core-ts/ts/codec.ts">export function encode<T>(schema: Schema<T>, value: unknown, options?: CodecOptions): EncodeResult;
-export function encodeArgs(schemas: readonly AnyFieldSchema[], values: readonly unknown[], options?: CodecOptions): EncodeResult;
+    <pre data-lang="ts" data-file="crates/candid-core-ts/ts/codec.ts" data-partial>export function encode<T>(
+  schema: Schema<T>,
+  value: unknown,
+  options: CodecOptions = {},
+): EncodeResult
 
-export function decode<T>(schema: Schema<T>, bytes: Uint8Array, options?: CodecOptions):
-  | { ok: true; value: unknown }
-  | { ok: false; issues: readonly CodecIssue[] };
-export function decodeArgs(schemas: readonly AnyFieldSchema[], bytes: Uint8Array, options?: CodecOptions): DecodeResult;</pre>
-    <pre data-lang="ts">import { decode, encode } from "@candid-core/schema/codec";
+export function decode<T>(
+  schema: Schema<T>,
+  bytes: Uint8Array,
+  options: CodecOptions = {},
+): { ok: true; value: unknown } | { ok: false; issues: readonly CodecIssue[] }</pre>
+    <p><code>encodeArgs</code> and <code>decodeArgs</code> take one schema and one value per argument of
+    a call, which is what a message really carries.</p>
+    <pre data-lang="ts" data-check="flow">import { decode, encode } from "@candid-core/schema/codec";
 
 const encoded = encode(Account, { owner, balance: 5n });
 if (!encoded.ok) {
@@ -251,7 +265,7 @@ A semantic Contract stores field label <em>ids</em>, not text, so names have to
 travel beside it — and envelope extensions sit outside the canonical identities
 by design, so carrying them never moves a <code>contract_id</code>.</p>
 
-<pre data-lang="ts" data-file="crates/candid-core-ts/ts/README.md">import { readFileSync } from "node:fs";
+<pre data-lang="ts" data-file="crates/candid-core-ts/ts/README.md" data-check>import { readFileSync } from "node:fs";
 import { schemaFromContract } from "@candid-core/schema/contract";
 
 const built = schemaFromContract(JSON.parse(readFileSync("./service.json", "utf8")));
@@ -278,6 +292,7 @@ at runtime</a> covers the options and the failure modes;
 </callout>
 
 <pre data-lang="bash">
+# 0.1.0 is the published CLI, and it emits the published layout (see the note at the top).
 npx @candid-core/cli@0.1.0 gen ./service.did -o ./generated
 </pre>
 
@@ -288,11 +303,7 @@ hand-written, generated, or loaded from a Contract document —
 <code>serviceMethods</code> reads its method table and the codec encodes each
 method's arguments and decodes its reply. Sending those bytes to a canister —
 the agent, identity, polling and certificate verification — is the job of the
-call layer you build on top. (<code>0.2.0</code> still ships a
-<code>createActor</code> in <span class="pill">./actor</span> and an
-<code>@icp-sdk/core</code> transport in
-<span class="pill">./transport-icp</span>; the next release removes both, and
-the package changelog lists every removed name.)</p>
+call layer you build on top.</p>
 
 <div class="card-grid">
   <a class="card" href="schema-codec.html">
