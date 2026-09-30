@@ -114,11 +114,13 @@ export type ValidationCode =
  * The `{resource, limit, observed}` triple, as candid-core serializes it.
  *
  * `stack` is the one resource with no candid-core counterpart: the host
- * JavaScript stack ran out before `maxDepth` did, which is only possible when
- * `maxDepth` was raised past what the engine's stack holds (or a hand-built
- * schema is deeper than any stack). Its `limit` is the effective `maxDepth`
- * and its `observed` the deepest depth the walk had charged when the engine
- * refused — always below `limit`, which is how it differs from `value_depth`.
+ * JavaScript stack ran out mid-walk. Its `limit` is the call's effective
+ * `maxDepth` and its `observed` the deepest depth the walk had reached when
+ * the engine refused. Usually that is below `limit` (a `maxDepth` raised past
+ * what the stack holds), but not always: `encode` builds its type table over
+ * plain nested combinators without charging depth, so a hand-built schema can
+ * overflow the stack there with `observed` above `limit`. Read `resource`, not
+ * a comparison of the two numbers, to tell `stack` from `value_depth`.
  */
 export interface ResourceLimitInfo {
   readonly resource: "value_depth" | "value_elements" | "stack";
@@ -485,8 +487,8 @@ class Walk {
       code: "resource_limit_exceeded",
       path: renderPath(path),
       message:
-        `the host stack was exhausted at depth ${this.reached}, before the configured ` +
-        `maxDepth of ${this.maxDepth}; lower maxDepth or use a host with a larger stack`,
+        `the host stack was exhausted at depth ${this.reached} (the configured maxDepth ` +
+        `is ${this.maxDepth}); use a shallower input or schema, or a host with a larger stack`,
       resource_limit: { resource: "stack", limit: this.maxDepth, observed: this.reached },
     });
     this.halted = true;

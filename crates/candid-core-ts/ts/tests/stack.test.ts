@@ -96,20 +96,29 @@ function assertStack(issue: AnyIssue, limit: number): void {
   }
   assert.strictEqual(info.resource, "stack");
   assert.strictEqual(info.limit, limit);
-  // The walk got past the default depth before the engine refused, and did
-  // not get anywhere near the configured limit: that is what tells `stack`
-  // apart from `value_depth`. The exact figure is engine-dependent and is
-  // deliberately not asserted.
+  // The walk got past the default depth before the engine refused. The exact
+  // figure is engine-dependent and is deliberately not asserted.
   assert(Number.isInteger(info.observed));
   assert(info.observed > 256, `observed ${info.observed} should exceed the default depth`);
-  assert(info.observed < limit);
   assert(issue.path.startsWith("$"));
+  // The message must not claim more than the triple can back up: the stack
+  // ran out at a depth, and that depth is not always below the configured
+  // maxDepth (see the type-table test below).
+  assert(!issue.message.includes("before"), issue.message);
 }
 
 test("stack exhaustion is resource_limit_exceeded {stack} from validate, encode and decode", () => {
   assertStack(only(validate(Nested, nestedValue(LEVELS), RAISED)), 1e9);
   assertStack(only(encode(Nested, nestedValue(LEVELS), RAISED)), 1e9);
   assertStack(only(decode(Nested, nestedBytes(LEVELS), RAISED)), 1e9);
+  // With `maxDepth` raised far past any stack, the depth reached is below it.
+  for (const result of [
+    validate(Nested, nestedValue(LEVELS), RAISED),
+    encode(Nested, nestedValue(LEVELS), RAISED),
+    decode(Nested, nestedBytes(LEVELS), RAISED),
+  ]) {
+    assert((only(result).resource_limit?.observed ?? Infinity) < 1e9);
+  }
 });
 
 test("the stack limit reports the configured maxDepth, whatever it is", () => {
@@ -119,14 +128,30 @@ test("the stack limit reports the configured maxDepth, whatever it is", () => {
   assertStack(only(decode(Nested, nestedBytes(LEVELS), options)), 5_000_000);
 });
 
+function deepVec(levels: number): AnySchema {
+  let deep: AnySchema = c.nat8;
+  for (let level = 0; level < levels; level += 1) {
+    deep = c.vec(deep);
+  }
+  return deep;
+}
+
 test("a hand-built schema deeper than the stack overflows the encoder's type table", () => {
   // No `rec` anywhere: depth here is plain combinator nesting, which the type
   // table construction recurses through without any depth charge of its own.
-  let deep: AnySchema = c.nat8;
-  for (let level = 0; level < LEVELS; level += 1) {
-    deep = c.vec(deep);
-  }
-  assertStack(only(encode(deep, [], RAISED)), 1e9);
+  assertStack(only(encode(deepVec(LEVELS), [], RAISED)), 1e9);
+});
+
+test("the same schema at default limits is stack, with observed above the limit", () => {
+  // The type table charges no depth for plain nested combinators, so the
+  // default maxDepth of 256 never fires here and the engine's stack runs out
+  // first. The issue must say so without claiming the stack ran out *before*
+  // maxDepth: the depth reached is far past it. Only the ordering is pinned,
+  // never the figure.
+  const issue = only(encode(deepVec(LEVELS), []));
+  assertStack(issue, 256);
+  const observed = issue.resource_limit?.observed ?? 0;
+  assert(observed > 256, `observed ${observed} is past the default limit of 256`);
 });
 
 test("at default limits the same inputs still fail with value_depth at 256", () => {

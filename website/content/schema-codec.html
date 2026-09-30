@@ -341,14 +341,18 @@ export interface CodecResourceLimitInfo {
 
 <p>
   <code>stack</code> is the one resource that is not an option you set. It means the host
-  JavaScript stack ran out before <code>maxDepth</code> did: <code>limit</code> is the call's
-  <code>maxDepth</code> and <code>observed</code> is the deepest depth the walk had charged when the
-  engine refused, always below <code>limit</code>. At the default <code>maxDepth</code> of 256 the
-  walk always stops at <code>value_depth</code> first, so you only meet <code>stack</code> after
-  raising <code>maxDepth</code> past what your engine's stack holds, or with a hand-built schema
-  deeper than any stack. It is a property of the host, not of the message or the schema: lower
-  <code>maxDepth</code> or run somewhere with a larger stack. Where an engine's limit falls varies,
-  so an input near it can pass on one call and report <code>stack</code> on the next.
+  JavaScript stack ran out mid-walk: <code>limit</code> is the call's <code>maxDepth</code> and
+  <code>observed</code> is the deepest depth the walk had reached when the engine refused. Tell it
+  apart from <code>value_depth</code> by <code>resource</code>, not by comparing the two numbers.
+  Usually <code>observed</code> is below <code>limit</code>: at the default <code>maxDepth</code> of
+  256 a message or value stops at <code>value_depth</code> first, so you meet <code>stack</code>
+  after raising <code>maxDepth</code> past what your engine's stack holds. The exception is
+  <code>encode</code>'s type table, which charges depth only for <code>rec</code> hops, not for
+  plain nested combinators: a hand-built schema nested deeper than the stack (no <code>rec</code>
+  anywhere) overflows even at the default limits, with <code>observed</code> above
+  <code>limit</code>. Either way it is a property of the host, not of the message: use a shallower
+  input or schema, or run somewhere with a larger stack. Where an engine's limit falls varies, so
+  an input near it can pass on one call and report <code>stack</code> on the next.
 </p>
 
 <p>

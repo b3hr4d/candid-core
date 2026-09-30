@@ -117,9 +117,12 @@ export type CodecCode =
 /** The `{resource, limit, observed}` triple a bound failure carries. */
 export interface CodecResourceLimitInfo {
   /**
-   * `stack` means the host JavaScript stack ran out before `maxDepth` did:
-   * `limit` is the effective `maxDepth` and `observed` the deepest depth the
-   * walk had charged, always below it.
+   * `stack` means the host JavaScript stack ran out mid-walk: `limit` is the
+   * effective `maxDepth` and `observed` the deepest depth the walk had reached.
+   * Usually `observed` is below `limit`, but not always: the encoder's type
+   * table charges no depth for plain nested combinators, so a hand-built
+   * schema can overflow there with `observed` above `limit`. Read `resource`,
+   * not a comparison of the two numbers, to tell `stack` from `value_depth`.
    */
   readonly resource:
     "bytes" | "type_table_entries" | "value_depth" | "value_elements" | "numeric_bytes" | "stack";
@@ -342,8 +345,8 @@ function stackIssue(path: readonly PathSegment[], limit: number, reached: number
     code: "resource_limit_exceeded",
     path: renderPath(path),
     message:
-      `the host stack was exhausted at depth ${reached}, before the configured ` +
-      `maxDepth of ${limit}; lower maxDepth or use a host with a larger stack`,
+      `the host stack was exhausted at depth ${reached} (the configured maxDepth ` +
+      `is ${limit}); use a shallower input or schema, or a host with a larger stack`,
     resource_limit: { resource: "stack", limit, observed: reached },
   };
 }

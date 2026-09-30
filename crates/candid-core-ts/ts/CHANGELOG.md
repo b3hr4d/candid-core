@@ -36,15 +36,19 @@ moved, and the generated bindings and goldens are untouched.
   true. All three now report `{ code: "resource_limit_exceeded",
   resource_limit: { resource: "stack", limit, observed } }`, where `limit` is the
   call's effective `maxDepth` and `observed` the deepest depth the walk had
-  charged when the engine refused — always below `limit`, which is how `stack`
-  is told apart from `value_depth`.
-- **When this can happen.** At the default `maxDepth` of 256 every walker
-  refuses with `value_depth` long before any stack runs out, and that is
-  unchanged. Overflow needs a `maxDepth` raised past what the host's stack holds,
-  or a hand-built schema deeper than any stack. Where exactly an engine's limit
-  falls varies by engine, by JIT state and between runs, so an input near that
-  point can succeed on one call and report `stack` on the next; only the label,
-  not the boundary, is fixed here.
+  reached when the engine refused. Tell `stack` from `value_depth` by `resource`:
+  `observed` is usually below `limit`, but not always (see below).
+- **When this can happen.** At the default `maxDepth` of 256 the walkers refuse
+  with `value_depth` long before any stack runs out, and that is unchanged, with
+  one exception. Otherwise overflow needs a `maxDepth` raised past what the
+  host's stack holds. The exception is `encode`'s type-table construction, which
+  charges depth only for `rec` hops and not for plain nested combinators: a
+  hand-built schema nested deeper than the stack (no `rec` anywhere) overflows
+  even at the default limits, reported with `observed` above `limit`. That
+  charging is left as it was. Where exactly an engine's limit falls varies by
+  engine, by JIT state and between runs, so an input near that point can succeed
+  on one call and report `stack` on the next; only the label, not the boundary,
+  is fixed here.
 - **How an overflow is recognised.** The engine's error is a `RangeError`
   reading "Maximum call stack size exceeded" (V8 and JavaScriptCore) or an
   `InternalError` reading "too much recursion" (SpiderMonkey, which does not
