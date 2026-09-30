@@ -2,17 +2,18 @@
 
 A Zod-style schema runtime for [Candid], driven by [candid-core]'s canonical
 Contract model: schema builders with static inference, structural validation,
-a TypeScript-native Candid binary codec, typed actors over a transport-only
-agent, and UI-agnostic form metadata.
+a TypeScript-native Candid binary codec, and a loader that builds the same
+schemas from a Contract document at runtime. It is the Candid layer only —
+calling a canister (transports, identity, actors) belongs to the layer you
+build on top of it ([below](#services-and-func-references)).
 
 ```sh
 npm install @candid-core/schema
 ```
 
-That is the whole install. The `@icp-sdk/core` peer is needed only by the
-[`./transport-icp`](#calling-a-canister) subpath, at runtime, for exactly
-whoever imports it — every other module is self-contained, principal typing
-included ([the decoded-value contract](#the-icp-sdk-peer) below).
+That is the whole install: no runtime dependencies and no peers, principal
+typing included ([the decoded-value contract](#decoded-principal-values)
+below).
 
 ```ts
 import { c, type Infer } from "@candid-core/schema";
@@ -47,25 +48,18 @@ Modules, each a subpath export:
 - **`./codec`** — the Candid binary wire format, schema-directed, with the
   spec's coercion relation on decode and explicit resource budgets. Verified
   bidirectionally against the reference implementation's vectors.
-- **`./actor`** — `createActor`/`callFunc` over a two-method byte-pipe
-  `Transport`; the agent never sees a schema.
-- **`./transport-icp`** — the compiled, tested `Transport` adapter over
-  `@icp-sdk/core`'s `HttpAgent` (peer `>= 6`; importing this subpath is what
-  makes the peer a runtime requirement).
-- **`./forms`** — form-generation metadata: per-kind controls, constraints,
-  labels, lazy recursion, and validation-issue-to-form-node resolution.
-- **`./labels`** — the Candid label hash and the `_N_` rendering convention.
 
-## The icp-sdk peer
+Those four are the whole export map. Earlier releases also exported
+`./actor`, `./transport-icp`, `./forms`, and `./labels`; they are gone — see
+[CHANGELOG.md](./CHANGELOG.md).
 
-`@icp-sdk/core` is a peer only the [`./transport-icp`](#calling-a-canister)
-subpath uses — at runtime, `>= 6`, for exactly whoever imports it. No other
-shipped module imports the SDK at all, at runtime or in its declarations, so
-every other subpath compiles and runs with no `@icp-sdk/core` installed —
-under strict TypeScript with `skipLibCheck` off included. (Earlier releases
-typed `c.principal` against the SDK's `Principal` class, which made the peer
-a silent type-level requirement everywhere; the structural `PrincipalValue`
-removed it.)
+## Principals and `@icp-sdk/core`
+
+This package does not depend on `@icp-sdk/core` — not at runtime, not in its
+declarations, and not as a peer — so everything compiles and runs with no SDK
+installed, under strict TypeScript with `skipLibCheck` off included. SDK
+values still work where the schemas take a principal, because principal
+typing is structural.
 
 ### Decoded principal values
 
@@ -153,65 +147,41 @@ fails closed instead of quietly renaming a field. Passing no table at all is
 legal and renders every field as `_id_`, which is also what
 `compile --no-source-info` leaves you with.
 
-## Calling a canister
+## Services and func references
 
-`createActor` needs a `Transport`: two methods that move Candid bytes, nothing
-more. Identity, ingress expiry, polling, certificate verification, and reject
-classification all stay on the agent's side of that pipe, and the agent never
-sees a schema. The `@icp-sdk/core` adapter ships compiled and tested as its
-own subpath, `./transport-icp`:
+A `service` schema describes a canister interface; it does not call one.
+`serviceMethods` reads its method table — name, mode, argument and result
+schemas — and the codec turns each call's arguments and reply into Candid
+bytes, which is everything a call layer needs from this package:
 
 ```ts
-import { c, type Infer } from "@candid-core/schema";
-import { createActor } from "@candid-core/schema/actor";
-import { httpTransport } from "@candid-core/schema/transport-icp";
+import { c, serviceMethods } from "@candid-core/schema";
+import { encodeArgs, decodeArgs } from "@candid-core/schema/codec";
 
-const Tokens = c.record({ e8s: c.nat64 });
 const Account = c.record({ owner: c.principal, subaccount: c.opt(c.vec(c.nat8)) });
-
 const Ledger = c.service({
-  balance_of: c.func([Account], [Tokens], "query"),
-  transfer: c.func([Account, Tokens], [c.nat], "update"),
+  balance_of: c.func([Account], [c.nat], "query"),
 });
 
-type Ledger = {
-  balance_of(account: Infer<typeof Account>): Promise<Infer<typeof Tokens>>;
-  transfer(to: Infer<typeof Account>, amount: Infer<typeof Tokens>): Promise<bigint>;
-};
-
-export const ledger = createActor<Ledger>(
-  Ledger,
-  "ryjl3-tyaaa-aaaaa-aaaba-cai",
-  httpTransport({ host: "https://icp-api.io" }),
-);
+const method = serviceMethods(Ledger).get("balance_of");
+if (method !== undefined) {
+  const request = encodeArgs(method.args, [
+    { owner: { toText: () => "aaaaa-aa" }, subaccount: null },
+  ]);
+  // `request.bytes` is the argument a transport sends on the `method.mode`
+  // path; the reply's bytes decode with `decodeArgs(method.results, reply)`.
+  void request;
+  void decodeArgs;
+}
 ```
 
-Importing `./transport-icp` is what makes `@icp-sdk/core` a **runtime**
-requirement, and the peer range `>= 6` is load-bearing: on v6 `agent.update`
-submits, polls to completion, and verifies the certificate in one shot, which
-is exactly what the adapter's `call` relies on — older majors resolved at
-submission and need their own submit-and-poll adapter, deliberately not
-written here. Consumers who never import this subpath need no `@icp-sdk/core`
-at all — [the peer](#the-icp-sdk-peer) exists for exactly this module.
-
-`httpTransport` exposes the two knobs a plain consumer needs — `host`, and
-`rootKey` for local networks (omit it on mainnet). Everything beyond them —
-identity, retries, ingress options — belongs to an agent you build yourself
-and pass as `agent`, alone: configuring a supplied agent from the other
-options would silently discard what it was built with, so the combination
-throws `TypeError`. There is deliberately no logging hook; wrapping the
-returned `Transport` composes cleanly.
-
-The actor interface travels explicitly because `c.rec` erases method
-structure from a schema's *type* — schemas carry values, not calls — so it
-cannot be re-derived from `typeof`. Generated modules emit it as
-`export type Actor = { … }`; hand-written it looks like the `Ledger` type
-above.
-
-A codec failure rejects the call promise with an `ActorError` carrying the
-issues; transport failures propagate untouched, including the plain `Error`
-the adapter throws for a rejected query — `` `${methodName} rejected
-(${code}): ${message}` ``.
+Transports, identity, certificate verification, retries, and invoking a
+decoded func reference are the call layer's job, not this package's: a func
+*value* stays the inert `{ principal, method }` pair. Generated modules still
+emit the typed call interface as `export type Actor = { … }` beside the
+`actor` service schema, because `c.rec` erases method structure from a
+schema's *type* — schemas carry values, not calls — so a call layer cannot
+re-derive it from `typeof`.
 
 ## Unwrapping ok/err results
 
@@ -272,8 +242,7 @@ direct compiles, not inferred from the manifest.
 | TypeScript | **≥ 5.0** |
 | `moduleResolution` | `node16`, `nodenext`, `bundler` |
 | Module format | **ESM only** — no CommonJS build ships |
-| Node, from ESM | **≥ 16** for the seven peer-free subpaths (16.20, 18.20, 20.19, 22.12, 25.9 exercised) |
-| Node, for `./transport-icp` | **≥ 20.19** — what the pinned `@icp-sdk/core` tree's own `engines` declare |
+| Node, from ESM | **≥ 16** (16.20, 18.20, 20.19, 22.12, 25.9 exercised) |
 | Node, from CommonJS `require()` | **≥ 20.19 / ≥ 22.12**, else `await import()` |
 | TypeScript, from a CommonJS project | **≥ 5.8 with `"module": "nodenext"`** |
 
@@ -290,14 +259,11 @@ or `bundler`.
 
 **Supporting ESM is not by itself enough for Node.** The build targets ES2020
 and does not down-level, so optional chaining and nullish coalescing reach
-`dist/` verbatim — they appear in six of the eight modules — and those are
+`dist/` verbatim — they appear in four of the five modules — and those are
 V8 8.0 syntax, which no Node before 14 can parse. The floor above is the
 oldest release this package is actually run on rather than the oldest that
-might work: 16.20.2 is exercised and passes every peer-free subpath, and
-nothing older is claimed. `./transport-icp` is the exception and has its own
-row: it is the one subpath that loads `@icp-sdk/core`, whose pinned dependency
-tree declares `node >= 20.19.0`, so the peer's floor governs there rather than
-this package's syntax.
+might work: 16.20.2 is exercised and passes every subpath, and nothing older
+is claimed.
 
 **From CommonJS**, the two floors are independent. At runtime, `require()` of
 an ES module is what Node added in 20.19 and 22.12; below those it throws

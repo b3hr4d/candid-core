@@ -199,8 +199,8 @@ export type SchemaFromContractResult =
 <h2>Why the name table is hash-enforced</h2>
 
 <p>
-  Every entry must be the Candid preimage of its own id:
-  <code>candidLabelHash(name) === id</code>, checked at load time, on caller-supplied and
+  Every entry must be the Candid preimage of its own id — the label hash of
+  <code>name</code> must equal <code>id</code> — checked at load time, on caller-supplied and
   envelope-carried tables alike. A table that fails it is refused with
   <code>invalid_name_table</code>, naming what the string actually hashes to.
 </p>
@@ -300,8 +300,7 @@ export type SchemaFromContractResult =
     <h3>Install the runtime</h3>
     <pre data-lang="bash">npm install @candid-core/schema</pre>
     <p>
-      No other dependency is needed. The <code>@icp-sdk/core</code> peer is optional and used only
-      by the <code>./transport-icp</code> subpath.
+      No other dependency is needed: the package has no runtime dependencies and no peers.
     </p>
   </li>
   <li>
@@ -371,9 +370,8 @@ validate(Item, { id: 7, label: "seven", payload: [7] });
 </pre>
     <p>
       <code>built.schemas.Item</code> is an ordinary schema. It goes into
-      <a href="schema-codec.html"><code>encode</code>/<code>decode</code></a>, into
-      <a href="schema-actors.html"><code>createActor</code></a>, and into the
-      <a href="schema-forms.html">form model</a> exactly like a generated one.
+      <a href="schema-codec.html"><code>encode</code>/<code>decode</code></a> and into
+      <a href="schema-validation.html"><code>validate</code></a> exactly like a generated one.
     </p>
   </li>
 </ol>

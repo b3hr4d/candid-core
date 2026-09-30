@@ -22,7 +22,6 @@ import {
   type AnySchema,
   type Schema,
 } from "../schema.ts";
-import { createActor, type Transport } from "../actor.ts";
 import { schemaFromContract, type FieldNameEntry } from "../contract.ts";
 
 import * as ledger from "../../tests/goldens/ledger.ts";
@@ -249,23 +248,6 @@ test("serviceMethods reads a service whose methods are lazy rec thunks", () => {
   );
 });
 
-test("serviceMethods and createActor walk the same table", () => {
-  const transport: Transport = {
-    query: () => Promise.reject(new Error("no call is made in this test")),
-    call: () => Promise.reject(new Error("no call is made in this test")),
-  };
-  const actor = createActor<Record<string, () => Promise<unknown>>>(
-    ledger.actor,
-    "aaaaa-aa",
-    transport,
-  );
-  assert.deepStrictEqual(
-    Object.keys(actor),
-    [...serviceMethods(ledger.actor).keys()],
-    "same method names, same order",
-  );
-});
-
 test("serviceMethods keys are ordinary entries, prototype names included", () => {
   // A Map rather than an object, because `__proto__` and `toString` are
   // method names Candid admits: on a returned object literal the first would
@@ -293,7 +275,7 @@ test("serviceMethods rejects a non-service and a non-func method", () => {
       error instanceof TypeError && error.message === "serviceMethods needs a service schema",
   );
   // A method that resolves to something other than a func fails eagerly,
-  // naming the method — the same message the actor factory raises.
+  // naming the method.
   const wrong = c.service({ balance: c.rec(() => c.nat) });
   assert.throws(
     () => serviceMethods(wrong),

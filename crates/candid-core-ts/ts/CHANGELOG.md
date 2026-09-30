@@ -15,6 +15,8 @@ API, the inferred domain types, the codec's wire behaviour, and the codes and
 
 ## Unreleased
 
+### Stack exhaustion is its own resource
+
 Runtime behavior changes in exactly one situation — the host JavaScript stack
 running out during `validate`, `encode` or `decode` — and one closed type union
 gains a member. No wire encoding, no validation verdict and no other issue code
@@ -62,6 +64,55 @@ moved, and the generated bindings and goldens are untouched.
 - **User-thrown errors keep their labels.** A getter that throws an ordinary
   error is still `unreadable_value`, and a `rec` thunk that throws during decode
   is still `unsupported_schema`; the choke points were not widened.
+
+### The package is the Candid layer only
+
+The package becomes the Candid layer only: schemas, validation, the codec,
+and the Contract loader. The call stack — transports, identity, actors — and
+form metadata move downstream to ic-reactor 4, which builds them on top of
+these four subpaths. Removing published subpaths is a breaking change, so the
+next release is a minor: under npm's pre-1.0 caret rules `^0.2.0` refuses
+`0.3.0`. No wire encoding, validation verdict, issue code, or inferred type
+moved — the modules that remain ship the same code as 0.2.0, with only
+documentation comments edited.
+
+### Removed subpaths
+
+- **BREAKING**: `./actor` is removed — `createActor`, `callFunc`, `ActorError`,
+  and the `Transport`, `CallTarget`, and `ActorOptions` types. Calling a
+  canister, and invoking a decoded func reference (what `callFunc` did — the
+  ledger's archived-blocks callback, for one), is the downstream call layer's
+  job now; a func value stays the inert `{ principal, method }` pair. What a
+  call layer builds on is unchanged: `serviceMethods` reads a service's
+  method table, `encodeArgs`/`decodeArgs` move its bytes, and generated
+  modules still emit the `actor` service schema and the `Actor` call
+  interface type.
+- **BREAKING**: `./transport-icp` is removed — `httpTransport` and
+  `HttpTransportOptions`. Its convenience path built an `HttpAgent` with no
+  identity: a second call path, anonymous by default, beside whatever
+  identity-aware transport an application actually uses.
+- **BREAKING**: `./forms` is no longer exported — `formModel`, `formNodeAt`,
+  and the `FormNode`, `FormCommon`, `FormArm`, and `FormControl` types. The
+  code stays in the repository, type-checked and tested, but is not built
+  into the tarball.
+- **BREAKING**: `./labels` is no longer exported — `candidLabelHash`,
+  `numericKeyId`, `isNumericShapedName`, `fieldIdOfKey`, `utf8BytesStrict`,
+  and `utf8Decode`. The module still ships, because the codec and the
+  Contract loader import it, but it is not an entry point.
+
+Importing any of the four now fails at resolution —
+`ERR_PACKAGE_PATH_NOT_EXPORTED` in Node, `TS2307` in TypeScript — and the
+packaged-consumer gate asserts both.
+
+### No peer
+
+- **BREAKING**: the optional `@icp-sdk/core >= 6` peer is dropped; only
+  `./transport-icp` ever used it. The package now declares no runtime
+  dependency and no peer of any kind. SDK `Principal` values are still
+  accepted wherever a principal is, because principal typing is the
+  structural `PrincipalValue`.
+- The Node support matrix loses its `>= 20.19` row, which applied only to
+  `./transport-icp`; the ESM floor of every remaining subpath is Node 16.
 
 ## 0.2.0 — 2026-08-24
 

@@ -15,6 +15,8 @@ import { validate, type ValidateResult } from "../validate.ts";
 import { encode, encodeArgs, decodeArgs } from "../codec.ts";
 import { formModel } from "../forms.ts";
 
+import type * as ledger from "../../tests/goldens/ledger.ts";
+
 // Every composite position admits the empty leaf (the #126 matrix: record
 // field, variant arm, tuple element, func arg/result; vec and opt always
 // did). These are positive compile-time probes — the file failing to
@@ -239,3 +241,29 @@ test("a resolved node narrows without casts", () => {
   assert.deepStrictEqual(Object.keys(node.fields), ["owner"]);
   assert.strictEqual(resolveSchema(node.fields.owner).kind, "primitive");
 });
+
+// The generated call interface, proven against a hand-written one. A module
+// generated from a contract with an actor emits `export type Actor` — one
+// async method per service method, zero results resolving to `void`, one to
+// the value, several to a tuple — as reviewed generator output for whatever
+// call layer a consumer builds on it. `Equals` is the same invariance trick
+// the goldens rest on, so a drift in the emitted interface turns this file
+// red under tsc.
+type Equals<A, B> =
+  (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2 ? true : false;
+
+interface ExpectedLedgerActor {
+  fee: () => Promise<ledger.Tokens>;
+  decimals: () => Promise<number>;
+  name: () => Promise<string>;
+  balance_of: (arg0: ledger.Account) => Promise<ledger.Tokens>;
+  get_transactions: (arg0: {
+    start: bigint;
+    length: bigint;
+  }) => Promise<ledger.TransactionsResponse>;
+  transfer: (arg0: ledger.TransferArg) => Promise<ledger.TransferResult>;
+  total_supply: () => Promise<ledger.Tokens>;
+  symbol: () => Promise<string>;
+}
+
+export const actorTypeMatchesHandWrittenInterface: Equals<ledger.Actor, ExpectedLedgerActor> = true;

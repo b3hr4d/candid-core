@@ -172,13 +172,13 @@ if (encoded.ok) {
 
 <p>
   Records and variants identify fields by a 32-bit number, not by name. Schema objects carry
-  readable keys, so both directions derive the number by two rules from
-  <code>@candid-core/schema/labels</code>: a key spelled <code>_N_</code> <em>is</em> the id
+  readable keys, so both directions derive the number by two rules: a key spelled
+  <code>_N_</code> <em>is</em> the id
   <code>N</code>, and every other key is the Candid label hash of its UTF-8 bytes,
   <code>h(name) = fold(h * 223 + byte) mod 2^32</code>. Two keys on one node that derive the same
   id fail closed with <code>duplicate_field_id</code> rather than one silently winning —
-  <code>c.record({ a: …, _97_: … })</code> is that collision, because
-  <code>candidLabelHash("a")</code> is 97.
+  <code>c.record({ a: …, _97_: … })</code> is that collision, because the label hash of
+  <code>a</code> is 97.
 </p>
 
 <p>
@@ -480,10 +480,8 @@ encode(c.principal, { toText: () => "aaaaa-ab" }); // invalid_principal (checksu
   <p>
     This module makes no claim about any bytes outside the Candid message: agent envelopes, the
     request or response wrappers of the Internet Computer's HTTP interface, certificates, and
-    reject encodings are all somebody else's format. The
-    <a href="schema-actors.html">actor layer</a> keeps that boundary explicit — a
-    <code>Transport</code> is two methods that move bytes, and the agent on the other side of it
-    never sees a schema.
+    reject encodings are all somebody else's format. Moving these bytes to a canister is the job
+    of whatever call layer sits on top, and the agent it uses never sees a schema.
   </p>
 </callout>
 
@@ -567,10 +565,10 @@ encode(c.principal, { toText: () => "aaaaa-ab" }); // invalid_principal (checksu
     <span class="card-title">Validation</span>
     <p>The eleven shared issue codes, path rendering, and the budgets the codec mirrors.</p>
   </a>
-  <a class="card" href="schema-actors.html">
+  <a class="card" href="schema-from-contract.html">
     <span class="card-kicker">Guide</span>
-    <span class="card-title">Typed actors</span>
-    <p>Where these bytes go: a two-method transport with the codec doing all the encoding.</p>
+    <span class="card-title">Schemas at runtime</span>
+    <p>The same schemas built from a Contract document, ready for <code>encode</code> and <code>decode</code>.</p>
   </a>
   <a class="card" href="reference-mapping.html">
     <span class="card-kicker">Reference</span>

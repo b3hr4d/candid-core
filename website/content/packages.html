@@ -64,7 +64,7 @@
     <tr><td>Turn a <code>.did</code> file into a validated Contract from Rust</td><td><code>candid-core</code>, default features</td><td><a href="rust-compiling.html">Compiling Candid sources</a></td></tr>
     <tr><td>Consume Contracts someone else produced, with no Candid parser in your dependency graph</td><td><code>candid-core</code>, <code>default-features = false</code></td><td><a href="rust-install.html">Install and feature surfaces</a></td></tr>
     <tr><td>Get a Contract document on the command line, no Rust code of your own</td><td>the <code>candid-core</code> binary</td><td><a href="cli-rust.html">The candid-core binary</a></td></tr>
-    <tr><td>Validate, encode, decode or call a canister from TypeScript</td><td><code>@candid-core/schema</code></td><td><a href="quickstart-typescript.html">Quickstart: TypeScript</a></td></tr>
+    <tr><td>Validate, encode or decode Candid values from TypeScript</td><td><code>@candid-core/schema</code></td><td><a href="quickstart-typescript.html">Quickstart: TypeScript</a></td></tr>
     <tr><td>Build schemas at runtime from a Contract document, with no code generation step</td><td><code>@candid-core/schema</code>, subpath <code>./contract</code></td><td><a href="schema-from-contract.html">Schemas at runtime</a></td></tr>
     <tr><td>Emit a TypeScript module from a Contract inside your own Rust tool</td><td><code>candid-core-ts</code>, path or git dependency</td><td><a href="generator.html">The code generator</a></td></tr>
     <tr><td>Do all of the above from a JavaScript-only project</td><td><code>@candid-core/cli</code></td><td><a href="cli-npm.html">@candid-core/cli</a></td></tr>
@@ -212,7 +212,7 @@ pub fn generate_module(
 
 <h2>@candid-core/schema, the npm runtime</h2>
 
-<p>The TypeScript half of the project, and the package most readers will actually install: schema builders with real static inference, structural validation, a TypeScript-native Candid binary codec, typed actors over a transport-only agent, and form metadata. It is for any TypeScript consumer of a canister, with or without a generated module, since the same schemas can be built at runtime from a Contract document.</p>
+<p>The TypeScript half of the project, and the package most readers will actually install: schema builders with real static inference, structural validation, and a TypeScript-native Candid binary codec. It is for any TypeScript consumer of a canister, with or without a generated module, since the same schemas can be built at runtime from a Contract document.</p>
 
 <ul>
   <li><strong>Manifest:</strong> <code>crates/candid-core-ts/ts/package.json</code>.</li>
@@ -225,11 +225,11 @@ pub fn generate_module(
 npm install @candid-core/schema
 </pre>
 
-<p>That is the whole install. The single peer dependency, <code>@icp-sdk/core &gt;= 6</code>, is declared <strong>optional</strong> in <code>peerDependenciesMeta</code> because only the <code>./transport-icp</code> subpath imports it. Every other module is self-contained, principal typing included.</p>
+<p>That is the whole install: no runtime dependencies and no peers, principal typing included.</p>
 
-<h3>The eight subpath exports</h3>
+<h3>The four subpath exports</h3>
 
-<p>The <code>exports</code> map has exactly these entries, each resolving to a <code>.d.ts</code> and a <code>.js</code> under <code>dist/</code>. There are no others, and nothing outside the map is importable.</p>
+<p>The <code>exports</code> map has exactly these entries, each resolving to a <code>.d.ts</code> and a <code>.js</code> under <code>dist/</code>. There are no others, and nothing outside the map is importable. <code>0.2.0</code>, the current release, also exports <code>./actor</code>, <code>./transport-icp</code>, <code>./forms</code> and <code>./labels</code>, and declares an optional <code>@icp-sdk/core</code> peer for the transport. The next release removes those four subpaths and the peer: the package is the Candid layer only, and calling a canister belongs to the layer built on top of it. The package changelog lists every removed name.</p>
 
 <table>
   <thead><tr><th>Subpath</th><th>What it is</th></tr></thead>
@@ -238,10 +238,6 @@ npm install @candid-core/schema
     <tr><td><span class="pill accent">./validate</span></td><td>Structural validation that never throws on any value. Issues carry stable codes and <code>$</code>-rooted paths, plus <code>isResultSchema</code> and <code>unwrapResult</code> for the <code>variant { ok; err }</code> convention. See <a href="schema-validation.html">Validation</a>.</td></tr>
     <tr><td><span class="pill accent">./contract</span></td><td><code>schemaFromContract</code>: build the same schemas at runtime from a canonical Contract JSON document, or from a one-document <code>ContractEnvelope</code> carrying its field-name table. See <a href="schema-from-contract.html">Schemas at runtime</a>.</td></tr>
     <tr><td><span class="pill accent">./codec</span></td><td>The Candid binary wire format, schema-directed, with the specification's coercion relation on decode and explicit resource budgets. See <a href="schema-codec.html">Binary codec</a>.</td></tr>
-    <tr><td><span class="pill accent">./actor</span></td><td><code>createActor</code> and <code>callFunc</code> over a two-method byte-pipe <code>Transport</code>; the agent never sees a schema. See <a href="schema-actors.html">Typed actors</a>.</td></tr>
-    <tr><td><span class="pill accent">./transport-icp</span></td><td>The compiled, tested <code>Transport</code> adapter over <code>@icp-sdk/core</code>'s <code>HttpAgent</code>. Importing this subpath is what turns the optional peer into a runtime requirement.</td></tr>
-    <tr><td><span class="pill accent">./forms</span></td><td>Form-generation metadata: per-kind controls, constraints, labels, lazy recursion, and resolution from a validation issue to a form node. See <a href="schema-forms.html">Form metadata</a>.</td></tr>
-    <tr><td><span class="pill accent">./labels</span></td><td>The Candid label hash and the <code>_N_</code> rendering convention, the bridge between numeric label ids and rendered schema keys.</td></tr>
   </tbody>
 </table>
 

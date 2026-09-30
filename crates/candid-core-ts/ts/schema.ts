@@ -268,8 +268,8 @@ export interface RecSchema<T> extends Schema<T> {
 /**
  * A Candid `func` *value*: a reference to a method on some service, as the
  * `{ principal, method }` pair candid-core's value domain uses. Invoking one
- * is the actor layer's job (`callFunc` in `@candid-core/schema/actor`) — the
- * value itself stays inert data, so it round-trips validation and the codec
+ * is the job of whatever call layer sits on top of this package — the value
+ * itself stays inert data, so it round-trips validation and the codec
  * symmetrically. Validation is strict: both fields required, no other own
  * enumerable key, and the method name a non-empty string.
  *
@@ -282,10 +282,10 @@ export interface FuncValue {
 }
 
 /**
- * Candid method modes; `update` is the unannotated default made explicit. An
- * actor sends `query` and `composite_query` down its transport's
- * non-replicated read path, and `update` and `oneway` down the replicated
- * one.
+ * Candid method modes; `update` is the unannotated default made explicit.
+ * A call made in `query` or `composite_query` mode travels the
+ * non-replicated read path, and one made in `update` or `oneway` mode the
+ * replicated one.
  *
  * @example
  * const mode: MethodMode = "composite_query";
@@ -295,7 +295,7 @@ export type MethodMode = "update" | "query" | "composite_query" | "oneway";
 /**
  * The signature lives in the node — args, results, mode — while the *value*
  * type is always [`FuncValue`]: what a func-typed field carries at runtime
- * is a reference, not a closure. The actor layer reads the node
+ * is a reference, not a closure. A call layer reads the node
  * structurally, which is why no generic parameters are needed here (and why
  * none would survive `c.rec`'s type erasure anyway).
  *
@@ -311,8 +311,8 @@ export interface FuncSchema extends Schema<FuncValue> {
 
 /**
  * A Candid `service` *type*. The value it describes is the principal of a
- * running service; the method map is what `createActor` walks to build a
- * typed call surface.
+ * running service; the method map, read with [`serviceMethods`], is what a
+ * call layer walks to build a typed call surface.
  *
  * @example
  * c.service({ balance: c.func([], [c.nat], "query") }).methods.balance;
@@ -677,8 +677,8 @@ export const c = {
   /**
    * A Candid `func` *type*: the node carries the signature — argument
    * schemas, result schemas, mode — while the value it describes is always
-   * an inert [`FuncValue`] reference, never a closure. `callFunc` in
-   * `@candid-core/schema/actor` is what invokes one.
+   * an inert [`FuncValue`] reference, never a closure; invoking one is the
+   * job of whatever call layer sits on top of this package.
    *
    * @example
    * c.func([c.principal], [c.nat], "query");
@@ -693,8 +693,8 @@ export const c = {
 
   /**
    * A Candid `service` *type*. The value it describes is the principal of a
-   * running service; the method map is what `createActor` in
-   * `@candid-core/schema/actor` walks to build a typed call surface.
+   * running service; the method map, read with [`serviceMethods`], is what a
+   * call layer walks to build a typed call surface.
    *
    * @example
    * c.service({ balance: c.func([c.principal], [c.nat], "query") });
@@ -724,12 +724,12 @@ export const c = {
   },
 };
 
-// Reading a schema back — issue #149. Both walkers in this package (the actor
-// factory and the form-model builder) resolved rec chains privately before
-// this, in two copies carrying the same bound and the same two messages; a
-// consumer holding the exported node interfaces had to write a third against
-// a discipline nothing documented. One implementation lives here now, and
-// both walkers call it.
+// Reading a schema back — issue #149. The walkers this package carried (an
+// actor factory and the form-model builder) resolved rec chains privately
+// before this, in two copies carrying the same bound and the same two
+// messages; a consumer holding the exported node interfaces had to write a
+// third against a discipline nothing documented. One implementation lives
+// here now, and every walker calls it.
 const REC_HOP_LIMIT = 256;
 
 // The kinds `ResolvedNode` claims to cover, as a record rather than a bare
@@ -799,8 +799,8 @@ export function resolveSchema(schema: AnyFieldSchema): ResolvedNode {
 /**
  * The method table of a service schema, keyed by method name in declaration
  * order — the first step of a wire debugger, a devtools panel, or a hook
- * generator. It is the same walk the actor factory performs to build its
- * methods, so what a table says and what an actor dispatches cannot disagree.
+ * generator. A call layer that builds its methods from this table dispatches
+ * exactly what the table says, so the two cannot disagree.
  *
  * Every method is resolved through [`resolveSchema`], because a method is not
  * reliably a `func` node directly: schemas built from a Contract document at

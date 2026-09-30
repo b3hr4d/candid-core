@@ -71,10 +71,9 @@
 // convention, directed by the schema rather than by probing a decoded value
 // for `ok`/`err` keys. They live in this module because unwrapping *is*
 // validation plus one typed read, and because the root entry imports nothing
-// at runtime while the actor factory, the form-model builder, and the
-// Contract loader all import *it* — so a validator dependency there would
-// have arrived with `formModel` and `schemaFromContract` for consumers who
-// never asked for one.
+// at runtime while the Contract loader (and the internal form-model builder)
+// import *it* — so a validator dependency there would have arrived with
+// `schemaFromContract` for consumers who never asked for one.
 
 import type {
   AnySchema,

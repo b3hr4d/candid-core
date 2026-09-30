@@ -3,8 +3,8 @@
   <a href="https://www.npmjs.com/package/@candid-core/schema"><code>@candid-core/schema</code></a>.
   There is no class to instantiate and no registry to populate: every member of <code>c</code>
   returns plain data. <code>c.record({ owner: c.principal, balance: c.nat })</code> evaluates to
-  <code>{ kind: "record", fields: { … } }</code>, and that object is what the validator, the codec,
-  the actor layer and the form model all walk.
+  <code>{ kind: "record", fields: { … } }</code>, and that object is what the validator and the
+  codec both walk.
 </p>
 
 <p>
@@ -305,7 +305,7 @@ service(methods: { readonly [name: string]: AnySchema }): ServiceSchema
 <p>
   A <code>service</code> <em>value</em> is the principal of a running service, so
   <code>c.service(...)</code> infers <code>PrincipalValue</code>. The method table it carries is
-  what <code>createActor</code> walks. Both appear in a generated module as ordinary declarations:
+  what <code>serviceMethods</code> reads back. Both appear in a generated module as ordinary declarations:
 </p>
 
 <pre data-lang="ts" data-file="crates/candid-core-ts/tests/goldens/deferred.ts">

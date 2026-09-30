@@ -506,10 +506,8 @@ export type ValidateResult =
     are given — a value that fights inspection with a throwing accessor or a hostile Proxy produces a
     terminal <code>unreadable_value</code> issue instead. Data never throws. Passing the wrong
     <em>schema</em> does: <code>resolveSchema</code>, <code>serviceMethods</code>,
-    <code>unwrapResult</code>, <code>createActor</code> and the form-model builders raise a
-    <code>TypeError</code> eagerly, which is a programmer error rather than a failure mode. A typed
-    actor call is the one data path that rejects instead of returning: its promise rejects with an
-    <code>ActorError</code> carrying the codec's <code>issues</code> array.
+    and <code>unwrapResult</code> raise a <code>TypeError</code> eagerly, which is a programmer
+    error rather than a failure mode.
   </li>
   <li>
     <strong>No sentinel on the issue cap.</strong> Rust replaces the last slot with a

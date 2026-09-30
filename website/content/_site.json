@@ -22,7 +22,7 @@
           "slug": "quickstart-typescript",
           "title": "Quickstart: TypeScript",
           "nav": "Quickstart · TypeScript",
-          "lead": "From a .did file to typed, validated canister calls — with no Rust toolchain."
+          "lead": "From a .did file to typed, validated Candid values and bytes — with no Rust toolchain."
         },
         {
           "slug": "quickstart-rust",
@@ -144,7 +144,7 @@
           "slug": "ts-overview",
           "title": "TypeScript overview",
           "nav": "Overview",
-          "lead": "How the generator, the schema runtime, the codec and the actor layer fit together."
+          "lead": "How the generator, the schema runtime, the codec and the Contract loader fit together."
         },
         {
           "slug": "schema-builders",
@@ -163,18 +163,6 @@
           "title": "The binary codec",
           "nav": "Binary codec",
           "lead": "Schema-directed Candid encoding and decoding in TypeScript, fail-closed on every input."
-        },
-        {
-          "slug": "schema-actors",
-          "title": "Typed actors",
-          "nav": "Typed actors",
-          "lead": "Calling a canister over a two-method byte-pipe transport, with the codec doing all the encoding."
-        },
-        {
-          "slug": "schema-forms",
-          "title": "Form metadata",
-          "nav": "Form metadata",
-          "lead": "UI-agnostic descriptions of a schema, so a form can be driven by the interface itself."
         },
         {
           "slug": "schema-from-contract",

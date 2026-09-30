@@ -130,9 +130,8 @@ export interface ResourceLimitInfo {
 </p>
 
 <p>
-  This is the same grammar the Rust crate uses for <code>$.declarations[3].name</code>, and the same
-  one <a href="schema-forms.html">the form model</a> uses for its node paths — which is what lets
-  <code>formNodeAt(model, issue.path)</code> hand you the control the user typed into.
+  This is the same grammar the Rust crate uses for <code>$.declarations[3].name</code>, so a path
+  means the same thing on both sides of the project.
 </p>
 
 <h2>Three worked calls</h2>
@@ -292,12 +291,10 @@ validate(schema, value as never);
     <code>validate</code> never throws for a value, and a malformed <em>schema</em> object comes back
     as an <code>unsupported_schema</code> issue rather than an exception. The helpers that
     <em>read</em> a schema are stricter. <code>resolveSchema</code>, <code>isResultSchema</code>,
-    <code>unwrapResult</code> and <code>formNodeAt</code> throw <code>TypeError</code> on a foreign
-    object, an unknown <code>kind</code>, or a <code>rec</code> chain running past 256 hops, and
+    and <code>unwrapResult</code> throw <code>TypeError</code> on a foreign object, an unknown
+    <code>kind</code>, or a <code>rec</code> chain running past 256 hops, and
     <code>unwrapResult</code> throws for a schema it reads without trouble that is not a result
-    variant. <code>formModel</code> throws on a foreign object or an unknown kind, but does not
-    follow <code>rec</code> at all, so an unterminated chain surfaces wherever it is expanded rather
-    than there. The classic case all of this catches is passing the decoded <em>value</em> where its
+    variant. The classic case all of this catches is passing the decoded <em>value</em> where its
     schema belongs.
   </p>
 </callout>
@@ -386,60 +383,9 @@ if (outcome.issues) {
   the single value of the Candid <code>null</code> it declares.
 </p>
 
-<h2>The labels module</h2>
-
-<p>
-  A Candid field is identified on the wire by a 32-bit label id, not by its name. A semantic
-  Contract stores only those ids; a schema object stores only rendered keys. The
-  <code>./labels</code> subpath is the bridge, and it is small enough to read in one sitting.
-</p>
-
-<pre data-lang="ts" data-file="crates/candid-core-ts/ts/labels.ts">
-export function candidLabelHash(name: string): number;
-export function numericKeyId(key: string): number | undefined;
-export function isNumericShapedName(name: string): boolean;
-export function fieldIdOfKey(key: string): number;
-export function utf8BytesStrict(text: string): Uint8Array | undefined;
-export function utf8Decode(bytes: Uint8Array): string | undefined;
-</pre>
-
-<p>
-  Two rules cover every key. A key shaped <code>_N_</code> — underscore, decimal digits, underscore
-  — renders the numeric label id <code>N</code>, which is the convention for a Candid field that has
-  no source name. Any other key is a source name, whose id is the Candid label hash
-  <code>h(name) = fold(h * 223 + byte) mod 2^32</code> over the name's UTF-8 bytes.
-  <code>fieldIdOfKey</code> applies them in that order and is total.
-</p>
-
-<pre data-lang="ts">import { candidLabelHash, fieldIdOfKey, numericKeyId } from "@candid-core/schema/labels";
-
-candidLabelHash("owner"); // 947296307
-fieldIdOfKey("owner");    // 947296307 — a source name, so the hash
-fieldIdOfKey("_7_");      // 7 — the id rendering, parsed back
-numericKeyId("owner");    // undefined</pre>
-
-<p>
-  You need this when you are matching a schema key against a wire id yourself: reading a raw Candid
-  type table, writing a debugger, or reconciling a Contract's numeric fields with a generated
-  module. The <a href="schema-codec.html">codec</a> and the
-  <a href="schema-from-contract.html">Contract loader</a> use it internally, so ordinary calling
-  code never has to. <code>isNumericShapedName</code> exists for one fail-closed rule: a
-  <em>source</em> name that is itself <code>_N_</code>-shaped hashes as a name in Candid but becomes
-  indistinguishable from an id rendering once erased to a key, so the Contract loader refuses such
-  names outright with <code>invalid_name_table</code> rather than letting the codec encode a wrong
-  wire id. The two UTF-8 helpers are the same fail-closed discipline at the byte level: both return
-  <code>undefined</code> rather than substituting a replacement character, so text that is not
-  well-formed never silently becomes different text.
-</p>
-
 <h2>Where to go next</h2>
 
 <div class="card-grid">
-  <a class="card" href="schema-forms.html">
-    <span class="card-kicker">Guide</span>
-    <span class="card-title">Form metadata</span>
-    <p>The other consumer of this path grammar: turn an issue's <code>path</code> into the control the user typed into.</p>
-  </a>
   <a class="card" href="schema-codec.html">
     <span class="card-kicker">Guide</span>
     <span class="card-title">The binary codec</span>

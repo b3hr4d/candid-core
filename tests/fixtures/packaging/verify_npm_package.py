@@ -20,10 +20,9 @@ The shipped *prose* is held to the same standard, because it is the first
 thing a consumer meets on npm: the README's TypeScript blocks are compiled
 against the packed artifact, exactly as a consumer's would be, so a documented
 example cannot drift away from the package it documents. A block that cannot
-be compiled here — the `@icp-sdk/core` agent adapter, whose SDK is a type-only
-peer this repository's lockfile deliberately does not carry — is opted out by
-an HTML comment naming the reason, so the exemption is visible in the README
-rather than implicit in this script.
+be compiled here is opted out by an HTML comment naming the reason, so the
+exemption is visible in the README rather than implicit in this script (no
+block needs one today).
 
 The changelog is treated as an artifact claim rather than a courtesy. It ships
 in the tarball, and the gate refuses one that does not document the version
@@ -31,28 +30,48 @@ being packed together with the `candid-core` version it pairs with — the
 README promises exactly that, and a promise about an artifact belongs in the
 artifact's gate.
 
-The `@icp-sdk/core` peer is installed as a minimal stub providing exactly
-the surfaces the artifact and this gate's consumers reference: the
-`Principal` class (the full consumer proves an SDK-class value is accepted
-where the schemas ask for the structural `PrincipalValue` — issue #150) and
-the `./agent` names the `./transport-icp` module uses (issue #154). The
-peer contract is then asserted in both directions with the peer removed: a
-consumer of every subpath except `./transport-icp` compiles and runs with
-no `@icp-sdk/core` at all, while the transport-importing consumer fails
-with the clear missing-module error rather than a silent `any`.
+The export surface is asserted exactly, in both directions. The manifest
+must export precisely the four Candid-layer subpaths (`.`, `./validate`,
+`./contract`, `./codec`) and declare no runtime dependency and no peer of
+any kind; no shipped module may import from `@icp-sdk/core`; and a consumer of
+every remaining subpath compiles and runs in a scratch tree with no
+`@icp-sdk/core` installed at all. The subpaths 0.2.0 exported and this
+package no longer does — `./actor`, `./transport-icp`, `./forms`,
+`./labels` — must each fail to resolve, at runtime with Node's
+`ERR_PACKAGE_PATH_NOT_EXPORTED` and at compile time with a missing-module
+error, and so must a deep import of the internal `dist/labels.js` the codec
+still ships and loads.
 """
 
 import datetime
 import json
 import pathlib
 import re
-import shutil
 import subprocess
 import sys
 import tempfile
 
 REPO = pathlib.Path(__file__).resolve().parents[3]
 PACKAGE = REPO / "crates" / "candid-core-ts" / "ts"
+
+# The export map, exactly: the Candid layer and nothing else.
+EXPORTED = [".", "./validate", "./contract", "./codec"]
+
+# Subpaths 0.2.0 exported that this package no longer does. Each must fail
+# to resolve from the packed artifact; a deep path into `dist/` must fail the
+# same way, because `exports` is what makes the internal modules internal.
+REMOVED = ["./actor", "./transport-icp", "./forms", "./labels"]
+DEEP = ["./dist/labels.js", "./dist/forms.js"]
+
+# Manifest fields that would give the package a dependency of any kind.
+DEPENDENCY_FIELDS = [
+    "dependencies",
+    "peerDependencies",
+    "peerDependenciesMeta",
+    "optionalDependencies",
+    "bundleDependencies",
+    "bundledDependencies",
+]
 
 # A README block preceded by this marker is documented as verified elsewhere
 # and is not compiled here. The marker is a full HTML comment in the README,
@@ -112,14 +131,14 @@ def main():
             for path in extracted.rglob("*")
             if path.is_file()
         )
+        # `labels` ships without an export: the codec and the Contract loader
+        # import it relatively, so it is part of their runtime, not an entry
+        # point. `forms` is internal and is not built at all.
         modules = [
-            "actor",
             "codec",
             "contract",
-            "forms",
             "labels",
             "schema",
-            "transport-icp",
             "validate",
         ]
         expected = sorted(
@@ -134,6 +153,39 @@ def main():
             )
 
         manifest = json.loads((extracted / "package.json").read_text())
+
+        # The export surface and the dependency surface, stated exactly. A
+        # removed subpath left in the map, or a peer re-added, fails here
+        # before anything is compiled.
+        exported = list(manifest.get("exports", {}))
+        if exported != EXPORTED:
+            raise SystemExit(
+                f"package.json exports {exported}; the package exports exactly "
+                f"{EXPORTED}"
+            )
+        declared = [field for field in DEPENDENCY_FIELDS if field in manifest]
+        if declared:
+            raise SystemExit(
+                f"package.json declares {declared}; the package has no runtime "
+                "dependency and no peer of any kind"
+            )
+        # Documentation may name the SDK (the principal docs explain how its
+        # values interoperate); no shipped module or declaration may import
+        # from it, statically, dynamically, or by `require`.
+        sdk_import = re.compile(
+            r"""(?:\bfrom|\bimport|\brequire)\s*\(?\s*["']@icp-sdk/"""
+        )
+        sdk = [
+            f"{path.relative_to(extracted)}:{number}: {line.strip()}"
+            for path in sorted(extracted.glob("dist/*"))
+            for number, line in enumerate(path.read_text().splitlines(), 1)
+            if sdk_import.search(line)
+        ]
+        if sdk:
+            raise SystemExit(
+                "shipped modules import @icp-sdk/core, which this package "
+                "neither depends on nor peers:\n  " + "\n  ".join(sdk)
+            )
 
         # npm derives the homepage link from `repository` when the field is
         # absent, which lands a consumer on the repository root README. That
@@ -260,104 +312,48 @@ def main():
                 "self-contained explanation:\n  " + "\n  ".join(cited)
             )
 
-        # The type-only peer, as a minimal stub: `Principal` must stay a real
-        # nominal type in the consumer, or the compile proves nothing. The
-        # `./agent` subpath joined for the transport adapter (issue #154): its
-        # shipped declaration imports the `Agent` type and its shipped module
-        # imports the `HttpAgent` and `QueryResponseStatus` values, so both
-        # halves are stubbed with exactly those names. The *real* `@icp-sdk/
-        # core@6.1.0` surface is what the repository's own tsc gate and mock-
-        # fetch suite compile and execute against; this stub only keeps the
-        # packaged-artifact compile hermetic.
-        peer = scratch / "node_modules" / "@icp-sdk" / "core"
-        (peer / "principal").mkdir(parents=True)
-        (peer / "agent").mkdir(parents=True)
-        (peer / "package.json").write_text(
-            json.dumps(
-                {
-                    "name": "@icp-sdk/core",
-                    "version": "6.0.0",
-                    "type": "module",
-                    "exports": {
-                        "./principal": {
-                            "types": "./principal/index.d.ts",
-                            "default": "./principal/index.js",
-                        },
-                        "./agent": {
-                            "types": "./agent/index.d.ts",
-                            "default": "./agent/index.js",
-                        },
-                    },
-                }
-            )
-        )
-        (peer / "agent" / "index.d.ts").write_text(
-            "export interface Agent {\n"
-            "  readonly rootKey: Uint8Array | null;\n"
-            "}\n"
-            "export declare class HttpAgent {\n"
-            "  private readonly _isHttpAgent: true;\n"
-            "  static create(options?: unknown): Promise<HttpAgent>;\n"
-            "}\n"
-            "export declare enum QueryResponseStatus {\n"
-            '  Replied = "replied",\n'
-            '  Rejected = "rejected",\n'
-            "}\n"
-        )
-        (peer / "agent" / "index.js").write_text(
-            "export class HttpAgent {\n"
-            "  static create() { return Promise.resolve(new HttpAgent()); }\n"
-            "}\n"
-            'export const QueryResponseStatus = { Replied: "replied", Rejected: "rejected" };\n'
-        )
-        (peer / "principal" / "index.d.ts").write_text(
-            "export declare class Principal {\n"
-            "  private readonly _isPrincipal: true;\n"
-            "  static fromText(text: string): Principal;\n"
-            "  toText(): string;\n"
-            "}\n"
-        )
-        # A runtime shape the validator accepts: canonical management-canister
-        # text, exactly what a real Principal's toText() returns.
-        (peer / "principal" / "index.js").write_text(
-            "export class Principal {\n"
-            '  toText() { return "aaaaa-aa"; }\n'
-            "}\n"
-        )
-
+        # A consumer of every exported subpath, in a scratch tree that has no
+        # `@icp-sdk/core` at all — nothing installs one, and the assertion
+        # below makes that a checked fact rather than an assumption. The
+        # nominal `SdkStylePrincipal` class stands in for an SDK `Principal`:
+        # a class with a private member and `toText()` must be accepted where
+        # the schemas ask for the structural `PrincipalValue`, which is what
+        # lets SDK values encode unchanged (the repository's own suite runs
+        # the same claim against the real pinned SDK).
+        if (scratch / "node_modules" / "@icp-sdk").exists():
+            raise SystemExit("the scratch consumer tree must not contain @icp-sdk")
         consumer = scratch / "consumer"
         consumer.mkdir()
         (consumer / "package.json").write_text('{ "type": "module" }\n')
         (consumer / "main.ts").write_text(
-            'import { c, type Infer } from "@candid-core/schema";\n'
-            'import { validate } from "@candid-core/schema/validate";\n'
+            'import { c, type Infer, type PrincipalValue } from "@candid-core/schema";\n'
+            'import { validate, unwrapResult } from "@candid-core/schema/validate";\n'
             'import { encode, decode } from "@candid-core/schema/codec";\n'
             'import { schemaFromContract } from "@candid-core/schema/contract";\n'
-            'import { createActor, type Transport } from "@candid-core/schema/actor";\n'
-            'import { httpTransport } from "@candid-core/schema/transport-icp";\n'
-            'import { formModel } from "@candid-core/schema/forms";\n'
-            'import { candidLabelHash } from "@candid-core/schema/labels";\n'
-            'import { Principal } from "@icp-sdk/core/principal";\n'
+            "\n"
+            "class SdkStylePrincipal {\n"
+            "  private readonly _isPrincipal = true;\n"
+            '  toText(): string { return "aaaaa-aa"; }\n'
+            "}\n"
             "\n"
             "const Account = c.record({ owner: c.principal, balance: c.nat });\n"
             "type Account = Infer<typeof Account>;\n"
-            'const owner = new Principal();\n'
-            "const value: Account = { owner, balance: 5n };\n"
-            "const checked = validate(Account, value);\n"
-            'if (!checked.ok) throw new Error("validate");\n'
-            "const bytes = encode(Account, value);\n"
-            'if (!bytes.ok) throw new Error("encode");\n'
-            "const back = decode(Account, bytes.bytes);\n"
-            'if (!back.ok) throw new Error("decode");\n'
-            'if ((back.value as Account).balance !== 5n) throw new Error("round trip");\n'
-            'if (formModel(Account).control !== "group") throw new Error("forms");\n'
-            'if (candidLabelHash("a") !== 97) throw new Error("labels");\n'
-            "void schemaFromContract;\n"
-            "void createActor;\n"
-            "const transportSlot: Transport | undefined = undefined;\n"
-            "void transportSlot;\n"
-            "const adapterSlot: (() => Transport) | undefined = httpTransport;\n"
-            "void adapterSlot;\n"
+            'const structural: PrincipalValue = { toText: () => "ryjl3-tyaaa-aaaaa-aaaba-cai" };\n'
+            "for (const owner of [structural, new SdkStylePrincipal()]) {\n"
+            "  const value: Account = { owner, balance: 5n };\n"
+            "  const checked = validate(Account, value);\n"
+            '  if (!checked.ok) throw new Error("validate");\n'
+            "  const bytes = encode(Account, value);\n"
+            '  if (!bytes.ok) throw new Error("encode");\n'
+            "  const back = decode(Account, bytes.bytes);\n"
+            '  if (!back.ok) throw new Error("decode");\n'
+            '  if ((back.value as Account).balance !== 5n) throw new Error("round trip");\n'
+            "}\n"
+            "const Reply = c.variant({ ok: c.nat, err: c.text });\n"
+            'const outcome = unwrapResult(Reply, { tag: "ok", value: 1n });\n'
+            'if (!outcome.ok || outcome.value !== 1n) throw new Error("unwrap");\n'
+            "const loaded = schemaFromContract({});\n"
+            'if (loaded.ok) throw new Error("an empty document must be refused");\n'
             'console.log("npm package smoke: ok");\n'
         )
         (consumer / "tsconfig.json").write_text(
@@ -387,8 +383,8 @@ def main():
         # is its own file, so an example that silently leans on an earlier
         # block's bindings fails here — which is the point: a reader copies one
         # block, not the file. `node:fs` is stubbed rather than pulled from
-        # `@types/node`, in the same spirit as the peer above: this gate adds
-        # no supply-chain surface to compile four signatures.
+        # `@types/node`: this gate adds no supply-chain surface to compile one
+        # signature.
         readme = scratch / "readme"
         readme.mkdir()
         (readme / "package.json").write_text('{ "type": "module" }\n')
@@ -436,48 +432,46 @@ def main():
                 f"blocks, in README order:\n{numbered}"
             )
 
-        # The issue #150 peer contract, asserted in both directions with the
-        # peer removed entirely. A consumer of everything EXCEPT
-        # `./transport-icp` — principal fields included, as structural
-        # `PrincipalValue`s — must compile and run with no `@icp-sdk/core`
-        # installed at all: the shipped declarations no longer import the SDK
-        # anywhere else, and this is what keeps that claim honest. The full
-        # consumer, which imports the transport subpath (and the SDK class
-        # itself), must still fail with the clear missing-module error rather
-        # than a silent `any`.
-        shutil.rmtree(scratch / "node_modules" / "@icp-sdk")
-        peerless = scratch / "peerless"
-        peerless.mkdir()
-        (peerless / "package.json").write_text('{ "type": "module" }\n')
-        (peerless / "main.ts").write_text(
-            'import { c, type Infer, type PrincipalValue } from "@candid-core/schema";\n'
-            'import { validate } from "@candid-core/schema/validate";\n'
-            'import { encode, decode } from "@candid-core/schema/codec";\n'
-            'import { schemaFromContract } from "@candid-core/schema/contract";\n'
-            'import { createActor, type Transport } from "@candid-core/schema/actor";\n'
-            'import { formModel } from "@candid-core/schema/forms";\n'
-            'import { candidLabelHash } from "@candid-core/schema/labels";\n'
-            "\n"
-            "const Account = c.record({ owner: c.principal, balance: c.nat });\n"
-            "type Account = Infer<typeof Account>;\n"
-            'const owner: PrincipalValue = { toText: () => "ryjl3-tyaaa-aaaaa-aaaba-cai" };\n'
-            "const value: Account = { owner, balance: 5n };\n"
-            "const checked = validate(Account, value);\n"
-            'if (!checked.ok) throw new Error("validate");\n'
-            "const bytes = encode(Account, value);\n"
-            'if (!bytes.ok) throw new Error("encode");\n'
-            "const back = decode(Account, bytes.bytes);\n"
-            'if (!back.ok) throw new Error("decode");\n'
-            'if ((back.value as Account).balance !== 5n) throw new Error("round trip");\n'
-            'if (formModel(Account).control !== "group") throw new Error("forms");\n'
-            'if (candidLabelHash("a") !== 97) throw new Error("labels");\n'
-            "void schemaFromContract;\n"
-            "void createActor;\n"
-            "const transportSlot: Transport | undefined = undefined;\n"
-            "void transportSlot;\n"
-            'console.log("npm package peerless smoke: ok");\n'
-        )
-        (peerless / "tsconfig.json").write_text(
+        # The removed subpaths, and deep paths into `dist/`, must not resolve.
+        # At runtime Node refuses them with ERR_PACKAGE_PATH_NOT_EXPORTED —
+        # checked per specifier in a fresh process each, so one resolution
+        # cannot mask another; `./package.json` is in the deep list because
+        # the map does not export it either.
+        refused = []
+        for subpath in REMOVED + DEEP:
+            specifier = "@candid-core/schema" + subpath[1:]
+            probe = subprocess.run(
+                [
+                    "node",
+                    "--input-type=module",
+                    "-e",
+                    f"await import({json.dumps(specifier)});",
+                ],
+                cwd=consumer,
+                capture_output=True,
+                text=True,
+            )
+            output = probe.stdout + probe.stderr
+            if probe.returncode == 0 or "ERR_PACKAGE_PATH_NOT_EXPORTED" not in output:
+                raise SystemExit(
+                    f"importing {specifier} from the packed artifact must fail "
+                    f"with ERR_PACKAGE_PATH_NOT_EXPORTED; got exit "
+                    f"{probe.returncode}:\n{output}"
+                )
+            refused.append(specifier)
+
+        # And at compile time: each removed subpath is its own file, so every
+        # one must be named in the compiler's missing-module diagnostics.
+        removed_types = scratch / "removed"
+        removed_types.mkdir()
+        (removed_types / "package.json").write_text('{ "type": "module" }\n')
+        for index, subpath in enumerate(REMOVED):
+            specifier = "@candid-core/schema" + subpath[1:]
+            (removed_types / f"removed{index}.ts").write_text(
+                f"import * as removed from {json.dumps(specifier)};\n"
+                "void removed;\n"
+            )
+        (removed_types / "tsconfig.json").write_text(
             json.dumps(
                 {
                     "compilerOptions": {
@@ -488,33 +482,42 @@ def main():
                         "target": "es2022",
                         "skipLibCheck": False,
                     },
-                    "include": ["main.ts"],
+                    "include": ["*.ts"],
                 }
             )
         )
-        run([str(tsc), "-p", str(peerless / "tsconfig.json")], peerless)
-        run(["node", "--experimental-strip-types", "--no-warnings", "main.ts"], peerless)
-
-        missing = subprocess.run(
-            [str(tsc), "-p", str(consumer / "tsconfig.json")],
-            cwd=consumer,
+        compiled = subprocess.run(
+            [str(tsc), "-p", str(removed_types / "tsconfig.json")],
+            cwd=removed_types,
             capture_output=True,
             text=True,
         )
-        # Matched against both streams (review finding): the pinned tsc
-        # writes diagnostics to stdout today, but the assertion should not
-        # hinge on which stream a future compiler picks.
-        missing_output = missing.stdout + missing.stderr
-        if missing.returncode == 0 or "@icp-sdk/core" not in missing_output:
-            raise SystemExit(
-                "expected a missing-peer type error naming @icp-sdk/core, got:\n"
-                f"{missing_output}"
+        # Matched against both streams: the pinned tsc writes diagnostics to
+        # stdout today, but the assertion should not hinge on which stream a
+        # future compiler picks.
+        diagnostics = compiled.stdout + compiled.stderr
+        unrefused = [
+            subpath
+            for index, subpath in enumerate(REMOVED)
+            if not re.search(
+                rf"removed{index}\.ts\(\d+,\d+\): error TS2307: .*"
+                + re.escape("@candid-core/schema" + subpath[1:]),
+                diagnostics,
             )
-    print("npm package artifact verified: manifest file list, homepage, changelog "
-          "entry and pairing, self-contained doc comments, root + 7 subpaths, "
-          "strict compile without skipLibCheck, executed round-trip, "
-          f"{len(blocks)} README block(s) compiled, peer contract in both "
-          "directions")
+        ]
+        if compiled.returncode == 0 or unrefused:
+            raise SystemExit(
+                f"removed subpaths {unrefused} still type-check against the "
+                f"packed artifact; expected TS2307 for each:\n{diagnostics}"
+            )
+    print("npm package artifact verified: manifest file list, exact export map "
+          f"{EXPORTED}, no dependency or peer, no @icp-sdk/core import, "
+          "homepage, changelog entry and pairing, self-contained doc comments, "
+          "strict compile without skipLibCheck with no @icp-sdk/core installed, "
+          f"executed round-trip, {len(blocks)} README block(s) compiled, "
+          f"{len(REMOVED)} removed subpaths refused at compile time, "
+          f"{len(refused)} specifiers refused at runtime "
+          "(ERR_PACKAGE_PATH_NOT_EXPORTED)")
 
 
 if __name__ == "__main__":

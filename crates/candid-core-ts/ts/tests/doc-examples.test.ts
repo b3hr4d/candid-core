@@ -51,17 +51,19 @@ import {
   type UnwrapResult,
 } from "../validate.ts";
 
-// Every module whose JSDoc ships. schema.ts carries the examples today; the
-// others are listed so an example added to one of them is covered the same
-// way rather than silently uncompiled.
+// Every module whose JSDoc ships, plus the internal form-model builder:
+// forms.ts is no longer a package export, but it stays compiled and tested
+// here, and its one example stays mirrored so it cannot rot while it waits.
+// schema.ts carries most of the examples; the others are listed so an
+// example added to one of them is covered the same way rather than silently
+// uncompiled.
 const SHIPPED_SOURCES = [
   "../schema.ts",
   "../validate.ts",
   "../contract.ts",
   "../codec.ts",
-  "../actor.ts",
-  "../forms.ts",
   "../labels.ts",
+  "../forms.ts",
 ];
 
 /** The lines of every `@example` block: from the tag to the block's end. */

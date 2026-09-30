@@ -1,7 +1,7 @@
 {
   "name": "@candid-core/schema",
   "version": "0.2.0",
-  "description": "Zod-style schema runtime for Candid: builders with static inference, structural validation, a TypeScript-native binary codec, typed actors over a transport-only agent, and form metadata — all driven by candid-core's canonical Contract model.",
+  "description": "Zod-style schema runtime for Candid: builders with static inference, structural validation, a TypeScript-native binary codec, and a loader that builds the same schemas from candid-core's canonical Contract documents.",
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
@@ -33,26 +33,7 @@
     "./codec": {
       "types": "./dist/codec.d.ts",
       "default": "./dist/codec.js"
-    },
-    "./actor": {
-      "types": "./dist/actor.d.ts",
-      "default": "./dist/actor.js"
-    },
-    "./transport-icp": {
-      "types": "./dist/transport-icp.d.ts",
-      "default": "./dist/transport-icp.js"
-    },
-    "./forms": {
-      "types": "./dist/forms.d.ts",
-      "default": "./dist/forms.js"
-    },
-    "./labels": {
-      "types": "./dist/labels.d.ts",
-      "default": "./dist/labels.js"
     }
-  },
-  "peerDependencies": {
-    "@icp-sdk/core": ">=6"
   },
   "scripts": {
     "build": "rm -rf dist && tsc -p tsconfig.build.json",
@@ -62,13 +43,7 @@
   },
   "devDependencies": {
     "@icp-sdk/core": "6.1.0",
-    "@noble/curves": "2.3.0",
     "prettier": "3.9.6",
     "typescript": "7.0.2"
-  },
-  "peerDependenciesMeta": {
-    "@icp-sdk/core": {
-      "optional": true
-    }
   }
 }
