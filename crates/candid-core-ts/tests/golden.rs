@@ -12,7 +12,9 @@
 use std::path::PathBuf;
 
 use candid_core::compile_did;
-use candid_core_ts::{generate_module, TsGenError, TsNames, TsOptions};
+use candid_core_ts::{
+    generate_module, GeneratedModule, Omission, OmissionKind, OmissionReason, TsNames, TsOptions,
+};
 
 fn generate_fixture(name: &str) -> String {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests");
@@ -26,6 +28,7 @@ fn generate_fixture(name: &str) -> String {
     );
     generate_module(compilation.contract(), &names, &TsOptions::default())
         .expect("fixture must generate")
+        .module
 }
 
 fn assert_golden_file(file_name: &str, generated: &str) {
@@ -99,7 +102,8 @@ fn hash_colliding_spellings_collapse_to_the_generator_name() {
 
     let names = TsNames::from_source_info(source_info);
     let module = generate_module(compilation.contract(), &names, &TsOptions::default())
-        .expect("the colliding source generates");
+        .expect("the colliding source generates")
+        .module;
     assert!(
         module.contains(&format!("{winner}: $.c.nat")),
         "the generated module must render the same spelling the table carries: \
@@ -262,6 +266,7 @@ fn golden_runtime_contract_documents() {
         "arms",
         "options",
         "fidelity",
+        "omissions",
     ] {
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests");
         let source = std::fs::read_to_string(root.join("fixtures").join(format!("{name}.did")))
@@ -326,25 +331,31 @@ fn golden_runtime_contract_documents() {
 
 /// Byte-identical output for the same Contract, and for the same Contract
 /// round-tripped through its serialized form — determinism is a pinned
-/// property, not an aspiration.
+/// property, not an aspiration. The omitted list and the header that lists
+/// it are held to the same standard (issue #189).
 #[test]
 fn generation_is_deterministic_across_serde_round_trips() {
-    let source = std::fs::read_to_string(
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/recursion.did"),
-    )
-    .expect("fixture must be readable");
-    let compilation = compile_did(&source).expect("fixture must compile");
-    let names = TsNames::from_source_info(compilation.source_info().expect("provenance"));
-    let options = TsOptions::default();
+    for fixture in ["recursion", "omissions"] {
+        let source = std::fs::read_to_string(
+            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/fixtures")
+                .join(format!("{fixture}.did")),
+        )
+        .expect("fixture must be readable");
+        let compilation = compile_did(&source).expect("fixture must compile");
+        let names = TsNames::from_source_info(compilation.source_info().expect("provenance"));
+        let options = TsOptions::default();
 
-    let first = generate_module(compilation.contract(), &names, &options).expect("generate");
-    let second = generate_module(compilation.contract(), &names, &options).expect("generate");
-    assert_eq!(first, second);
+        let first = generate_module(compilation.contract(), &names, &options).expect("generate");
+        let second = generate_module(compilation.contract(), &names, &options).expect("generate");
+        assert_eq!(first, second, "{fixture}");
 
-    let json = serde_json::to_string(compilation.contract()).expect("serialize");
-    let reparsed = candid_core::Contract::from_json(&json).expect("reparse");
-    let third = generate_module(&reparsed, &names, &options).expect("generate");
-    assert_eq!(first, third);
+        let json = serde_json::to_string(compilation.contract()).expect("serialize");
+        let reparsed = candid_core::Contract::from_json(&json).expect("reparse");
+        let third = generate_module(&reparsed, &names, &options).expect("generate");
+        assert_eq!(first, third, "{fixture}");
+        assert_eq!(fixture == "omissions", !first.omitted.is_empty());
+    }
 }
 
 /// A deferred construct nested inside a supported type fails closed rather
@@ -358,7 +369,8 @@ fn nested_func_generates() {
         .expect("source must compile");
     let names = TsNames::from_source_info(anonymous.source_info().expect("provenance"));
     let output = generate_module(anonymous.contract(), &names, &TsOptions::default())
-        .expect("anonymous nested func generates since #104");
+        .expect("anonymous nested func generates since #104")
+        .module;
     assert!(
         output.contains("hook: { principal: $.Principal; method: string }"),
         "{output}"
@@ -374,7 +386,8 @@ fn nested_func_generates() {
     .expect("source must compile");
     let names = TsNames::from_source_info(named.source_info().expect("provenance"));
     let output = generate_module(named.contract(), &names, &TsOptions::default())
-        .expect("a reference to a func alias generates since #104");
+        .expect("a reference to a func alias generates since #104")
+        .module;
     assert!(
         output.contains("type $Callback = { principal: $.Principal; method: string };"),
         "{output}"
@@ -417,7 +430,8 @@ fn collapsing_options_box() {
             &TsNames::new(),
             &TsOptions::default(),
         )
-        .unwrap_or_else(|error| panic!("{source} must generate: {error}"));
+        .unwrap_or_else(|error| panic!("{source} must generate: {error}"))
+        .module;
         assert!(output.contains(alias), "{source}: {output}");
         // The builder is `c.opt` either way; the box is a domain shape the
         // runtime's `OptDomain` and walkers derive from the same node rule.
@@ -437,8 +451,9 @@ fn principal_import_is_escaped() {
     let options = TsOptions {
         principal_import: "bad\"path".to_string(),
     };
-    let output =
-        generate_module(compilation.contract(), &TsNames::new(), &options).expect("generate");
+    let output = generate_module(compilation.contract(), &TsNames::new(), &options)
+        .expect("generate")
+        .module;
     assert!(
         output.contains("import type { Principal } from \"bad\\\"path\";\n"),
         "specifier must be escaped: {output}"
@@ -458,7 +473,8 @@ fn principal_import_is_escaped() {
         &TsNames::new(),
         &TsOptions::default(),
     )
-    .expect("generate");
+    .expect("generate")
+    .module;
     assert!(output.contains("type $Who = $.Principal;"), "{output}");
     assert!(!output.contains("import type"), "{output}");
     assert!(!output.contains("PrincipalValue"), "{output}");
@@ -478,7 +494,8 @@ fn principal_named_declaration_generates() {
     let compilation = compile_did("type Principal = record { p : principal };").expect("compile");
     let names = TsNames::from_source_info(compilation.source_info().expect("provenance"));
     let output = generate_module(compilation.contract(), &names, &TsOptions::default())
-        .expect("a declaration named Principal generates");
+        .expect("a declaration named Principal generates")
+        .module;
     assert_eq!(
         output,
         concat!(
@@ -492,37 +509,63 @@ fn principal_named_declaration_generates() {
     );
 }
 
-/// A source name shaped like the `_N_` id rendering is refused (issue #115):
-/// erased to a schema key it is indistinguishable from numeric label id N,
-/// so the codec would encode wire id N instead of the name's hash — the
-/// silent-wrong-id fail-open the reservation exists to prevent. The loader
-/// enforces the identical reservation on its name table (issue #103), so
-/// both paths reject the same documents; the TS suite pins the loader half.
+/// A source name shaped like the `_N_` id rendering cannot become a schema
+/// key (issue #115): erased to one it is indistinguishable from numeric label
+/// id N, so the codec would encode wire id N instead of the name's hash —
+/// the silent-wrong-id fail-open the reservation exists to prevent. Since
+/// issue #189 the declaration holding it is omitted, with every declaration
+/// and actor method that references it, and everything unrelated generates.
+/// `schemaFromContract` omits the same (`ts/tests/contract.test.ts`).
 #[test]
-fn numeric_shaped_source_names_are_refused() {
-    for source in [
-        "type Holder = record { _123_ : nat8 };",
-        "type Event = variant { _123_ : nat8; idle };",
-        // The original #115 collision repro: the reservation refuses it
-        // before any duplicate key could render.
-        "type T = record { _123_ : nat8; 123 : text };",
+fn numeric_shaped_source_names_are_omitted() {
+    for (declaration, bad) in [
+        ("type Holder = record { _123_ : nat8 };", "Holder"),
+        ("type Event = variant { _123_ : nat8; idle };", "Event"),
+        // The original #115 collision repro: omitted before any duplicate
+        // key could render.
+        ("type T = record { _123_ : nat8; 123 : text };", "T"),
     ] {
-        let compilation = compile_did(source).expect("compile");
-        let names = TsNames::from_source_info(compilation.source_info().expect("provenance"));
-        let error = generate_module(compilation.contract(), &names, &TsOptions::default())
-            .expect_err("a _N_-shaped source name must refuse generation");
+        let source = format!(
+            "{declaration}\ntype Uses = record {{ inner : {bad} }};\n\
+             type Fine = record {{ a : nat }};\n\
+             service : {{ keep : (Fine) -> (); drop : ({bad}) -> () }}"
+        );
+        let generated = generate_source_full(&source);
+        assert_eq!(
+            generated.omitted,
+            vec![
+                declaration_omitted(bad, OmissionReason::ReservedFieldName),
+                declaration_omitted_via("Uses", bad),
+                method_omitted_via("drop", bad),
+            ],
+            "{source}"
+        );
+        let module = &generated.module;
         assert!(
-            matches!(&error, TsGenError::ReservedFieldName { name, .. } if name == "_123_"),
-            "unexpected error for {source}: {error}"
+            !module.contains("_123_"),
+            "the reserved name renders nowhere: {module}"
+        );
+        assert!(!references_local(module, bad), "{module}");
+        assert!(!references_local(module, "Uses"), "{module}");
+        assert!(module.contains("export { $Fine as Fine };"), "{module}");
+        assert!(
+            module.contains("keep: (arg0: $Fine) => Promise<void>;"),
+            "{module}"
+        );
+        assert!(
+            !without_omitted_lines(module).contains("drop"),
+            "only the header names the omitted method: {module}"
         );
     }
     // Non-canonical shapes are ordinary names: a leading zero never renders
     // from a numeric id, so `_007_` stays hash-addressed and unambiguous.
-    let compilation = compile_did("type Ok = record { _007_ : nat8 };").expect("compile");
-    let names = TsNames::from_source_info(compilation.source_info().expect("provenance"));
-    let output = generate_module(compilation.contract(), &names, &TsOptions::default())
-        .expect("a non-canonical shape is not reserved");
-    assert!(output.contains("_007_"), "the name must render: {output}");
+    let generated = generate_source_full("type Ok = record { _007_ : nat8 };");
+    assert!(generated.omitted.is_empty(), "{:?}", generated.omitted);
+    assert!(
+        generated.module.contains("_007_"),
+        "the name must render: {}",
+        generated.module
+    );
 }
 
 /// Issue #188: the declaration names #116 and #130 refused — the module's
@@ -562,7 +605,8 @@ fn former_binding_names_generate() {
             &TsNames::new(),
             &TsOptions::default(),
         )
-        .unwrap_or_else(|error| panic!("{source} must generate since #188: {error}"));
+        .unwrap_or_else(|error| panic!("{source} must generate since #188: {error}"))
+        .module;
         assert!(
             output.contains(&format!("\nexport {{ ${name} as {name} }};\n")),
             "{source}: {output}"
@@ -580,37 +624,88 @@ fn former_binding_names_generate() {
 
 /// The module's own export names stay reserved: the actor surface exports
 /// `actor` and `Actor`, so a declaration by either name would be a
-/// duplicate export. Refused unconditionally — with or without an actor —
-/// by the #116 locality rule; issue #189 turns this into an omission.
+/// duplicate export. Since issue #189 such a declaration is omitted
+/// (`reserved_export_name`) — with or without an actor, by the #116 locality
+/// rule — and the rest of the module generates.
 #[test]
-fn export_name_declarations_are_refused() {
-    for source in [
-        "type actor = nat8;",
-        "type actor = nat8; service : { ping : () -> () };",
-        "type Actor = nat8;",
-        "type Actor = nat8; service : { ping : () -> () };",
+fn export_name_declarations_are_omitted() {
+    let header = "// Generated by candid-core-ts from a candid-core Contract. Do not edit.\n";
+    let actor_surface = concat!(
+        "import * as $ from \"@candid-core/schema\";\n",
+        "\n",
+        "const $actor: $.Schema<$.Principal> = $.c.rec(() => $.c.service({ ping: $.c.func([], [], \"update\") }));\n",
+        "type $Actor = {\n",
+        "  ping: () => Promise<void>;\n",
+        "};\n",
+        "export { $actor as actor, type $Actor as Actor };\n",
+    );
+    for (source, name, rest) in [
+        ("type actor = nat8;", "actor", ""),
+        (
+            "type actor = nat8; service : { ping : () -> () };",
+            "actor",
+            actor_surface,
+        ),
+        ("type Actor = nat8;", "Actor", ""),
+        (
+            "type Actor = nat8; service : { ping : () -> () };",
+            "Actor",
+            actor_surface,
+        ),
     ] {
-        let compilation = compile_did(source).expect("compile");
-        let error = generate_module(
-            compilation.contract(),
-            &TsNames::new(),
-            &TsOptions::default(),
-        )
-        .expect_err("a declaration named after an export must refuse generation");
-        assert!(
-            matches!(
-                &error,
-                TsGenError::ReservedDeclarationName { name } if name == "actor" || name == "Actor"
-            ),
-            "unexpected error for {source}: {error}"
+        let generated = generate_source_full(source);
+        assert_eq!(
+            generated.omitted,
+            vec![declaration_omitted(
+                name,
+                OmissionReason::ReservedExportName
+            )],
+            "{source}"
         );
-        // Message hygiene: a joined multi-line literal bakes indentation
-        // into the user-facing text, which no format gate catches.
-        assert!(
-            !error.to_string().contains("  "),
-            "error message carries embedded space runs: {error}"
+        assert_eq!(
+            generated.module,
+            format!("{header}// Omitted: type {name} (reserved_export_name)\n{rest}"),
+            "{source}"
         );
     }
+
+    // Issue #189, criterion 4: the methods and declarations that reference
+    // the omitted declaration go with it, from both actor surfaces; the rest
+    // of the actor stays.
+    let generated = generate_source_full(
+        "type actor = record { id : nat };\ntype Keep = record { k : nat };\n\
+         type Uses = vec actor;\n\
+         service : { use_it : (actor) -> (); keep : (Keep) -> (Keep) query }",
+    );
+    assert_eq!(
+        generated.omitted,
+        vec![
+            declaration_omitted_via("Uses", "actor"),
+            declaration_omitted("actor", OmissionReason::ReservedExportName),
+            method_omitted_via("use_it", "actor"),
+        ]
+    );
+    let module = &generated.module;
+    assert!(
+        !without_omitted_lines(module).contains("use_it"),
+        "only the header names the omitted method: {module}"
+    );
+    assert!(
+        module.contains("$.c.service({ keep: $.c.func([$Keep], [$Keep], \"query\") })"),
+        "{module}"
+    );
+    assert!(
+        module.contains("  keep: (arg0: $Keep) => Promise<$Keep>;\n"),
+        "{module}"
+    );
+    assert_eq!(
+        module
+            .matches("export { $actor as actor, type $Actor as Actor };")
+            .count(),
+        1,
+        "{module}"
+    );
+
     // The reservation is the exact names: case variants and near-misses
     // are ordinary declarations beside the actor's exports.
     for (source, name) in [
@@ -624,30 +719,33 @@ fn export_name_declarations_are_refused() {
             "Actor2",
         ),
     ] {
-        let compilation = compile_did(source).expect("compile");
-        let output = generate_module(
-            compilation.contract(),
-            &TsNames::new(),
-            &TsOptions::default(),
-        )
-        .unwrap_or_else(|error| panic!("{source}: {error}"));
+        let generated = generate_source_full(source);
+        assert!(generated.omitted.is_empty(), "{source}");
         assert!(
-            output.contains(&format!("export {{ ${name} as {name} }};")),
-            "{source}: {output}"
+            generated
+                .module
+                .contains(&format!("export {{ ${name} as {name} }};")),
+            "{source}: {}",
+            generated.module
         );
         assert!(
-            output.contains("export { $actor as actor, type $Actor as Actor };"),
-            "{source}: {output}"
+            generated
+                .module
+                .contains("export { $actor as actor, type $Actor as Actor };"),
+            "{source}: {}",
+            generated.module
         );
     }
 }
 
 /// A Contract document admits any non-empty declaration name; Candid source
 /// admits only identifiers. A name that is not identifier-shaped cannot
-/// become a `$`-prefixed local, so it still fails closed — reachable only
-/// through a hand-built or JSON-loaded Contract.
+/// become a `$`-prefixed local, so the declaration is omitted
+/// (`invalid_declaration_name`) — reachable only through a hand-built or
+/// JSON-loaded Contract. The header quotes such a name, and nothing in it can
+/// end the line comment it is listed on.
 #[test]
-fn non_identifier_declaration_names_are_refused() {
+fn non_identifier_declaration_names_are_omitted() {
     let contract_named = |name: &str| {
         candid_core::ContractDraft::new(
             vec![candid_core::TypeNode::Primitive {
@@ -662,84 +760,647 @@ fn non_identifier_declaration_names_are_refused() {
         .build()
         .unwrap_or_else(|error| panic!("{name:?}: a valid Contract: {error}"))
     };
-    for name in ["has space", "na\u{ef}ve", "1abc", "a-b"] {
-        let error = generate_module(
+    let header = "// Generated by candid-core-ts from a candid-core Contract. Do not edit.\n";
+    for (name, listed) in [
+        ("has space", "\"has space\""),
+        ("na\u{ef}ve", "\"na\u{ef}ve\""),
+        ("1abc", "\"1abc\""),
+        ("a-b", "\"a-b\""),
+        ("line\nbreak", "\"line\\nbreak\""),
+        ("para\u{2029}graph", "\"para\\u2029graph\""),
+        ("line\u{2028}separator", "\"line\\u2028separator\""),
+        ("quote\"d */", "\"quote\\\"d */\""),
+    ] {
+        let generated = generate_module(
             &contract_named(name),
             &TsNames::new(),
             &TsOptions::default(),
         )
-        .expect_err("a non-identifier declaration name must refuse generation");
-        assert!(
-            matches!(&error, TsGenError::InvalidDeclarationName { name: refused } if refused == name),
-            "unexpected error for {name:?}: {error}"
+        .unwrap_or_else(|error| panic!("{name:?}: {error}"));
+        assert_eq!(
+            generated.omitted,
+            vec![declaration_omitted(
+                name,
+                OmissionReason::InvalidDeclarationName
+            )],
+        );
+        assert_eq!(
+            generated.module,
+            format!("{header}// Omitted: type {listed} (invalid_declaration_name)\n"),
+            "{name:?}"
         );
     }
+
+    // A declaration that renders the omitted one's name goes with it, and
+    // the header quotes the `via` name the same way.
+    let contract = candid_core::ContractDraft::new(
+        vec![
+            candid_core::TypeNode::Record {
+                fields: vec![candid_core::Field { id: 1, ty: 1 }],
+            },
+            candid_core::TypeNode::Record {
+                fields: vec![candid_core::Field { id: 2, ty: 2 }],
+            },
+            candid_core::TypeNode::Primitive {
+                primitive: candid_core::PrimitiveType::Nat,
+            },
+        ],
+        vec![
+            candid_core::Declaration {
+                name: "a-b".to_string(),
+                ty: 1,
+            },
+            candid_core::Declaration {
+                name: "Uses".to_string(),
+                ty: 0,
+            },
+        ],
+        None,
+    )
+    .build()
+    .expect("a valid Contract");
+    let generated = generate_module(&contract, &TsNames::new(), &TsOptions::default())
+        .expect("an invalid name is an omission, not a refusal");
+    assert_eq!(
+        generated.omitted,
+        vec![
+            declaration_omitted_via("Uses", "a-b"),
+            declaration_omitted("a-b", OmissionReason::InvalidDeclarationName),
+        ]
+    );
+    assert!(
+        generated
+            .module
+            .contains("// Omitted: type Uses (references_omitted via \"a-b\")\n"),
+        "{}",
+        generated.module
+    );
+
     // `$` is identifier-shaped, and `$` plus a `$`-bearing name is still an
     // injective, valid local.
-    let output = generate_module(
+    let generated = generate_module(
         &contract_named("$ok"),
         &TsNames::new(),
         &TsOptions::default(),
     )
     .expect("an identifier-shaped name generates");
-    assert!(output.contains("export { $$ok as $ok };"), "{output}");
+    assert!(generated.omitted.is_empty());
+    assert!(
+        generated.module.contains("export { $$ok as $ok };"),
+        "{}",
+        generated.module
+    );
 }
 
 /// Issue #127: a variant arm whose payload is a *declared* `opt` of a
 /// never-domain type renders as a bare reference statically identical to a
 /// declared alias of `null` — the one shape no type-level classification
-/// can carry — and is refused instead of emitting text the equality gate
-/// would reject. The anonymous form and the null alias stay generable; the
-/// `arms` golden pins them.
+/// can carry. Since issue #189 the variant is omitted
+/// (`ambiguous_variant_arm`) instead of refusing the module; the `opt`
+/// declaration itself generates, and the anonymous form and the null alias
+/// stay generable (the `arms` golden pins them).
 #[test]
-fn declared_opt_empty_variant_arms_are_refused() {
-    for source in [
-        "type W = opt empty; type V = variant { a : W; b : nat };",
+fn declared_opt_empty_variant_arms_are_omitted() {
+    for (source, kept) in [
+        (
+            "type W = opt empty; type V = variant { a : W; b : nat };",
+            &["W"][..],
+        ),
         // The inner may be a declared alias of empty: same arena node.
-        "type E = empty; type W = opt E; type V = variant { a : W };",
+        (
+            "type E = empty; type W = opt E; type V = variant { a : W };",
+            &["E", "W"][..],
+        ),
         // An empty variant is never-domain too.
-        "type Never = variant {}; type W = opt Never; type V = variant { a : W };",
+        (
+            "type Never = variant {}; type W = opt Never; type V = variant { a : W };",
+            &["Never", "W"][..],
+        ),
         // Dedup alone declares the arm: an anonymous arm and a same-shape
         // declaration share one node, so the arm renders as the name.
-        "type V = variant { a : opt empty }; type W = opt empty;",
+        (
+            "type V = variant { a : opt empty }; type W = opt empty;",
+            &["W"][..],
+        ),
     ] {
-        let compilation = compile_did(source).expect("compile");
-        let names = TsNames::from_source_info(compilation.source_info().expect("provenance"));
-        let error = generate_module(compilation.contract(), &names, &TsOptions::default())
-            .expect_err("a declared opt-empty arm must refuse generation");
-        assert!(
-            matches!(
-                &error,
-                TsGenError::AmbiguousVariantArm { declaration, arm }
-                    if declaration == "V" && arm == "a"
-            ),
-            "unexpected error for {source}: {error}"
+        let generated = generate_source_full(source);
+        assert_eq!(
+            generated.omitted,
+            vec![declaration_omitted(
+                "V",
+                OmissionReason::AmbiguousVariantArm
+            )],
+            "{source}"
         );
-        assert!(
-            !error.to_string().contains("  "),
-            "error message carries embedded space runs: {error}"
-        );
+        assert!(!references_local(&generated.module, "V"), "{source}");
+        for name in kept {
+            assert!(
+                generated
+                    .module
+                    .contains(&format!("export {{ ${name} as {name} }};")),
+                "{source}: {}",
+                generated.module
+            );
+        }
     }
     // Near-misses stay generable: an opt of an inhabited type through a
     // declaration is an ordinary valued arm — the inhabited *variant* case
-    // pins the `fields.is_empty()` discrimination in the refusal itself…
+    // pins the `fields.is_empty()` discrimination in the cause itself…
     for source in [
         "type W = opt nat; type V = variant { a : W };",
         "type S = variant { x }; type W = opt S; type V = variant { a : W };",
+        // …and an opt of an uninhabited *record* keeps `value` on its own:
+        // the reference's static type is `{ f: never } | null`, not `null`,
+        // so the type level classifies it without help.
+        "type W = opt record { f : empty }; type V = variant { a : W };",
     ] {
-        let compilation = compile_did(source).expect("compile");
-        let names = TsNames::from_source_info(compilation.source_info().expect("provenance"));
-        generate_module(compilation.contract(), &names, &TsOptions::default())
-            .expect("an opt of an inhabited type is not ambiguous");
+        let generated = generate_source_full(source);
+        assert!(
+            generated.omitted.is_empty(),
+            "{source}: {:?}",
+            generated.omitted
+        );
+        assert!(generated.module.contains("export { $V as V };"), "{source}");
     }
-    // …and an opt of an uninhabited *record* keeps `value` on its own: the
-    // reference's static type is `{ f: never } | null`, not `null`, so the
-    // type level classifies it without help.
-    let compilation = compile_did("type W = opt record { f : empty }; type V = variant { a : W };")
-        .expect("compile");
+}
+
+/// Issue #189: the `omissions` fixture — every direct cause a Candid source
+/// can reach, and the closure through every kind of edge (a field, an
+/// alias, anonymous `vec`/`opt`/record nesting, a nested `service` type in
+/// value position, a `func` declaration, recursion) — generates a module the
+/// tsc equality gate compiles, and its omitted list is a golden too: the
+/// loader crosscheck (`ts/tests/crosscheck.test.ts`) and the wasm parity
+/// tests hold theirs equal to it.
+#[test]
+fn golden_omissions() {
+    let generated = generate_fixture_full("omissions");
+    assert_golden_file("omissions.ts", &generated.module);
+    let mut text = serde_json::to_string_pretty(&omitted_json(&generated.omitted))
+        .expect("the omitted list serializes");
+    text.push('\n');
+    assert_golden_file("omissions.omitted.json", &text);
+}
+
+/// The closure proof: nothing the module emits references an omitted
+/// declaration — no `$` local of one appears anywhere — and each omitted
+/// method is gone from *both* actor surfaces, the `actor` schema and the
+/// `Actor` type, which are rendered by separate paths. The listed order is
+/// declarations, then methods, each by name, and the header lists exactly
+/// that order.
+#[test]
+fn omissions_leave_no_reference_behind() {
+    let generated = generate_fixture_full("omissions");
+    let module = &generated.module;
+
+    let mut sorted = generated.omitted.clone();
+    sorted.sort_by(|left, right| (left.kind, &left.name).cmp(&(right.kind, &right.name)));
+    assert_eq!(
+        generated.omitted, sorted,
+        "declarations, then methods, by name"
+    );
+    let header: Vec<&str> = module
+        .lines()
+        .filter(|line| line.starts_with("// Omitted: "))
+        .collect();
+    let listed: Vec<String> = generated
+        .omitted
+        .iter()
+        .map(|omission| format!("// Omitted: {omission}"))
+        .collect();
+    assert_eq!(header, listed);
+    assert_eq!(
+        module
+            .lines()
+            .skip(1)
+            .take(listed.len())
+            .collect::<Vec<_>>(),
+        header,
+        "the list sits directly under the first header line"
+    );
+
+    let omitted_declarations: Vec<&str> = generated
+        .omitted
+        .iter()
+        .filter(|omission| omission.kind == OmissionKind::Declaration)
+        .map(|omission| omission.name.as_str())
+        .collect();
+    for omission in &generated.omitted {
+        if let Some(via) = &omission.via {
+            assert_eq!(omission.reason, OmissionReason::ReferencesOmitted);
+            assert!(
+                omitted_declarations.contains(&via.as_str()),
+                "{omission}: `via` must name an omitted declaration"
+            );
+        } else {
+            assert_ne!(omission.reason, OmissionReason::ReferencesOmitted);
+        }
+    }
+    // The actor surface binds `$actor` and `$Actor` itself; with its three
+    // lines set aside, not even an omitted `actor` or `Actor` has a local.
+    let declarations_only: String = module
+        .split_inclusive('\n')
+        .filter(|line| {
+            !line.starts_with("const $actor: ")
+                && !line.starts_with("type $Actor = {")
+                && !line.starts_with("export { $actor as actor, type $Actor as Actor };")
+        })
+        .collect();
+    for name in &omitted_declarations {
+        assert!(
+            !references_local(&declarations_only, name),
+            "the module still references omitted `{name}`:\n{module}"
+        );
+    }
+
+    let schema = module
+        .lines()
+        .find(|line| line.starts_with("const $actor: "))
+        .expect("the actor schema");
+    let interface = module
+        .split("type $Actor = {\n")
+        .nth(1)
+        .and_then(|rest| rest.split("\n};").next())
+        .expect("the Actor type");
+    let kept = ["ok", "list", "directory"];
+    assert_eq!(
+        schema.matches(": $.c.func(").count(),
+        kept.len(),
+        "{schema}"
+    );
+    assert_eq!(interface.lines().count(), kept.len(), "{interface}");
+    for method in kept {
+        assert!(
+            schema.contains(&format!(" {method}: $.c.func(")),
+            "{schema}"
+        );
+        assert!(interface.contains(&format!("  {method}: (")), "{interface}");
+    }
+    for omission in &generated.omitted {
+        if omission.kind == OmissionKind::Method {
+            let name = &omission.name;
+            assert!(!schema.contains(&format!(" {name}: ")), "{schema}");
+            assert!(!interface.contains(&format!("  {name}: ")), "{interface}");
+        }
+    }
+}
+
+/// The wire-type proof: omission changes nothing it keeps. The module
+/// generated from the `omissions` fixture, minus its `// Omitted:` lines, is
+/// byte-identical to the module generated from the same source with every
+/// omitted declaration and method deleted by hand — so every emitted alias,
+/// builder, `Actor` signature and actor-schema method is exactly what it
+/// would be had the omitted declarations never existed, and the wire type of
+/// every emitted method is unchanged.
+#[test]
+fn omission_leaves_everything_it_keeps_unchanged() {
+    let control = generate_source_full(OMISSIONS_CONTROL);
+    assert!(control.omitted.is_empty(), "{:?}", control.omitted);
+    let generated = generate_fixture_full("omissions");
+    assert!(!generated.omitted.is_empty());
+    assert_eq!(without_omitted_lines(&generated.module), control.module);
+}
+
+/// `omissions.did` with every omitted declaration and method removed.
+const OMISSIONS_CONTROL: &str = "
+type Good = record { a : nat };
+type NoValue = opt empty;
+type List = opt record { head : nat; tail : List };
+type Directory = record { svc : service { g : (Good) -> () } };
+service : {
+  ok : (Good) -> (Good) query;
+  list : () -> (List) query;
+  directory : (Directory) -> ();
+}
+";
+
+/// An actor written as a declared service (`service : S`) whose declaration
+/// is omitted keeps its surviving methods: the actor renders the service
+/// inline without the omitted ones — sound only for the actor, whose own
+/// service type no call ever encodes — and is byte-identical to an actor
+/// declared without them.
+#[test]
+fn an_omitted_actor_service_declaration_keeps_the_actor() {
+    let generated = generate_source_full(
+        "type Good = record { a : nat };\ntype Bad = record { _0_ : nat };\n\
+         type S = service { ok : (Good) -> (); bad : (Bad) -> () };\nservice : S",
+    );
+    assert_eq!(
+        generated.omitted,
+        vec![
+            declaration_omitted("Bad", OmissionReason::ReservedFieldName),
+            declaration_omitted_via("S", "Bad"),
+            method_omitted_via("bad", "Bad"),
+        ]
+    );
+    let control =
+        generate_source_full("type Good = record { a : nat };\nservice : { ok : (Good) -> () }");
+    assert_eq!(without_omitted_lines(&generated.module), control.module);
+
+    // A declared service with nothing omitted still renders by its name.
+    let kept = generate_source_full(
+        "type Good = record { a : nat };\ntype S = service { ok : (Good) -> () };\nservice : S",
+    );
+    assert!(kept.omitted.is_empty());
+    assert!(
+        kept.module
+            .contains("const $actor: $.Schema<$.Principal> = $.c.rec(() => $S);"),
+        "{}",
+        kept.module
+    );
+}
+
+/// A class actor's init args are install-time metadata the module never
+/// renders, so an omitted declaration they reference drops nothing from the
+/// actor: the actor surface itself is never omitted.
+#[test]
+fn a_class_actor_keeps_its_methods_when_its_init_args_are_omitted() {
+    let generated = generate_source_full(
+        "type Bad = record { _0_ : nat };\nservice : (Bad) -> { ping : () -> () }",
+    );
+    assert_eq!(
+        generated.omitted,
+        vec![declaration_omitted(
+            "Bad",
+            OmissionReason::ReservedFieldName
+        )]
+    );
+    assert!(
+        generated.module.contains("  ping: () => Promise<void>;\n"),
+        "{}",
+        generated.module
+    );
+    assert!(
+        generated.module.contains("init args are install-time"),
+        "{}",
+        generated.module
+    );
+}
+
+/// A later declaration of the same composite node renders the *first*
+/// declaration's name (the arena de-duplicates structure), so when that first
+/// declaration is omitted for its name, the alias goes with it — the rule the
+/// emitter's rendering implies, pinned so it is a decision, not an accident.
+#[test]
+fn an_alias_of_an_omitted_first_declaration_is_omitted_through_it() {
+    let generated =
+        generate_source_full("type Actor = record { a : nat };\ntype Z = record { a : nat };");
+    assert_eq!(
+        generated.omitted,
+        vec![
+            declaration_omitted("Actor", OmissionReason::ReservedExportName),
+            declaration_omitted_via("Z", "Actor"),
+        ]
+    );
+}
+
+/// A module with nothing to omit is byte-identical to what the generator
+/// emitted before issue #189: every other golden still matches its reviewed
+/// text (the `golden_*` tests), and none of them omits anything or carries an
+/// `// Omitted:` line.
+#[test]
+fn modules_without_omissions_are_unchanged() {
+    for name in [
+        "primitives",
+        "collections",
+        "variants",
+        "recursion",
+        "quoting",
+        "deferred",
+        "proto",
+        "ledger",
+        "empties",
+        "arms",
+        "options",
+        "shadowing",
+        "fidelity",
+        "docs",
+    ] {
+        let generated = generate_fixture_full(name);
+        assert!(
+            generated.omitted.is_empty(),
+            "{name}: {:?}",
+            generated.omitted
+        );
+        assert!(!generated.module.contains("// Omitted"), "{name}");
+    }
+}
+
+/// The reason codes are the serialized contract (`@candid-core/cli`'s
+/// `ModuleSuccess.omitted`, the loader's `omitted`): snake_case, distinct,
+/// and closed — the exhaustive match below stops compiling when a reason is
+/// added without a code.
+#[test]
+fn omission_codes_are_stable() {
+    let reasons = [
+        OmissionReason::ReservedFieldName,
+        OmissionReason::AmbiguousVariantArm,
+        OmissionReason::ReservedExportName,
+        OmissionReason::InvalidDeclarationName,
+        OmissionReason::ReferencesOmitted,
+    ];
+    let codes: Vec<&str> = reasons
+        .iter()
+        .map(|reason| match reason {
+            OmissionReason::ReservedFieldName
+            | OmissionReason::AmbiguousVariantArm
+            | OmissionReason::ReservedExportName
+            | OmissionReason::InvalidDeclarationName
+            | OmissionReason::ReferencesOmitted => reason.code(),
+        })
+        .collect();
+    assert_eq!(
+        codes,
+        [
+            "reserved_field_name",
+            "ambiguous_variant_arm",
+            "reserved_export_name",
+            "invalid_declaration_name",
+            "references_omitted",
+        ]
+    );
+    assert_eq!(OmissionKind::Declaration.code(), "declaration");
+    assert_eq!(OmissionKind::Method.code(), "method");
+}
+
+/// Two spellings with one Candid hash can address one `(container, id)` in a
+/// name table: `_0_` and `` 6,/`U`` both hash to 4735054. `TsNames` keeps
+/// the last one inserted, and only that winner is classified: a reserved
+/// `_N_` spelling that loses to a later ordinary one renders the ordinary
+/// key, and one that wins omits the declaration. `ts/tests/contract.test.ts`
+/// pins the same two outcomes for `schemaFromContract` over the same table
+/// in both orders (PR #210 review).
+#[test]
+fn the_last_name_for_a_key_wins_before_it_is_classified() {
+    let reserved = "_0_";
+    let collision = " 6,/`U";
+    let id = candid_parser_id(reserved);
+    assert_eq!(id, candid_parser_id(collision), "the two spellings collide");
+    assert_eq!(id, 4_735_054);
+    let contract = candid_core::ContractDraft::new(
+        vec![
+            candid_core::TypeNode::Record {
+                fields: vec![candid_core::Field { id, ty: 1 }],
+            },
+            candid_core::TypeNode::Primitive {
+                primitive: candid_core::PrimitiveType::Nat,
+            },
+        ],
+        vec![candid_core::Declaration {
+            name: "A".to_string(),
+            ty: 0,
+        }],
+        None,
+    )
+    .build()
+    .expect("a valid Contract");
+    let record = contract
+        .types()
+        .iter()
+        .position(|node| matches!(node, candid_core::TypeNode::Record { .. }))
+        .expect("the record node") as u32;
+
+    // Reserved first, ordinary last: the ordinary spelling wins and renders.
+    let names = TsNames::from_pairs([(record, id, reserved), (record, id, collision)]);
+    let generated = generate_module(&contract, &names, &TsOptions::default()).expect("generates");
+    assert!(generated.omitted.is_empty(), "{:?}", generated.omitted);
+    assert!(
+        generated
+            .module
+            .contains("$.c.record({ \" 6,/`U\": $.c.nat })"),
+        "{}",
+        generated.module
+    );
+
+    // Ordinary first, reserved last: the reserved spelling wins and omits.
+    let names = TsNames::from_pairs([(record, id, collision), (record, id, reserved)]);
+    let generated = generate_module(&contract, &names, &TsOptions::default()).expect("generates");
+    assert_eq!(
+        generated.omitted,
+        vec![declaration_omitted("A", OmissionReason::ReservedFieldName)]
+    );
+}
+
+/// A quoted method name may hold any character, including the four that end
+/// an ECMAScript `//` comment (LF, CR, U+2028, U+2029) and other controls.
+/// Its header line is still one line: JSON-style escapes, plus `\u2028` and
+/// `\u2029`, which JSON leaves raw. The CLI's `warning: omitted` line is
+/// held to the same text by `npm/test/cli.test.js` (PR #210 review).
+#[test]
+fn an_omitted_method_with_line_terminators_in_its_name_stays_on_one_line() {
+    let generated = generate_source_full(
+        "type Bad = record { _0_ : nat };\n\
+         service : { \"a\\u{2028}b\\u{2029}c\\nd\\re\\u{8}f\" : (Bad) -> (); ok : () -> () }",
+    );
+    assert_eq!(
+        generated.omitted,
+        vec![
+            declaration_omitted("Bad", OmissionReason::ReservedFieldName),
+            method_omitted_via("a\u{2028}b\u{2029}c\nd\re\u{8}f", "Bad"),
+        ]
+    );
+    let header =
+        "// Omitted: method \"a\\u2028b\\u2029c\\nd\\re\\u0008f\" (references_omitted via Bad)\n";
+    assert!(generated.module.contains(header), "{:?}", generated.module);
+    for terminator in ['\r', '\u{2028}', '\u{2029}'] {
+        assert!(
+            !generated.module.contains(terminator),
+            "{:?}",
+            generated.module
+        );
+    }
+    assert_eq!(
+        generated
+            .module
+            .lines()
+            .filter(|line| line.starts_with("// Omitted: "))
+            .count(),
+        2
+    );
+}
+
+/// Generate a fixture through the real provenance bridge, omissions included.
+fn generate_fixture_full(name: &str) -> GeneratedModule {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests");
+    let source = std::fs::read_to_string(root.join("fixtures").join(format!("{name}.did")))
+        .expect("fixture must be readable");
+    generate_source_full(&source)
+}
+
+/// Generate from Candid text through the real provenance bridge, omissions
+/// included.
+fn generate_source_full(source: &str) -> GeneratedModule {
+    let compilation = compile_did(source).unwrap_or_else(|error| panic!("{source}: {error:?}"));
     let names = TsNames::from_source_info(compilation.source_info().expect("provenance"));
     generate_module(compilation.contract(), &names, &TsOptions::default())
-        .expect("a non-never-alias inner is not ambiguous");
+        .unwrap_or_else(|error| panic!("{source} must generate: {error}"))
+}
+
+fn declaration_omitted(name: &str, reason: OmissionReason) -> Omission {
+    Omission {
+        kind: OmissionKind::Declaration,
+        name: name.to_string(),
+        reason,
+        via: None,
+    }
+}
+
+fn declaration_omitted_via(name: &str, via: &str) -> Omission {
+    Omission {
+        kind: OmissionKind::Declaration,
+        name: name.to_string(),
+        reason: OmissionReason::ReferencesOmitted,
+        via: Some(via.to_string()),
+    }
+}
+
+fn method_omitted_via(name: &str, via: &str) -> Omission {
+    Omission {
+        kind: OmissionKind::Method,
+        name: name.to_string(),
+        reason: OmissionReason::ReferencesOmitted,
+        via: Some(via.to_string()),
+    }
+}
+
+/// Whether the module mentions the `$` local of declaration `name` anywhere:
+/// `$name` not followed by another identifier character.
+fn references_local(module: &str, name: &str) -> bool {
+    let local = format!("${name}");
+    module.match_indices(&local).any(|(at, _)| {
+        !module[at + local.len()..]
+            .chars()
+            .next()
+            .is_some_and(|next| next.is_ascii_alphanumeric() || next == '_' || next == '$')
+    })
+}
+
+/// The module text without its `// Omitted:` header lines.
+fn without_omitted_lines(module: &str) -> String {
+    module
+        .split_inclusive('\n')
+        .filter(|line| !line.starts_with("// Omitted: "))
+        .collect()
+}
+
+/// The omitted list in its serialized form — the shape `@candid-core/cli`'s
+/// `didToModule` returns and `schemaFromContract` reports.
+fn omitted_json(omitted: &[Omission]) -> serde_json::Value {
+    serde_json::Value::Array(
+        omitted
+            .iter()
+            .map(|omission| {
+                let mut entry = serde_json::json!({
+                    "kind": omission.kind.code(),
+                    "name": omission.name,
+                    "reason": omission.reason.code(),
+                });
+                if let Some(via) = &omission.via {
+                    entry["via"] = serde_json::json!(via);
+                }
+                entry
+            })
+            .collect(),
+    )
 }
 
 /// The actor surface's sharp edges (issue #104 review): a class actor
@@ -752,7 +1413,8 @@ fn actor_emission_covers_class_unwrap_and_proto_methods() {
         compile_did("service : (nat) -> { ping : () -> () };").expect("a class actor compiles");
     let names = TsNames::from_source_info(class_actor.source_info().expect("provenance"));
     let output = generate_module(class_actor.contract(), &names, &TsOptions::default())
-        .expect("a class actor generates its running service");
+        .expect("a class actor generates its running service")
+        .module;
     assert!(
         output.contains("export { $actor as actor, type $Actor as Actor };"),
         "{output}"
@@ -766,8 +1428,9 @@ fn actor_emission_covers_class_unwrap_and_proto_methods() {
     let proto = compile_did("service : { \"__proto__\" : () -> () };")
         .expect("a __proto__ method compiles");
     let names = TsNames::from_source_info(proto.source_info().expect("provenance"));
-    let output =
-        generate_module(proto.contract(), &names, &TsOptions::default()).expect("generate");
+    let output = generate_module(proto.contract(), &names, &TsOptions::default())
+        .expect("generate")
+        .module;
     assert!(
         output.contains("$.c.service({ [\"__proto__\"]: $.c.func"),
         "the method key must be computed: {output}"
@@ -780,6 +1443,7 @@ fn generate_source(source: &str) -> String {
     let names = TsNames::from_source_info(compilation.source_info().expect("provenance"));
     generate_module(compilation.contract(), &names, &TsOptions::default())
         .unwrap_or_else(|error| panic!("{source} must generate: {error}"))
+        .module
 }
 
 /// Issue #191: a declaration of a primitive names only itself. The arena
@@ -928,7 +1592,8 @@ fn without_provenance_no_docs_are_emitted() {
         &TsNames::new(),
         &TsOptions::default(),
     )
-    .expect("generate");
+    .expect("generate")
+    .module;
     assert!(!bare.contains("/**"), "{bare}");
     assert!(
         bare.contains("arg0: "),
@@ -961,7 +1626,9 @@ fn documented_generation_is_deterministic() {
     let names = TsNames::from_source_info(compilation.source_info().expect("provenance"));
     let json = serde_json::to_string(compilation.contract()).expect("serialize");
     let reparsed = candid_core::Contract::from_json(&json).expect("reparse");
-    let again = generate_module(&reparsed, &names, &TsOptions::default()).expect("generate");
+    let again = generate_module(&reparsed, &names, &TsOptions::default())
+        .expect("generate")
+        .module;
     assert_eq!(first, again);
 }
 
@@ -1191,7 +1858,8 @@ fn missing_names_render_by_id_convention() {
         &TsNames::new(),
         &TsOptions::default(),
     )
-    .expect("generate");
+    .expect("generate")
+    .module;
     let id = candid_parser_id("id");
     let label = candid_parser_id("label");
     assert!(output.contains(&format!("_{id}_")), "{output}");

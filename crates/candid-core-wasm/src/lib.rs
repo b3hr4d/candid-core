@@ -22,9 +22,19 @@
 //!   `candid-core compile <path> --envelope` binary prints for the same
 //!   sources, pinned by test against the committed envelope fixture. The
 //!   `contract` key is the same discriminator `schemaFromContract` detects.
-//! - [`did_to_module`] success: `{"ok": true, "module": "<TypeScript>"}` —
-//!   the text `candid-core-ts` generates, byte-identical to the reviewed
-//!   goldens, pinned by test.
+//! - [`did_to_module`] success: `{"ok": true, "module": "<TypeScript>",
+//!   "omitted": […]}` — the text `candid-core-ts` generates, byte-identical
+//!   to the reviewed goldens, pinned by test, and what it left out (issue
+//!   #189). Each `omitted` entry is `{"kind", "name", "reason", "via"?}`:
+//!   `kind` is `declaration` or `method` (a method of the actor's service);
+//!   `reason` is one of the generator's closed set of codes —
+//!   `reserved_field_name`, `ambiguous_variant_arm`, `reserved_export_name`,
+//!   `invalid_declaration_name`, `references_omitted`; and `via`, present
+//!   only for `references_omitted`, names the omitted declaration the entry
+//!   references. Declarations come first, then methods, each sorted by name.
+//!   The array is empty, never absent, when nothing was omitted. A module
+//!   with omissions is still a success: everything it emits is exactly what
+//!   it would be without the omitted declarations.
 //! - failure, either function: `{"ok": false, "diagnostics": […]}` — the
 //!   one and only failure shape. Compiler diagnostics pass through verbatim;
 //!   envelope-validation refusals surface as their path-addressed violation
@@ -32,8 +42,10 @@
 //!   review); and the two codes this crate itself originates are
 //!   `invalid_request` (`"phase": "load"` — the request document is not one
 //!   of the two shapes) and `ts_generation_refused`
-//!   (`"phase": "generate"` — the generator's fail-closed refusals, message
-//!   text verbatim).
+//!   (`"phase": "generate"` — the generator's refusal of an invalid
+//!   Contract graph, message text verbatim; a Contract compiled from
+//!   Candid source is always valid, so since issue #189 this is a
+//!   fail-closed guard that no `.did` input reaches).
 //!
 //! # Determinism
 //!
@@ -45,7 +57,7 @@ use candid_core::{
     compile_with_resolver, Compilation, CompileError, CompileOptions, ContractEnvelope, Limits,
     MemoryResolver, RuntimeContext, SourceInfo, SourceLabel,
 };
-use candid_core_ts::{generate_module, TsNames, TsOptions};
+use candid_core_ts::{generate_module, Omission, TsNames, TsOptions};
 use serde_json::{json, Value};
 
 /// The envelope extension carrying field names, per the issue #152 decision.
@@ -60,8 +72,8 @@ pub fn did_to_contract(request: &str) -> String {
     }
 }
 
-/// Generate the TypeScript module for a request: `{"ok": true, "module": …}`
-/// or `{"ok": false, "diagnostics": […]}`.
+/// Generate the TypeScript module for a request: `{"ok": true, "module": …,
+/// "omitted": […]}` or `{"ok": false, "diagnostics": […]}`.
 pub fn did_to_module(request: &str) -> String {
     match compile_request(request) {
         Ok(compilation) => {
@@ -70,7 +82,11 @@ pub fn did_to_module(request: &str) -> String {
                 .expect("source info was requested");
             let names = TsNames::from_source_info(source_info);
             match generate_module(compilation.contract(), &names, &TsOptions::default()) {
-                Ok(module) => pretty(&json!({ "ok": true, "module": module })),
+                Ok(generated) => pretty(&json!({
+                    "ok": true,
+                    "module": generated.module,
+                    "omitted": omitted_document(&generated.omitted),
+                })),
                 Err(refusal) => pretty(&json!({
                     "ok": false,
                     "diagnostics": [{
@@ -205,6 +221,28 @@ fn field_name_triples(source_info: &SourceInfo) -> Vec<Value> {
         .iter()
         .map(|((container, id), label)| json!([container, id, label]))
         .collect()
+}
+
+/// The generator's omissions as `ModuleSuccess.omitted` serializes them:
+/// `{"kind", "name", "reason", "via"?}` with the generator's stable codes,
+/// in the generator's order. `via` is present only for `references_omitted`.
+fn omitted_document(omitted: &[Omission]) -> Value {
+    Value::Array(
+        omitted
+            .iter()
+            .map(|omission| {
+                let mut entry = json!({
+                    "kind": omission.kind.code(),
+                    "name": omission.name,
+                    "reason": omission.reason.code(),
+                });
+                if let Some(via) = &omission.via {
+                    entry["via"] = json!(via);
+                }
+                entry
+            })
+            .collect(),
+    )
 }
 
 fn diagnostics_document(error: &CompileError) -> String {

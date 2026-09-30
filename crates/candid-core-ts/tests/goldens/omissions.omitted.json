@@ -1,0 +1,128 @@
+[
+  {
+    "kind": "declaration",
+    "name": "Actor",
+    "reason": "reserved_export_name"
+  },
+  {
+    "kind": "declaration",
+    "name": "Ambiguous",
+    "reason": "ambiguous_variant_arm"
+  },
+  {
+    "kind": "declaration",
+    "name": "AnonymousBad",
+    "reason": "reserved_field_name"
+  },
+  {
+    "kind": "declaration",
+    "name": "Bad",
+    "reason": "reserved_field_name"
+  },
+  {
+    "kind": "declaration",
+    "name": "BadAlias",
+    "reason": "references_omitted",
+    "via": "Bad"
+  },
+  {
+    "kind": "declaration",
+    "name": "Callback",
+    "reason": "references_omitted",
+    "via": "Bad"
+  },
+  {
+    "kind": "declaration",
+    "name": "Deep",
+    "reason": "references_omitted",
+    "via": "Bad"
+  },
+  {
+    "kind": "declaration",
+    "name": "Handlers",
+    "reason": "references_omitted",
+    "via": "Callback"
+  },
+  {
+    "kind": "declaration",
+    "name": "Holder",
+    "reason": "references_omitted",
+    "via": "Bad"
+  },
+  {
+    "kind": "declaration",
+    "name": "Loop",
+    "reason": "references_omitted",
+    "via": "Bad"
+  },
+  {
+    "kind": "declaration",
+    "name": "Registry",
+    "reason": "references_omitted",
+    "via": "Bad"
+  },
+  {
+    "kind": "declaration",
+    "name": "TwoCauses",
+    "reason": "references_omitted",
+    "via": "Bad"
+  },
+  {
+    "kind": "declaration",
+    "name": "UsesActor",
+    "reason": "references_omitted",
+    "via": "actor"
+  },
+  {
+    "kind": "declaration",
+    "name": "UsesAmbiguous",
+    "reason": "references_omitted",
+    "via": "Ambiguous"
+  },
+  {
+    "kind": "declaration",
+    "name": "actor",
+    "reason": "reserved_export_name"
+  },
+  {
+    "kind": "method",
+    "name": "ambiguous",
+    "reason": "references_omitted",
+    "via": "Ambiguous"
+  },
+  {
+    "kind": "method",
+    "name": "anonymous_bad",
+    "reason": "reserved_field_name"
+  },
+  {
+    "kind": "method",
+    "name": "bad",
+    "reason": "references_omitted",
+    "via": "Bad"
+  },
+  {
+    "kind": "method",
+    "name": "by_reference",
+    "reason": "references_omitted",
+    "via": "Callback"
+  },
+  {
+    "kind": "method",
+    "name": "callback",
+    "reason": "references_omitted",
+    "via": "Callback"
+  },
+  {
+    "kind": "method",
+    "name": "two_causes",
+    "reason": "references_omitted",
+    "via": "Ambiguous"
+  },
+  {
+    "kind": "method",
+    "name": "uses_actor",
+    "reason": "references_omitted",
+    "via": "actor"
+  }
+]

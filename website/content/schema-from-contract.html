@@ -60,13 +60,28 @@ export type SchemaFromContractResult =
       readonly schemas: { readonly [name: string]: AnySchema };
       /** The actor interface as a service schema, when the document has one. */
       readonly actor?: AnySchema;
+      /** What was left out, and why — the list the generator reports. */
+      readonly omitted: readonly {
+        readonly kind: "declaration" | "method";
+        readonly name: string;
+        readonly reason:
+          | "reserved_field_name"
+          | "ambiguous_variant_arm"
+          | "reserved_export_name"
+          | "invalid_declaration_name"
+          | "references_omitted";
+        readonly via?: string;
+      }[];
     }
   | { readonly ok: false; readonly issues: readonly ContractIssue[] };
 </pre>
 
 <p>
   On success you get one schema per declaration, keyed by declaration name and built in declaration
-  order, plus <code>actor</code> when the <code>.did</code> file declared a service. The map is
+  order, plus <code>actor</code> when the <code>.did</code> file declared a service, and
+  <code>omitted</code>: the declarations and actor methods left out, exactly as a generated module
+  leaves them out for the same Contract (see <a href="#the-mapping-decisions">the mapping
+  decisions</a>). The map is
   built with <code>Object.create(null)</code>, so a declaration or field legitimately named
   <code>__proto__</code> is an ordinary own key rather than a prototype write.
 </p>
@@ -217,9 +232,12 @@ export type SchemaFromContractResult =
 </p>
 
 <p>
-  Names shaped like <code>_N_</code> are refused for the same reason: erased to a schema key, a
-  source name spelled <code>_5_</code> is indistinguishable from the numeric rendering of id 5,
-  and the two derive different wire ids.
+  Names shaped like <code>_N_</code> never become keys, for the same reason: erased to a schema key,
+  a source name spelled <code>_5_</code> is indistinguishable from the numeric rendering of id 5,
+  and the two derive different wire ids. Such a name that honestly hashes to its id is real
+  provenance, so it does not fail the table; the declaration that would render it is omitted
+  instead (<code>reserved_field_name</code>), as the generator omits it. One that does not hash to its
+  id is a lying entry like any other.
 </p>
 
 <p>
@@ -281,11 +299,29 @@ export type SchemaFromContractResult =
     when that class <em>is</em> the actor root.
   </dd>
 
-  <dt>Declaration names need not be TypeScript identifiers</dt>
+  <dt>What the generator omits, the loader omits</dt>
   <dd>
-    This is the one deliberate divergence. The generator emits source text and must refuse a
-    declaration called <code>delete</code>; this loader builds a map, where any string is a valid
-    key.
+    <p>
+      A declaration no generated module can represent is left out of <code>schemas</code>, together
+      with every declaration and actor method that references it — through nested <code>func</code>
+      and <code>service</code> types too, up to the containing declaration, since dropping a method
+      from a service type in value position would change its wire type — and listed in
+      <code>omitted</code> as <code>{ kind, name, reason, via? }</code>, declarations first, then
+      methods, each by name in code-point order. The reasons are the generator's:
+      <code>reserved_field_name</code> (an honest <code>_N_</code>-shaped field or arm name),
+      <code>ambiguous_variant_arm</code> (an arm whose payload is a declared <code>opt</code> of an
+      uninhabited type), <code>reserved_export_name</code> (a declaration named <code>actor</code> or
+      <code>Actor</code>), <code>invalid_declaration_name</code> (a name that is not
+      identifier-shaped) and <code>references_omitted</code>, whose <code>via</code> names the omitted
+      declaration referenced. The actor is never omitted; it loses only the listed methods.
+    </p>
+    <p>
+      The loader could build some of these; it leaves them out so that its schemas are exactly the
+      declarations a generated module exports. Declaration names that are not identifier-shaped used to
+      load here as a deliberate divergence from the generator, and are omitted now for that parity;
+      reserved words such as <code>delete</code> are identifier names and load as before. An invalid
+      document still fails whole.
+    </p>
   </dd>
 </dl>
 
@@ -442,7 +478,7 @@ built.actor; // the service schema, when the document has one
     <tr><td><code>unsupported_construct</code></td><td>A <code>class</code> node nests inside a supported type.</td></tr>
     <tr><td><code>duplicate_field_id</code>, <code>duplicate_field_name</code></td><td>Two fields of one node share an id, or two ids render to the same key.</td></tr>
     <tr><td><code>empty_declaration_name</code>, <code>duplicate_declaration_name</code></td><td>A declaration has no name, or two share one.</td></tr>
-    <tr><td><code>invalid_name_table</code></td><td>An entry is not <code>[container, id, name]</code>, is <code>_N_</code>-shaped, or does not hash to its id.</td></tr>
+    <tr><td><code>invalid_name_table</code></td><td>An entry is not <code>[container, id, name]</code>, or does not hash to its id. (An honest <code>_N_</code>-shaped name omits its declaration instead; see above.)</td></tr>
     <tr><td><code>invalid_extension_name</code></td><td>An envelope extension key is not a reverse-domain name followed by <code>/v&lt;integer&gt;</code>.</td></tr>
     <tr><td><code>resource_limit_exceeded</code></td><td>One of the caps above tripped; the issue carries <code>{ resource, limit, observed }</code>.</td></tr>
   </tbody>

@@ -18,7 +18,7 @@ import { readFileSync } from "node:fs";
 
 import { schemaFromContract, type FieldNameEntry } from "../contract.ts";
 import { validate } from "../validate.ts";
-import type { AnySchema } from "../schema.ts";
+import { serviceMethods, type AnySchema } from "../schema.ts";
 
 import * as primitives from "../../tests/goldens/primitives.ts";
 import * as collections from "../../tests/goldens/collections.ts";
@@ -32,6 +32,7 @@ import * as empties from "../../tests/goldens/empties.ts";
 import * as arms from "../../tests/goldens/arms.ts";
 import * as options from "../../tests/goldens/options.ts";
 import * as fidelity from "../../tests/goldens/fidelity.ts";
+import * as omissions from "../../tests/goldens/omissions.ts";
 
 interface Fixture {
   readonly name: string;
@@ -49,6 +50,23 @@ function load(name: string): { contract: unknown; names: FieldNameEntry[]; envel
     ) as FieldNameEntry[],
     envelope: JSON.parse(readFileSync(new URL(`${name}.envelope.json`, goldens), "utf8")),
   };
+}
+
+/**
+ * What the generator left out of a fixture's module (issue #189): the
+ * `<name>.omitted.json` golden `tests/golden.rs` writes from the generator's
+ * own `omitted` list, or nothing for a fixture that omits nothing.
+ */
+function generatorOmitted(name: string): unknown[] {
+  const goldens = new URL("../../tests/goldens/", import.meta.url);
+  try {
+    return JSON.parse(readFileSync(new URL(`${name}.omitted.json`, goldens), "utf8")) as unknown[];
+  } catch (error) {
+    if ((error as { code?: string }).code === "ENOENT") {
+      return [];
+    }
+    throw error;
+  }
 }
 
 // A principal is canonical text (issue #187); the non-canonical spellings and
@@ -439,6 +457,19 @@ const FIXTURES: readonly Fixture[] = [
       ],
     },
   },
+  {
+    // Issue #189: what the generator omits, the loader omits — the schema
+    // set equality below and the omitted-list equality after it — and what
+    // both keep validates identically.
+    name: "omissions",
+    module: omissions,
+    samples: {
+      Good: [{ a: 1n }, { a: 1 }, {}],
+      NoValue: [null, 0, { some: null }],
+      List: [null, { head: 1n, tail: null }, { head: 1n, tail: { head: 2n, tail: null } }, {}],
+      Directory: [{ svc: principal }, { svc: carrier }, {}],
+    },
+  },
 ];
 
 for (const fixture of FIXTURES) {
@@ -469,7 +500,16 @@ for (const fixture of FIXTURES) {
         validate(built.actor, principalSample),
         validate(generatedActor, principalSample),
       );
+      // The same methods survive on both paths, in the same order.
+      assert.deepStrictEqual(
+        [...serviceMethods(built.actor).keys()],
+        [...serviceMethods(generatedActor).keys()],
+      );
     }
+
+    // Loader parity (issue #189): the same omissions — names, kinds,
+    // reasons, `via` — in the same order as the generator's list.
+    assert.deepStrictEqual(built.omitted, generatorOmitted(fixture.name));
 
     // Every declaration has samples; every sample must get the identical
     // result — verdict, codes, paths, and messages — from both schemas.
@@ -519,6 +559,7 @@ for (const fixture of FIXTURES) {
       twoFile.actor !== undefined,
       "both paths agree on whether the contract carries an actor",
     );
+    assert.deepStrictEqual(oneDocument.omitted, twoFile.omitted);
     if (oneDocument.actor !== undefined && twoFile.actor !== undefined) {
       const principalSample = "aaaaa-aa";
       assert.deepStrictEqual(

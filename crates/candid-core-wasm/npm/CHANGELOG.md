@@ -56,8 +56,9 @@ export { $Tokens as Tokens };
   TypeScript reserved words (`delete`, `string`). Import them by name,
   renaming where needed (`import { delete as del } from "./service"`). A
   declaration named `default` becomes the module's default export.
-- Declarations named `actor` or `Actor` are still refused with
-  `ts_generation_refused`: those are the module's own export names.
+- Declarations named `actor` or `Actor` stay reserved: those are the
+  module's own export names. They are omitted from the module rather than
+  refusing it; see *Unrepresentable declarations are omitted, not refused*.
 - **Release ordering**: none. The layout needs only the `c`, `Schema` and
   `PrincipalValue` exports `@candid-core/schema` 0.2.0 already has; the
   goldens without collapsing options type-check against 0.2.0 unchanged.
@@ -134,6 +135,60 @@ export { $Tokens as Tokens };
   as its parameter name where it took `arg0`, and gains an `@param x` block,
   whether or not the file has a single comment. Types, values and wire bytes
   do not move either way.
+
+### Unrepresentable declarations are omitted, not refused
+
+The embedded generator leaves out a declaration it cannot represent, with
+everything that references it, instead of refusing the whole interface. One
+exotic declaration no longer costs the module.
+
+- **BREAKING (exit status)**: `candid-core-cli gen` used to print a
+  `ts_generation_refused` diagnostics document and exit 1 for an interface
+  with a record field or variant arm named like the `_N_` numeric-id
+  rendering (`record { _0_ : nat }`), a variant arm whose payload is a
+  declared `opt` of an uninhabited type (`type W = opt empty; type V =
+  variant { a : W }`), or a declaration named `actor` or `Actor`. It now
+  writes the module without those declarations and exits 0, printing one
+  `warning: omitted …` line per omission on stderr. A script that relied on
+  the non-zero exit to reject such an interface must read the warnings, or
+  `omitted`, instead. Stdout's report is unchanged.
+- **BREAKING**: `didToModule` returns `{ ok: true, module, omitted }` for
+  those inputs where it returned `{ ok: false, diagnostics }`. No Candid
+  source reaches `ts_generation_refused` any more; the code stays, reserved
+  for an invalid contract graph.
+- **The closure**: an omitted declaration takes with it every declaration
+  that references it through any edge — a field, an alias, `vec`/`opt`/record
+  nesting, a `func` type's arguments or results, a `service` type's methods —
+  up to the containing declaration. A record holding a
+  `service { f : (Bad) -> () }` is omitted whole, not stripped of `f`: a
+  service value's wire type is its full method table, and a peer would see a
+  different type. Only the actor drops individual methods, from both the
+  `actor` schema and the `Actor` type, since calling a method never encodes
+  the actor's own service type. The actor itself is never omitted, and a class
+  actor whose init arguments reference an omitted declaration keeps every
+  method (init arguments are not generated).
+- **Everything kept is unchanged**: the modules for the other golden
+  interfaces are byte-identical, and a test pins that, for an interface with
+  omissions, every emitted declaration, `Actor` signature and actor method is
+  byte-identical to the module generated with the omitted declarations
+  deleted from the source.
+- **`ModuleSuccess.omitted`** (new, always present, empty when nothing is
+  omitted): an array of `{ kind, name, reason, via? }`, declarations first,
+  then methods, each sorted by name. `kind` is `"declaration"` or
+  `"method"`. `reason` is one of `reserved_field_name`,
+  `ambiguous_variant_arm`, `reserved_export_name`, `invalid_declaration_name`
+  (Contract documents only; Candid source cannot produce one) or
+  `references_omitted`; `via` is present only for `references_omitted` and
+  names the omitted declaration referenced. This is a serialized shape: the
+  set of `reason` codes is closed, and a new code is a breaking change.
+- **The module header** lists the same entries in the same order, one line
+  each, directly under the first line:
+  `// Omitted: type Holder (references_omitted via Bad)`. A module that omits
+  nothing has no such line and is byte-identical to before.
+- **Release ordering**: the paired `@candid-core/schema` change makes
+  `schemaFromContract` leave out the same declarations and methods, with the
+  same reasons, so a generated module and a loaded contract agree; ship them
+  together.
 
 ## 0.1.0 — 2026-08-27
 

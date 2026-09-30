@@ -14,6 +14,11 @@
 // a compile or generation failure prints its JSON diagnostics document on
 // stdout and exits 1. Determinism is enforced, not assumed: every
 // generation runs twice and the run refuses on any byte mismatch.
+//
+// A module that had to leave declarations or actor methods out is still
+// usable, so the run succeeds (exit 0): each omission is printed as
+// a `warning: omitted …` line on stderr, in the order and wording of the
+// module's own `// Omitted:` header, and stdout carries the usual report.
 
 import { readFile, readdir, mkdir, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -137,6 +142,48 @@ async function didFiles(root) {
   return files;
 }
 
+/**
+ * A name as the module header lists it, character for character: bare when
+ * identifier-shaped, else quoted exactly as the generator quotes it — `"`,
+ * `\\`, `\n`, `\r` and `\t` escaped, every other control character as a
+ * lowercase `\u00XX`, and U+2028 / U+2029 as `\u2028` / `\u2029`.
+ * `JSON.stringify` is not that: it leaves U+2028 and U+2029 raw — both end
+ * a line — and writes `\b` and `\f`. A quoted Candid method name can hold
+ * any of them, and each warning must stay one line equal to its header line.
+ */
+function listedName(name) {
+  if (/^[A-Za-z_$][A-Za-z0-9_$]*$/.test(name)) {
+    return name;
+  }
+  let quoted = '"';
+  for (const character of name) {
+    const code = character.codePointAt(0);
+    if (character === '"') {
+      quoted += '\\"';
+    } else if (character === "\\") {
+      quoted += "\\\\";
+    } else if (character === "\n") {
+      quoted += "\\n";
+    } else if (character === "\r") {
+      quoted += "\\r";
+    } else if (character === "\t") {
+      quoted += "\\t";
+    } else if (code < 0x20 || code === 0x2028 || code === 0x2029) {
+      quoted += `\\u${code.toString(16).padStart(4, "0")}`;
+    } else {
+      quoted += character;
+    }
+  }
+  return `${quoted}"`;
+}
+
+/** One omission, worded as the module header's `// Omitted:` line. */
+function describeOmission(entry) {
+  const kind = entry.kind === "method" ? "method" : "type";
+  const via = entry.via === undefined ? "" : ` via ${listedName(entry.via)}`;
+  return `${kind} ${listedName(entry.name)} (${entry.reason}${via})`;
+}
+
 /** Run a generation twice and refuse on any byte mismatch. */
 async function deterministic(label, produce) {
   const first = await produce();
@@ -195,3 +242,6 @@ if (identities.interface !== undefined) {
 }
 console.log(`wrote ${modulePath}`);
 console.log(`wrote ${envelopePath}`);
+for (const entry of generated.omitted) {
+  console.error(`warning: omitted ${describeOmission(entry)}`);
+}

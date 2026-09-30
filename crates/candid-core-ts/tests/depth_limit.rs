@@ -149,7 +149,12 @@ fn emit_depth_limit_goldens() {
             &TsOptions::default(),
         )
         .unwrap_or_else(|error| panic!("{name}: the maximum depth must generate: {error}"));
-        assert_golden(&format!("{name}.ts"), &module);
+        assert!(
+            module.omitted.is_empty(),
+            "{name}: a depth fixture omits nothing: {:?}",
+            module.omitted
+        );
+        assert_golden(&format!("{name}.ts"), &module.module);
 
         let mut document =
             serde_json::to_value(compilation.contract()).expect("contract must serialize");

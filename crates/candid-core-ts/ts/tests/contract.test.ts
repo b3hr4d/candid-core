@@ -14,7 +14,7 @@ import {
 } from "../contract.ts";
 import { validate } from "../validate.ts";
 import { candidLabelHash } from "../labels.ts";
-import { isBoxedOpt, type AnySchema } from "../schema.ts";
+import { isBoxedOpt, serviceMethods, type AnySchema } from "../schema.ts";
 
 type Json = ReturnType<typeof JSON.parse>;
 
@@ -300,13 +300,19 @@ test("a lying name table fails closed at the table, before any key renders", () 
   // wrong wire id; hash enforcement (issue #103) rejects the entry itself.
   const lying = schemaFromContract(doc, { names: [[0, 1, "same"]] });
   failsWith(lying, "invalid_name_table", "$.names[0]");
-  // `_N_`-shaped names are reserved for the numeric-id rendering: erased to
-  // a key, `_2_` the name and `_2_` the rendering of id 2 are identical.
+  // An `_N_`-shaped name that does not hash to its id is a lying entry like
+  // any other, refused at the table.
   const reserved = schemaFromContract(doc, { names: [[0, 1, "_2_"]] });
   failsWith(reserved, "invalid_name_table", "$.names[0]");
-  // The shape refusal must hold even when the hash is honest: "_2_" hashes
-  // to 4735500, so this entry passes the hash check and only the reserved
-  // shape stands between the codec and a silently wrong wire id.
+});
+
+// Issue #189, amending #103 and #115: an *honest* `_N_`-shaped name — "_2_"
+// hashes to 4735500 — is real provenance, but erased to a schema key it is
+// indistinguishable from the rendering of numeric id 2, so the codec would
+// derive the wrong wire id from it. It never becomes a key: the declaration
+// that would render it is omitted, with everything referencing it, exactly
+// as the generator omits it — no longer a whole-document refusal.
+test("an honest _N_-shaped name omits its declaration instead of refusing", () => {
   const honestHash = schemaFromContract(
     document(
       [{ kind: "record", fields: [{ id: 4_735_500, type: 1 }] }, primitive("nat")],
@@ -314,18 +320,119 @@ test("a lying name table fails closed at the table, before any key renders", () 
     ),
     { names: [[0, 4_735_500, "_2_"]] },
   );
-  failsWith(honestHash, "invalid_name_table", "$.names[0]");
-  // Cross-path agreement with the generator (#115): the document its
-  // ReservedFieldName refuses — a source field genuinely named "_123_",
-  // hash 3550129612 — is refused here too, by the same reservation.
+  assert(honestHash.ok, "an honest reserved name is an omission, not a refusal");
+  if (honestHash.ok) {
+    assert.deepStrictEqual(Object.keys(honestHash.schemas), []);
+    assert.deepStrictEqual(honestHash.omitted, [
+      { kind: "declaration", name: "A", reason: "reserved_field_name" },
+    ]);
+  }
+  // Cross-path agreement with the generator (#115): the document whose
+  // `_123_` field the generator omits — a source field genuinely named
+  // "_123_", hash 3550129612 — is omitted here too, and a declaration beside
+  // it still loads.
   const generatorTwin = schemaFromContract(
     document(
-      [{ kind: "record", fields: [{ id: 3_550_129_612, type: 1 }] }, primitive("nat8")],
-      [{ name: "Holder", type: 0 }],
+      [
+        { kind: "record", fields: [{ id: 3_550_129_612, type: 1 }] },
+        primitive("nat8"),
+        { kind: "record", fields: [{ id: 1, type: 1 }] },
+      ],
+      [
+        { name: "Holder", type: 0 },
+        { name: "Other", type: 2 },
+      ],
     ),
     { names: [[0, 3_550_129_612, "_123_"]] },
   );
-  failsWith(generatorTwin, "invalid_name_table", "$.names[0]");
+  assert(generatorTwin.ok);
+  if (generatorTwin.ok) {
+    assert.deepStrictEqual(Object.keys(generatorTwin.schemas), ["Other"]);
+    assert.deepStrictEqual(generatorTwin.omitted, [
+      { kind: "declaration", name: "Holder", reason: "reserved_field_name" },
+    ]);
+  }
+  // The #115 collision document — `_123_` the name beside `123` the id —
+  // no longer reaches the duplicate-key check: the reserved name never
+  // renders a key, so the node is omitted rather than refused.
+  const collision = schemaFromContract(
+    document(
+      [
+        {
+          kind: "record",
+          fields: [
+            { id: 123, type: 1 },
+            { id: 3_550_129_612, type: 1 },
+          ],
+        },
+        primitive("nat8"),
+      ],
+      [{ name: "T", type: 0 }],
+    ),
+    { names: [[0, 3_550_129_612, "_123_"]] },
+  );
+  assert(collision.ok);
+  if (collision.ok) {
+    assert.deepStrictEqual(collision.omitted, [
+      { kind: "declaration", name: "T", reason: "reserved_field_name" },
+    ]);
+  }
+  // An entry that names no rendered key — here a container that is not a
+  // record at all — is ignored, as the generator ignores it.
+  const unused = schemaFromContract(document([primitive("nat")], [{ name: "N", type: 0 }]), {
+    names: [[0, 4_735_500, "_2_"]],
+  });
+  assert(unused.ok);
+  if (unused.ok) {
+    assert.deepStrictEqual(Object.keys(unused.schemas), ["N"]);
+    assert.deepStrictEqual(unused.omitted, []);
+  }
+});
+
+// Two honest spellings can share one Candid hash — `_0_` and `` 6,/`U``
+// both hash to 4735054 — so a table may address one `(container, id)` twice.
+// The last entry wins, as in `TsNames`, and only the winner is classified:
+// `tests/golden.rs::the_last_name_for_a_key_wins_before_it_is_classified`
+// pins the generator's two outcomes for the same table in both orders
+// (PR #210 review).
+test("the last name for a key wins before it is classified, in generator parity", () => {
+  const reserved = "_0_";
+  const collision = " 6,/`U";
+  const id = candidLabelHash(reserved);
+  assert.strictEqual(id, 4_735_054);
+  assert.strictEqual(candidLabelHash(collision), id);
+  const doc = document(
+    [{ kind: "record", fields: [{ id, type: 1 }] }, primitive("nat")],
+    [{ name: "A", type: 0 }],
+  );
+
+  // Reserved first, ordinary last: the ordinary spelling wins and renders.
+  const ordinaryWins = schemaFromContract(doc, {
+    names: [
+      [0, id, reserved],
+      [0, id, collision],
+    ],
+  });
+  assert(ordinaryWins.ok);
+  if (ordinaryWins.ok) {
+    assert.deepStrictEqual(ordinaryWins.omitted, []);
+    assert.deepStrictEqual(validate(ordinaryWins.schemas.A, { [collision]: 1n }), { ok: true });
+  }
+
+  // Ordinary first, reserved last: the reserved spelling wins and omits.
+  const reservedWins = schemaFromContract(doc, {
+    names: [
+      [0, id, collision],
+      [0, id, reserved],
+    ],
+  });
+  assert(reservedWins.ok);
+  if (reservedWins.ok) {
+    assert.deepStrictEqual(Object.keys(reservedWins.schemas), []);
+    assert.deepStrictEqual(reservedWins.omitted, [
+      { kind: "declaration", name: "A", reason: "reserved_field_name" },
+    ]);
+  }
 });
 
 test("a malformed name table entry fails closed", () => {
@@ -615,14 +722,105 @@ test("numeric ids starting at 0 but not contiguous build a record, not a tuple",
   }
 });
 
-test("declaration names need not be TypeScript identifiers", () => {
-  // A deliberate divergence from the generator, which emits source text and
-  // must refuse `type delete`; a map key has no such constraint.
-  const result = schemaFromContract(document([primitive("nat")], [{ name: "delete", type: 0 }]));
+test("declaration names that no generated module can bind are omitted in parity", () => {
+  // Reserved words are identifier names: `delete` binds `$delete` in a
+  // generated module (issue #188) and loads here as a plain key.
+  const keyword = schemaFromContract(document([primitive("nat")], [{ name: "delete", type: 0 }]));
+  assert(keyword.ok);
+  if (keyword.ok) {
+    assert.deepStrictEqual(validate(keyword.schemas.delete, 1n), { ok: true });
+    assert.deepStrictEqual(keyword.omitted, []);
+  }
+  // A name that is not identifier-shaped used to load here as a deliberate
+  // divergence from the generator. Since issue #189 both leave it out, with
+  // what references it, so the loaded set is the generated set.
+  const result = schemaFromContract(
+    document(
+      [
+        { kind: "record", fields: [{ id: 1, type: 1 }] },
+        { kind: "record", fields: [{ id: 2, type: 2 }] },
+        primitive("nat"),
+      ],
+      [
+        { name: "a-b", type: 1 },
+        { name: "Uses", type: 0 },
+        { name: "has space", type: 2 },
+      ],
+    ),
+  );
   assert(result.ok);
   if (result.ok) {
-    assert.deepStrictEqual(validate(result.schemas.delete, 1n), { ok: true });
+    assert.deepStrictEqual(Object.keys(result.schemas), []);
+    assert.deepStrictEqual(result.omitted, [
+      { kind: "declaration", name: "Uses", reason: "references_omitted", via: "a-b" },
+      { kind: "declaration", name: "a-b", reason: "invalid_declaration_name" },
+      { kind: "declaration", name: "has space", reason: "invalid_declaration_name" },
+    ]);
   }
+});
+
+test("omission follows every edge to the containing declaration; the actor drops methods", () => {
+  // types: 0 Bad = variant { _1_ (reserved) }, 1 nat, 2 Holder = record { svc },
+  // 3 service { f : 4 }, 4 func (Bad) -> (), 5 Good = record { a : nat },
+  // 6 func (Good) -> (), 7 the actor service { bad : 4; ok : 6 },
+  // 8 actor-named record, 9 func (8) -> (), 10 NoValue = opt empty,
+  // 11 empty, 12 Ambiguous = variant { a : NoValue }.
+  const types = [
+    { kind: "variant", fields: [{ id: 3_550_129_612, type: 1 }] },
+    primitive("nat"),
+    { kind: "record", fields: [{ id: 5, type: 3 }] },
+    { kind: "service", methods: [{ name: "f", id: candidLabelHash("f"), function: 4 }] },
+    { kind: "func", args: [0], results: [], mode: "update" },
+    { kind: "record", fields: [{ id: 6, type: 1 }] },
+    { kind: "func", args: [5], results: [], mode: "query" },
+    {
+      kind: "service",
+      methods: [
+        { name: "bad", id: candidLabelHash("bad"), function: 4 },
+        { name: "ok", id: candidLabelHash("ok"), function: 6 },
+        { name: "who", id: candidLabelHash("who"), function: 9 },
+      ],
+    },
+    { kind: "record", fields: [{ id: 7, type: 1 }] },
+    { kind: "func", args: [8], results: [], mode: "update" },
+    { kind: "opt", inner: 11 },
+    primitive("empty"),
+    { kind: "variant", fields: [{ id: 8, type: 10 }] },
+  ];
+  const result = schemaFromContract(
+    document(
+      types,
+      [
+        { name: "Ambiguous", type: 12 },
+        { name: "Bad", type: 0 },
+        { name: "Good", type: 5 },
+        { name: "Holder", type: 2 },
+        { name: "NoValue", type: 10 },
+        { name: "actor", type: 8 },
+      ],
+      { kind: "service", service: 7 },
+    ),
+    { names: [[0, 3_550_129_612, "_123_"]] },
+  );
+  assert(result.ok, `expected success: ${JSON.stringify(codesOf(result))}`);
+  if (!result.ok) {
+    return;
+  }
+  // The nested service omits its containing declaration, not just `f`.
+  assert.deepStrictEqual(Object.keys(result.schemas), ["Good", "NoValue"]);
+  assert.deepStrictEqual(result.omitted, [
+    { kind: "declaration", name: "Ambiguous", reason: "ambiguous_variant_arm" },
+    { kind: "declaration", name: "Bad", reason: "reserved_field_name" },
+    { kind: "declaration", name: "Holder", reason: "references_omitted", via: "Bad" },
+    { kind: "declaration", name: "actor", reason: "reserved_export_name" },
+    { kind: "method", name: "bad", reason: "references_omitted", via: "Bad" },
+    { kind: "method", name: "who", reason: "references_omitted", via: "actor" },
+  ]);
+  const actor = result.actor;
+  if (actor === undefined) {
+    throw new Error("the actor itself is never omitted");
+  }
+  assert.deepStrictEqual([...serviceMethods(actor).keys()], ["ok"]);
 });
 
 test("reference structural constraints fail closed (issue #104 review)", () => {
@@ -929,7 +1127,8 @@ test("envelope-carried names are hash-enforced exactly like caller-supplied ones
     "invalid_name_table",
     `${NAMES_BASE}[0]`,
   );
-  // `_N_`-shaped names are reserved, same rule as the options table.
+  // An `_N_`-shaped name that does not hash to its id lies, same rule as
+  // the options table.
   failsWith(
     schemaFromContract({
       contract: ownerDocument(),

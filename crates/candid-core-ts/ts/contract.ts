@@ -39,9 +39,20 @@
 //   candid-core's `class_not_actor_root` (issue #129). The actor interface,
 //   when present, is built as a service schema and returned as `actor`.
 //
-// One deliberate divergence: declaration names are not required to be
-// TypeScript identifiers. The generator emits source text and must refuse
-// `type delete`; this loader builds a map, where any name is a valid key.
+// # Omission, in parity with the generator
+//
+// Since issue #189 a declaration a generated module cannot represent — an
+// honest `_N_`-shaped field or arm name, a variant arm whose payload is a
+// declared `opt` of an uninhabited type, a name that is not
+// identifier-shaped or is one of the module's export names `actor` and
+// `Actor` — is left out of `schemas`, together with every declaration and
+// actor method that references it, and listed in the result's `omitted`.
+// The loader could build some of these; it leaves them out anyway so that
+// the schemas it returns are exactly the declarations a generated module
+// exports for the same Contract, with the same reasons (the golden
+// crosscheck pins both). Declaration names that are not identifier-shaped
+// used to load here as a deliberate divergence from the generator; they are
+// omitted now, for the same parity. An invalid document still refuses whole.
 //
 // # Untrusted input, bounded and fail closed
 //
@@ -136,10 +147,10 @@ export interface ContractResourceLimitInfo {
  * entry renders by the ecosystem's `_id_` convention.
  *
  * Entries are hash-enforced: a name must be the Candid preimage of its id
- * (`candidLabelHash(name) === id`), and `_N_`-shaped names are refused —
- * erased to a schema key they are indistinguishable from the numeric-id
- * rendering, and the codec derives wire ids from keys. A table from real
- * provenance always satisfies both; a lying one fails closed.
+ * (`candidLabelHash(name) === id`), or the table fails closed — the codec
+ * derives wire ids from keys. An honest `_N_`-shaped name never becomes a
+ * key: erased to one it is indistinguishable from the numeric-id rendering,
+ * so the node that would render it is omitted instead.
  */
 export type FieldNameEntry = readonly [container: number, id: number, name: string];
 
@@ -164,18 +175,74 @@ export interface ContractSchemaOptions {
   readonly maxDeclarations?: number;
 }
 
+/**
+ * Why a declaration or actor method was left out. Closed: a new reason is
+ * an API change. The same snake_case codes the generator reports
+ * (`@candid-core/cli`'s `ModuleSuccess.omitted`):
+ *
+ * - `reserved_field_name`: a record field or variant arm name shaped like
+ *   the `_N_` id rendering. Erased to a key it would read back as numeric id
+ *   N, so the codec would encode the wrong wire id.
+ * - `ambiguous_variant_arm`: a variant arm whose payload is a declared `opt`
+ *   of an uninhabited type — statically indistinguishable from an alias of
+ *   `null` in generated code.
+ * - `reserved_export_name`: a declaration named `actor` or `Actor`, the
+ *   generated module's own export names.
+ * - `invalid_declaration_name`: a declaration name that is not
+ *   identifier-shaped (`[A-Za-z_$][A-Za-z0-9_$]*`), which no generated module
+ *   can bind.
+ * - `references_omitted`: the entry references an omitted declaration,
+ *   named by `via`.
+ */
+type OmissionReason =
+  | "reserved_field_name"
+  | "ambiguous_variant_arm"
+  | "reserved_export_name"
+  | "invalid_declaration_name"
+  | "references_omitted";
+
+/** One declaration or actor method left out, and why. */
+type Omission = {
+  /** A named declaration, or a method of the actor's service. */
+  readonly kind: "declaration" | "method";
+  /** The declaration or method name, as the document spells it. */
+  readonly name: string;
+  readonly reason: OmissionReason;
+  /**
+   * For `references_omitted`, the omitted declaration the entry references;
+   * absent for every other reason.
+   */
+  readonly via?: string;
+};
+
 /** Schemas keyed by declaration name, or every reason the document failed. */
 export type SchemaFromContractResult =
   | {
       readonly ok: true;
       /**
        * One schema per declaration, in declaration order, func and service
-       * kinds included. A class is never named: a declaration targeting one
-       * is refused, since a class is legal only as the actor root.
+       * kinds included — except the declarations listed in `omitted`. A
+       * class is never named: a declaration targeting one is refused, since
+       * a class is legal only as the actor root.
        */
       readonly schemas: { readonly [name: string]: AnySchema };
-      /** The actor interface as a service schema, when the document has one. */
+      /**
+       * The actor interface as a service schema, when the document has one,
+       * without the methods listed in `omitted`. The actor itself is never
+       * omitted.
+       */
       readonly actor?: AnySchema;
+      /**
+       * What the loader left out, exactly as the generator leaves it out of
+       * a generated module for the same Contract: a declaration no generated
+       * module can represent, with every declaration and actor method that
+       * references it — through nested `func` and `service`
+       * types too, up to the containing declaration, since dropping a method
+       * from a service type in value position would change its wire type.
+       * Declarations first, then methods, each sorted by name in code-point
+       * order. Empty when nothing is left out.
+       */
+      readonly omitted: readonly Omission[];
     }
   | { readonly ok: false; readonly issues: readonly ContractIssue[] };
 
@@ -247,14 +314,16 @@ function isObject(value: unknown): value is Record<string, unknown> {
 }
 
 /**
- * Build `Schema` objects for every supported declaration of a Contract.
+ * Build `Schema` objects for every supported declaration of a Contract,
+ * leaving out — and listing in `omitted` — exactly what a generated module
+ * leaves out for the same Contract.
  *
  * Accepts either document the `candid-core` binary emits: a bare canonical
  * Contract, or a `ContractEnvelope` — recognised by its `contract` key, which
  * no canonical Contract document carries — whose
  * `extensions[FIELD_NAMES_EXTENSION]` table is consumed as the field names.
  * Envelope-carried names are validated exactly like caller-supplied ones
- * (shape, `_N_` reservation, hash enforcement, entry cap); an explicit
+ * (shape, hash enforcement, `_N_` reservation, entry cap); an explicit
  * `options.names` wins over the envelope's table, which is then not
  * consulted. The envelope shell itself fails closed the way the Rust loader
  * fails it: unknown envelope keys, a non-object `extensions`, and invalid
@@ -858,7 +927,9 @@ function buildFromContract(
   // identically either way: shape, reservation, hash, and its entry count
   // included, so a corrupted table cannot amplify into an unbounded issue
   // list or Map. Issue paths are rooted where the table actually came from.
+  const winners = new Map<string, string>();
   const nameTable = new Map<string, string>();
+  const reservedKeys = new Set<string>();
   if (!Array.isArray(namesSource.entries)) {
     push(
       "invalid_name_table",
@@ -904,17 +975,8 @@ function buildFromContract(
     // Hash consistency is the wire-correctness invariant (issue #103): the
     // codec derives every field's wire id from its rendered key, so a name
     // that does not hash back to its entry's id would silently encode a
-    // wrong id. `_N_`-shaped names are refused outright — erased to a key,
-    // they are indistinguishable from the numeric-id rendering convention.
+    // wrong id, and the table is refused at the entry.
     const name = entry[2];
-    if (isNumericShapedName(name)) {
-      push(
-        "invalid_name_table",
-        `${namesSource.base}[${index}]`,
-        "a name shaped like the _N_ id rendering is reserved",
-      );
-      continue;
-    }
     if (candidLabelHash(name) !== entry[1]) {
       push(
         "invalid_name_table",
@@ -923,7 +985,24 @@ function buildFromContract(
       );
       continue;
     }
-    nameTable.set(`${entry[0]}:${entry[1]}`, name);
+    // Two honest entries may address one `(container, id)` — two spellings
+    // with one Candid hash. The last one wins, exactly as `TsNames` keeps the
+    // last name inserted for a key, and the winner alone is classified below.
+    winners.set(`${entry[0]}:${entry[1]}`, name);
+  }
+  // An honest `_N_`-shaped winner is real provenance — a Candid field
+  // genuinely named `_123_` — but erased to a key it is indistinguishable
+  // from the numeric-id rendering, so it never becomes one: the node that
+  // would render it is omitted with everything that references it, as the
+  // generator omits it (issues #115, #189). It is kept out of the key table,
+  // so no key ever renders from it. Classifying only after the last entry
+  // has won keeps the two collections disjoint whatever the entry order.
+  for (const [key, name] of winners) {
+    if (isNumericShapedName(name)) {
+      reservedKeys.add(key);
+    } else {
+      nameTable.set(key, name);
+    }
   }
 
   const fieldKey = (container: number, id: number): string =>
@@ -1073,16 +1152,6 @@ function buildFromContract(
     }
   };
 
-  const schemas: { [name: string]: AnySchema } = Object.create(null);
-  for (const declaration of parsedDeclarations) {
-    // The same shape the generator emits: every declaration wrapped in
-    // `c.rec`, so aliases of one node share the memoized structure beneath.
-    // Reference kinds build like everything else since issue #104. A
-    // class-targeting declaration still builds here, but the placement walk
-    // below refuses the document before the map can be returned (#129).
-    schemas[declaration.name] = c.rec(() => schemaAt(declaration.type));
-  }
-
   // candid-core restricts class nodes to the actor root
   // (`class_not_actor_root`); mirror it so the two loaders refuse the same
   // documents.
@@ -1157,7 +1226,8 @@ function buildFromContract(
   // The actor interface, when the document carries one: a service schema,
   // with a class actor unwrapped to its running service. Fail closed on any
   // shape the canonical format does not produce.
-  let actor: AnySchema | undefined;
+  let actorTarget: number | undefined;
+  let actorService: number | undefined;
   if (contract.actor !== undefined && contract.actor !== null) {
     const raw: unknown = contract.actor;
     if (
@@ -1190,8 +1260,307 @@ function buildFromContract(
       );
       return { ok: false, issues };
     }
-    actor = c.rec(() => schemaAt(target));
+    actorTarget = target;
+    actorService = node.kind === "class" ? node.service : target;
   }
 
-  return { ok: true, schemas, actor };
+  // Every refusal is behind us: the document is valid, and what remains is
+  // which declarations and actor methods to leave out (issue #189).
+  const omission = omissionAnalysis(sound, parsedDeclarations, reservedKeys, actorService);
+
+  const schemas: { [name: string]: AnySchema } = Object.create(null);
+  for (const declaration of parsedDeclarations) {
+    if (omission.declarations.has(declaration.name)) {
+      continue;
+    }
+    // The same shape the generator emits: every declaration wrapped in
+    // `c.rec`, so aliases of one node share the memoized structure beneath.
+    // Reference kinds build like everything else since issue #104.
+    schemas[declaration.name] = c.rec(() => schemaAt(declaration.type));
+  }
+
+  let actor: AnySchema | undefined;
+  if (actorTarget !== undefined && actorService !== undefined) {
+    const target = actorTarget;
+    const service = sound[actorService];
+    if (omission.methods.size === 0 || service.kind !== "service") {
+      actor = c.rec(() => schemaAt(target));
+    } else {
+      // The surviving methods only, exactly as the generator renders the
+      // actor's service inline. Sound only for the actor: calling a method
+      // never encodes the actor's own service type.
+      const methods: { [name: string]: AnySchema } = Object.create(null);
+      for (const method of service.methods) {
+        if (!omission.methods.has(method.name)) {
+          methods[method.name] = lazy(method.func);
+        }
+      }
+      actor = c.rec(() => c.service(methods));
+    }
+  }
+
+  return { ok: true, schemas, actor, omitted: omission.omitted };
+}
+
+/** A parsed declaration, as the omission analysis reads it. */
+interface NamedDeclaration {
+  readonly name: string;
+  readonly type: number;
+}
+
+/**
+ * The generator's `$`-local shape for a declaration name: `$` plus it must
+ * be a binding, which it is exactly when the name is identifier-shaped.
+ */
+const IDENTIFIER_SHAPED = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
+
+/** The actor surface's own export names (issue #188). */
+const RESERVED_EXPORT_NAMES: ReadonlySet<string> = new Set(["actor", "Actor"]);
+
+/**
+ * Names in code-point order — the byte order Rust sorts `String`s by. The
+ * default `<` on strings compares UTF-16 code units, which disagrees above
+ * U+FFFF, and the generator's list must match this one element for element.
+ */
+function compareCodePoints(left: string, right: string): number {
+  let i = 0;
+  let j = 0;
+  while (i < left.length && j < right.length) {
+    const a = left.codePointAt(i) as number;
+    const b = right.codePointAt(j) as number;
+    if (a !== b) {
+      return a < b ? -1 : 1;
+    }
+    i += a > 0xffff ? 2 : 1;
+    j += b > 0xffff ? 2 : 1;
+  }
+  return i < left.length ? 1 : j < right.length ? -1 : 0;
+}
+
+/**
+ * Which declarations and actor methods the loader leaves out, and why —
+ * `crates/candid-core-ts/src/omissions.rs`, step for step, so the loader and
+ * the generator report the same list for the same Contract (the crosscheck
+ * pins it). See that module for the rule; in short:
+ *
+ * - a node has a *direct cause* when it is a record (neither empty nor
+ *   tuple-shaped) or variant with a field or arm whose honest name is shaped
+ *   like `_N_`, or a variant arm whose payload is a *declared* `opt` of a
+ *   never-domain type — arms in order, reserved name before ambiguity;
+ * - a declaration has a *name cause* when its name is not identifier-shaped
+ *   or is `actor` / `Actor`;
+ * - taint spreads from every cause, and from every composite node whose
+ *   first declaration has a name cause, over reverse edges (every structural
+ *   edge, nested `func` and `service` types included) by breadth-first
+ *   search, which also yields each tainted node's distance to a cause;
+ * - a declaration is omitted when it has a name cause or its node is
+ *   tainted; an actor method when its function node is tainted;
+ * - the reason: the name cause; else `references_omitted` via the first
+ *   declaration of the node when that is another declaration; else the
+ *   node reason — the direct cause, or the first child (in edge order) with
+ *   a smaller distance: `references_omitted` via its first declaration when
+ *   it has one, else that child's node reason.
+ *
+ * Iterative and memoized, so it stays linear in the arena like everything
+ * else here.
+ */
+function omissionAnalysis(
+  nodes: readonly ParsedNode[],
+  declarations: readonly NamedDeclaration[],
+  reservedKeys: ReadonlySet<string>,
+  actorService: number | undefined,
+): {
+  readonly declarations: ReadonlySet<string>;
+  readonly methods: ReadonlySet<string>;
+  readonly omitted: readonly Omission[];
+} {
+  // The first declaration of each composite node: the name every later
+  // reference to the node renders as (the generator's `first_names`).
+  const declared = new Map<number, string>();
+  for (const declaration of declarations) {
+    if (nodes[declaration.type].kind !== "primitive" && !declared.has(declaration.type)) {
+      declared.set(declaration.type, declaration.name);
+    }
+  }
+  const nameCause = (name: string): OmissionReason | undefined =>
+    !IDENTIFIER_SHAPED.test(name)
+      ? "invalid_declaration_name"
+      : RESERVED_EXPORT_NAMES.has(name)
+        ? "reserved_export_name"
+        : undefined;
+
+  const children = (node: ParsedNode): readonly number[] => {
+    switch (node.kind) {
+      case "opt":
+      case "vec":
+        return [node.inner];
+      case "record":
+      case "variant":
+        return node.fields.map((field) => field.type);
+      case "func":
+        return [...node.args, ...node.results];
+      case "service":
+        return node.methods.map((method) => method.func);
+      default:
+        return [];
+    }
+  };
+  const directCause = (index: number): OmissionReason | undefined => {
+    const node = nodes[index];
+    const reserved = (id: number) => reservedKeys.has(`${index}:${id}`);
+    if (node.kind === "record") {
+      const renderedKeys =
+        node.fields.length > 0 && !node.fields.every((field, position) => field.id === position);
+      return renderedKeys && node.fields.some((field) => reserved(field.id))
+        ? "reserved_field_name"
+        : undefined;
+    }
+    if (node.kind === "variant") {
+      for (const field of node.fields) {
+        if (reserved(field.id)) {
+          return "reserved_field_name";
+        }
+        const payload = nodes[field.type];
+        if (declared.has(field.type) && payload.kind === "opt") {
+          const inner = nodes[payload.inner];
+          if (
+            (inner.kind === "primitive" && inner.primitive === "empty") ||
+            (inner.kind === "variant" && inner.fields.length === 0)
+          ) {
+            return "ambiguous_variant_arm";
+          }
+        }
+      }
+    }
+    return undefined;
+  };
+
+  const edges: (readonly number[])[] = new Array(nodes.length);
+  const parents: number[][] = Array.from({ length: nodes.length }, () => []);
+  const direct: (OmissionReason | undefined)[] = new Array(nodes.length);
+  for (let index = 0; index < nodes.length; index += 1) {
+    edges[index] = children(nodes[index]);
+    for (const child of edges[index]) {
+      parents[child].push(index);
+    }
+    direct[index] = directCause(index);
+  }
+
+  // Multi-source breadth-first search from every cause, over reverse edges.
+  const distance: (number | undefined)[] = new Array(nodes.length);
+  const queue: number[] = [];
+  for (let index = 0; index < nodes.length; index += 1) {
+    if (direct[index] !== undefined) {
+      distance[index] = 0;
+      queue.push(index);
+    }
+  }
+  for (const [index, first] of [...declared].sort((a, b) => a[0] - b[0])) {
+    if (nameCause(first) !== undefined && distance[index] === undefined) {
+      distance[index] = 0;
+      queue.push(index);
+    }
+  }
+  for (let head = 0; head < queue.length; head += 1) {
+    const index = queue[head];
+    const next = (distance[index] as number) + 1;
+    for (const parent of parents[index]) {
+      if (distance[parent] === undefined) {
+        distance[parent] = next;
+        queue.push(parent);
+      }
+    }
+  }
+
+  type Reason = { readonly reason: OmissionReason; readonly via?: string };
+  const memo: (Reason | undefined)[] = new Array(nodes.length);
+  const nodeReason = (start: number): Reason => {
+    const chain: number[] = [];
+    let current = start;
+    let found: Reason;
+    for (;;) {
+      const known = memo[current];
+      if (known !== undefined) {
+        found = known;
+        break;
+      }
+      chain.push(current);
+      const cause = direct[current];
+      if (cause !== undefined) {
+        found = { reason: cause };
+        break;
+      }
+      const own = distance[current] as number;
+      // Distances strictly decrease along the walk, so it ends; a tainted
+      // node without a direct cause always has a child one step closer.
+      const closer = edges[current].find(
+        (child) => distance[child] !== undefined && (distance[child] as number) < own,
+      ) as number;
+      const first = declared.get(closer);
+      if (first !== undefined) {
+        found = { reason: "references_omitted", via: first };
+        break;
+      }
+      current = closer;
+    }
+    for (const index of chain) {
+      memo[index] = found;
+    }
+    return found;
+  };
+
+  const entry = (kind: Omission["kind"], name: string, reason: Reason): Omission =>
+    reason.via === undefined
+      ? { kind, name, reason: reason.reason }
+      : { kind, name, reason: reason.reason, via: reason.via };
+
+  const omittedDeclarations = new Set<string>();
+  const omitted: Omission[] = [];
+  for (const declaration of declarations) {
+    const cause = nameCause(declaration.name);
+    let reason: Reason;
+    if (cause !== undefined) {
+      reason = { reason: cause };
+    } else if (distance[declaration.type] === undefined) {
+      continue;
+    } else {
+      const first = declared.get(declaration.type);
+      reason =
+        first !== undefined && first !== declaration.name
+          ? { reason: "references_omitted", via: first }
+          : nodeReason(declaration.type);
+    }
+    omittedDeclarations.add(declaration.name);
+    omitted.push(entry("declaration", declaration.name, reason));
+  }
+
+  const omittedMethods = new Set<string>();
+  const service = actorService === undefined ? undefined : nodes[actorService];
+  if (service !== undefined && service.kind === "service") {
+    for (const method of service.methods) {
+      if (distance[method.func] === undefined) {
+        continue;
+      }
+      const first = declared.get(method.func);
+      omittedMethods.add(method.name);
+      omitted.push(
+        entry(
+          "method",
+          method.name,
+          first !== undefined
+            ? { reason: "references_omitted", via: first }
+            : nodeReason(method.func),
+        ),
+      );
+    }
+  }
+  omitted.sort((left, right) =>
+    left.kind !== right.kind
+      ? left.kind === "declaration"
+        ? -1
+        : 1
+      : compareCodePoints(left.name, right.name),
+  );
+
+  return { declarations: omittedDeclarations, methods: omittedMethods, omitted };
 }

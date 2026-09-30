@@ -21,7 +21,10 @@ fn single(source: &str) -> String {
 }
 
 /// Every generator golden fixture must reproduce its reviewed `.ts` byte
-/// for byte through this crate's module path.
+/// for byte through this crate's module path, and report the native
+/// generator's omitted list — the `<name>.omitted.json` golden
+/// `crates/candid-core-ts/tests/golden.rs` writes from it — or an empty list
+/// for a fixture that omits nothing (issue #189).
 #[test]
 fn modules_match_the_generator_goldens() {
     for name in [
@@ -39,6 +42,7 @@ fn modules_match_the_generator_goldens() {
         "shadowing",
         "fidelity",
         "docs",
+        "omissions",
     ] {
         let source = repo(&format!("crates/candid-core-ts/tests/fixtures/{name}.did"));
         let golden = repo(&format!("crates/candid-core-ts/tests/goldens/{name}.ts"));
@@ -48,6 +52,18 @@ fn modules_match_the_generator_goldens() {
             response["module"].as_str().unwrap(),
             golden,
             "{name}: the module must be byte-identical to the reviewed golden",
+        );
+        let omitted = if name == "omissions" {
+            serde_json::from_str(&repo(&format!(
+                "crates/candid-core-ts/tests/goldens/{name}.omitted.json"
+            )))
+            .unwrap()
+        } else {
+            Value::Array(Vec::new())
+        };
+        assert_eq!(
+            response["omitted"], omitted,
+            "{name}: the omitted list must equal the native generator's",
         );
     }
 }
@@ -199,21 +215,38 @@ fn diagnostics_pass_through_verbatim() {
     let response: Value = serde_json::from_str(&did_to_contract(&request.to_string())).unwrap();
     assert_eq!(response["ok"], Value::Bool(false), "{response}");
 
-    // The generator's fail-closed refusals surface under a stable code with
-    // the refusal text verbatim: a source name shaped like the `_N_` id
-    // rendering is still refused (issues #103, #115).
-    let response: Value =
-        serde_json::from_str(&did_to_module(&single("type R = record { _0_ : nat };"))).unwrap();
-    assert_eq!(response["ok"], Value::Bool(false));
-    assert_eq!(response["diagnostics"][0]["code"], "ts_generation_refused");
-    assert_eq!(response["diagnostics"][0]["phase"], "generate");
-    assert!(
-        response["diagnostics"][0]["message"]
-            .as_str()
-            .unwrap()
-            .contains("`_0_`"),
-        "the refusal text passes through verbatim: {response}",
+    // Since issue #189 no Candid source reaches a generator refusal: a
+    // declaration the module cannot represent — here a source name shaped
+    // like the `_N_` id rendering (issues #103, #115) — is omitted, with
+    // what references it, and the module is a success that says so.
+    // `ts_generation_refused` is kept for an invalid Contract graph, which a
+    // compiled Contract never is.
+    let response: Value = serde_json::from_str(&did_to_module(&single(
+        "type R = record { _0_ : nat };\ntype Uses = vec R;\ntype Fine = nat;\n\
+         service : { use_it : (R) -> (); fine : (Fine) -> () }",
+    )))
+    .unwrap();
+    assert_eq!(response["ok"], Value::Bool(true), "{response}");
+    assert_eq!(
+        response["omitted"],
+        serde_json::json!([
+            { "kind": "declaration", "name": "R", "reason": "reserved_field_name" },
+            { "kind": "declaration", "name": "Uses", "reason": "references_omitted", "via": "R" },
+            { "kind": "method", "name": "use_it", "reason": "references_omitted", "via": "R" },
+        ]),
     );
+    let module = response["module"].as_str().unwrap();
+    assert!(
+        module.contains("// Omitted: type R (reserved_field_name)\n"),
+        "{module}"
+    );
+    assert!(module.contains("export { $Fine as Fine };"), "{module}");
+    assert!(
+        module.contains("  fine: (arg0: bigint) => Promise<void>;"),
+        "{module}"
+    );
+    // `via` is absent, not null, when the reason carries none.
+    assert!(response["omitted"][0].get("via").is_none());
 
     // A declaration named after one of the module's former bindings
     // generates since issue #188: it binds as a `$`-prefixed local and is

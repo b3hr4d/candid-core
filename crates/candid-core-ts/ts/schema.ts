@@ -321,7 +321,8 @@ export interface TupleSchema<S extends readonly AnyFieldSchema[]> extends Schema
 //   resolves back to the null primitive.
 // The one shape these rules cannot see through — a *declared* alias of
 // `opt empty`, statically identical to a declared alias of `null` — is
-// refused at generation (`TsGenError::AmbiguousVariantArm`); a hand-built
+// never emitted: the generator omits the variant (`ambiguous_variant_arm`,
+// issue #189), and `schemaFromContract` omits it in parity; a hand-built
 // `c.rec` thunk over a null-domain opt (`opt empty`; `opt null` boxes, so
 // its domain is no longer `null`) passed directly as an arm is likewise
 // statically invisible (rec erases structure) and stays a documented
