@@ -311,7 +311,10 @@ decode(c.opt(c.variant({ ok: c.null })), later.bytes);  // { ok: true, value: nu
   switch its bound off, since nothing is greater than <code>NaN</code>), a negative, a fraction, a
   string, <code>null</code>, or <code>Infinity</code>. A trusted host that wants no practical bound
   passes a large integer. <code>undefined</code> means the default, and <code>0</code> is a valid
-  limit that refuses any input consuming that resource.
+  limit that refuses any input consuming that resource. Each option is read exactly once, and the
+  call runs on that checked copy: a getter or Proxy cannot pass the check with one value and run
+  with another. An options object whose getter or trap throws while being read raises a
+  <code>TypeError</code> too, carrying the original exception as its <code>cause</code>.
 </p>
 
 <pre data-lang="ts" data-file="crates/candid-core-ts/ts/codec.ts">

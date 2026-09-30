@@ -271,12 +271,13 @@ export function schemaFromContract(
   // Options are code, not document data: checked before the choke point
   // below, so a bad one throws rather than becoming a document issue. The
   // `names` table is data and is validated into issues where it is used.
-  checkOptions(
+  // Everything below reads only the checked snapshot, never `options` again.
+  const checked = checkOptions(
     "schemaFromContract",
     options,
     ["maxTypeNodes", "maxFields", "maxDeclarations"],
     ["names"],
-  );
+  ) as ContractSchemaOptions;
   // The fail-closed choke point behind the no-throw claim: a document that is
   // not plain parsed JSON — accessors that throw, hostile Proxy traps — blows
   // up inside one of the reads below, and the failure must be an issue, not
@@ -284,7 +285,7 @@ export function schemaFromContract(
   // the plain parsed structures, never the raw document, so they cannot
   // throw later.
   try {
-    return buildFromDocument(contract, options);
+    return buildFromDocument(contract, checked);
   } catch {
     return {
       ok: false,

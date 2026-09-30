@@ -205,7 +205,12 @@ verdict, an issue code, a decoded value, or a generated binding.
   ones `resolveSchema`, `serviceMethods` and `unwrapResult` already throw,
   not a new issue code; it is raised before anything else is read.
   `undefined` still means "use the default", and `0` is still a valid,
-  fail-closed limit. Values, byte strings and Contract documents still never
+  fail-closed limit. Each option is read from the caller's object exactly
+  once, into a frozen snapshot that the whole call — nested calls included —
+  reads instead, so a getter or Proxy cannot pass the check with one value
+  and run with another; an options object whose getter or Proxy trap throws
+  while being read raises a `TypeError` naming the entry point, with the
+  original exception as its `cause`. Values, byte strings and Contract documents still never
   make these functions throw. Refusing `Infinity` is the recommendation
   recorded on issue #190, pending the maintainer: a trusted host that wants
   no practical bound passes a large safe integer.
