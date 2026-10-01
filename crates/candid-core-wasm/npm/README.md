@@ -5,6 +5,16 @@ toolchain: the [candid-core] compiler and its TypeScript generator compiled
 to WebAssembly, usable as a Node CLI and as a browser library. Data in, data
 out — no eval, no network, and nothing generated is ever executed.
 
+> **The next release, not yet published.** This README describes the package
+> the repository builds, which is the next release. The published 0.1.0 still
+> has the old behaviour: it emits modules in the old layout with an
+> object-shaped principal type, refuses a whole interface with
+> `ts_generation_refused` for one declaration it cannot represent, and returns
+> no `omitted` list. Every change is recorded under `## Unreleased` in the
+> [changelog](./CHANGELOG.md), which ships in the tarball, and the
+> [migration notes](https://b3hr4d.github.io/candid-core/migrating-from-0-2.html)
+> show each one as before and after code.
+
 ```sh
 npx @candid-core/cli gen ./service.did -o ./generated
 ```
@@ -17,7 +27,9 @@ That emits three things:
 
 - **`service.ts`** — the generated `@candid-core/schema` module: one reviewed
   type alias and one invariantly-annotated schema builder per declaration,
-  byte-identical to what the Rust-native generator emits;
+  each bound as a `$`-prefixed local and exported under its Candid name, with
+  the `.did`'s doc comments as JSDoc, byte-identical to what the Rust-native
+  generator emits;
 - **`service.envelope.json`** — the one-document `ContractEnvelope`: the
   canonical Contract plus its field-name table under the
   `org.candid-core.field-names/v1` extension, byte-identical to

@@ -8,7 +8,19 @@
   </p>
 </callout>
 
+<callout type="note" title="Not yet released">
+  <p>
+    This page describes the package the repository builds, which is the next release. The published
+    <code>0.1.0</code> still has the old behaviour: it emits modules in the old layout with an
+    object-shaped principal type, exits 1 with <code>ts_generation_refused</code> for an interface with
+    one declaration it cannot represent, and returns no <code>omitted</code> list.
+    <a href="migrating-from-0-2.html">Migrating from 0.2.0</a> lists every difference with before and
+    after code, and each is recorded under <code>## Unreleased</code> in the package changelog.
+  </p>
+</callout>
+
 <pre data-lang="bash">
+# 0.1.0 is the published version (see the note above).
 npx @candid-core/cli@0.1.0 gen ./service.did -o ./generated
 </pre>
 
@@ -64,7 +76,9 @@ npx @candid-core/cli@0.1.0 gen ./service.did -o ./generated
       <td>
         None. <code>@candid-core/schema</code> <code>^0.2.0</code> is declared as an
         <em>optional</em> peer — every module the CLI emits imports from it, but a
-        consumer calling only <code>didToContract</code> never loads it. The one
+        consumer calling only <code>didToContract</code> never loads it. The modules this page's
+        generator emits need the <code>Principal</code> export that 0.2.0 lacks, so the release that
+        ships it must raise this range to the schema release that has it. The one
         devDependency, <code>playwright-core</code>, drives the browser test
       </td>
     </tr>
@@ -350,7 +364,7 @@ wrote generated/basic.envelope.json
   <code>crates/candid-core-wasm/npm/lib/index.js</code> directly.
 </p>
 
-<pre data-lang="js">
+<pre data-lang="js" data-check="api">
 import { didToContract, didToModule } from "@candid-core/cli";
 
 const envelope = await didToContract("service : { ping : () -> () };");
@@ -375,10 +389,10 @@ const generated = await didToModule({
   lets record and variant fields come back with their source spellings instead of numeric label hashes:
 </p>
 
-<pre data-lang="js">
-import { didToContract } from "@candid-core/cli";
+<pre data-lang="js" data-check="api">
 import { schemaFromContract } from "@candid-core/schema/contract";
 
+const didText = "type Payload = record { owner : principal; amount : nat };";
 const built = schemaFromContract(await didToContract(didText));
 </pre>
 
@@ -446,7 +460,7 @@ warning: omitted method bad (references_omitted via Bad)
   <code>owner</code>/<code>amount</code> validates:
 </p>
 
-<pre data-lang="js" data-file="crates/candid-core-wasm/npm/test/browser/smoke.test.js">
+<pre data-lang="js" data-file="crates/candid-core-wasm/npm/test/browser/smoke.test.js" data-unchecked="adapted from the page template in smoke.test.js, with the source inlined as didText; the headless-Chrome test is what runs it">
 import init, { didToContract } from "/wasm/candid_core_wasm.js";
 import { schemaFromContract } from "/schema/contract.js";
 import { validate } from "/schema/validate.js";
@@ -535,8 +549,8 @@ npm test
     <tr>
       <td><code>host</code></td>
       <td>
-        Format, clippy with warnings denied, and the Rust parity tests: ten golden fixtures reproduce
-        their reviewed <code>.ts</code> module byte for byte; the emitted envelope equals the committed
+        Format, clippy with warnings denied, and the Rust parity tests: every golden fixture reproduces
+        its reviewed <code>.ts</code> module byte for byte; the emitted envelope equals the committed
         fixture the native <code>candid-core compile --envelope</code> binary produced, byte for byte;
         the field-name triples equal the generator's reviewed <code>*.names.json</code> goldens for five
         fixtures; identical requests produce identical responses.

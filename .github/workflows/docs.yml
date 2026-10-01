@@ -9,7 +9,8 @@
 # Three triggers, one of which publishes:
 # - `pull_request` builds and checks only. A broken sitemap, a dead internal
 #   link, an anchor that no longer resolves, an install line for a package
-#   that is not published, or a caret dependency line that cannot resolve
+#   that is not published, a caret dependency line that cannot resolve, or a
+#   TypeScript snippet that no longer compiles against the tree it documents
 #   fails review rather than reaching the published site. It publishes nothing.
 # - `push` to main republishes after a merge, filtered to the paths that can
 #   change the site.
@@ -19,6 +20,12 @@
 #   one Pages site and no preview channel, so deploying a branch would replace
 #   the public documentation with unmerged content. A dispatch from another ref
 #   builds and checks, and says why it did not publish.
+#
+# The snippet check compiles the site's TypeScript with the compiler already
+# pinned in crates/candid-core-ts/ts, so that directory is installed here and
+# its sources, the goldens and the CLI's declarations are trigger paths: a
+# change to any of them can make a snippet false without touching website/**.
+# The site itself still takes no dependency.
 #
 # Every action is pinned by commit SHA, like the release workflows. The
 # toolchain is not a canary here: the site build is release tooling.
@@ -30,10 +37,24 @@ on:
     branches: [main]
     paths:
       - "website/**"
+      - "crates/candid-core-ts/ts/**"
+      - "crates/candid-core-ts/tests/**"
+      - "crates/candid-core-ts/src/lib.rs"
+      - "crates/candid-core-wasm/npm/lib/**"
+      - "crates/candid-core-wasm/npm/bin/**"
+      - "crates/candid-core-wasm/npm/test/**"
+      - "crates/candid-core-wasm/npm/package.json"
       - ".github/workflows/docs.yml"
   pull_request:
     paths:
       - "website/**"
+      - "crates/candid-core-ts/ts/**"
+      - "crates/candid-core-ts/tests/**"
+      - "crates/candid-core-ts/src/lib.rs"
+      - "crates/candid-core-wasm/npm/lib/**"
+      - "crates/candid-core-wasm/npm/bin/**"
+      - "crates/candid-core-wasm/npm/test/**"
+      - "crates/candid-core-wasm/npm/package.json"
       - ".github/workflows/docs.yml"
 
 permissions:
@@ -61,6 +82,12 @@ jobs:
             echo "website/ must stay dependency-free" >&2
             exit 1
           fi
+
+      # The pinned compiler the snippet check compiles with. `npm ci` here is
+      # the runtime package's own lockfile, not a dependency of the site.
+      - name: Install the pinned TypeScript
+        working-directory: crates/candid-core-ts/ts
+        run: npm ci
 
       - name: Build
         run: node website/build.mjs
@@ -103,6 +130,10 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "24.18.0"
+
+      - name: Install the pinned TypeScript
+        working-directory: crates/candid-core-ts/ts
+        run: npm ci
 
       - name: Build
         run: node website/build.mjs && node website/check.mjs

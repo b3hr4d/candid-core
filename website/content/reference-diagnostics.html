@@ -444,6 +444,17 @@ match Contract::from_slice_with_context(document, &context) {
 
 <h2>The TypeScript side</h2>
 
+<callout type="note" title="Not yet released">
+  <p>
+    The TypeScript half of this page describes the surface the repository builds, which is the surface
+    of the next release of <code>@candid-core/schema</code>. The published <code>0.2.0</code> still has
+    the old one: its closed unions differ (no <code>stack</code> resource, and a contract code for
+    <code>opt opt</code>), and a bad options object does not throw.
+    <a href="migrating-from-0-2.html">Migrating from 0.2.0</a> lists every difference, and each is
+    recorded under <code>## Unreleased</code> in the package changelog. The Rust half is unchanged.
+  </p>
+</callout>
+
 <p>
   <code>@candid-core/schema</code> reproduces the same serialized item shape on purpose. Its issue
   interfaces carry exactly <code>{ code, path, message, resource_limit? }</code>, its codes are stable
@@ -452,7 +463,7 @@ match Contract::from_slice_with_context(document, &context) {
   <code>$.declarations[3].name</code> style candid-core emits.
 </p>
 
-<pre data-lang="ts" data-file="crates/candid-core-ts/ts/validate.ts">
+<pre data-lang="ts" data-file="crates/candid-core-ts/ts/validate.ts" data-partial>
 export interface ValidationIssue {
   readonly code: ValidationCode;
   /** `$`-rooted path to the offending value, candid-core style. */
@@ -555,9 +566,11 @@ export type ValidateResult =
   <code>{ some: v }</code>. See <a href="reference-mapping.html">Candid to TypeScript mapping</a>.
 </p>
 
-<pre data-lang="ts">
+<pre data-lang="ts" data-check>
 import { validate } from "@candid-core/schema/validate";
 import { Account } from "./ledger.ts";
+
+declare const incoming: unknown; // a value you were handed
 
 const result = validate(Account, incoming);
 if (!result.ok) {

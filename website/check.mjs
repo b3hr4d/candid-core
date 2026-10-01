@@ -14,6 +14,7 @@ import { readFile, readdir } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { checkSnippets } from "./snippets.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const CONTENT = join(HERE, "content");
@@ -109,8 +110,56 @@ const SOFT = [
   /\brobust\b/i,
 ];
 
+/* The surface the site teaches is the one the repository builds. These names
+ * belong to the surface the published 0.2.0 still has and the next release
+ * does not, so they may be named only where the change is the subject: the
+ * migration page, and the release history on the status page. Anywhere else
+ * they would be prose or a snippet that teaches something that no longer
+ * exists. The check reads prose and code alike, because a page that shows
+ * `createActor` in a block teaches it as surely as one that says so. */
+const REMOVED_SURFACE = [
+  /\bcreateActor\b/,
+  /\bcallFunc\b/,
+  /\bhttpTransport\b/,
+  /\bHttpTransportOptions\b/,
+  /\bActorError\b/,
+  /\bPrincipalValue\b/,
+  /\bDecodedPrincipal\b/,
+  /\bformModel\b/,
+  /\bformNodeAt\b/,
+  /\bunrepresentable_option\b/,
+  /\bUnrepresentableOption\b/,
+  /@candid-core\/schema\/(actor|transport-icp|forms|labels)\b/,
+  /\.\/transport-icp\b/,
+  /\.\/actor\b/,
+  /\.\/forms\b/,
+  /\.\/labels\b/,
+];
+const REMOVED_SURFACE_PAGES = new Set(["migrating-from-0-2", "status"]);
+
+/* Pages that describe the schema runtime or the generator carry the one note
+ * saying the published 0.2.0 / 0.1.0 differ, and where to read what changed. */
+const NOTE_TITLE = "Not yet released";
+const NOTE_PAGES = new Set([
+  "index",
+  "quickstart-typescript",
+  "packages",
+  "ts-overview",
+  "schema-builders",
+  "schema-validation",
+  "schema-codec",
+  "schema-from-contract",
+  "generator",
+  "cli-npm",
+  "reference-mapping",
+  "reference-diagnostics",
+  "status",
+  "migrating-from-0-2",
+]);
+
 const warnings = [];
 const anchorLinks = [];
+const snippetPages = [];
 
 for (const name of (await readdir(CONTENT)).filter((f) => f.endsWith(".html"))) {
   const page = `content/${name}`;
@@ -245,6 +294,34 @@ for (const name of (await readdir(CONTENT)).filter((f) => f.endsWith(".html"))) 
       );
     }
   }
+  /* --- the removed surface, and the release note --- */
+  const slug = name.replace(/\.html$/, "");
+  snippetPages.push({ slug, source });
+  if (!REMOVED_SURFACE_PAGES.has(slug)) {
+    for (const pattern of REMOVED_SURFACE) {
+      const hit = source.match(pattern);
+      if (hit) {
+        fail(
+          page,
+          `names ${JSON.stringify(hit[0])}, which the published 0.2.0 has and the next release removes; ` +
+            "that belongs on the migration page, not here",
+        );
+      }
+    }
+  }
+  if (NOTE_PAGES.has(slug)) {
+    const notes = (source.match(/<callout[^>]*title="Not yet released"/g) || []).length;
+    if (slug === "migrating-from-0-2") {
+      if (notes !== 0) fail(page, "the migration page is the note; it must not carry another");
+    } else if (notes !== 1) {
+      fail(
+        page,
+        `must carry exactly one <callout title="${NOTE_TITLE}"> saying the published packages differ (found ${notes})`,
+      );
+    } else if (!/<callout[^>]*title="Not yet released"[\s\S]*?href="migrating-from-0-2\.html"[\s\S]*?<\/callout>/.test(source)) {
+      fail(page, `the ${NOTE_TITLE} note must link migrating-from-0-2.html`);
+    }
+  }
   for (const rule of FORBIDDEN_IN_PROSE) {
     const hit = prose.match(rule.pattern);
     if (hit) fail(page, `${rule.message} — found ${JSON.stringify(hit[0])}`);
@@ -253,6 +330,18 @@ for (const name of (await readdir(CONTENT)).filter((f) => f.endsWith(".html"))) 
     const hit = prose.match(rule);
     if (hit) warnings.push(`${page}: soft filler ${JSON.stringify(hit[0])}`);
   }
+}
+
+/* --- the snippets: compiled against the tree, or excerpted verbatim --- */
+const skipSnippets = process.argv.includes("--skip-snippets");
+const snippets = await checkSnippets({
+  pages: snippetPages,
+  root: join(HERE, ".."),
+  skipCompile: skipSnippets,
+});
+for (const problem of snippets.problems) fail(problem.page, problem.message);
+if (skipSnippets) {
+  warnings.push("snippets were not compiled (--skip-snippets); CI does not pass that flag");
 }
 
 /* --- every sitemap entry has a file --- */
@@ -299,7 +388,12 @@ if (warnings.length) {
 }
 
 if (failures.length === 0) {
-  console.log(`checks passed: ${slugs.size} pages`);
+  const t = snippets.tally;
+  console.log(
+    `checks passed: ${slugs.size} pages; snippets: ${t.compiled} compiled, ${t.fails} proven stale ` +
+      `(must not compile), ${t.excerpts} excerpts matched verbatim, ${t.unchecked.length} unchecked with a reason` +
+      (t.unchecked.length ? ` (${t.unchecked.join(", ")})` : ""),
+  );
   process.exit(0);
 }
 

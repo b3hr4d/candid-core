@@ -14,10 +14,15 @@ npm install @candid-core/schema
 That is the whole install: no runtime dependencies and no peers, principal
 handling included ([principal values](#principal-values) below).
 
-This README describes the package from the release after 0.2.0 on. 0.2.0
-itself also exports `./actor`, `./transport-icp`, `./forms`, and `./labels`
-and declares an optional `@icp-sdk/core` peer for the transport; the
-[changelog](./CHANGELOG.md) lists what was removed and why.
+> **The next release, not yet published.** This README describes the package
+> the repository builds, which is the next release. The published 0.2.0 still
+> has the old surface: it also exports `./actor`, `./transport-icp`, `./forms`
+> and `./labels`, declares an optional `@icp-sdk/core` peer, types a principal
+> as `{ toText(): string }`, and refuses `opt opt T`, `opt null` and
+> `opt reserved`. Every change is recorded under `## Unreleased` in the
+> [changelog](./CHANGELOG.md), which ships in the tarball, and the
+> [migration notes](https://b3hr4d.github.io/candid-core/migrating-from-0-2.html)
+> show each one as before and after code.
 
 ```ts
 import { c, principal, type Infer } from "@candid-core/schema";
@@ -65,15 +70,13 @@ proportional to that limit, and a trusted host that raises it can walk a
 100,000-level linked list or ICRC-3 value whatever the engine's stack size —
 a worker's small stack included — with the same answer on every call.
 
-Those four are the whole export map. 0.2.0 also exported `./actor`,
-`./transport-icp`, `./forms`, and `./labels`; they are gone — see
-[CHANGELOG.md](./CHANGELOG.md).
+Those four are the whole export map: nothing else, a deep path into `dist/`
+included, is importable.
 
 ## Principals and `@icp-sdk/core`
 
-From the release after 0.2.0 on, this package does not depend on
-`@icp-sdk/core` — not at runtime, not in its declarations, and not as a
-peer — so everything compiles and runs with no SDK installed, under strict
+This package does not depend on `@icp-sdk/core` — not at runtime, not in its
+declarations, and not as a peer — so everything compiles and runs with no SDK installed, under strict
 TypeScript with `skipLibCheck` off included. A principal is its canonical
 text, so an SDK value converts once, at your own boundary, with `principal()`.
 
@@ -137,6 +140,7 @@ module and a `ContractEnvelope` document, `./generated/service.envelope.json`,
 which is byte-identical to the `compile --envelope` output below:
 
 ```sh
+# 0.1.0 is the published CLI; it emits the published layout (see the note at the top).
 npx @candid-core/cli@0.1.0 gen ./service.did -o ./generated
 ```
 
@@ -210,6 +214,15 @@ hash-enforced: it must be the Candid preimage of its id, so a table that lies
 fails closed instead of quietly renaming a field. Passing no table at all is
 legal and renders every field as `_id_`, which is also what
 `compile --no-source-info` leaves you with.
+
+A generated module imports this package as the namespace `$` and binds every
+declaration as a `$`-prefixed local exported under its Candid name, so no
+Candid name — `c`, `Array`, `delete` — collides with the module's own
+bindings and you import the names you wrote: `import { Tokens, actor, type
+Actor } from "./ledger"`. The `.did`'s doc comments and argument names become
+JSDoc on the exported types, on record properties and variant arms, and on the
+methods of `Actor`, and every `vec nat8` is a `Uint8Array`, however its element
+type is named.
 
 ## Services and func references
 
@@ -329,7 +342,7 @@ or `bundler`.
 
 **Supporting ESM is not by itself enough for Node.** The build targets ES2020
 and does not down-level, so optional chaining and nullish coalescing reach
-`dist/` verbatim — they appear in four of the five modules — and those are
+`dist/` verbatim — they appear in four of the eight modules `dist/` ships — and those are
 V8 8.0 syntax, which no Node before 14 can parse. The floor above is the
 oldest release this package is actually run on rather than the oldest that
 might work: 16.20.2 is exercised and passes every subpath, and nothing older

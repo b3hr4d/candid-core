@@ -1,3 +1,14 @@
+<callout type="note" title="Not yet released">
+  <p>
+    This page describes the surface the repository builds, which is the surface of the next release of
+    <code>@candid-core/schema</code>. The published <code>0.2.0</code> still has the old one: it
+    accepts any object with <code>toText()</code> as a principal, and an options object with a
+    misspelled or non-integer limit does not throw.
+    <a href="migrating-from-0-2.html">Migrating from 0.2.0</a> lists every difference with before and
+    after code, and each is recorded under <code>## Unreleased</code> in the package changelog.
+  </p>
+</callout>
+
 <p>
   <a href="https://www.npmjs.com/package/@candid-core/schema"><code>@candid-core/schema</code></a>
   keeps a Candid type alive at runtime as a plain data object.
@@ -15,18 +26,20 @@
   codec or an agent with it.
 </p>
 
-<pre data-lang="ts">import { c } from "@candid-core/schema";
+<pre data-lang="ts" data-check>import { c } from "@candid-core/schema";
 import { validate } from "@candid-core/schema/validate";</pre>
 
 <h2>The signature and the result</h2>
 
-<pre data-lang="ts" data-file="crates/candid-core-ts/ts/validate.ts">
+<pre data-lang="ts" data-file="crates/candid-core-ts/ts/validate.ts" data-partial>
 export function validate<T>(
   schema: Schema<T>,
   value: unknown,
   options: ValidateOptions = {},
 ): ValidateResult;
+</pre>
 
+<pre data-lang="ts" data-file="crates/candid-core-ts/ts/validate.ts">
 export type ValidateResult =
   { readonly ok: true } | { readonly ok: false; readonly issues: readonly ValidationIssue[] };
 </pre>
@@ -75,19 +88,19 @@ export type ValidateResult =
 
 <h2>The issue shape</h2>
 
-<pre data-lang="ts" data-file="crates/candid-core-ts/ts/validate.ts">
+<pre data-lang="ts" data-file="crates/candid-core-ts/ts/validate.ts" data-partial>
+export interface ResourceLimitInfo {
+  readonly resource: "value_depth" | "value_elements" | "stack";
+  readonly limit: number;
+  readonly observed: number;
+}
+
 export interface ValidationIssue {
   readonly code: ValidationCode;
   /** `$`-rooted path to the offending value, candid-core style. */
   readonly path: string;
   readonly message: string;
   readonly resource_limit?: ResourceLimitInfo;
-}
-
-export interface ResourceLimitInfo {
-  readonly resource: "value_depth" | "value_elements" | "stack";
-  readonly limit: number;
-  readonly observed: number;
 }
 </pre>
 
@@ -147,7 +160,7 @@ export interface ResourceLimitInfo {
 
 <p>All three use the same two schemas, hand-written here so the shapes are visible.</p>
 
-<pre data-lang="ts">import { c, principal } from "@candid-core/schema";
+<pre data-lang="ts" data-check="worked">import { c, principal } from "@candid-core/schema";
 import { validate } from "@candid-core/schema/validate";
 
 const Tokens = c.record({ e8s: c.nat64 });
@@ -156,7 +169,7 @@ const TransferArg = c.record({ to: Account, amount: Tokens, memo: c.opt(c.blob()
 
 <p>A value the schema describes:</p>
 
-<pre data-lang="ts">validate(TransferArg, {
+<pre data-lang="ts" data-check="worked">validate(TransferArg, {
   to: { owner: principal("aaaaa-aa"), subaccount: null },
   amount: { e8s: 100_000n },
   memo: null,
@@ -171,7 +184,7 @@ const TransferArg = c.record({ to: Account, amount: Tokens, memo: c.opt(c.blob()
 
 <p>Two failures at once, each addressed to its own path:</p>
 
-<pre data-lang="ts">const result = validate(TransferArg, {
+<pre data-lang="ts" data-check="worked">const result = validate(TransferArg, {
   to: { owner: "AAAAA-AA", subaccount: null },
   amount: { e8s: -1n },
   memo: null,
@@ -206,7 +219,7 @@ const TransferArg = c.record({ to: Account, amount: Tokens, memo: c.opt(c.blob()
 
 <p>And the omitted-versus-null case, plus an unknown key:</p>
 
-<pre data-lang="ts">validate(TransferArg, {
+<pre data-lang="ts" data-check="worked">validate(TransferArg, {
   to: { owner: principal("aaaaa-aa"), subaccount: null },
   amount: { e8s: 1n },
   reference: "abc",
@@ -245,8 +258,8 @@ const TransferArg = c.record({ to: Account, amount: Tokens, memo: c.opt(c.blob()
   reporting success would claim an inspection that never happened.
 </p>
 
-<pre data-lang="ts">const big = new Array(1000).fill(0);
-const result = validate(c.vec(c.nat8), big, { maxElements: 10 });
+<pre data-lang="ts" data-check="worked">const big = new Array(1000).fill(0);
+const limited = validate(c.vec(c.nat8), big, { maxElements: 10 });
 
 // {
 //   ok: false,
@@ -301,7 +314,7 @@ const result = validate(c.vec(c.nat8), big, { maxElements: 10 });
   <code>unreadable_value</code> issue at the path being examined:
 </p>
 
-<pre data-lang="ts">const schema = c.record({ a: c.record({ b: c.bool }) });
+<pre data-lang="ts" data-check="worked">const schema = c.record({ a: c.record({ b: c.bool }) });
 const value = { a: { get b(): boolean { throw new Error("boom"); } } };
 
 validate(schema, value as never);
@@ -338,7 +351,7 @@ validate(schema, value as never);
     <span class="pill">./validate</span>
   </div>
   <div class="api-body">
-    <pre data-lang="ts">export function isResultSchema(schema: AnyFieldSchema): boolean</pre>
+    <pre data-lang="ts" data-file="crates/candid-core-ts/ts/validate.ts">export function isResultSchema(schema: AnyFieldSchema): boolean</pre>
     <p>
       True when the schema resolves — through the <code>rec</code> indirections every generated
       declaration arrives wrapped in — to a variant whose arms are <strong>exactly</strong> an ok arm
@@ -356,7 +369,7 @@ validate(schema, value as never);
     <span class="pill">./validate</span>
   </div>
   <div class="api-body">
-    <pre data-lang="ts">export function unwrapResult<S extends AnyFieldSchema>(
+    <pre data-lang="ts" data-file="crates/candid-core-ts/ts/validate.ts">export function unwrapResult<S extends AnyFieldSchema>(
   schema: S,
   value: unknown,
   options: ValidateOptions = {},
@@ -373,7 +386,7 @@ validate(schema, value as never);
   </div>
 </div>
 
-<pre data-lang="ts">import { isResultSchema, unwrapResult } from "@candid-core/schema/validate";
+<pre data-lang="ts" data-check="worked">import { isResultSchema, unwrapResult } from "@candid-core/schema/validate";
 
 const TransferError = c.variant({
   bad_fee: c.record({ expected_fee: c.nat }),

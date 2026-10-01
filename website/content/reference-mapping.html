@@ -1,9 +1,22 @@
+<callout type="note" title="Not yet released">
+  <p>
+    This page describes the surface the repository builds, which is the surface of the next release of
+    <code>@candid-core/schema</code> and <code>@candid-core/cli</code>. The published <code>0.2.0</code>
+    and <code>0.1.0</code> still have the old one: a principal is an object with <code>toText()</code>,
+    a collapsing <code>opt</code> is refused, a <code>type Byte = nat8</code> turns every blob into
+    <code>number[]</code>, and one declaration the generator cannot represent refuses the whole
+    interface. <a href="migrating-from-0-2.html">Migrating from 0.2.0</a> lists every difference with
+    before and after code, and each is recorded under <code>## Unreleased</code> in the package
+    changelogs.
+  </p>
+</callout>
+
 <p>
   Every Candid type has exactly one TypeScript rendering in this project, and every rendering has a
   matching runtime <em>schema</em> — an inert data object built from the <code>c</code> combinators
   that validation and the binary codec both walk. This page is the
-  complete table of both, plus the handful of shapes that refuse to generate rather than lose
-  information.
+  complete table of both, plus the handful of declarations that are left out rather than
+  represented wrongly.
 </p>
 
 <p>
@@ -298,7 +311,7 @@ type Numbered = variant { 0 : null; 5 : nat };
 type Tree = variant { leaf : nat; node : record { left : Tree; right : Tree } };
 </pre>
 
-<pre data-lang="ts" data-file="crates/candid-core-ts/tests/goldens/variants.ts">
+<pre data-lang="ts" data-file="crates/candid-core-ts/tests/goldens/variants.ts" data-partial>
 type $Numbered = { tag: "_0_" } | { tag: "_5_"; value: bigint };
 const $Numbered: $.Schema<$Numbered> = $.c.rec(() => $.c.variant({ _0_: $.c.null, _5_: $.c.nat }));
 export { $Numbered as Numbered };
@@ -328,7 +341,7 @@ type Kept = record { value : nat };
 service : { ping : () -> () }
 </pre>
 
-<pre data-lang="ts" data-file="crates/candid-core-ts/tests/goldens/deferred.ts">
+<pre data-lang="ts" data-file="crates/candid-core-ts/tests/goldens/deferred.ts" data-partial>
 type $Callback = { principal: $.Principal; method: string };
 const $Callback: $.Schema<$Callback> = $.c.rec(() => $.c.func([$.c.nat], [$.c.text], "query"));
 export { $Callback as Callback };
@@ -376,14 +389,17 @@ export { $actor as actor, type $Actor as Actor };
 
 <p>
   The builder is <code>c.opt(…)</code> in every row. The runtime's <code>OptDomain</code> type makes
-  the same decision from the inner domain, and validation, both codec directions, and the form model
+  the same decision from the inner domain, and validation and both codec directions
   make it from the resolved inner node when they walk a value, so the invariant annotation proves the
   generated alias and the builder agree. The box changes the value shape only. Wire bytes and the
   decoding coercion rules are exactly those of any other <code>opt</code>.
 </p>
 
-<pre data-lang="ts">
-// type Description = opt opt text;
+<pre data-lang="ts" data-check>
+import { c } from "@candid-core/schema";
+import { encode } from "@candid-core/schema/codec";
+
+const Description = c.opt(c.opt(c.text)); // type Description = opt opt text;
 encode(Description, null);          // None: keep the setting
 encode(Description, { some: null }); // Some(None): clear it
 encode(Description, { some: "x" });  // Some(Some("x")): set it
@@ -502,9 +518,13 @@ encode(Description, { some: "x" });  // Some(Some("x")): set it
   what your application code sees, and the wire shape never appears at all.
 </p>
 
-<pre data-lang="ts">
+<pre data-lang="ts" data-check>
 import { encodeArgs, decodeArgs } from "@candid-core/schema/codec";
+import { principal } from "@candid-core/schema";
 import { TransferArg, TransferResult } from "./ledger.ts";
+
+const recipient = principal("ryjl3-tyaaa-aaaaa-aaaba-cai");
+declare const replyBytes: Uint8Array; // what the canister answered
 
 const arg: TransferArg = {
   to: { owner: recipient, subaccount: null },   // Account; opt blob absent

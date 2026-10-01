@@ -1,3 +1,14 @@
+<callout type="note" title="Not yet released">
+  <p>
+    This page describes the surface the repository builds, which is the surface of the next release of
+    <code>@candid-core/schema</code>. The published <code>0.2.0</code> still has the old one: a decoded
+    principal is an object with <code>toText()</code> and encoding accepts one, the encoded type table
+    depends on how the schema was built, and a misspelled limit is ignored.
+    <a href="migrating-from-0-2.html">Migrating from 0.2.0</a> lists every difference with before and
+    after code, and each is recorded under <code>## Unreleased</code> in the package changelog.
+  </p>
+</callout>
+
 <p>
   <code>@candid-core/schema/codec</code> turns JavaScript values into Candid wire bytes and back.
   It is written in TypeScript, has no runtime dependencies, and exports exactly six functions:
@@ -39,7 +50,8 @@ export function encodeArgs(
   values: readonly unknown[],
   options: CodecOptions = {},
 ): EncodeResult
-
+</pre>
+<pre data-lang="ts" data-file="crates/candid-core-ts/ts/codec.ts">
 export type EncodeResult =
   | { readonly ok: true; readonly bytes: Uint8Array }
   | { readonly ok: false; readonly issues: readonly CodecIssue[] };
@@ -63,7 +75,8 @@ export function decodeArgs(
   bytes: Uint8Array,
   options: CodecOptions = {},
 ): DecodeResult
-
+</pre>
+<pre data-lang="ts" data-file="crates/candid-core-ts/ts/codec.ts">
 export type DecodeResult =
   | { readonly ok: true; readonly values: readonly unknown[] }
   | { readonly ok: false; readonly issues: readonly CodecIssue[] };
@@ -81,7 +94,7 @@ export type DecodeResult =
     <span class="pill accent">./codec</span>
   </div>
   <div class="api-body">
-<pre data-lang="ts" data-file="crates/candid-core-ts/ts/codec.ts">
+<pre data-lang="ts" data-file="crates/candid-core-ts/ts/codec.ts" data-partial>
 export function encode<T>(
   schema: Schema<T>,
   value: unknown,
@@ -113,7 +126,7 @@ export function decode<T>(
 
 <p>Here is the whole surface in one round trip:</p>
 
-<pre data-lang="ts" data-file="crates/candid-core-ts/ts/README.md">
+<pre data-lang="ts" data-file="crates/candid-core-ts/ts/README.md" data-check>
 import { c, principal, type Infer } from "@candid-core/schema";
 import { validate } from "@candid-core/schema/validate";
 import { encode, decode } from "@candid-core/schema/codec";
@@ -263,33 +276,42 @@ if (encoded.ok) {
 </ul>
 
 <p>
-  Each behaviour below is an executed assertion in the coercion-matrix test. The
-  <code>.ok</code> guards the real test needs before reaching <code>.bytes</code> are elided here,
-  and the expected results moved into comments:
+  Each behaviour below is an executed assertion in the coercion-matrix test
+  (<code>ts/tests/codec.test.ts</code>). Here a small helper unwraps the bytes, and the expected
+  results are in comments:
 </p>
 
-<pre data-lang="ts" data-file="crates/candid-core-ts/ts/tests/codec.test.ts">
+<pre data-lang="ts" data-check>
+import { c } from "@candid-core/schema";
+import { decode, encode, type EncodeResult } from "@candid-core/schema/codec";
+
+// The bytes of an encode that must have succeeded.
+function bytes(result: EncodeResult): Uint8Array {
+  if (!result.ok) throw new Error(result.issues[0].message);
+  return result.bytes;
+}
+
 // A wire nat is accepted at expected int; the reverse hard-errors.
-decode(c.int, encode(c.nat, 5n).bytes);   // { ok: true, value: 5n }
-decode(c.nat, encode(c.int, 5n).bytes);   // type_mismatch
+decode(c.int, bytes(encode(c.nat, 5n)));   // { ok: true, value: 5n }
+decode(c.nat, bytes(encode(c.int, 5n)));   // type_mismatch
 
 // Extra wire record fields are skipped.
-const wide = encode(c.record({ a: c.bool, b: c.text }), { a: true, b: "x" });
-decode(c.record({ a: c.bool }), wide.bytes);          // { ok: true, value: { a: true } }
+const wide = bytes(encode(c.record({ a: c.bool, b: c.text }), { a: true, b: "x" }));
+decode(c.record({ a: c.bool }), wide);            // { ok: true, value: { a: true } }
 
 // A field the wire does not carry: null if opt-like, hard error otherwise.
-const narrow = encode(c.record({ a: c.bool }), { a: true });
-decode(c.record({ a: c.bool, b: c.opt(c.text) }), narrow.bytes); // { a: true, b: null }
-decode(c.record({ a: c.bool, b: c.text }), narrow.bytes);        // missing_field
+const narrow = bytes(encode(c.record({ a: c.bool }), { a: true }));
+decode(c.record({ a: c.bool, b: c.opt(c.text) }), narrow); // { a: true, b: null }
+decode(c.record({ a: c.bool, b: c.text }), narrow);        // missing_field
 
 // Expected opt absorbs a constituent mismatch; a bare value auto-wraps.
-decode(c.opt(c.nat), encode(c.text, "hi").bytes);  // { ok: true, value: null }
-decode(c.opt(c.text), encode(c.text, "hi").bytes); // { ok: true, value: "hi" }
+decode(c.opt(c.nat), bytes(encode(c.text, "hi")));  // { ok: true, value: null }
+decode(c.opt(c.text), bytes(encode(c.text, "hi"))); // { ok: true, value: "hi" }
 
 // Variants trap on an unknown tag — unless an enclosing opt absorbs it.
-const later = encode(c.variant({ ok: c.null, later: c.nat32 }), { tag: "later", value: 7 });
-decode(c.variant({ ok: c.null }), later.bytes);         // unknown_variant_tag
-decode(c.opt(c.variant({ ok: c.null })), later.bytes);  // { ok: true, value: null }
+const later = bytes(encode(c.variant({ ok: c.null, later: c.nat32 }), { tag: "later", value: 7 }));
+decode(c.variant({ ok: c.null }), later);         // unknown_variant_tag
+decode(c.opt(c.variant({ ok: c.null })), later);  // { ok: true, value: null }
 </pre>
 
 <p>
@@ -320,7 +342,7 @@ decode(c.opt(c.variant({ ok: c.null })), later.bytes);  // { ok: true, value: nu
   <code>TypeError</code> too, carrying the original exception as its <code>cause</code>.
 </p>
 
-<pre data-lang="ts" data-file="crates/candid-core-ts/ts/codec.ts">
+<pre data-lang="ts" data-file="crates/candid-core-ts/ts/codec.ts" data-partial>
 export interface CodecOptions {
   /** Input size ceiling for decode, in bytes. */
   readonly maxBytes?: number;
@@ -331,7 +353,12 @@ export interface CodecOptions {
    * is merged, so the table it writes is never larger than this.
    */
   readonly maxTypeTableEntries?: number;
-  /** Traversal depth cap, mirroring `Limits::max_value_depth`. */
+  /**
+   * Traversal depth cap, mirroring `Limits::max_value_depth`. Encode's
+   * type-table walk charges it too, for Candid nesting depth: once per
+   * combinator level at which the table gains an entry, never for a `rec`
+   * hop, so a static schema nested deeper than this is refused.
+   */
   readonly maxDepth?: number;
   /** Traversal element budget, mirroring validate's accounting. */
   readonly maxElements?: number;
@@ -384,7 +411,7 @@ export interface CodecOptions {
   <code>resource_limit_exceeded</code> and a <code>resource_limit</code> field:
 </p>
 
-<pre data-lang="ts" data-file="crates/candid-core-ts/ts/codec.ts">
+<pre data-lang="ts" data-file="crates/candid-core-ts/ts/codec.ts" data-partial>
 export interface CodecResourceLimitInfo {
   readonly resource:
     "bytes" | "type_table_entries" | "value_depth" | "value_elements" | "numeric_bytes" | "stack";
@@ -464,7 +491,10 @@ export interface CodecResourceLimitInfo {
   yourself and take responsibility for the loss.
 </p>
 
-<pre data-lang="ts" data-file="crates/candid-core-ts/ts/tests/codec.test.ts">
+<pre data-lang="ts" data-check>
+import { c } from "@candid-core/schema";
+import { encode } from "@candid-core/schema/codec";
+
 encode(c.float32, 0.1);               // unrepresentable_float32
 encode(c.float32, Math.fround(0.1));  // ok
 encode(c.float32, Number.NaN);        // ok
@@ -495,7 +525,10 @@ encode(c.float32, Number.NaN);        // ok
   <code>validate</code>'s code, <code>invalid_type</code>, at the same path:
 </p>
 
-<pre data-lang="ts" data-file="crates/candid-core-ts/ts/tests/codec.test.ts">
+<pre data-lang="ts" data-check>
+import { c } from "@candid-core/schema";
+import { encode } from "@candid-core/schema/codec";
+
 encode(c.principal, "AAAAA-AA"); // invalid_type (case)
 encode(c.principal, "aaaaa-ab"); // invalid_type (non-zero padding bits)
 encode(c.principal, { toText: () => "aaaaa-aa" }); // invalid_type (not a string)
@@ -641,6 +674,6 @@ encode(c.principal, { toText: () => "aaaaa-aa" }); // invalid_type (not a string
   <a class="card" href="reference-mapping.html">
     <span class="card-kicker">Reference</span>
     <span class="card-title">Candid to TypeScript</span>
-    <p>The complete mapping table, including the cases that deliberately fail closed.</p>
+    <p>The complete mapping table, including the declarations that are left out.</p>
   </a>
 </div>
