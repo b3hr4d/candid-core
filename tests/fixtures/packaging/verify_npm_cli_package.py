@@ -225,6 +225,67 @@ def main():
                 f"the emitted envelope is not one: keys {sorted(envelope)}"
             )
 
+        # 5b. The scripted surface, from the tarball: `--json` prints exactly
+        #     one document on stdout (stderr empty), several entries work, and
+        #     `--check` exits 0 on a clean tree, exits 1 after one byte of
+        #     drift while writing nothing.
+        cli = ["node", "node_modules/@candid-core/cli/bin/cli.js"]
+        (consumer / "sub").mkdir()
+        (consumer / "sub" / "second.did").write_text("service : { ping : () -> () };\n")
+        gen_json = run(
+            cli + ["gen", "./service.did", "./sub/second.did", "-o", "./out", "--json"],
+            cwd=consumer,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        if gen_json.stderr != "":
+            raise SystemExit(f"--json wrote to stderr: {gen_json.stderr!r}")
+        report = json.loads(gen_json.stdout)
+        if (
+            report.get("schemaVersion") != 1
+            or report.get("ok") is not True
+            or report.get("check") is not False
+            or report.get("drift") != []
+            or [(e["entry"], e["status"]) for e in report.get("entries", [])]
+            != [("./service.did", "unchanged"), ("./sub/second.did", "written")]
+            or any(e["omitted"] != [] or e["diagnostics"] != [] for e in report["entries"])
+        ):
+            raise SystemExit(f"--json document has the wrong shape: {gen_json.stdout}")
+
+        check_json = run(
+            cli + ["gen", "./service.did", "./sub/second.did", "-o", "./out", "--check", "--json"],
+            cwd=consumer,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        checked = json.loads(check_json.stdout)
+        if checked["ok"] is not True or checked["check"] is not True or checked["drift"]:
+            raise SystemExit(f"--check on a clean tree is not clean: {check_json.stdout}")
+
+        target = consumer / "out" / "second.ts"
+        original = target.read_bytes()
+        target.write_bytes(original + b" ")
+        drifted_bytes = target.read_bytes()
+        drifted = subprocess.run(
+            cli + ["gen", "./service.did", "./sub/second.did", "-o", "./out", "--check", "--json"],
+            cwd=consumer,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        drift_report = json.loads(drifted.stdout)
+        if (
+            drifted.returncode != 1
+            or drift_report["ok"] is not False
+            or drift_report["drift"] != [str(pathlib.Path("out") / "second.ts")]
+            or target.read_bytes() != drifted_bytes
+        ):
+            raise SystemExit(
+                f"--check after drift: exit {drifted.returncode}, "
+                f"{drifted.stdout}; it must exit 1, list the file and write nothing"
+            )
+        target.write_bytes(original)
+
         # 6. The declared peer must be able to load what the CLI emitted, and
         #    the package's own declarations must compile without the DOM.
         # No host globals here on purpose (no `console`, no `process`): with
@@ -233,6 +294,7 @@ def main():
         # package's own declarations.
         (consumer / "check.ts").write_text(
             'import { didToContract, didToModule } from "@candid-core/cli";\n'
+            'import type { CliReport } from "@candid-core/cli";\n'
             'import { schemaFromContract } from "@candid-core/schema/contract";\n'
             "\n"
             "export async function main(): Promise<string[]> {\n"
@@ -249,6 +311,12 @@ def main():
             '  const emitted = await didToModule({ source: "service : { ping : () -> (); }" });\n'
             '  notes.push(emitted.ok ? String(emitted.module.length) : "failed");\n'
             "  return notes;\n"
+            "}\n"
+            "\n"
+            "export function summarize(report: CliReport): string[] {\n"
+            "  return report.entries.map(\n"
+            "    (entry) => `${entry.entry} ${entry.status} ${entry.omitted.length} ${entry.diagnostics.length}`,\n"
+            "  ).concat(report.drift, String(report.schemaVersion), String(report.ok));\n"
             "}\n"
         )
         (consumer / "tsconfig.json").write_text(
@@ -292,7 +360,8 @@ def main():
 
     print(
         "npm cli package verified: manifest file list, wasm present "
-        f"({size} bytes), self-contained prose, end-to-end gen, envelope "
+        f"({size} bytes), self-contained prose, end-to-end gen, --json and "
+        "--check from the tarball, envelope "
         "shape, DOM-less strict compile, emitted module compiles against "
         f"the declared peer {manifest['peerDependencies']['@candid-core/schema']}"
     )
