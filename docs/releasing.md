@@ -694,11 +694,20 @@ with an interactive login exactly as for the bootstrap:
 
 ```bash
 npm login                                             # interactive, 2FA
-npm dist-tag add @candid-core/schema@<version> latest
+npm dist-tag add @candid-core/schema@<schema-version> latest
+npm dist-tag add @candid-core/cli@<cli-version> latest   # the CLI that pairs with it
 npm dist-tag rm @candid-core/schema beta              # only if the tag should go
+npm dist-tag rm @candid-core/cli beta                 # likewise
+npm view @candid-core/schema dist-tags
+npm view @candid-core/cli dist-tags
 npm logout
 ```
 
+Both packages move in the one login, schema first. Moving only the schema
+leaves `latest` on a CLI whose peer range does not admit it: a plain install
+of both then pairs the new schema with the old CLI, npm warns and leaves the
+optional peer unmet, and the generated module fails to compile. `<cli-version>`
+is the CLI release whose exact peer is `<schema-version>`.
+
 No guard checks this path: `npm dist-tag add` will point `latest` at a
-prerelease, which makes a plain `npm install` resolve a beta. Promote the pair
-together, schema first, and check `npm view <package> dist-tags` afterwards.
+prerelease, which makes a plain `npm install` resolve a beta.
