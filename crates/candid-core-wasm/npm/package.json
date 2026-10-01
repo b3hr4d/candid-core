@@ -1,6 +1,6 @@
 {
   "name": "@candid-core/cli",
-  "version": "0.1.0",
+  "version": "0.2.0-beta.1",
   "description": "Candid .did to canonical Contract envelopes and @candid-core/schema modules, compiled to WebAssembly: a JavaScript-only on-ramp with no Rust toolchain, for Node CLIs and browsers alike.",
   "license": "Apache-2.0",
   "repository": {
@@ -39,7 +39,7 @@
     "playwright-core": "1.62.1"
   },
   "peerDependencies": {
-    "@candid-core/schema": "^0.2.0"
+    "@candid-core/schema": "0.3.0-beta.1"
   },
   "peerDependenciesMeta": {
     "@candid-core/schema": {

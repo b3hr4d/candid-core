@@ -79,8 +79,30 @@ const unpublishedRules = UNPUBLISHED_NPM.flatMap((name) => [
   },
 ]);
 
+/* Versions and dist-tags of published names that the registry does not hold
+ * yet: a release prepared on `main` before its dispatch. The name resolves, so
+ * the rules above cannot see the problem, but `@candid-core/schema@beta`
+ * resolves to nothing until a beta is published under that tag, and an exact
+ * prepared version is a 404. The same two spellings are refused, in code
+ * blocks only, so a page can still say in prose what the line will be. The
+ * publish-day change empties this list and turns that prose into blocks. */
+const UNPUBLISHED_NPM_SPECS = [
+  "@candid-core/schema@0.3.0-beta.1",
+  "@candid-core/schema@beta",
+  "@candid-core/cli@0.2.0-beta.1",
+  "@candid-core/cli@beta",
+];
+
+const unpublishedSpecRules = UNPUBLISHED_NPM_SPECS.map((spec) => ({
+  /* The spec followed by anything that cannot continue a version or a tag, so
+   * `@beta` does not also refuse a later `@beta-2` tag by prefix. */
+  pattern: new RegExp(`${escapeRe(spec)}(?![\\w.+-])`),
+  message: `${spec}, which the registry does not hold yet`,
+}));
+
 const FORBIDDEN_IN_CODE = [
   ...unpublishedRules,
+  ...unpublishedSpecRules,
   {
     pattern: /^\s*cargo\s+add\s+candid-core\s*$/m,
     message: "bare `cargo add candid-core`, which cannot resolve a prerelease",

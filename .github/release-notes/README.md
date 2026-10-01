@@ -36,3 +36,20 @@ What the note itself is expected to state honestly, following
 `0.1.0-beta.1` predates this workflow and was released by hand, so it has no
 file here; its notes are the body of
 [its GitHub release](https://github.com/b3hr4d/candid-core/releases/tag/v0.1.0-beta.1).
+
+## npm packages
+
+The two npm packages keep their notes under `npm/<package>/<version>.md` —
+`npm/schema/0.3.0-beta.1.md` for `@candid-core/schema`, `npm/cli/0.2.0-beta.1.md`
+for `@candid-core/cli` — never at this directory's top level. The npm versions
+are independent of the crate's, so a top-level `0.2.0-beta.1.md` written for the
+CLI is exactly the file the `Release` workflow would read, and publish as the
+crate's GitHub release body, if the crate ever released that number.
+
+No workflow reads these files: the npm release workflows create no GitHub
+release. They are the reviewed record of a release, landed in the version-bump
+pull request like the crate's notes, and they carry what that pull request
+reviewed: the installation lines, the pairing (the `candid-core` version, and
+for the CLI the embedded revision and the schema peer), the public-API diff
+against the previous release with every break marked, and the known
+limitations.

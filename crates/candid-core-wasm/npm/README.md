@@ -5,18 +5,26 @@ toolchain: the [candid-core] compiler and its TypeScript generator compiled
 to WebAssembly, usable as a Node CLI and as a browser library. Data in, data
 out — no eval, no network, and nothing generated is ever executed.
 
-> **The next release, not yet published.** This README describes the package
-> the repository builds, which is the next release. The published 0.1.0 still
-> has the old behaviour: it emits modules in the old layout with an
-> object-shaped principal type, refuses a whole interface with
+> **A beta.** This README describes 0.2.0-beta.1, published under the npm
+> `beta` dist-tag. A plain `npx @candid-core/cli` runs `latest`, which is
+> still 0.1.0 and has the old behaviour: it emits modules in the old layout
+> with an object-shaped principal type, refuses a whole interface with
 > `ts_generation_refused` for one declaration it cannot represent, and returns
-> no `omitted` list. Every change is recorded under `## Unreleased` in the
+> no `omitted` list. The modules this beta emits need
+> `@candid-core/schema` 0.3.0-beta.1 exactly, which is the optional peer it
+> declares; install the two as a pair, each with `--save-exact`:
+> `npm install --save-exact @candid-core/schema@0.3.0-beta.1` and
+> `npm install --save-dev --save-exact @candid-core/cli@0.2.0-beta.1`.
+>
+> `@candid-core/schema` 0.3 betas break the 0.2 API (principal values are canonical text, collapsing opts are boxed, every `vec nat8` is a `Uint8Array`, generated modules use a new binding layout and may omit declarations, and the `./actor`, `./transport-icp`, `./forms` and `./labels` subpaths are gone); there is no compatibility layer.
+>
+> Every change is recorded under `0.2.0-beta.1` in the
 > [changelog](./CHANGELOG.md), which ships in the tarball, and the
 > [migration notes](https://b3hr4d.github.io/candid-core/migrating-from-0-2.html)
 > show each one as before and after code.
 
 ```sh
-npx @candid-core/cli gen ./service.did -o ./generated
+npx @candid-core/cli@beta gen ./service.did -o ./generated
 ```
 
 `gen` takes one or more entries (`gen <a.did> [<b.did> …]`), and two flags:
@@ -104,7 +112,7 @@ output file is missing or differs, listing each on stderr (`missing <path>` or
 `drifted <path>`):
 
 ```sh
-npx @candid-core/cli gen ./service.did -o ./generated --check
+npx @candid-core/cli@beta gen ./service.did -o ./generated --check
 ```
 
 Use it in CI to fail when committed output is stale. A compile error is a
@@ -256,6 +264,11 @@ it in this wasm artifact is an owner decision recorded on the repository's
 issue tracker) are built from one repository commit, and the parity gates
 prove the emitted module and contract are byte-identical to that commit's
 Rust-native outputs over the golden fixtures.
+
+The `@candid-core/schema` peer is an exact version, not a range, while the two
+packages move in lockstep: each schema beta is paired with a new beta of this
+package that names it, so a generated module always meets the runtime it was
+generated for.
 
 [candid-core]: https://github.com/b3hr4d/candid-core
 [`@candid-core/schema`]: https://www.npmjs.com/package/@candid-core/schema

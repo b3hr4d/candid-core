@@ -13,66 +13,49 @@ entry here is [docs/releasing.md] in that repository.
 API, the inferred domain types, the codec's wire behaviour, and the codes and
 `$`-rooted paths validation reports. Pin an exact version.
 
-## Unreleased
+## 0.3.0-beta.1 — 2026-10-01
 
-### Stack exhaustion is its own resource
+Pairs with `candid-core` 0.1.0-beta.3.
 
-Runtime behavior changes in exactly one situation — the host JavaScript stack
-running out during `validate`, `encode` or `decode` — and one closed type union
-gains a member. No wire encoding, no validation verdict and no other issue code
-moved, and the generated bindings and goldens are untouched.
+`@candid-core/schema` 0.3 betas break the 0.2 API (principal values are canonical text, collapsing opts are boxed, every `vec nat8` is a `Uint8Array`, generated modules use a new binding layout and may omit declarations, and the `./actor`, `./transport-icp`, `./forms` and `./labels` subpaths are gone); there is no compatibility layer.
 
-- **BREAKING**: `resource_limit_exceeded` issues gain a new `resource` member,
-  `"stack"`, in both closed unions that enumerate resources —
-  `ResourceLimitInfo["resource"]` in `./validate` (now `"value_depth" |
-  "value_elements" | "stack"`) and `CodecResourceLimitInfo["resource"]` in
-  `./codec`. This is a **type-level** breaking change: a consumer's exhaustive
-  `switch` over either union stops compiling until it handles `"stack"`.
-  `ContractIssue["resource_limit"]` reuses the `./validate` type, so its
-  declared type widens too, though the contract loader is non-recursive and
-  never produces it.
-- **A host stack overflow is no longer mislabelled.** When the engine's own call
-  stack ran out mid-walk, `validate` and `encode` reported `unreadable_value`
-  ("the value threw while being inspected") and `decode` reported
-  `unsupported_schema` ("the schema threw while being traversed"). Neither was
-  true. All three now report `{ code: "resource_limit_exceeded",
-  resource_limit: { resource: "stack", limit, observed } }`, where `limit` is the
-  call's effective `maxDepth` and `observed` the deepest depth the walk had
-  reached when the engine refused. Tell `stack` from `value_depth` by `resource`:
-  `observed` is usually below `limit`, but not always (see below).
-- **When this can happen.** Since the walkers became iterative ("Iterative
-  walkers", below), only when user code a walk calls — a getter, a Proxy trap,
-  a `rec` thunk — recurses too deeply itself. When this change was made the
-  walkers were still recursive, and a `maxDepth` raised past what the host's
-  stack held, or a hand-built schema nested deeper than the stack, overflowed
-  them at a point that varied by engine, JIT state and run; that entry removes
-  both.
-- **How an overflow is recognised.** The engine's error is a `RangeError`
-  reading "Maximum call stack size exceeded" (V8 and JavaScriptCore) or an
-  `InternalError` reading "too much recursion" (SpiderMonkey, which does not
-  throw a `RangeError`). Detection matches on `name` and `message`, never
-  `instanceof`, and answers no for any other `RangeError` (an invalid array
-  length, an oversized BigInt), for a plain `Error` quoting the words, and for
-  any thrown value it cannot safely read. A getter or `rec` thunk that throws an
-  error with exactly this name and message is classified the same way — the
-  label can be forged, the fail-closed outcome cannot. The detector is internal
-  and adds no export to any subpath.
-- **User-thrown errors keep their labels.** A getter that throws an ordinary
-  error is still `unreadable_value`, and a `rec` thunk that throws during decode
-  is still `unsupported_schema`; the choke points were not widened.
+The first beta of the 0.3 line, and the first prerelease of this package. It is
+published under the npm `beta` dist-tag, so `latest` stays on 0.2.0 and a plain
+`npm install @candid-core/schema` does not select it; ask for it by its exact
+version, `npm install --save-exact @candid-core/schema@0.3.0-beta.1`. A
+`^0.2.0` range does not admit it either: under npm's pre-1.0 caret rules a
+minor is a breaking release. The package stays 0.x through the 4.0 release
+of ic-reactor, the call layer built on it; 1.0 follows a stability window after
+that, not with it.
+
+The package becomes the Candid layer only — schemas, validation, the codec and
+the Contract loader — and its public shape changes where a call layer built on
+top of it needs it to. Every break is listed below and marked **BREAKING**,
+ordered for a reader upgrading from 0.2.0: what stops resolving, then what
+changes shape, then what changes behaviour. No byte a 0.2.0 encoder wrote is
+read differently, and no Contract document or identity moved; one encoder
+change (the structural type table) makes some byte strings shorter, never
+different in meaning.
+
+**The CLI pairs with this exact version.** `@candid-core/cli` 0.2.0-beta.1
+declares this package as a peer at exactly `0.3.0-beta.1`: the modules its
+generator emits need the `Principal` export and the boxed options introduced
+here, which 0.2.0 does not have, and the generator and this package's
+`schemaFromContract` agree on blobs and on omitted declarations only when both
+come from the same release. While the two packages move in lockstep, every
+beta of this package is paired with a new CLI beta that raises that exact peer.
+
+The Contract documents this package loads are unchanged, so the
+`candid-core compile --envelope` on-ramp in the README works with the published
+`candid-core` 0.1.0-beta.3.
 
 ### The package is the Candid layer only
 
-The package becomes the Candid layer only: schemas, validation, the codec,
-and the Contract loader. The call stack — transports, identity, actors — and
-form metadata move downstream to ic-reactor 4, which builds them on top of
-these four subpaths. Removing published subpaths is a breaking change, so the
-next release is a minor: under npm's pre-1.0 caret rules `^0.2.0` refuses
-`0.3.0`. No wire encoding, validation verdict, issue code, or inferred type
-moved — the modules that remain ship the same code as 0.2.0, with only
-documentation comments edited.
-
-### Removed subpaths
+The call stack — transports, identity, actors — and form metadata move
+downstream to ic-reactor 4, which builds them on top of these four subpaths. On its own this change
+moved no wire encoding, validation verdict, issue code or inferred type: the
+modules that remain shipped the same code as 0.2.0, with only documentation
+comments edited, until the changes in the sections after this one.
 
 - **BREAKING**: `./actor` is removed — `createActor`, `callFunc`, `ActorError`,
   and the `Transport`, `CallTarget`, and `ActorOptions` types. Calling a
@@ -95,13 +78,9 @@ documentation comments edited.
   `numericKeyId`, `isNumericShapedName`, `fieldIdOfKey`, `utf8BytesStrict`,
   and `utf8Decode`. The module still ships, because the codec and the
   Contract loader import it, but it is not an entry point.
-
-Importing any of the four now fails at resolution —
-`ERR_PACKAGE_PATH_NOT_EXPORTED` in Node, `TS2307` in TypeScript — and the
-packaged-consumer gate asserts both.
-
-### No peer
-
+- Importing any of the four now fails at resolution —
+  `ERR_PACKAGE_PATH_NOT_EXPORTED` in Node, `TS2307` in TypeScript — and the
+  packaged-consumer gate asserts both.
 - **BREAKING**: the optional `@icp-sdk/core >= 6` peer is dropped; only
   `./transport-icp` ever used it. The package now declares no runtime
   dependency and no peer of any kind. SDK `Principal` values convert to this
@@ -109,110 +88,6 @@ packaged-consumer gate asserts both.
   text" below.
 - The Node support matrix loses its `>= 20.19` row, which applied only to
   `./transport-icp`; the ESM floor of every remaining subpath is Node 16.
-
-### Options whose inner type admits `null` are boxed
-
-An `opt` whose inner type is another `opt`, `null`, or `reserved` could not
-be carried by `T | null`: `None` and `Some(None)` were the same `null`. Such
-interfaces used to be refused outright, and a hand-built `c.opt(c.opt(…))`
-silently decoded `Some(None)` as `None`. Exactly those opts now carry their
-present value as `{ some: v }`; every other opt is unchanged in type, value,
-and wire bytes.
-
-- **BREAKING**: `opt opt T`, `opt null`, and `opt reserved` are
-  `{ some: T } | null` in both value and type shape, for hand-built,
-  Contract-loaded, and generated schemas alike: `Infer<typeof
-  c.opt(c.opt(c.nat))>` is `{ some: bigint | null } | null`, validation and
-  encoding require `{ some: v }` for a present value (a bare `v` is
-  `invalid_type`, and `undefined` is no longer read as present under
-  `opt reserved`), and decoding returns `{ some: v }`. The decision is made
-  on the resolved inner node, so declared aliases and recursive types
-  (`type Chain = opt Chain`) box too, while `opt empty` stays `null`. Wire
-  bytes and the decoding coercion rules are unchanged.
-- **BREAKING**: `ContractIssueCode` in `./contract` loses
-  `unrepresentable_option`; `schemaFromContract` now loads the documents it
-  used to refuse with it.
-- **BREAKING**: `OptSchema<T>` now extends `Schema<OptDomain<T>>` rather
-  than `Schema<T | null>`. The root export gains the `OptDomain<T>` type
-  and the runtime predicate `isBoxedOpt(schema)`, which answers whether a
-  schema is an opt whose present values are boxed.
-- The internal forms model's `optional` control gains `boxed: boolean`; a
-  boxed optional's inner node sits at `….some`, which `formNodeAt` resolves.
-  (`./forms` is no longer exported; see above.)
-  Code that only reads the model is unaffected; code that constructs
-  `FormControl` values must add the field.
-- **Release ordering**: `@candid-core/cli` declares this package as a peer
-  (`^0.2.0`). A CLI built with this change emits boxed aliases for
-  collapsing opts, which the published 0.2.0 cannot type (and whose runtime
-  would collapse them), so the CLI release that ships the generator change
-  must raise its peer to the release carrying this entry. Interfaces without
-  collapsing opts generate byte-identical modules.
-
-### Generated modules bind `$`-prefixed locals
-
-Nothing in this package changes: no export, type, verdict or byte. The
-generator in `@candid-core/cli` now emits modules that import this package as
-a namespace (`import * as $ from "@candid-core/schema"`) and bind every
-declaration as a `$`-prefixed local exported under its Candid name, so a
-Candid declaration named `c`, `Schema`, `Array` or `delete` no longer
-collides with the module's own bindings. Such a module uses only
-the `c`, `Schema` and `PrincipalValue` exports 0.2.0 already has. The
-`Schema` documentation comment that quoted the old generated line is
-updated.
-
-### Encoded bytes no longer depend on how a schema was built; bad options throw
-
-Two fail-open behaviours closed (issue #190). Neither changes a validation
-verdict, an issue code, a decoded value, or a generated binding.
-
-- **BREAKING**: `encode` and `encodeArgs` write a *structural* type table.
-  The table used to be keyed by schema-object identity, so the same value
-  encoded through a generated module and through `schemaFromContract` could
-  produce different bytes — the ledger fixture's `TransferArg` wrote an
-  11-entry table through the generated schema and a 7-entry one through the
-  loaded schema. Anything keying a cache or deduplicating requests on
-  argument bytes saw two keys for one call. Equal Candid types now produce
-  equal entries, written once: bytes depend on the values and the types, not
-  on whether the schema was generated, loaded or hand-built, how it shares or
-  duplicates nodes, or in which order a record's schema or value spells its
-  keys. `blob` and `vec nat8` share one entry. A schema with no repeated
-  structure writes exactly the bytes it wrote before — every checked-in wire
-  golden is unchanged — and a schema with repeated anonymous structure now
-  writes a smaller table, still valid Candid that every decoder reads; for
-  the ledger vectors it is byte-for-byte what the `candid` crate writes.
-  Recursive types are canonical per knot: schemas generated from or loaded
-  from a Contract (one knot per recursive node, the Contract canonicalizer
-  having already minimised the graph) agree, while two separately hand-built
-  knots for one recursive type are not merged — cyclic minimisation is a
-  non-goal, and the case is pinned. `maxTypeTableEntries` still charges one
-  entry per distinct composite schema node the encoder's walk meets, before
-  merging, so where it refuses is unchanged. The rewrite is iterative and
-  linear in the table's size.
-- **BREAKING**: every entry point that takes an options object — `validate`
-  and `unwrapResult` in `./validate`, `encode`, `encodeArgs`, `decode` and
-  `decodeArgs` in `./codec`, `schemaFromContract` in `./contract` — throws
-  `TypeError` on an own key it does not define (a misspelled limit used to
-  apply the default silently; `maxIssues` passed to `encode` is now an error
-  too), and on a limit that is not a non-negative safe integer: `NaN`, a
-  negative, a fraction, a string, `null`, and `Infinity` all throw. A `NaN`
-  limit used to switch its bound off entirely (`validate` accepted a
-  depth-300 value under `maxDepth: NaN`) and a string one was compared as a
-  string. Options are code, not input, so this is a `TypeError` like the
-  ones `resolveSchema`, `serviceMethods` and `unwrapResult` already throw,
-  not a new issue code; it is raised before anything else is read.
-  `undefined` still means "use the default", and `0` is still a valid,
-  fail-closed limit. Each option is read from the caller's object exactly
-  once, into a frozen snapshot that the whole call — nested calls included —
-  reads instead, so a getter or Proxy cannot pass the check with one value
-  and run with another; an options object whose getter or Proxy trap throws
-  while being read raises a `TypeError` naming the entry point, with the
-  original exception as its `cause`. Values, byte strings and Contract documents still never
-  make these functions throw. Refusing `Infinity` is the recommendation
-  recorded on issue #190, pending the maintainer: a trusted host that wants
-  no practical bound passes a large safe integer.
-- Two internal modules ship in `dist/` without an export: `options.js` (the
-  shared option check) and `typetable.js` (the structural table). Deep
-  imports of them fail like every other internal module.
 
 ### Principals are canonical text
 
@@ -264,8 +139,8 @@ principal that encoded before; Contract JSON and identities are untouched.
   id over 29 bytes, an opaque reference).
 - Equal principal text encodes to equal bytes whatever built the schema —
   generated, loaded, hand-built or `rec`-wrapped — in the primitive, func and
-  service positions alike: the structural-table guarantee above, completed for
-  principals now that the value is the text itself.
+  service positions alike: the structural-table guarantee below, completed
+  for principals now that the value is the text itself.
 - A string longer than 63 characters — the longest canonical text — is
   refused before any work proportional to its length.
 - The principal text form moves out of the codec into an internal module,
@@ -284,14 +159,41 @@ principal that encoded before; Contract JSON and identities are untouched.
   generator imports `Principal` from it, and that module must re-export this
   package's `Principal`: the brand makes the type nominal, so the generated
   `Schema<…>` annotations compile against no other type.
-- **Release ordering**: generated modules need the `Principal` export, which
-  0.2.0 does not have, so the `@candid-core/cli` release that ships this
-  generator must raise its peer to the release carrying this entry.
+
+### Options whose inner type admits `null` are boxed
+
+An `opt` whose inner type is another `opt`, `null`, or `reserved` could not
+be carried by `T | null`: `None` and `Some(None)` were the same `null`. Such
+interfaces used to be refused outright, and a hand-built `c.opt(c.opt(…))`
+silently decoded `Some(None)` as `None`. Exactly those opts now carry their
+present value as `{ some: v }`; every other opt is unchanged in type, value,
+and wire bytes.
+
+- **BREAKING**: `opt opt T`, `opt null`, and `opt reserved` are
+  `{ some: T } | null` in both value and type shape, for hand-built,
+  Contract-loaded, and generated schemas alike: `Infer<typeof
+  c.opt(c.opt(c.nat))>` is `{ some: bigint | null } | null`, validation and
+  encoding require `{ some: v }` for a present value (a bare `v` is
+  `invalid_type`, and `undefined` is no longer read as present under
+  `opt reserved`), and decoding returns `{ some: v }`. The decision is made
+  on the resolved inner node, so declared aliases and recursive types
+  (`type Chain = opt Chain`) box too, while `opt empty` stays `null`. Wire
+  bytes and the decoding coercion rules are unchanged.
+- **BREAKING**: `ContractIssueCode` in `./contract` loses
+  `unrepresentable_option`; `schemaFromContract` now loads the documents it
+  used to refuse with it.
+- **BREAKING**: `OptSchema<T>` now extends `Schema<OptDomain<T>>` rather
+  than `Schema<T | null>`. The root export gains the `OptDomain<T>` type
+  and the runtime predicate `isBoxedOpt(schema)`, which answers whether a
+  schema is an opt whose present values are boxed.
+- The internal forms model's `optional` control gains `boxed: boolean`; a
+  boxed optional's inner node sits at `….some`, which `formNodeAt` resolves.
+  (`./forms` is no longer exported; see above.)
 
 ### `schemaFromContract` builds a blob for every `vec nat8`
 
-The loader's blob rule matches the generator's change (issue #191). No wire
-encoding, issue code, export or type moved; one loaded value domain did.
+The loader's blob rule matches the generator's. No wire encoding, issue code,
+export or type moved; one loaded value domain did.
 
 - **BREAKING**: `schemaFromContract` used to build `c.blob()` for a `vec nat8`
   only when its `nat8` element node was not itself a declaration. A Contract
@@ -308,76 +210,18 @@ encoding, issue code, export or type moved; one loaded value domain did.
   A declared primitive now names only itself, in the loader and in the
   generator (see `@candid-core/cli`'s changelog), and the crosscheck that holds
   the loaded schemas to the generated ones is extended to the new `fidelity`
-  fixture.
-- **Release ordering**: none needed for the loader alone, but a generated module
-  and a loader from different sides of this change disagree about `vec Byte`.
-  Ship the generator and this package together.
-
-### Iterative walkers: the configured limits are the only bounds
-
-`validate`, `encode`/`encodeArgs` and `decode`/`decodeArgs` no longer recurse
-on the JavaScript call stack once per nesting level: each keeps its work on an
-explicit stack of frames (issue #192). No wire encoding, golden or wire vector
-moved, and every issue code, `$`-path, message, `resource_limit` triple and
-first-issue precedence is what it was, with the one deliberate exception
-below. `DEFAULT_MAX_DEPTH` stays 256 and every other limit keeps its meaning.
-
-- **Deep data within raised limits now works, everywhere, every time.** With
-  `maxDepth` and `maxElements` raised, a 100,000-level value — a Motoko-style
-  linked list, an ICRC-3 `Value` tree, a nested `vec` — validates, encodes and
-  decodes on any engine, independent of its stack size, with the same result
-  on every call. Before, the walkers overflowed the host stack from about
-  1,500 (encode), 2,000 (validate) and 2,600 (decode) levels on Node, at a
-  point that moved with the engine's JIT state, and reported `stack`.
-- **Hostile depth is refused after bounded work.** A reply nested a million
-  levels deep is refused with `value_depth` at `maxDepth + 1` after charging
-  work proportional to `maxDepth` (256 elements at the default, 10,000 at
-  `maxDepth: 10_000`), whatever lies beyond; the suite pins the exact charge.
-- **Changed (decision D1 of #192, as the maintainer settled it): `encode`
-  charges `maxDepth` for Candid nesting depth, and only for that.** The
-  property: any type the candid-core compiler accepts encodes through its
-  generated module at the default limits, however it is split into
-  declarations. The type-table walk charges one depth unit per combinator
-  level at which it opens an entry (the argument's type at 0) and nothing for
-  `rec` hops, which are aliases and lazy edges — the count the compiler bounds
-  with `max_type_depth` (256), where an alias adds no depth either. A chain of
-  `rec` hops resolving one reference is capped on its own at `maxDepth`
-  (a generated module needs one or two, a loaded schema one). Before, the walk
-  counted rec hops and combinators together and checked the sum only at rec
-  hops: a compiler-accepted type reached through many aliases (for example
-  250 aliases each a `vec` of the next) and any `schemaFromContract` schema
-  deeper than about 128 levels were refused with `value_depth`, while a
-  hand-built static schema with no `rec` in it was not checked at all and
-  overflowed the stack. Now the first are accepted, and the last — `c.vec`
-  nested 20,000 times, say — is refused with `value_depth` at the first
-  composite at Candid depth 257 (`observed` 257, path `$`), after 257 entries.
-  Primitives open no entry and are not charged. A schema object reused at
-  several positions is written once but charged at each, for the depth it
-  spans there, so a composite first met shallow cannot carry a deep use past
-  the limit; a back edge closing a recursive knot (including one reached
-  again through an alias of the knot) is not charged, as Candid does not
-  expand a type inside itself. Visible only in a schema's
-  type table: such an encode may now be accepted where it was refused, refused
-  where it was accepted (a shallow value in a hand-built schema nested past
-  the limit), or refused with a different `observed`, or ahead of a value
-  issue, since the type table is walked first. A value nested through every
-  level of a deep type still meets `maxDepth` in the value walk, which counts
-  rec hops as `validate` and `decode` do; that is unchanged. The worst case
-  for a hostile hand-built schema is `maxDepth × (maxDepth + 2)` thunk calls
-  per path (a full 256-hop chain at every level), pinned in the suite.
-- **`stack` is now only for user code.** The `stack` resource stays, for a
-  getter, Proxy trap or `rec` thunk that itself recurses too deeply; no depth
-  of value, message or schema produces it any more.
-- **Faster deep records.** `encode` no longer copies a record's field bytes
-  once per enclosing record to put them in wire order, so deeply nested
-  records encode in linear rather than quadratic time. Bytes are unchanged.
+  fixture. A generated module and a loaded schema from different sides of
+  this change disagree about `vec Byte`, which is one reason the CLI peers this
+  exact version.
 
 ### `schemaFromContract` omits what the generator omits
 
 The loader leaves out exactly the declarations and actor methods a generated
-module leaves out for the same Contract, with the same reasons, and says so
-(issue #189). No wire encoding, validation verdict or issue code moved; an
-invalid document still fails whole, with `issues`.
+module leaves out for the same Contract, with the same reasons, and says so.
+No wire encoding, validation verdict or issue code moved; an invalid document
+still fails whole, with `issues`. The golden crosscheck holds the loader's
+list and the generator's equal, entry for entry, on the new `omissions`
+fixture.
 
 - **BREAKING**: a name-table entry whose name is shaped like the `_N_`
   numeric-id rendering and honestly hashes to its id — a Candid field
@@ -408,9 +252,173 @@ invalid document still fails whole, with `issues`.
   `via` names the omitted declaration a `references_omitted` entry
   references. Reading results is unaffected; code that constructs an `ok`
   result by hand must add the field. The entry types are not exported by name.
-- **Release ordering**: ship with the `@candid-core/cli` generator change
-  that omits the same entries; the golden crosscheck holds the two lists
-  equal, entry for entry, on the new `omissions` fixture.
+
+### Encoded bytes no longer depend on how a schema was built; bad options throw
+
+Two fail-open behaviours closed. Neither changes a validation verdict, an
+issue code, a decoded value, or a generated binding.
+
+- **BREAKING**: `encode` and `encodeArgs` write a *structural* type table.
+  The table used to be keyed by schema-object identity, so the same value
+  encoded through a generated module and through `schemaFromContract` could
+  produce different bytes — the ledger fixture's `TransferArg` wrote an
+  11-entry table through the generated schema and a 7-entry one through the
+  loaded schema. Anything keying a cache or deduplicating requests on
+  argument bytes saw two keys for one call. Equal Candid types now produce
+  equal entries, written once: bytes depend on the values and the types, not
+  on whether the schema was generated, loaded or hand-built, how it shares or
+  duplicates nodes, or in which order a record's schema or value spells its
+  keys. `blob` and `vec nat8` share one entry. A schema with no repeated
+  structure writes exactly the bytes it wrote before — every checked-in wire
+  golden is unchanged — and a schema with repeated anonymous structure now
+  writes a smaller table, still valid Candid that every decoder reads; for
+  the ledger vectors it is byte-for-byte what the `candid` crate writes.
+  Recursive types are canonical per knot: schemas generated from or loaded
+  from a Contract (one knot per recursive node, the Contract canonicalizer
+  having already minimised the graph) agree, while two separately hand-built
+  knots for one recursive type are not merged — cyclic minimisation is a
+  non-goal, and the case is pinned. `maxTypeTableEntries` still charges one
+  entry per distinct composite schema node the encoder's walk meets, before
+  merging, so where it refuses is unchanged. The rewrite is iterative and
+  linear in the table's size.
+- **BREAKING**: every entry point that takes an options object — `validate`
+  and `unwrapResult` in `./validate`, `encode`, `encodeArgs`, `decode` and
+  `decodeArgs` in `./codec`, `schemaFromContract` in `./contract` — throws
+  `TypeError` on an own key it does not define (a misspelled limit used to
+  apply the default silently; `maxIssues` passed to `encode` is now an error
+  too), and on a limit that is not a non-negative safe integer: `NaN`, a
+  negative, a fraction, a string, `null`, and `Infinity` all throw. A `NaN`
+  limit used to switch its bound off entirely (`validate` accepted a
+  depth-300 value under `maxDepth: NaN`) and a string one was compared as a
+  string. Options are code, not input, so this is a `TypeError` like the
+  ones `resolveSchema`, `serviceMethods` and `unwrapResult` already throw,
+  not a new issue code; it is raised before anything else is read.
+  `undefined` still means "use the default", and `0` is still a valid,
+  fail-closed limit. Each option is read from the caller's object exactly
+  once, into a frozen snapshot that the whole call — nested calls included —
+  reads instead, so a getter or Proxy cannot pass the check with one value
+  and run with another; an options object whose getter or Proxy trap throws
+  while being read raises a `TypeError` naming the entry point, with the
+  original exception as its `cause`. Values, byte strings and Contract
+  documents still never make these functions throw. Refusing `Infinity` may
+  still be revisited before 1.0: a trusted host that wants no practical bound
+  passes a large safe integer.
+- Two internal modules ship in `dist/` without an export: `options.js` (the
+  shared option check) and `typetable.js` (the structural table). Deep
+  imports of them fail like every other internal module.
+
+### Iterative walkers: the configured limits are the only bounds
+
+`validate`, `encode`/`encodeArgs` and `decode`/`decodeArgs` no longer recurse
+on the JavaScript call stack once per nesting level: each keeps its work on an
+explicit stack of frames. No wire encoding, golden or wire vector moved, and
+every issue code, `$`-path, message, `resource_limit` triple and first-issue
+precedence is what it was, with the one deliberate exception below.
+`DEFAULT_MAX_DEPTH` stays 256 and every other limit keeps its meaning.
+
+- **Deep data within raised limits now works, everywhere, every time.** With
+  `maxDepth` and `maxElements` raised, a 100,000-level value — a Motoko-style
+  linked list, an ICRC-3 `Value` tree, a nested `vec` — validates, encodes and
+  decodes on any engine, independent of its stack size, with the same result
+  on every call. In 0.2.0 the recursive walkers overflowed the host stack from
+  about 1,500 (encode), 2,000 (validate) and 2,600 (decode) levels on Node, at
+  a point that moved with the engine's JIT state.
+- **Hostile depth is refused after bounded work.** A reply nested a million
+  levels deep is refused with `value_depth` at `maxDepth + 1` after charging
+  work proportional to `maxDepth` (256 elements at the default, 10,000 at
+  `maxDepth: 10_000`), whatever lies beyond; the suite pins the exact charge.
+- **Changed: `encode` charges `maxDepth` for Candid nesting depth, and only
+  for that.** The property: any type the candid-core compiler accepts encodes
+  through its generated module at the default limits, however it is split
+  into declarations. The type-table walk charges one depth unit per
+  combinator level at which it opens an entry (the argument's type at 0) and
+  nothing for `rec` hops, which are aliases and lazy edges — the count the
+  compiler bounds with `max_type_depth` (256), where an alias adds no depth
+  either. A chain of `rec` hops resolving one reference is capped on its own
+  at `maxDepth` (a generated module needs one or two, a loaded schema one).
+  Before, the walk counted rec hops and combinators together and checked the
+  sum only at rec hops: a compiler-accepted type reached through many aliases
+  (for example 250 aliases each a `vec` of the next) and any
+  `schemaFromContract` schema deeper than about 128 levels were refused with
+  `value_depth`, while a hand-built static schema with no `rec` in it was not
+  checked at all and overflowed the stack. Now the first are accepted, and
+  the last — `c.vec` nested 20,000 times, say — is refused with `value_depth`
+  at the first composite at Candid depth 257 (`observed` 257, path `$`),
+  after 257 entries. Primitives open no entry and are not charged. A schema
+  object reused at several positions is written once but charged at each,
+  for the depth it spans there, so a composite first met shallow cannot carry
+  a deep use past the limit; a back edge closing a recursive knot (including
+  one reached again through an alias of the knot) is not charged, as Candid
+  does not expand a type inside itself. Visible only in a schema's type
+  table: such an encode may now be accepted where it was refused, refused
+  where it was accepted (a shallow value in a hand-built schema nested past
+  the limit), or refused with a different `observed`, or ahead of a value
+  issue, since the type table is walked first. A value nested through every
+  level of a deep type still meets `maxDepth` in the value walk, which counts
+  rec hops as `validate` and `decode` do; that is unchanged. The worst case
+  for a hostile hand-built schema is `maxDepth × (maxDepth + 2)` thunk calls
+  per path (a full 256-hop chain at every level), pinned in the suite.
+- **Faster deep records.** `encode` no longer copies a record's field bytes
+  once per enclosing record to put them in wire order, so deeply nested
+  records encode in linear rather than quadratic time. Bytes are unchanged.
+
+### Stack exhaustion is its own resource
+
+One closed type union gains a member, and a host stack overflow is reported
+as what it is. No wire encoding, no validation verdict and no other issue code
+moved.
+
+- **BREAKING**: `resource_limit_exceeded` issues gain a new `resource` member,
+  `"stack"`, in both closed unions that enumerate resources —
+  `ResourceLimitInfo["resource"]` in `./validate` (now `"value_depth" |
+  "value_elements" | "stack"`) and `CodecResourceLimitInfo["resource"]` in
+  `./codec`. This is a **type-level** breaking change: a consumer's exhaustive
+  `switch` over either union stops compiling until it handles `"stack"`.
+  `ContractIssue["resource_limit"]` reuses the `./validate` type, so its
+  declared type widens too, though the contract loader is non-recursive and
+  never produces it.
+- **A host stack overflow is no longer mislabelled.** When the engine's own call
+  stack ran out mid-walk, 0.2.0's `validate` and `encode` reported
+  `unreadable_value` ("the value threw while being inspected") and `decode`
+  reported `unsupported_schema` ("the schema threw while being traversed").
+  Neither was true. All three now report `{ code: "resource_limit_exceeded",
+  resource_limit: { resource: "stack", limit, observed } }`, where `limit` is
+  the call's effective `maxDepth` and `observed` the deepest depth the walk had
+  reached when the engine refused. Tell `stack` from `value_depth` by
+  `resource`: `observed` is usually below `limit`, but not always.
+- **When this can happen.** With the walkers iterative (above), only when user
+  code a walk calls — a getter, a Proxy trap, a `rec` thunk — recurses too
+  deeply itself. No depth of value, message or schema produces it.
+- **How an overflow is recognised.** The engine's error is a `RangeError`
+  reading "Maximum call stack size exceeded" (V8 and JavaScriptCore) or an
+  `InternalError` reading "too much recursion" (SpiderMonkey, which does not
+  throw a `RangeError`). Detection matches on `name` and `message`, never
+  `instanceof`, and answers no for any other `RangeError` (an invalid array
+  length, an oversized BigInt), for a plain `Error` quoting the words, and for
+  any thrown value it cannot safely read. A getter or `rec` thunk that throws an
+  error with exactly this name and message is classified the same way — the
+  label can be forged, the fail-closed outcome cannot. The detector is internal
+  and adds no export to any subpath.
+- **User-thrown errors keep their labels.** A getter that throws an ordinary
+  error is still `unreadable_value`, and a `rec` thunk that throws during decode
+  is still `unsupported_schema`; the choke points were not widened.
+
+### Generated modules bind `$`-prefixed locals
+
+Nothing in this package changes for this: no export, type, verdict or byte.
+The generator in `@candid-core/cli` now emits modules that import this package
+as a namespace (`import * as $ from "@candid-core/schema"`) and bind every
+declaration as a `$`-prefixed local exported under its Candid name, so a
+Candid declaration named `c`, `Schema`, `Array` or `delete` no longer collides
+with the module's own bindings. The `Schema` documentation comment that quoted
+the old generated line is updated.
+
+### The declarations
+
+- `schema.d.ts` grows from 640 lines to 732, with the documentation of the new
+  `Principal`, `principal()`, `isPrincipal()`, `OptDomain` and `isBoxedOpt`.
+  Every shipped declaration still stands on its own, with no internal issue
+  number, and compiles under strict TypeScript without `skipLibCheck`.
 
 ## 0.2.0 — 2026-08-24
 
