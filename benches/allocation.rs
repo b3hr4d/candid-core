@@ -72,9 +72,17 @@ fn record_allocation(size: usize) {
 }
 
 fn record_deallocation(size: usize) {
-    let _ = LIVE_BYTES.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |live| {
-        Some(live.saturating_sub(size))
-    });
+    // A compare-exchange loop, not `fetch_update`: stable 1.99 deprecates that
+    // name in favour of `try_update`, which the 1.78 MSRV does not have.
+    let mut live = LIVE_BYTES.load(Ordering::Relaxed);
+    while let Err(observed) = LIVE_BYTES.compare_exchange_weak(
+        live,
+        live.saturating_sub(size),
+        Ordering::Relaxed,
+        Ordering::Relaxed,
+    ) {
+        live = observed;
+    }
 }
 
 fn reset_counters() {
