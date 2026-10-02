@@ -256,8 +256,15 @@ ever been published under this name. That baseline now exists, and
 `tests/fixtures/packaging/verify_semver.py` is the gate:
 
 ```sh
-python3 tests/fixtures/packaging/verify_semver.py
+. tests/fixtures/packaging/release-tools.env
+RUSTUP_TOOLCHAIN="${SEMVER_TOOLCHAIN}" python3 tests/fixtures/packaging/verify_semver.py
 ```
+
+The toolchain is pinned beside the tool in `release-tools.env`, because
+`cargo semver-checks` reads rustdoc JSON and each release of it understands a
+fixed set of format versions: on a newer stable than the pinned one it stops
+with "unsupported rustdoc format" and the gate exits 2, a tool failure, not a
+verdict.
 
 It is evidence that no breaking change reached the published surfaces
 **unnoticed** — not that none occurred. The distinction is deliberate. This

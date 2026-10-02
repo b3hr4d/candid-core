@@ -258,11 +258,16 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
-        with:
-          toolchain: stable
       - name: Load the pinned tool versions
         run: grep -E '^[A-Z_]+=' tests/fixtures/packaging/release-tools.env >> "$GITHUB_ENV"
+      # An exact stable, not `stable`. cargo-semver-checks reads rustdoc JSON
+      # and each release of it understands a fixed set of format versions, so a
+      # rolling toolchain breaks this job whenever rustdoc moves the format
+      # (1.99.0 wrote v61, which 0.49.0 cannot read). release-tools.env pins the
+      # two together.
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
+        with:
+          toolchain: ${{ env.SEMVER_TOOLCHAIN }}
       - name: Install the pinned cargo-semver-checks
         run: cargo install cargo-semver-checks --version "${CARGO_SEMVER_CHECKS_VERSION}" --locked
       # Neither "no breaks" nor "breaks are free". This crate is pre-1.0 and its
