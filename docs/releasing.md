@@ -668,13 +668,18 @@ in the same directory must still resolve `latest`.
 
 ### Publish day
 
-Once both are on the registry, a follow-up pull request turns what was
-prepared into what is installable: `UNPUBLISHED_NPM_SPECS` emptied, the prose
-install lines on the website made into blocks, the "Not yet released" notes
-and the status page's registry table rewritten for a beta that exists, and the
-root README's install line. Nothing in a tarball can change after the fact,
+Once both are on the registry (`npm view <package> dist-tags` shows them under
+`beta`), a follow-up pull request turns what was prepared into what is
+installable: the published specs leave `UNPUBLISHED_NPM_SPECS`, the prose
+install lines on the website become checked blocks, the one release note per
+TypeScript page (`NOTE_TITLE` in `website/check.mjs`, "Published as a beta"
+since 0.3.0-beta.1) says which beta the page describes and that `latest`
+differs, the status page records the publish date and both release runs, and
+each npm release note gains its release record (commit, run, shasum,
+integrity, from `npm view`). Nothing in a tarball can change after the fact,
 which is why the package READMEs carry their beta lines in the version-bump
-pull request instead.
+pull request instead. For 0.3.0-beta.1 / 0.2.0-beta.1 this was the pull
+request that closed #194.
 
 ### The next beta
 

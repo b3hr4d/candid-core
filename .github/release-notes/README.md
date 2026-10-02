@@ -52,4 +52,8 @@ pull request like the crate's notes, and they carry what that pull request
 reviewed: the installation lines, the pairing (the `candid-core` version, and
 for the CLI the embedded revision and the schema peer), the public-API diff
 against the previous release with every break marked, and the known
-limitations.
+limitations. After the publish, the publish-day pull request appends a
+**Release record** read back with `npm view`: date, dist-tag, `gitHead`, the
+run, and the tarball's shasum and integrity. Unlike a crate note, an npm note
+can carry these in the repository, because the publish does not digest the
+commit that records them.

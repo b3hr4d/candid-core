@@ -97,15 +97,16 @@ node website/build.mjs && node website/check.mjs
   while still working on a local server — the one mistake local preview cannot
   catch;
 - a performance claim, or marketing filler, anywhere in the prose;
-- a name the published `@candid-core/schema` 0.2.0 has and the next release
-  removes (`createActor`, `httpTransport`, `PrincipalValue`, the four removed
+- a name `latest` (`@candid-core/schema` 0.2.0) has and the 0.3 betas
+  remove (`createActor`, `httpTransport`, `PrincipalValue`, the four removed
   subpaths, `unrepresentable_option`, …) on any page but the migration page and
   the release history on the status page — in prose or in a code block, because
   a block that shows one teaches it as surely as a sentence does;
 - a page that describes the TypeScript packages without carrying exactly one
-  `Not yet released` callout that links the migration page. The site describes
-  the surface the repository builds, which is the next release; the published
-  packages differ, and each page says so once, in that one place;
+  `Published as a beta` callout (`NOTE_TITLE` in `check.mjs`) that links the
+  migration page. The site describes the surface the repository builds, which
+  is what the `beta` dist-tag holds; `latest` differs, and each page says so
+  once, in that one place;
 - any TypeScript or JavaScript snippet that is not verified (next section).
 
 And, **in a code block only** — because a page is expected to discuss the
@@ -115,6 +116,11 @@ broken spellings, and a copyable line is the thing that must work:
   in `check.mjs` — the list this repository keeps of names it has prepared but
   not published. The list is empty today; adding a name is what preparing the
   next package does, and emptying it is what publishing one does;
+- an install, `npx` or import line naming a spec in `UNPUBLISHED_NPM_SPECS` —
+  a version or dist-tag of a published name that the registry does not hold
+  yet, such as a prepared beta (`@candid-core/schema@0.3.0-beta.2`, or
+  `@candid-core/schema@beta` before any beta exists). The version-bump pull
+  request adds its specs; the publish-day pull request removes them;
 - a `candid-core` dependency requirement that is anything other than the
   exact pin. The required spelling is derived from the `version` in
   `Cargo.toml` rather than written down here, so a release makes every stale
