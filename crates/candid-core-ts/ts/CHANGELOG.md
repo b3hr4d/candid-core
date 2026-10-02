@@ -13,7 +13,7 @@ entry here is [docs/releasing.md] in that repository.
 API, the inferred domain types, the codec's wire behaviour, and the codes and
 `$`-rooted paths validation reports. Pin an exact version.
 
-## 0.3.0-beta.1 — 2026-10-01
+## 0.3.0-beta.1 — 2026-10-02
 
 Pairs with `candid-core` 0.1.0-beta.3.
 
