@@ -14,7 +14,7 @@ fixtures.
 grammar, the library API, and the request/response shapes. Pin an exact
 version.
 
-## 0.2.0-beta.1 — 2026-10-01
+## 0.2.0-beta.1 — 2026-10-02
 
 Embeds `candid-core` 0.1.0-beta.3 and the `candid-core-ts` generator from the
 same repository commit the release is dispatched from; the release record
