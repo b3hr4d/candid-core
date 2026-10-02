@@ -8,18 +8,24 @@ calling a canister (transports, identity, actors) belongs to the layer you
 build on top of it ([below](#services-and-func-references)).
 
 ```sh
-npm install @candid-core/schema
+npm install --save-exact @candid-core/schema@beta
 ```
 
 That is the whole install: no runtime dependencies and no peers, principal
 handling included ([principal values](#principal-values) below).
 
-> **The next release, not yet published.** This README describes the package
-> the repository builds, which is the next release. The published 0.2.0 still
-> has the old surface: it also exports `./actor`, `./transport-icp`, `./forms`
-> and `./labels`, declares an optional `@icp-sdk/core` peer, types a principal
-> as `{ toText(): string }`, and refuses `opt opt T`, `opt null` and
-> `opt reserved`. Every change is recorded under `## Unreleased` in the
+> **A beta.** This README describes 0.3.0-beta.1, published under the npm
+> `beta` dist-tag. A plain `npm install @candid-core/schema` installs `latest`,
+> which is still 0.2.0 and has the old surface: it also exports `./actor`,
+> `./transport-icp`, `./forms` and `./labels`, declares an optional
+> `@icp-sdk/core` peer, types a principal as `{ toText(): string }`, and
+> refuses `opt opt T`, `opt null` and `opt reserved`. Keep `--save-exact`:
+> one beta may break the next, and `@candid-core/cli` pairs with exactly one
+> of them.
+>
+> `@candid-core/schema` 0.3 betas break the 0.2 API (principal values are canonical text, collapsing opts are boxed, every `vec nat8` is a `Uint8Array`, generated modules use a new binding layout and may omit declarations, and the `./actor`, `./transport-icp`, `./forms` and `./labels` subpaths are gone); there is no compatibility layer.
+>
+> Every change is recorded under `0.3.0-beta.1` in the
 > [changelog](./CHANGELOG.md), which ships in the tarball, and the
 > [migration notes](https://b3hr4d.github.io/candid-core/migrating-from-0-2.html)
 > show each one as before and after code.
@@ -140,8 +146,8 @@ module and a `ContractEnvelope` document, `./generated/service.envelope.json`,
 which is byte-identical to the `compile --envelope` output below:
 
 ```sh
-# 0.1.0 is the published CLI; it emits the published layout (see the note at the top).
-npx @candid-core/cli@0.1.0 gen ./service.did -o ./generated
+# The CLI beta that pairs with this release: it peers exactly 0.3.0-beta.1.
+npx @candid-core/cli@0.2.0-beta.1 gen ./service.did -o ./generated
 ```
 
 With the Rust crate, it is two commands. Install the compiler. `candid-core`

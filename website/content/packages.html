@@ -55,7 +55,7 @@
 </callout>
 
 <callout type="note" title="Not yet released">
-  <p>Versions in this table are what the registries hold. The sections below describe the packages as the repository builds them, which is the next release of <code>@candid-core/schema</code> and <code>@candid-core/cli</code>: the published <code>0.2.0</code> still has two more subpaths and an optional peer, and the published <code>0.1.0</code> still emits the old module layout. <a href="migrating-from-0-2.html">Migrating from 0.2.0</a> lists every difference, and each is recorded under <code>## Unreleased</code> in the package changelogs.</p>
+  <p>Versions in this table are what the registries hold. The sections below describe the packages as the repository builds them, which is the next release of <code>@candid-core/schema</code> and <code>@candid-core/cli</code>: the published <code>0.2.0</code> still has two more subpaths and an optional peer, and the published <code>0.1.0</code> still emits the old module layout. <a href="migrating-from-0-2.html">Migrating from 0.2.0</a> lists every difference, and each is recorded in the package changelogs under <code>0.3.0-beta.1</code> and <code>0.2.0-beta.1</code>, which are prepared and not yet published.</p>
 </callout>
 
 <h2>Which one do I need?</h2>
@@ -256,7 +256,7 @@ npx @candid-core/cli@0.1.0 gen ./service.did -o ./generated
 <ul>
   <li><strong>Manifest:</strong> <code>crates/candid-core-wasm/npm/package.json</code>.</li>
   <li><strong>Binary name:</strong> <code>candid-core-cli</code>, at <code>./bin/cli.js</code>.</li>
-  <li><strong>Exports:</strong> <code>"."</code> → <code>./lib/index.js</code> under a <code>types</code> condition, plus <code>./package.json</code>. ESM only, Apache-2.0, no runtime dependencies; the single peer, <code>@candid-core/schema</code> <code>^0.2.0</code>, is declared optional. The one devDependency is <code>playwright-core</code> for the browser tests.</li>
+  <li><strong>Exports:</strong> <code>"."</code> → <code>./lib/index.js</code> under a <code>types</code> condition, plus <code>./package.json</code>. ESM only, Apache-2.0, no runtime dependencies; the single peer, <code>@candid-core/schema</code> at exactly <code>0.3.0-beta.1</code> (<code>^0.2.0</code> in the published <code>0.1.0</code>), is declared optional. The one devDependency is <code>playwright-core</code> for the browser tests.</li>
   <li><strong>CLI grammar:</strong> exactly <code>candid-core-cli gen &lt;service.did&gt; [-o &lt;dir&gt;]</code>. <code>-o</code> defaults to the current working directory. Output names come from the entry file's stem: <code>service.did</code> writes <code>service.ts</code> and <code>service.envelope.json</code>, and prints the content-addressed identities.</li>
   <li><strong>Library exports:</strong> <code>didToContract(sources)</code> and <code>didToModule(sources)</code>, each taking either a string of Candid text or a <code>{ entry, files }</code> bundle, plus <code>init(input)</code>, which loads the embedded WebAssembly module once and needs no argument under Node.</li>
 </ul>

@@ -451,7 +451,7 @@ gh workflow run npm-release.yml \
 # A prerelease: it lands under its own dist-tag, and consumers opt in with
 # `npm i @candid-core/schema@beta`. `latest` does not move.
 gh workflow run npm-release.yml \
-  --field commit=<40-character SHA> --field version=0.3.0-beta.0 --field dist-tag=beta
+  --field commit=<40-character SHA> --field version=0.3.0-beta.1 --field dist-tag=beta
 ```
 
 1. The `verify` job shape-checks the inputs (`commit` must be a full
@@ -499,7 +499,9 @@ but this package no longer does (`./actor`, `./transport-icp`, `./forms`,
 The package versions independently of the crate (pre-1.0). Bump
 `ts/package.json` in an ordinary reviewed PR; state in that PR's body which
 `candid-core` generator version the release pairs with, and record the pair
-in the npm release notes.
+in the npm release notes, `.github/release-notes/npm/schema/<version>.md`
+(the convention, and why npm notes never sit at that directory's top level,
+is in [its README](../.github/release-notes/README.md)).
 
 Between releases, changes accumulate in an `## Unreleased` section at the
 top of `ts/CHANGELOG.md`. Release prep, in that same version-bump PR, renames
@@ -556,3 +558,156 @@ Two differences, both because the artifact embeds a wasm build:
 The name's first publish was the owner's explicit act, per the standing
 release discipline: the once-per-name bootstrap above, then the trusted
 publisher, then a dispatch of this workflow like any other.
+
+## npm: a coordinated beta of the pair
+
+While `@candid-core/schema` changes shape for its downstream (the 0.3 line),
+the two packages release as a pair of betas: `@candid-core/schema`
+`0.3.0-beta.N` and `@candid-core/cli` `0.2.0-beta.N`, both under the `beta`
+dist-tag, with `latest` left on the last stable versions. The CLI declares the
+schema package as an optional peer at **exactly** the paired version, not a
+range. That is the lockstep: a generated module needs the runtime release it
+was generated for, so every schema beta forces a CLI beta that raises the
+exact peer, even when the generator did not change. The schema package stays
+0.x through ic-reactor's 4.0 release; 1.0 follows after a stability window.
+
+### The version-bump pull request
+
+One pull request carries both packages, because the CLI's packaging gate
+installs the local schema tarball beside the CLI tarball and compiles against
+it. A schema version the CLI's exact peer does not name does not fail the
+install itself — the peer is optional, so npm only warns `ERESOLVE overriding
+peer dependency`, and in the case measured (npm 11.3.0) leaves the schema
+package out of the tree — and the gate then fails compiling the consumer
+(`TS2307` for `@candid-core/schema/contract`). It contains, and contains only:
+
+1. `crates/candid-core-ts/ts/package.json` and the two root entries of its
+   `package-lock.json` at the schema beta; `crates/candid-core-wasm/npm/package.json`
+   and the two root entries of its `package-lock.json` at the CLI beta, with
+   `peerDependencies["@candid-core/schema"]` set to the schema beta exactly.
+   `crates/candid-core-wasm/Cargo.toml`'s version is not the CLI's and is
+   not bumped.
+2. Both changelogs: `## Unreleased` renamed to `## <version> — <YYYY-MM-DD>`,
+   the date being the day the dispatch is planned. The gates require a real
+   date and refuse "prepared"; if the merge slips past that day, a commit
+   correcting the date comes first, and that commit is the one dispatched. The
+   entry is reconciled into one text for a reader upgrading from the last
+   stable version: every **BREAKING** item kept, no per-PR "release ordering"
+   notes left contradicting each other, and every measured figure re-measured
+   (the rename re-arms `verify_npm_package.py`'s check of the `schema.d.ts`
+   line count). The schema entry carries ``Pairs with `candid-core` X.``; the
+   CLI entry carries ``Embeds `candid-core` X …``, where X is the root
+   `Cargo.toml` version (the CLI gate compares the two).
+3. When the tree's `candid-core` source has moved past the archive crates.io
+   holds for X, but the change neither moves a Contract nor an identity of an
+   input X accepts, no crate release is required first: the schema entry still
+   pairs with X, because the documents it loads are X's, and the README's
+   `cargo install candid-core --version X` (which the schema gate holds to the
+   pairing) still installs a compiler whose output it loads. The CLI entry
+   names X and says, in the same paragraph, what the embedded source has that
+   X's archive does not; the release record names the SHA. A change that does
+   move a Contract or an identity needs the crate released first, and both
+   entries then pair with the new version.
+4. The one-line compatibility non-goal, identical in both READMEs, both
+   changelog entries and both release notes.
+5. Release notes at `.github/release-notes/npm/schema/<version>.md` and
+   `.github/release-notes/npm/cli/<version>.md`, each with the public-API diff
+   against the previous release: the exported names of the shipped
+   `dist/*.d.ts` (schema) and `lib/index.d.ts` plus the command grammar (CLI),
+   every break marked. Build the baseline from the previous release's
+   `gitHead` (`npm view <package>@<version> gitHead`) and confirm the rebuilt
+   tarball's integrity equals `npm view <package>@<version> dist.integrity`
+   before diffing against it.
+6. The package READMEs, which ship in the tarballs, describing the beta they
+   ship in, with `@beta` install lines and `--save-exact`.
+7. The repository-side prose that the rename makes false the moment it merges
+   (anything pointing at `## Unreleased`), and `website/check.mjs`'s
+   `UNPUBLISHED_NPM_SPECS` naming each prepared version and the `beta` tag
+   while the tag does not exist on the registry, so no page offers a copyable
+   line that resolves to nothing. Pages say in prose what the line will be.
+
+### Dispatch, schema first
+
+After the merge, from the merge commit (`git rev-parse origin/main`), the owner
+dispatches the schema package first, because the CLI's peer must exist before
+a consumer can install the CLI:
+
+```bash
+gh workflow run npm-release.yml \
+  --field commit=<merge SHA> --field version=0.3.0-beta.1 --field dist-tag=beta
+# approve npm-publish once the verify job is green, then:
+gh workflow run npm-release-cli.yml \
+  --field commit=<merge SHA> --field version=0.2.0-beta.1 --field dist-tag=beta
+# approve npm-publish once the verify job is green
+```
+
+`stable-off-latest` stays unset (false) for a beta; the verify job refuses a
+prerelease under `latest`, and refuses `stable-off-latest=true` with a
+prerelease.
+
+### Checking the install from the tag
+
+Read-only, after each publish:
+
+```bash
+npm view @candid-core/schema dist-tags          # beta: 0.3.0-beta.1, latest unchanged
+npm view @candid-core/schema@0.3.0-beta.1 gitHead dist.integrity
+npm view @candid-core/cli dist-tags             # beta: 0.2.0-beta.1, latest unchanged
+npm view @candid-core/cli@0.2.0-beta.1 peerDependencies gitHead
+
+# a clean consumer, from the tag rather than from a tarball
+cd "$(mktemp -d)" && npm init -y >/dev/null
+npm install --save-exact @candid-core/schema@beta @candid-core/cli@beta
+printf 'service : { ping : () -> () };\n' > s.did
+npx candid-core-cli gen ./s.did -o out            # writes out/s.ts and out/s.envelope.json
+npx candid-core-cli gen ./s.did -o out --check    # exit 0: a second run reproduces the bytes
+```
+
+`gitHead` must be the dispatched SHA; a plain `npm install @candid-core/schema`
+in the same directory must still resolve `latest`.
+
+### Publish day
+
+Once both are on the registry, a follow-up pull request turns what was
+prepared into what is installable: `UNPUBLISHED_NPM_SPECS` emptied, the prose
+install lines on the website made into blocks, the "Not yet released" notes
+and the status page's registry table rewritten for a beta that exists, and the
+root README's install line. Nothing in a tarball can change after the fact,
+which is why the package READMEs carry their beta lines in the version-bump
+pull request instead.
+
+### The next beta
+
+The next round is the same pull request with N + 1: changes accumulate under
+`## Unreleased` in both changelogs between rounds; the bump renames them to
+`0.3.0-beta.N+1` and `0.2.0-beta.N+1` (the CLI gets a beta even if only the
+schema changed, saying so in its entry), raises the exact peer, adds both
+version specs to `UNPUBLISHED_NPM_SPECS`, and diffs the public API against
+the previous beta. Dispatch order is again schema first.
+
+### Promoting to `latest`
+
+The supported way to move `latest` is a stable release through the workflows
+(`0.3.0` with `dist-tag=latest`). Pointing `latest` at an already-published
+version by hand, a beta included, is the owner's act outside the workflows,
+with an interactive login exactly as for the bootstrap:
+
+```bash
+npm login                                             # interactive, 2FA
+npm dist-tag add @candid-core/schema@<schema-version> latest
+npm dist-tag add @candid-core/cli@<cli-version> latest   # the CLI that pairs with it
+npm dist-tag rm @candid-core/schema beta              # only if the tag should go
+npm dist-tag rm @candid-core/cli beta                 # likewise
+npm view @candid-core/schema dist-tags
+npm view @candid-core/cli dist-tags
+npm logout
+```
+
+Both packages move in the one login, schema first. Moving only the schema
+leaves `latest` on a CLI whose peer range does not admit it: a plain install
+of both then pairs the new schema with the old CLI, npm warns and leaves the
+optional peer unmet, and the generated module fails to compile. `<cli-version>`
+is the CLI release whose exact peer is `<schema-version>`.
+
+No guard checks this path: `npm dist-tag add` will point `latest` at a
+prerelease, which makes a plain `npm install` resolve a beta.
