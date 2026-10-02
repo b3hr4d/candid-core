@@ -86,12 +86,10 @@ const unpublishedRules = UNPUBLISHED_NPM.flatMap((name) => [
  * prepared version is a 404. The same two spellings are refused, in code
  * blocks only, so a page can still say in prose what the line will be. The
  * publish-day change empties this list and turns that prose into blocks. */
-const UNPUBLISHED_NPM_SPECS = [
-  "@candid-core/schema@0.3.0-beta.1",
-  "@candid-core/schema@beta",
-  "@candid-core/cli@0.2.0-beta.1",
-  "@candid-core/cli@beta",
-];
+// Emptied when @candid-core/schema 0.3.0-beta.1 and @candid-core/cli
+// 0.2.0-beta.1 were published under `beta`. The next beta's bump adds its
+// versions back until its own publish.
+const UNPUBLISHED_NPM_SPECS = [];
 
 const unpublishedSpecRules = UNPUBLISHED_NPM_SPECS.map((spec) => ({
   /* The spec followed by anything that cannot continue a version or a tag, so
@@ -133,8 +131,8 @@ const SOFT = [
 ];
 
 /* The surface the site teaches is the one the repository builds. These names
- * belong to the surface the published 0.2.0 still has and the next release
- * does not, so they may be named only where the change is the subject: the
+ * belong to the surface `latest` (0.2.0) still has and the 0.3 betas
+ * do not, so they may be named only where the change is the subject: the
  * migration page, and the release history on the status page. Anywhere else
  * they would be prose or a snippet that teaches something that no longer
  * exists. The check reads prose and code alike, because a page that shows
@@ -160,8 +158,13 @@ const REMOVED_SURFACE = [
 const REMOVED_SURFACE_PAGES = new Set(["migrating-from-0-2", "status"]);
 
 /* Pages that describe the schema runtime or the generator carry the one note
- * saying the published 0.2.0 / 0.1.0 differ, and where to read what changed. */
-const NOTE_TITLE = "Not yet released";
+ * saying they describe the beta, that `latest` (0.2.0 / 0.1.0) differs, and
+ * where to read what changed. */
+const NOTE_TITLE = "Published as a beta";
+const NOTE_RE = new RegExp(`<callout[^>]*title="${NOTE_TITLE}"`, "g");
+const NOTE_LINK_RE = new RegExp(
+  `<callout[^>]*title="${NOTE_TITLE}"[\\s\\S]*?href="migrating-from-0-2\\.html"[\\s\\S]*?<\\/callout>`,
+);
 const NOTE_PAGES = new Set([
   "index",
   "quickstart-typescript",
@@ -325,14 +328,14 @@ for (const name of (await readdir(CONTENT)).filter((f) => f.endsWith(".html"))) 
       if (hit) {
         fail(
           page,
-          `names ${JSON.stringify(hit[0])}, which the published 0.2.0 has and the next release removes; ` +
+          `names ${JSON.stringify(hit[0])}, which latest (0.2.0) has and the 0.3 betas remove; ` +
             "that belongs on the migration page, not here",
         );
       }
     }
   }
   if (NOTE_PAGES.has(slug)) {
-    const notes = (source.match(/<callout[^>]*title="Not yet released"/g) || []).length;
+    const notes = (source.match(NOTE_RE) || []).length;
     if (slug === "migrating-from-0-2") {
       if (notes !== 0) fail(page, "the migration page is the note; it must not carry another");
     } else if (notes !== 1) {
@@ -340,7 +343,7 @@ for (const name of (await readdir(CONTENT)).filter((f) => f.endsWith(".html"))) 
         page,
         `must carry exactly one <callout title="${NOTE_TITLE}"> saying the published packages differ (found ${notes})`,
       );
-    } else if (!/<callout[^>]*title="Not yet released"[\s\S]*?href="migrating-from-0-2\.html"[\s\S]*?<\/callout>/.test(source)) {
+    } else if (!NOTE_LINK_RE.test(source)) {
       fail(page, `the ${NOTE_TITLE} note must link migrating-from-0-2.html`);
     }
   }

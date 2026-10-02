@@ -8,20 +8,20 @@
   </p>
 </callout>
 
-<callout type="note" title="Not yet released">
+<callout type="note" title="Published as a beta">
   <p>
-    This page describes the package the repository builds, which is the next release. The published
-    <code>0.1.0</code> still has the old behaviour: it emits modules in the old layout with an
-    object-shaped principal type, exits 1 with <code>ts_generation_refused</code> for an interface with
-    one declaration it cannot represent, and returns no <code>omitted</code> list.
-    <a href="migrating-from-0-2.html">Migrating from 0.2.0</a> lists every difference with before and
-    after code, and each is recorded in the package changelog under <code>0.2.0-beta.1</code>, which is prepared and not yet published.
+    This page describes the package the repository builds, published as <code>0.2.0-beta.1</code> under
+    the npm <code>beta</code> dist-tag. <code>latest</code> is still <code>0.1.0</code>, which has the old behaviour: it
+    emits modules in the old layout with an object-shaped principal type, exits 1 with
+    <code>ts_generation_refused</code> for an interface with one declaration it cannot represent, and
+    returns no <code>omitted</code> list. <a href="migrating-from-0-2.html">Migrating from 0.2.0</a> lists every difference with before and after code,
+    and each is recorded in the package changelog under <code>0.2.0-beta.1</code>.
   </p>
 </callout>
 
 <pre data-lang="bash">
-# 0.1.0 is the published version (see the note above).
-npx @candid-core/cli@0.1.0 gen ./service.did -o ./generated
+# 0.2.0-beta.1, the beta this page describes (see the note above)
+npx @candid-core/cli@0.2.0-beta.1 gen ./service.did -o ./generated
 </pre>
 
 <p>
@@ -109,11 +109,10 @@ usage: candid-core-cli gen <service.did>... [-o <dir>] [--json] [--check]
 
 <callout type="note" title="Several entries, --json and --check are not in 0.1.0">
   <p>
-    The published <code>0.1.0</code> takes exactly one entry and neither flag:
+    <code>latest</code>, <code>0.1.0</code>, takes exactly one entry and neither flag:
     <code>gen &lt;service.did&gt; [-o &lt;dir&gt;]</code>. Several entries, <code>--json</code> and
     <code>--check</code>, described in <a href="#several-entries-json-and-check">their own section
-    below</a>, are on <code>main</code> and ship with the next release. Everything else on this page
-    describes both.
+    below</a>, ship in <code>0.2.0-beta.1</code>. Everything else on this page describes both.
   </p>
 </callout>
 

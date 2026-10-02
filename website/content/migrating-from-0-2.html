@@ -1,10 +1,10 @@
 <p>
   This page is for code written against the published <code>@candid-core/schema</code>
   <code>0.2.0</code> or <code>@candid-core/cli</code> <code>0.1.0</code>. Every other page on this
-  site describes the surface the repository builds now, which is the surface of the next release of
-  both packages. That release is prepared as <code>@candid-core/schema</code>
-  <code>0.3.0-beta.1</code> and <code>@candid-core/cli</code> <code>0.2.0-beta.1</code>, and it is not
-  published yet; this site promises no date for it. The record of each change, with the reasoning, is
+  site describes the surface the repository builds now, published on 2026-10-02 as
+  <code>@candid-core/schema</code> <code>0.3.0-beta.1</code> and <code>@candid-core/cli</code>
+  <code>0.2.0-beta.1</code> under the npm <code>beta</code> dist-tag; <code>latest</code> stays on
+  <code>0.2.0</code> and <code>0.1.0</code>. The record of each change, with the reasoning, is
   the <code>0.3.0-beta.1</code> entry of the
   <a href="https://github.com/b3hr4d/candid-core/blob/main/crates/candid-core-ts/ts/CHANGELOG.md"><code>@candid-core/schema</code> changelog</a>
   and the <code>0.2.0-beta.1</code> entry of the
@@ -22,18 +22,25 @@
 <h2>Installing the beta</h2>
 
 <p>
-  Once published, the pair installs from the npm <code>beta</code> dist-tag, never from
-  <code>latest</code>, which stays on <code>0.2.0</code> and <code>0.1.0</code>: the runtime with
-  <code>npm install --save-exact @candid-core/schema@beta</code>, and the CLI, whose optional peer is
-  exactly <code>0.3.0-beta.1</code>, with
-  <code>npm install --save-dev --save-exact @candid-core/cli@beta</code>. Keep both exact: one beta may
-  break the next, and while the two packages move in lockstep every schema beta is paired with a new
-  CLI beta that peers it exactly. Until the publish, neither line resolves, so this page shows them
-  as prose rather than as a block to copy.
+  The pair installs from the npm <code>beta</code> dist-tag, never from <code>latest</code>, which
+  stays on <code>0.2.0</code> and <code>0.1.0</code>. The CLI's optional peer is exactly
+  <code>0.3.0-beta.1</code>:
+</p>
+
+<pre data-lang="bash">
+npm install --save-exact @candid-core/schema@beta
+npm install --save-dev --save-exact @candid-core/cli@beta
+</pre>
+
+<p>
+  Keep both exact: one beta may break the next, and while the two packages move in lockstep every
+  schema beta is paired with a new CLI beta that peers it exactly. Because the peer is optional, npm
+  only warns about a mismatched pair (<code>ERESOLVE overriding peer dependency</code>); it does not
+  refuse it.
 </p>
 
 <p>
-  Removing published subpaths is a breaking change, so the next release is a minor: under npm's
+  Removing published subpaths is a breaking change, so the 0.3 line is a minor: under npm's
   pre-1.0 caret rules a <code>^0.2.0</code> dependency does not select it, and moving to it is a
   deliberate edit. Nothing on the wire moved. No byte a <code>0.2.0</code> encoder wrote is read
   differently, and Contract JSON and every identity are untouched; what changed is the TypeScript

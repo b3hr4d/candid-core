@@ -1,11 +1,11 @@
-<callout type="note" title="Not yet released">
+<callout type="note" title="Published as a beta">
   <p>
-    This page describes the generator the repository builds, which is the one the next release of
-    <code>@candid-core/cli</code> embeds. The published <code>@candid-core/cli</code> <code>0.1.0</code>
-    still emits the old layout: bare module-scope bindings, an object-shaped type for principals,
-    a refusal of the whole interface for one declaration it cannot represent, and no JSDoc.
-    <a href="migrating-from-0-2.html">Migrating from 0.2.0</a> lists every difference with before and
-    after code, and each is recorded in the package changelogs under <code>0.3.0-beta.1</code> and <code>0.2.0-beta.1</code>, which are prepared and not yet published.
+    This page describes the generator the repository builds, the one <code>@candid-core/cli</code> <code>0.2.0-beta.1</code> embeds, published
+    under the npm <code>beta</code> dist-tag. <code>latest</code>, <code>@candid-core/cli</code> <code>0.1.0</code>, still emits
+    the old layout: bare module-scope bindings, an object-shaped type for principals, a refusal of the
+    whole interface for one declaration it cannot represent, and no JSDoc.
+    <a href="migrating-from-0-2.html">Migrating from 0.2.0</a> lists every difference with before and after code, and each is recorded in the package
+    changelogs under <code>0.3.0-beta.1</code> and <code>0.2.0-beta.1</code>.
   </p>
 </callout>
 
@@ -578,8 +578,9 @@ v1, so it pins rather than floats.</p>
   which is this generator compiled to WebAssembly. Its one subcommand is
   <code>candid-core-cli gen &lt;service.did&gt; [-o &lt;dir&gt;]</code>, and it writes
   <code>&lt;stem&gt;.ts</code> alongside <code>&lt;stem&gt;.envelope.json</code>. That package is
-  published on npm, so <code>npx @candid-core/cli@0.1.0 gen ./service.did</code> runs the published
-  version, which predates this page, with no Rust toolchain.</p>
+  published on npm, so <code>npx @candid-core/cli@0.2.0-beta.1 gen ./service.did</code> runs the
+  generator this page describes with no Rust toolchain; <code>latest</code>, <code>0.1.0</code>,
+  predates it.</p>
   <p>The route that needs no build step at all is <code>@candid-core/schema</code>'s
   <code>schemaFromContract</code>, which builds the same schemas at runtime from a compiled Contract
   document — see <a href="schema-from-contract.html">schemas at runtime</a>. What that route cannot
