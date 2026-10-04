@@ -48,6 +48,22 @@ bullet).
     whose `getPrototypeOf` trap throws was reported as `unsupported_schema`,
     and is now `stack`.
 
+### An absorbed coercion mismatch no longer leaves stale path segments
+
+- **Decode reports the right path after an absorbed coercion mismatch** (issue
+  #209). When an expected `opt` absorbed a mismatch from inside its value
+  (decoding it as `null`, which is unchanged), the path segments of the
+  abandoned value were left behind, so the next issue anywhere later in the
+  message was reported under them. Decoding `record { a : record { x : int };
+  b : text }` bytes against `record { a : opt record { x : nat }; b : nat }`
+  reported the `type_mismatch` for `b` at `$.a.b`; it is now `$.b`. An issue
+  found while skipping the absorbed value's bytes (a malformed byte inside it)
+  is now reported at the `opt`'s own path, not at the path where the mismatch
+  was found. Only these paths change: no verdict, issue code, message,
+  resource figure or decoded value moves, and encode and validate are
+  untouched. A consumer that matched on the old paths of such issues sees the
+  corrected ones.
+
 ## 0.3.0-beta.1 — 2026-10-02
 
 Pairs with `candid-core` 0.1.0-beta.3.
