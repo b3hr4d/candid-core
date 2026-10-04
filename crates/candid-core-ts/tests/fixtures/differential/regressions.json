@@ -1,3 +1,78 @@
 {
-  "vectors": []
+  "about": "Minimized regression vectors of the issue #196 differential fuzz: one per divergence category the campaign found. Each runs in its own environment (its `did`); the Rust driver records the reference verdict into tests/goldens/differential/corpus.jsonl, and the TypeScript replay holds each to the category listed for it in tests/goldens/differential/divergences.json.",
+  "vectors": [
+    {
+      "name": "leb128_overlong_nat_value",
+      "target": "decode",
+      "note": "nat 5 as the two-byte group 85 00. Reference accepts 5; the runtime refuses overlong_leb128 (intended, #103 decision 4).",
+      "did": "type T0 = nat;\n",
+      "expected": ["T0"],
+      "hex": "4449444c00017d8500"
+    },
+    {
+      "name": "leb128_overlong_type_count",
+      "target": "decode",
+      "note": "An empty type table whose count is the two-byte group 80 00. Reference accepts; the runtime refuses in the header (intended, #103 decision 4).",
+      "did": "type T0 = nat;\n",
+      "expected": ["T0"],
+      "hex": "4449444c8000017d05"
+    },
+    {
+      "name": "leb128_wide_field_id",
+      "target": "decode",
+      "note": "Field id 97 (\"a\") as a six-byte group e1 80 80 80 80 00: longer than a u32 field's five bytes, so the runtime reports invalid_length; the reference accepts. Same rule, non-minimal LEB128 (intended).",
+      "did": "type T0 = record { a : nat };\n",
+      "expected": ["T0"],
+      "hex": "4449444c016c01e180808080007d010005"
+    },
+    {
+      "name": "empty_method_name",
+      "target": "decode",
+      "note": "A func reference to aaaaa-aa with an empty method name. Reference accepts; the runtime refuses invalid_length by decision (round-trip symmetry with validate and encode; candid-core's HostValue validator refuses it too).",
+      "did": "type T0 = func () -> ();\n",
+      "expected": ["T0"],
+      "hex": "4449444c016a000000010001010000"
+    },
+    {
+      "name": "contract_unknown_key",
+      "target": "contract",
+      "note": "An unknown key on a type node. Contract::from_json refuses it (unknown field); schemaFromContract accepts it.",
+      "did": "type T0 = nat;\n",
+      "ops": [{ "op": "set", "path": ["types", 0, "extra"], "value": false }]
+    },
+    {
+      "name": "contract_orphan_type_node",
+      "target": "contract",
+      "note": "A type node no declaration reaches. Contract::from_json refuses it (orphan_type_node); schemaFromContract accepts it.",
+      "did": "type T0 = nat;\n",
+      "ops": [
+        {
+          "op": "insert",
+          "path": ["types", 1],
+          "value": { "kind": "primitive", "primitive": "text" }
+        }
+      ]
+    },
+    {
+      "name": "contract_rootless_arena",
+      "target": "contract",
+      "note": "A non-empty arena with no declaration and no actor. Contract::from_json refuses it (rootless_type_arena); schemaFromContract accepts it.",
+      "did": "type T0 = nat;\n",
+      "ops": [{ "op": "set", "path": ["declarations"], "value": [] }]
+    },
+    {
+      "name": "contract_identities_edit",
+      "target": "contract",
+      "note": "A contract id that is not a contract id. Contract::from_json refuses it; schemaFromContract does not read identities, by design (contract.ts).",
+      "did": "type T0 = nat;\n",
+      "ops": [{ "op": "set", "path": ["identities", "contract"], "value": "x" }]
+    },
+    {
+      "name": "contract_producer_edit",
+      "target": "contract",
+      "note": "A producer field of the wrong JSON type. Contract::from_json refuses it; schemaFromContract does not read producer, by design (contract.ts).",
+      "did": "type T0 = nat;\n",
+      "ops": [{ "op": "set", "path": ["producer", "candid_version"], "value": [] }]
+    }
+  ]
 }

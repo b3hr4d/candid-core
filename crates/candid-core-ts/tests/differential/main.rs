@@ -290,11 +290,18 @@ fn validate_case(built: &Built, rng: &mut Rng, id: String, env_id: &str) -> Valu
         .and_then(|value| host::descriptor(&built.types, &ty, &value))
         .unwrap_or_else(|| host::random_scalar(rng));
     let mut mutated = false;
-    if rng.chance(13, 20) {
-        for _ in 0..1 + rng.below(2) {
-            host::mutate(rng, &mut value);
+    match rng.below(20) {
+        0..=6 => {}
+        7..=12 => {
+            host::boundary(rng, &built.types, &ty, &mut value);
+            mutated = true;
         }
-        mutated = true;
+        _ => {
+            for _ in 0..1 + rng.below(2) {
+                host::mutate(rng, &mut value);
+            }
+            mutated = true;
+        }
     }
     let host_json = host::host_value(&built.types, &ty, &value);
     json!({

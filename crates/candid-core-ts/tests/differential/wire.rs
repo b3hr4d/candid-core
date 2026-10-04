@@ -168,11 +168,26 @@ pub fn random_principal(rng: &mut Rng) -> Principal {
 const METHOD_NAMES: &[&str] = &["f", "go", "", "méthode", "get_blocks"];
 
 /// A random value of `ty`, or `None` when the walk finds no inhabitant within
-/// the depth budget (an `empty`, a record that only recurses).
+/// its depth and node budgets (an `empty`, a record that only recurses, a
+/// type whose every inhabitant is huge).
 pub fn random_value(env: &TypeEnv, ty: &Type, rng: &mut Rng, depth: usize) -> Option<IDLValue> {
-    if depth > 24 {
+    // The node budget bounds the walk: without it a type such as
+    // `variant { a : record { T; T }; b : nat }` costs 2^depth.
+    let mut budget = 4096usize;
+    value_within(env, ty, rng, depth, &mut budget)
+}
+
+fn value_within(
+    env: &TypeEnv,
+    ty: &Type,
+    rng: &mut Rng,
+    depth: usize,
+    budget: &mut usize,
+) -> Option<IDLValue> {
+    if depth > 24 || *budget == 0 {
         return None;
     }
+    *budget -= 1;
     let shallow = depth > 6;
     let ty = trace(env, ty)?;
     Some(match ty.as_ref() {
@@ -197,7 +212,7 @@ pub fn random_value(env: &TypeEnv, ty: &Type, rng: &mut Rng, depth: usize) -> Op
             if shallow || rng.chance(1, 3) {
                 IDLValue::None
             } else {
-                match random_value(env, inner, rng, depth + 1) {
+                match value_within(env, inner, rng, depth + 1, budget) {
                     Some(value) => IDLValue::Opt(Box::new(value)),
                     None => IDLValue::None,
                 }
@@ -207,7 +222,7 @@ pub fn random_value(env: &TypeEnv, ty: &Type, rng: &mut Rng, depth: usize) -> Op
             let length = if shallow { 0 } else { rng.below(4) };
             let mut items = Vec::new();
             for _ in 0..length {
-                items.push(random_value(env, inner, rng, depth + 1)?);
+                items.push(value_within(env, inner, rng, depth + 1, budget)?);
             }
             IDLValue::Vec(items)
         }
@@ -216,7 +231,7 @@ pub fn random_value(env: &TypeEnv, ty: &Type, rng: &mut Rng, depth: usize) -> Op
             for field in fields {
                 values.push(IDLField {
                     id: (*field.id).clone(),
-                    val: random_value(env, &field.ty, rng, depth + 1)?,
+                    val: value_within(env, &field.ty, rng, depth + 1, budget)?,
                 });
             }
             IDLValue::Record(values)
@@ -230,7 +245,7 @@ pub fn random_value(env: &TypeEnv, ty: &Type, rng: &mut Rng, depth: usize) -> Op
             for offset in 0..fields.len() {
                 let index = (start + offset) % fields.len();
                 let field = &fields[index];
-                if let Some(value) = random_value(env, &field.ty, rng, depth + 1) {
+                if let Some(value) = value_within(env, &field.ty, rng, depth + 1, budget) {
                     return Some(IDLValue::Variant(VariantValue(
                         Box::new(IDLField {
                             id: (*field.id).clone(),
@@ -351,6 +366,28 @@ fn has_empty_method(value: &IDLValue) -> bool {
     }
 }
 
+/// The reference decoder's configuration. Unconfigured, the `candid` crate
+/// bounds no work (its documentation asks canister code to set a quota), and
+/// a vector of a zero-sized type with a forged length of 2^40 then runs for
+/// hours. The decoding quota (which charges skipped values 50x) is set well
+/// above anything a generated message needs; the runtime's own element
+/// budget (`maxElements`, 1,000,000) refuses those messages first.
+pub const DECODING_QUOTA: usize = 2_000_000;
+
+fn config() -> candid::DecoderConfig {
+    let mut config = candid::DecoderConfig::new();
+    config.set_decoding_quota(DECODING_QUOTA);
+    config
+}
+
+/// Whether a reference error is its quota running out. The `candid` crate
+/// reports it only as message text (`… cost exceeds the limit`), so this one
+/// class is read from the reference's own wording; it is never compared with
+/// anything the runtime says.
+fn quota_exhausted(error: &candid::Error) -> bool {
+    format!("{error:?}").contains("cost exceeds the limit")
+}
+
 /// The reference verdict for one decode case, as the golden records it.
 ///
 /// A rejection carries a class derived from the reference's *behaviour*, not
@@ -358,14 +395,16 @@ fn has_empty_method(value: &IDLValue) -> bool {
 /// header and type table (`IDLDeserialize::new` fails), `malformed` when the
 /// header parses but the message does not decode at its own wire types
 /// (`IDLArgs::from_bytes` fails), and `coercion` when the message is
-/// well-formed and only the expected types refuse it.
+/// well-formed and only the expected types refuse it; `limit` when the
+/// decoding quota ran out first (see `DECODING_QUOTA`).
 ///
 /// `flags` records input properties the verdict mapping needs and only the
 /// reference can see: `empty_method` when a value the reference decoded (at
 /// the expected types, or at the wire types for a `coercion` rejection) is a
 /// func reference with an empty method name.
 pub fn reference_verdict(env: &TypeEnv, bytes: &[u8], expected: &[Type]) -> Value {
-    let typed = guarded(|| IDLArgs::from_bytes_with_types(bytes, env, expected));
+    let typed =
+        guarded(|| IDLArgs::from_bytes_with_types_with_config(bytes, env, expected, &config()));
     match typed {
         Err(()) => json!({ "verdict": "panic" }),
         Ok(Ok(decoded)) => {
@@ -384,19 +423,26 @@ pub fn reference_verdict(env: &TypeEnv, bytes: &[u8], expected: &[Type]) -> Valu
             }
             verdict
         }
-        Ok(Err(_)) => {
+        Ok(Err(error)) => {
+            if quota_exhausted(&error) {
+                return json!({ "verdict": "reject", "class": "limit" });
+            }
             let header =
-                guarded(|| candid::de::IDLDeserialize::new(bytes).is_ok()).unwrap_or(false);
+                guarded(|| candid::de::IDLDeserialize::new_with_config(bytes, &config()).is_ok())
+                    .unwrap_or(false);
             if !header {
                 return json!({ "verdict": "reject", "class": "header" });
             }
-            match guarded(|| IDLArgs::from_bytes(bytes)) {
+            match guarded(|| IDLArgs::from_bytes_with_config(bytes, &config())) {
                 Ok(Ok(untyped)) => {
                     let mut verdict = json!({ "verdict": "reject", "class": "coercion" });
                     if untyped.args.iter().any(has_empty_method) {
                         verdict["flags"] = json!(["empty_method"]);
                     }
                     verdict
+                }
+                Ok(Err(error)) if quota_exhausted(&error) => {
+                    json!({ "verdict": "reject", "class": "limit" })
                 }
                 _ => json!({ "verdict": "reject", "class": "malformed" }),
             }

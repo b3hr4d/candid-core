@@ -1,0 +1,109 @@
+{
+  "about": "Reviewed expected-divergence list of the issue #196 differential fuzz. `categories` (edited by hand) classifies every divergence category the verdict mapping in ts/tests/differential/compare.ts can report and that a corpus case shows: class a = a bug in the TypeScript runtime, b = a bug in the Rust reference, c = an intended difference. `cases` and `skipped` are rewritten by UPDATE_GOLDENS=1 npm test; ts/tests/differential.test.ts fails when a case diverges differently from this list, including when a listed divergence disappears.",
+  "categories": {
+    "contract:intended:identities-unchecked": {
+      "class": "c",
+      "reason": "schemaFromContract does not verify the identities hashes, by design (ts/contract.ts: verifying them needs canonicalization, candid-core's job); Contract::from_json refuses a document whose identities are wrong. Only cases whose graph alone the reference accepts land here."
+    },
+    "contract:intended:producer-unchecked": {
+      "class": "c",
+      "reason": "schemaFromContract does not read producer metadata, by design (ts/contract.ts); Contract::from_json refuses a malformed producer block. Only cases whose graph alone the reference accepts land here."
+    },
+    "contract:ts-accepts:json_unknown_field": {
+      "class": "a",
+      "reason": "schemaFromContract accepts a document carrying a key the Contract format does not define (on the root, a type node, a field, a declaration); Contract::from_json refuses it (deny_unknown_fields). The loader's own rule is that a future format revision must be adopted deliberately, not half-read, which it already applies to unknown node kinds and primitive names.",
+      "issue": "to be filed (see the #196 campaign report)"
+    },
+    "contract:ts-accepts:orphan_type_node": {
+      "class": "a",
+      "reason": "schemaFromContract accepts a type arena with a node no declaration or actor reaches; Contract::from_json refuses it (orphan_type_node, a structural validity rule of the format). Harmless to the schemas built, but the loader admits documents candid-core says are not Contracts.",
+      "issue": "to be filed (see the #196 campaign report)"
+    },
+    "contract:ts-accepts:rootless_type_arena": {
+      "class": "a",
+      "reason": "schemaFromContract accepts a non-empty type arena with no declaration and no actor; Contract::from_json refuses it (rootless_type_arena). The loader returns no schemas for it, but admits a document candid-core says is not a Contract.",
+      "issue": "to be filed (see the #196 campaign report)"
+    },
+    "decode:intended:empty-method-name": {
+      "class": "c",
+      "reason": "The runtime refuses a func reference with an empty method name (invalid_length) for round-trip symmetry: validate and encode refuse it, and so does candid-core's HostValue validator (empty_function_method). The candid crate accepts it."
+    },
+    "decode:intended:leb128-minimality": {
+      "class": "c",
+      "reason": "The runtime refuses a non-minimal LEB128/SLEB128 group (overlong_leb128, or invalid_length when a u32 field's group is longer than five bytes although its value fits); the candid crate accepts it. Settled on #103 (decision 4): the spec's strict-inverse reading."
+    }
+  },
+  "cases": {
+    "c/10/7": "contract:ts-accepts:orphan_type_node",
+    "c/13/2": "contract:ts-accepts:json_unknown_field",
+    "c/13/7": "contract:ts-accepts:orphan_type_node",
+    "c/14/6": "contract:ts-accepts:orphan_type_node",
+    "c/15/2": "contract:ts-accepts:orphan_type_node",
+    "c/16/1": "contract:ts-accepts:orphan_type_node",
+    "c/16/6": "contract:ts-accepts:orphan_type_node",
+    "c/18/2": "contract:ts-accepts:orphan_type_node",
+    "c/18/6": "contract:ts-accepts:orphan_type_node",
+    "c/18/7": "contract:ts-accepts:orphan_type_node",
+    "c/2/2": "contract:ts-accepts:orphan_type_node",
+    "c/21/7": "contract:ts-accepts:json_unknown_field",
+    "c/3/0": "contract:ts-accepts:json_unknown_field",
+    "c/3/3": "contract:ts-accepts:orphan_type_node",
+    "c/3/4": "contract:ts-accepts:orphan_type_node",
+    "c/4/3": "contract:ts-accepts:orphan_type_node",
+    "c/5/0": "contract:ts-accepts:orphan_type_node",
+    "c/7/0": "contract:ts-accepts:orphan_type_node",
+    "c/7/5": "contract:ts-accepts:orphan_type_node",
+    "c/8/1": "contract:ts-accepts:orphan_type_node",
+    "c/9/4": "contract:ts-accepts:orphan_type_node",
+    "d/1/11": "decode:intended:leb128-minimality",
+    "d/1/18": "decode:intended:leb128-minimality",
+    "d/11/0": "decode:intended:leb128-minimality",
+    "d/11/19": "decode:intended:leb128-minimality",
+    "d/11/31": "decode:intended:leb128-minimality",
+    "d/11/32": "decode:intended:leb128-minimality",
+    "d/11/4": "decode:intended:empty-method-name",
+    "d/13/11": "decode:intended:leb128-minimality",
+    "d/13/34": "decode:intended:leb128-minimality",
+    "d/13/36": "decode:intended:leb128-minimality",
+    "d/15/16": "decode:intended:leb128-minimality",
+    "d/15/23": "decode:intended:leb128-minimality",
+    "d/17/12": "decode:intended:leb128-minimality",
+    "d/18/19": "decode:intended:leb128-minimality",
+    "d/19/15": "decode:intended:leb128-minimality",
+    "d/19/18": "decode:intended:leb128-minimality",
+    "d/2/27": "decode:intended:leb128-minimality",
+    "d/21/20": "decode:intended:leb128-minimality",
+    "d/21/25": "decode:intended:leb128-minimality",
+    "d/21/3": "decode:intended:leb128-minimality",
+    "d/22/14": "decode:intended:leb128-minimality",
+    "d/22/2": "decode:intended:leb128-minimality",
+    "d/22/33": "decode:intended:leb128-minimality",
+    "d/22/37": "decode:intended:leb128-minimality",
+    "d/22/8": "decode:intended:leb128-minimality",
+    "d/23/17": "decode:intended:leb128-minimality",
+    "d/24/32": "decode:intended:leb128-minimality",
+    "d/3/26": "decode:intended:leb128-minimality",
+    "d/3/4": "decode:intended:leb128-minimality",
+    "d/3/5": "decode:intended:leb128-minimality",
+    "d/4/14": "decode:intended:leb128-minimality",
+    "d/4/20": "decode:intended:leb128-minimality",
+    "d/4/8": "decode:intended:leb128-minimality",
+    "d/4/9": "decode:intended:leb128-minimality",
+    "d/5/19": "decode:intended:leb128-minimality",
+    "d/6/24": "decode:intended:leb128-minimality",
+    "d/6/25": "decode:intended:leb128-minimality",
+    "d/8/1": "decode:intended:empty-method-name",
+    "d/8/17": "decode:intended:leb128-minimality",
+    "d/8/5": "decode:intended:leb128-minimality",
+    "r/contract_identities_edit": "contract:intended:identities-unchecked",
+    "r/contract_orphan_type_node": "contract:ts-accepts:orphan_type_node",
+    "r/contract_producer_edit": "contract:intended:producer-unchecked",
+    "r/contract_rootless_arena": "contract:ts-accepts:rootless_type_arena",
+    "r/contract_unknown_key": "contract:ts-accepts:json_unknown_field",
+    "r/empty_method_name": "decode:intended:empty-method-name",
+    "r/leb128_overlong_nat_value": "decode:intended:leb128-minimality",
+    "r/leb128_overlong_type_count": "decode:intended:leb128-minimality",
+    "r/leb128_wide_field_id": "decode:intended:leb128-minimality"
+  },
+  "skipped": {}
+}

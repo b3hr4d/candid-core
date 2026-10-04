@@ -204,6 +204,151 @@ fn principal_text(rng: &mut Rng) -> String {
     }
 }
 
+/// Paths (descriptor index chains) to every scalar leaf of a conforming
+/// descriptor, each with the type it was generated at.
+fn scalar_leaves(
+    env: &TypeEnv,
+    ty: &Type,
+    desc: &Value,
+    path: &mut Vec<usize>,
+    out: &mut Vec<(Vec<usize>, Type)>,
+) {
+    let Some(resolved) = trace(env, ty) else {
+        return;
+    };
+    let tag = desc.get(0).and_then(Value::as_str).unwrap_or("");
+    match (resolved.as_ref(), tag) {
+        (TypeInner::Opt(inner), _) if tag != "n" => {
+            if admits_null(env, inner) {
+                if tag == "o" {
+                    path.extend([1, 0, 1]);
+                    scalar_leaves(env, inner, &desc[1][0][1], path, out);
+                    path.truncate(path.len() - 3);
+                }
+            } else {
+                scalar_leaves(env, inner, desc, path, out);
+            }
+        }
+        (TypeInner::Vec(inner), "a") => {
+            for (index, item) in desc[1].as_array().into_iter().flatten().enumerate() {
+                path.extend([1, index]);
+                scalar_leaves(env, inner, item, path, out);
+                path.truncate(path.len() - 2);
+            }
+        }
+        (TypeInner::Record(fields), "a" | "o") => {
+            for (index, item) in desc[1].as_array().into_iter().flatten().enumerate() {
+                let (key_id, inner, prefix) = if tag == "a" {
+                    (index as u32, item, vec![1, index])
+                } else {
+                    (
+                        label_id(item[0].as_str().unwrap_or("")),
+                        &item[1],
+                        vec![1, index, 1],
+                    )
+                };
+                if let Some(field) = fields.iter().find(|field| field.id.get_id() == key_id) {
+                    let depth = prefix.len();
+                    path.extend(prefix);
+                    scalar_leaves(env, &field.ty, inner, path, out);
+                    path.truncate(path.len() - depth);
+                }
+            }
+        }
+        (TypeInner::Variant(arms), "o") => {
+            let list = desc[1].as_array().cloned().unwrap_or_default();
+            let tag_id = list
+                .iter()
+                .find(|entry| entry[0] == "tag")
+                .and_then(|entry| entry[1][1].as_str().map(label_id));
+            for (index, entry) in list.iter().enumerate() {
+                if entry[0] != "value" {
+                    continue;
+                }
+                if let Some(arm) = arms.iter().find(|arm| Some(arm.id.get_id()) == tag_id) {
+                    path.extend([1, index, 1]);
+                    scalar_leaves(env, &arm.ty, &entry[1], path, out);
+                    path.truncate(path.len() - 3);
+                }
+            }
+        }
+        (
+            TypeInner::Record(_) | TypeInner::Variant(_) | TypeInner::Vec(_) | TypeInner::Opt(_),
+            _,
+        ) => {}
+        _ => out.push((path.clone(), resolved.clone())),
+    }
+}
+
+/// A value at or just past the edge of `ty`'s domain.
+fn boundary_for(rng: &mut Rng, ty: &Type) -> Value {
+    let ints = |rng: &mut Rng, values: &[&str]| big((*rng.pick(values)).to_string());
+    let nums = |rng: &mut Rng, values: &[f64]| num(*rng.pick(values));
+    match ty.as_ref() {
+        TypeInner::Nat => ints(rng, &["-1", "0", "340282366920938463463374607431768211456"]),
+        TypeInner::Int => ints(rng, &["-340282366920938463463374607431768211457", "0"]),
+        TypeInner::Nat64 => ints(
+            rng,
+            &["-1", "0", "18446744073709551615", "18446744073709551616"],
+        ),
+        TypeInner::Int64 => ints(
+            rng,
+            &[
+                "-9223372036854775809",
+                "-9223372036854775808",
+                "9223372036854775807",
+                "9223372036854775808",
+            ],
+        ),
+        TypeInner::Nat8 => nums(rng, &[-1.0, 0.0, 255.0, 256.0, 1.5, -0.0]),
+        TypeInner::Nat16 => nums(rng, &[-1.0, 65535.0, 65536.0, 0.5]),
+        TypeInner::Nat32 => nums(rng, &[-1.0, 4_294_967_295.0, 4_294_967_296.0]),
+        TypeInner::Int8 => nums(rng, &[-129.0, -128.0, 127.0, 128.0]),
+        TypeInner::Int16 => nums(rng, &[-32769.0, -32768.0, 32767.0, 32768.0]),
+        TypeInner::Int32 => nums(
+            rng,
+            &[
+                -2_147_483_649.0,
+                -2_147_483_648.0,
+                2_147_483_647.0,
+                2_147_483_648.0,
+            ],
+        ),
+        TypeInner::Float32 | TypeInner::Float64 => nums(
+            rng,
+            &[
+                f64::NAN,
+                f64::INFINITY,
+                -0.0,
+                1e300,
+                f64::MIN_POSITIVE / 4.0,
+            ],
+        ),
+        TypeInner::Principal => json!(["s", principal_text(rng)]),
+        TypeInner::Text => json!(["s", *rng.pick(&["", "\u{0}", "\u{10ffff}"])]),
+        TypeInner::Bool => nums(rng, &[0.0, 1.0]),
+        TypeInner::Null => json!(["o", []]),
+        _ => random_scalar(rng),
+    }
+}
+
+/// Replace one scalar leaf of a conforming descriptor with a boundary value
+/// for its type: in range, one past the range, the wrong numeric kind.
+pub fn boundary(rng: &mut Rng, env: &TypeEnv, ty: &Type, value: &mut Value) {
+    let mut leaves = Vec::new();
+    scalar_leaves(env, ty, value, &mut Vec::new(), &mut leaves);
+    if leaves.is_empty() {
+        return;
+    }
+    let (path, leaf_ty) = rng.pick(&leaves).clone();
+    let replacement = boundary_for(rng, &leaf_ty);
+    let mut node = value;
+    for index in path {
+        node = &mut node[index];
+    }
+    *node = replacement;
+}
+
 /// One random edit somewhere in a descriptor tree.
 pub fn mutate(rng: &mut Rng, value: &mut Value) {
     // Walk down to a random node.

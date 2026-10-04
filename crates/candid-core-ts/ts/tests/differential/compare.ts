@@ -33,8 +33,9 @@
 // - reference `coercion` → a COERCION code (the bytes are well-formed);
 // - reference `malformed` → a WIRE or a COERCION code (whichever problem the
 //   walk meets first, which depends on byte order, not on a rule);
-// - `resource_limit_exceeded` agrees with any rejection: the two sides'
-//   budgets are different policies (see "intended differences").
+// - `resource_limit_exceeded` agrees with any rejection, and so does the
+//   reference's `limit` (its decoding quota ran out): the two sides' budgets
+//   are different policies (see "intended differences").
 //
 // # Intended differences (encoded in the mapping, never silently agreed)
 //
@@ -357,10 +358,14 @@ export function decodeCategory(ref: Reference, ours: Ours): string | null {
     return intendedWire(ours.code, ref) ?? `decode:ts-rejects:${ours.code}`;
   }
   if (ours.verdict === "accept") {
-    return `decode:ts-accepts:${ref.class ?? "?"}`;
+    // The reference's decoding quota is the harness's policy, not a rule of
+    // either decoder (see `wire::DECODING_QUOTA`).
+    return ref.class === "limit"
+      ? "decode:intended:reference-quota"
+      : `decode:ts-accepts:${ref.class ?? "?"}`;
   }
   const code = ours.code;
-  if (code === "resource_limit_exceeded") {
+  if (code === "resource_limit_exceeded" || ref.class === "limit") {
     return null;
   }
   const wire = WIRE.has(code);
