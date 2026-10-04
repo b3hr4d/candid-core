@@ -24,6 +24,11 @@
       "reason": "schemaFromContract accepts a non-empty type arena with no declaration and no actor; Contract::from_json refuses it (rootless_type_arena). The loader returns no schemas for it, but admits a document candid-core says is not a Contract.",
       "issue": "to be filed (see the #196 campaign report)"
     },
+    "contract:ts-rejects:invalid_contract_document": {
+      "class": "a",
+      "reason": "schemaFromContract refuses a Contract document with no declarations key (declarations must be an array); Contract::from_json accepts it, the key defaulting to empty (serde default on RawContract, documented for ContractDraft). candid-core's own serializer always writes the key, so only a hand-written or third-party document hits this; whether absence is part of the format is the owner's call.",
+      "issue": "to be filed (see the #196 campaign report)"
+    },
     "decode:intended:empty-method-name": {
       "class": "c",
       "reason": "The runtime refuses a func reference with an empty method name (invalid_length) for round-trip symmetry: validate and encode refuse it, and so does candid-core's HostValue validator (empty_function_method). The candid crate accepts it."
@@ -113,6 +118,7 @@
     "d/8/1": "decode:intended:empty-method-name",
     "d/8/17": "decode:intended:leb128-minimality",
     "d/8/5": "decode:intended:leb128-minimality",
+    "r/contract_declarations_absent": "contract:ts-rejects:invalid_contract_document",
     "r/contract_identities_edit": "contract:intended:identities-unchecked",
     "r/contract_orphan_type_node": "contract:ts-accepts:orphan_type_node",
     "r/contract_producer_edit": "contract:intended:producer-unchecked",

@@ -179,6 +179,20 @@
       "did": "type T = nat;\n",
       "expected": [],
       "hex": "4449444c016d7f0100824f"
+    },
+    {
+      "name": "contract_declarations_absent",
+      "target": "contract",
+      "note": "A Contract document with its empty declarations key removed. Contract::from_json accepts it (the key defaults to empty); schemaFromContract refuses invalid_contract_document (declarations must be an array).",
+      "did": "service : { m : () -> () }\n",
+      "ops": [
+        {
+          "op": "delete",
+          "path": [
+            "declarations"
+          ]
+        }
+      ]
     }
   ]
 }

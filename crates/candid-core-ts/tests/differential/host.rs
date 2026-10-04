@@ -25,7 +25,8 @@
 //!   anything).
 //! - `opt T`: null → absent; when `T` admits null, exactly `{some: v}` →
 //!   present `v`, anything else blind; otherwise any other value → present.
-//! - `nat`/`int`/`nat64`/`int64`: bigint → that kind, decimal unchanged.
+//! - `nat`/`int`/`nat64`/`int64`: bigint → that kind, with the canonical
+//!   decimal JavaScript's `BigInt` would hold (`-0` is `0`).
 //! - `nat8`…`int32`: an integral number in range → that kind; otherwise blind.
 //! - `float64`: number → its bits; `float32`: number → the bits of its
 //!   round-to-nearest `f32` (the runtime's `float32` accepts any number;
@@ -443,10 +444,29 @@ pub fn mutate(rng: &mut Rng, value: &mut Value) {
     }
 }
 
+/// A bigint descriptor's decimal as JavaScript's `BigInt` reads it: one
+/// canonical spelling (no leading zeros, no `-0`), which is the only one the
+/// HostValue ABI accepts.
+fn canonical_decimal(desc: &Value) -> Value {
+    let text = desc[1].as_str().unwrap_or("0");
+    let (negative, digits) = match text.strip_prefix('-') {
+        Some(rest) => (true, rest),
+        None => (false, text),
+    };
+    let digits = digits.trim_start_matches('0');
+    if digits.is_empty() {
+        json!("0")
+    } else if negative {
+        json!(format!("-{digits}"))
+    } else {
+        json!(digits)
+    }
+}
+
 fn host_blind(desc: &Value) -> Value {
     match desc.get(0).and_then(Value::as_str) {
         Some("b") => json!({ "kind": "bool", "value": desc[1] }),
-        Some("i") => json!({ "kind": "int", "value": desc[1] }),
+        Some("i") => json!({ "kind": "int", "value": canonical_decimal(desc) }),
         Some("f") => json!({ "kind": "float64", "bits": desc[1] }),
         Some("s") => json!({ "kind": "text", "value": desc[1] }),
         Some("y") => {
@@ -579,7 +599,7 @@ pub fn host_value(env: &TypeEnv, ty: &Type, desc: &Value) -> Value {
                 TypeInner::Nat64 => "nat64",
                 _ => "int64",
             };
-            json!({ "kind": kind, "value": desc[1] })
+            json!({ "kind": kind, "value": canonical_decimal(desc) })
         }
         TypeInner::Nat8
         | TypeInner::Nat16
