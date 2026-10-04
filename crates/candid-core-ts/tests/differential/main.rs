@@ -317,7 +317,7 @@ fn contract_case(built: &Built, rng: &mut Rng, id: String, env_id: &str) -> Valu
         "id": id,
         "env": env_id,
         "ops": ops,
-        "ref": contract::reference_verdict(&document, &ops),
+        "ref": contract::judge(&built.envelope["contract"], &ops),
     })
 }
 
@@ -412,16 +412,12 @@ fn generate_regressions(lines: &mut Vec<Value>) {
             }
             Some("contract") => {
                 let ops: Vec<Value> = vector["ops"].as_array().expect("ops").clone();
-                let mut document = built.envelope["contract"].clone();
-                for op in &ops {
-                    contract::apply(&mut document, op);
-                }
                 json!({
                     "kind": "contract",
                     "id": id,
                     "env": env_id,
                     "ops": ops,
-                    "ref": contract::reference_verdict(&document, &ops),
+                    "ref": contract::judge(&built.envelope["contract"], &ops),
                 })
             }
             other => panic!("regression {name}: unknown target {other:?}"),

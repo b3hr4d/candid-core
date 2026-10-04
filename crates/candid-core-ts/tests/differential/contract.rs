@@ -382,3 +382,36 @@ pub fn reference_verdict(edited: &Value, ops: &[Value]) -> Value {
         }
     }
 }
+
+fn touches_metadata(op: &Value) -> bool {
+    matches!(
+        op["path"].get(0).and_then(Value::as_str),
+        Some("producer" | "identities")
+    )
+}
+
+/// The reference verdict for `ops` applied to `base`. When an operation edits
+/// `producer` or `identities` — the two parts the TypeScript loader does not
+/// read, by design — a second verdict, `graph`, judges the document with only
+/// the other operations applied, so the runner can tell a refusal caused by
+/// the metadata edit (an intended difference) from one the graph causes.
+pub fn judge(base: &Value, ops: &[Value]) -> Value {
+    let mut edited = base.clone();
+    for op in ops {
+        apply(&mut edited, op);
+    }
+    let mut verdict = reference_verdict(&edited, ops);
+    if ops.iter().any(touches_metadata) {
+        let graph_ops: Vec<Value> = ops
+            .iter()
+            .filter(|op| !touches_metadata(op))
+            .cloned()
+            .collect();
+        let mut graph = base.clone();
+        for op in &graph_ops {
+            apply(&mut graph, op);
+        }
+        verdict["graph"] = reference_verdict(&graph, &graph_ops);
+    }
+    verdict
+}

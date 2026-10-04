@@ -477,21 +477,24 @@ function clone(value: unknown): unknown {
  * The contract target's intended differences: `schemaFromContract` reads
  * neither `identities` nor `producer` (documented in `contract.ts`: the hashes
  * need canonicalization, candid-core's job; producer metadata is untrusted
- * provenance), so an edit there that only the reference refuses is by design.
+ * provenance). When an edit touched either, the reference also judged the
+ * document without those edits (`ref.graph`): if that graph is accepted, the
+ * refusal came from the metadata edit and is by design; otherwise the
+ * category names the graph's own refusal.
  */
 function contractCategory(kase: ContractLine, ours: Ours): string | null {
   const category = verdictCategory("contract", kase.ref, ours);
-  if (category === null || !category.startsWith("contract:ts-accepts:")) {
+  const graph = (kase.ref as { readonly graph?: Reference }).graph;
+  if (category === null || !category.startsWith("contract:ts-accepts:") || graph === undefined) {
     return category;
   }
-  const roots = new Set(kase.ops.map((op) => op.path[0]));
-  if (roots.has("identities")) {
-    return "contract:intended:identities-unchecked";
+  if (graph.verdict === "accept") {
+    const roots = new Set(kase.ops.map((op) => op.path[0]));
+    return roots.has("identities")
+      ? "contract:intended:identities-unchecked"
+      : "contract:intended:producer-unchecked";
   }
-  if (roots.has("producer")) {
-    return "contract:intended:producer-unchecked";
-  }
-  return category;
+  return verdictCategory("contract", graph, ours);
 }
 
 function runContract(kase: ContractLine, envLine: EnvLine): Outcome {
