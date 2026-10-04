@@ -512,6 +512,18 @@ fn differential_corpus_matches_reference() {
         std::fs::write(&path, &text).expect("golden must be writable");
         return;
     }
+    // docs/verification.md states the committed count; keep the two equal.
+    let seeds = CORPUS_SEEDS;
+    let stated = format!(
+        "{} environments × {} decode, {} validate and {} contract cases",
+        seeds.envs, seeds.decode, seeds.validate, seeds.contract
+    );
+    let verification = std::fs::read_to_string(manifest_dir().join("../../docs/verification.md"))
+        .expect("docs/verification.md must be readable");
+    assert!(
+        verification.contains(&stated),
+        "docs/verification.md must state the committed corpus as `{stated}`"
+    );
     let golden = std::fs::read_to_string(&path)
         .unwrap_or_else(|_| panic!("missing golden {path:?}; run with UPDATE_GOLDENS=1"));
     assert!(
