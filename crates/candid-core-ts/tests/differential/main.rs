@@ -559,8 +559,10 @@ fn differential_campaign() {
 }
 
 /// Minimization oracle: `DIFF_IN` holds one JSON request per line —
-/// `{"did", "expected", "hex"}` — and `DIFF_OUT` receives the reference
-/// verdict for each, in order.
+/// `{"did", "expected", "hex"}`, or `{"did", "expected", "wire", "textual"}`
+/// to have the reference encode a textual value at the wire declarations
+/// first — and `DIFF_OUT` receives the reference verdict for each, in order
+/// (with the encoded `hex` for a textual request).
 #[test]
 #[ignore = "minimization mode: run explicitly with DIFF_IN and DIFF_OUT"]
 fn differential_verdicts() {
@@ -581,13 +583,32 @@ fn differential_verdicts() {
                         .iter()
                         .map(|name| types.find_type(name.as_str()?).ok().cloned())
                         .collect();
-                    match expected {
-                        None => json!({ "verdict": "invalid_env" }),
-                        Some(expected) => wire::reference_verdict(
-                            &types,
-                            &wire::unhex(request["hex"].as_str().expect("hex")),
-                            &expected,
-                        ),
+                    let bytes = match request["textual"].as_str() {
+                        None => Some(wire::unhex(request["hex"].as_str().expect("hex"))),
+                        Some(textual) => {
+                            let wire_types: Option<Vec<Type>> = request["wire"]
+                                .as_array()
+                                .expect("wire")
+                                .iter()
+                                .map(|name| types.find_type(name.as_str()?).ok().cloned())
+                                .collect();
+                            wire_types.and_then(|wire_types| {
+                                candid_parser::parse_idl_args(textual)
+                                    .ok()?
+                                    .annotate_types(true, &types, &wire_types)
+                                    .ok()?
+                                    .to_bytes_with_types(&types, &wire_types)
+                                    .ok()
+                            })
+                        }
+                    };
+                    match (expected, bytes) {
+                        (Some(expected), Some(bytes)) => {
+                            let mut verdict = wire::reference_verdict(&types, &bytes, &expected);
+                            verdict["hex"] = json!(wire::hex(&bytes));
+                            verdict
+                        }
+                        _ => json!({ "verdict": "invalid_env" }),
                     }
                 }
             };

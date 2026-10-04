@@ -366,6 +366,146 @@ fn has_empty_method(value: &IDLValue) -> bool {
     }
 }
 
+struct Cursor<'a> {
+    bytes: &'a [u8],
+    at: usize,
+}
+
+impl Cursor<'_> {
+    fn byte(&mut self) -> Option<u8> {
+        let byte = *self.bytes.get(self.at)?;
+        self.at += 1;
+        Some(byte)
+    }
+
+    fn leb(&mut self) -> Option<u64> {
+        let mut value = 0u64;
+        for shift in (0..64).step_by(7) {
+            let byte = self.byte()?;
+            value |= u64::from(byte & 0x7f) << shift;
+            if byte & 0x80 == 0 {
+                return Some(value);
+            }
+        }
+        None
+    }
+
+    fn sleb(&mut self) -> Option<i64> {
+        let mut value = 0i64;
+        let mut shift = 0;
+        loop {
+            let byte = self.byte()?;
+            value |= i64::from(byte & 0x7f) << shift;
+            shift += 7;
+            if byte & 0x80 == 0 {
+                if shift < 64 && byte & 0x40 != 0 {
+                    value |= -1i64 << shift;
+                }
+                return Some(value);
+            }
+            if shift >= 63 {
+                return None;
+            }
+        }
+    }
+}
+
+/// The record entries of a message's type table, as table indices of their
+/// fields' types (primitive field types omitted); `None` for a table that
+/// does not parse.
+fn table_records(bytes: &[u8]) -> Option<Vec<Option<Vec<usize>>>> {
+    let mut cursor = Cursor { bytes, at: 0 };
+    for expected in *b"DIDL" {
+        if cursor.byte()? != expected {
+            return None;
+        }
+    }
+    let count = usize::try_from(cursor.leb()?).ok()?;
+    if count > bytes.len() {
+        return None;
+    }
+    let mut entries = Vec::new();
+    for _ in 0..count {
+        let opcode = cursor.sleb()?;
+        entries.push(match opcode {
+            -18 | -19 => {
+                cursor.sleb()?;
+                None
+            }
+            -20 | -21 => {
+                let fields = cursor.leb()?;
+                let mut refs = Vec::new();
+                for _ in 0..fields {
+                    cursor.leb()?;
+                    let ty = cursor.sleb()?;
+                    if ty >= 0 {
+                        refs.push(usize::try_from(ty).ok()?);
+                    }
+                }
+                (opcode == -20).then_some(refs)
+            }
+            -22 => {
+                for _ in 0..2 {
+                    for _ in 0..cursor.leb()? {
+                        cursor.sleb()?;
+                    }
+                }
+                for _ in 0..cursor.leb()? {
+                    cursor.byte()?;
+                }
+                None
+            }
+            -23 => {
+                for _ in 0..cursor.leb()? {
+                    let length = usize::try_from(cursor.leb()?).ok()?;
+                    cursor.at = cursor.at.checked_add(length)?;
+                    cursor.sleb()?;
+                }
+                None
+            }
+            _ => return None,
+        });
+    }
+    Some(entries)
+}
+
+/// Whether the message's type table holds a record type the reference
+/// rewrites to `empty` while parsing it (`TypeEnv::replace_empty`: a record
+/// some field of which is, through record fields only, the record itself —
+/// uninhabited). The reference applies that rewrite to the wire table only,
+/// never to the expected types, so in a func or service signature it turns
+/// `W <: E` into `empty <: E` (always true: it accepts a reference type that is
+/// not a subtype) and `E <: W` into `E <: empty` (false: it refuses even
+/// identical types). The runtime compares the types as written. This mirrors
+/// the reference's rule exactly so the verdict mapping can attribute those
+/// divergences (`decode:reference:empty-normalization`).
+pub fn wire_has_empty_record(bytes: &[u8]) -> bool {
+    let Some(entries) = table_records(bytes) else {
+        return false;
+    };
+    // 0 = unvisited, 1 = in progress, 2 = empty, 3 = not empty.
+    fn empty(entries: &[Option<Vec<usize>>], state: &mut [u8], index: usize) -> bool {
+        match state.get(index).copied() {
+            None => return false,
+            Some(1 | 2) => {
+                state[index] = 2;
+                return true;
+            }
+            Some(3) => return false,
+            _ => {}
+        }
+        state[index] = 1;
+        let result = match &entries[index] {
+            Some(fields) => fields.iter().any(|&field| empty(entries, state, field)),
+            None => false,
+        };
+        state[index] = if result { 2 } else { 3 };
+        result
+    }
+    let mut state = vec![0u8; entries.len()];
+    (0..entries.len()).any(|index| entries[index].is_some() && empty(&entries, &mut state, index))
+}
+
 /// The reference decoder's configuration. Unconfigured, the `candid` crate
 /// bounds no work (its documentation asks canister code to set a quota), and
 /// a vector of a zero-sized type with a forged length of 2^40 then runs for
@@ -401,8 +541,20 @@ fn quota_exhausted(error: &candid::Error) -> bool {
 /// `flags` records input properties the verdict mapping needs and only the
 /// reference can see: `empty_method` when a value the reference decoded (at
 /// the expected types, or at the wire types for a `coercion` rejection) is a
-/// func reference with an empty method name.
+/// func reference with an empty method name; `wire_empty_record` when the
+/// wire type table holds a record the reference rewrites to `empty` (see
+/// `wire_has_empty_record`).
 pub fn reference_verdict(env: &TypeEnv, bytes: &[u8], expected: &[Type]) -> Value {
+    let mut verdict = reference_verdict_unflagged(env, bytes, expected);
+    if wire_has_empty_record(bytes) {
+        let mut flags = verdict["flags"].as_array().cloned().unwrap_or_default();
+        flags.push(json!("wire_empty_record"));
+        verdict["flags"] = Value::Array(flags);
+    }
+    verdict
+}
+
+fn reference_verdict_unflagged(env: &TypeEnv, bytes: &[u8], expected: &[Type]) -> Value {
     let typed =
         guarded(|| IDLArgs::from_bytes_with_types_with_config(bytes, env, expected, &config()));
     match typed {

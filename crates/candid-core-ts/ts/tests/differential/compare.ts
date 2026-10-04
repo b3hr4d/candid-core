@@ -338,7 +338,34 @@ function intendedWire(code: string, ref: Reference): string | null {
   return null;
 }
 
+/**
+ * Divergences the reference causes by rewriting uninhabited recursive records
+ * in the *wire* type table to `empty` (`TypeEnv::replace_empty`, applied to
+ * the wire side only): in a func or service signature that makes it accept a
+ * reference type that is not a subtype (`empty <: E`) and refuse identical
+ * types (`E <: empty`), and an `opt` around such a reference then absorbs to
+ * `null`. The reference flags messages whose table holds such a record
+ * (`wire_empty_record`); on those, these three symptoms are its doing.
+ */
+const EMPTY_NORMALIZATION_SYMPTOMS = new Set([
+  "decode:ts-accepts:coercion",
+  "decode:ts-rejects:type_mismatch",
+  "decode:value-mismatch",
+]);
+
 export function decodeCategory(ref: Reference, ours: Ours): string | null {
+  const category = decodeSymptom(ref, ours);
+  if (
+    category !== null &&
+    EMPTY_NORMALIZATION_SYMPTOMS.has(category) &&
+    ref.flags?.includes("wire_empty_record") === true
+  ) {
+    return "decode:reference:empty-normalization";
+  }
+  return category;
+}
+
+function decodeSymptom(ref: Reference, ours: Ours): string | null {
   if (ref.verdict === "panic") {
     return "decode:reference-panic";
   }

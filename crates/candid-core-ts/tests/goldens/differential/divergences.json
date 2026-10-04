@@ -31,6 +31,16 @@
     "decode:intended:leb128-minimality": {
       "class": "c",
       "reason": "The runtime refuses a non-minimal LEB128/SLEB128 group (overlong_leb128, or invalid_length when a u32 field's group is longer than five bytes although its value fits); the candid crate accepts it. Settled on #103 (decision 4): the spec's strict-inverse reading."
+    },
+    "decode:reference:empty-normalization": {
+      "class": "b",
+      "reason": "The candid crate rewrites an uninhabited recursive record (a record that reaches itself through record fields only) to empty in the wire type table, and never in the expected types (TypeEnv::replace_empty, called from binary_parser::Header::to_types). Inside a func or service signature that makes its reference subtype check accept a type that is not a subtype (empty <: E) and refuse identical types (E <: empty); under an opt the refusal is absorbed to null. The runtime compares the types as written, as the spec's subtyping does. Attributed only where the reference flags such a record in the wire table (wire_empty_record).",
+      "issue": "to be reported upstream (dfinity/candid); see the #196 campaign report"
+    },
+    "decode:ts-rejects:invalid_utf8": {
+      "class": "b",
+      "reason": "The candid crate does not check that a func reference's method name is UTF-8 when it skips the value (an extra argument, an expected reserved, an absorbing opt); it does check a skipped text, and checks the method name when it decodes the func. The runtime refuses invalid UTF-8 wherever it occurs, skipped or not.",
+      "issue": "to be reported upstream (dfinity/candid); see the #196 campaign report"
     }
   },
   "cases": {
@@ -103,7 +113,11 @@
     "r/empty_method_name": "decode:intended:empty-method-name",
     "r/leb128_overlong_nat_value": "decode:intended:leb128-minimality",
     "r/leb128_overlong_type_count": "decode:intended:leb128-minimality",
-    "r/leb128_wide_field_id": "decode:intended:leb128-minimality"
+    "r/leb128_wide_field_id": "decode:intended:leb128-minimality",
+    "r/reference_absorbs_identical_func_in_opt": "decode:reference:empty-normalization",
+    "r/reference_accepts_non_subtype_func": "decode:reference:empty-normalization",
+    "r/reference_refuses_identical_func": "decode:reference:empty-normalization",
+    "r/reference_skips_invalid_utf8_method": "decode:ts-rejects:invalid_utf8"
   },
   "skipped": {}
 }
