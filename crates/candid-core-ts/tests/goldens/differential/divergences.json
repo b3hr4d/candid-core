@@ -32,6 +32,10 @@
       "class": "c",
       "reason": "The runtime refuses a non-minimal LEB128/SLEB128 group (overlong_leb128, or invalid_length when a u32 field's group is longer than five bytes although its value fits); the candid crate accepts it. Settled on #103 (decision 4): the spec's strict-inverse reading."
     },
+    "decode:intended:reference-quota": {
+      "class": "c",
+      "reason": "The harness runs the candid crate with a decoding quota of 2,000,000 (wire::DECODING_QUOTA; unconfigured it bounds no work at all), which a forged vector length can exhaust while the runtime's own element budget (maxElements, 1,000,000 elements) still admits the message. A policy of the harness, not a semantic difference between the decoders."
+    },
     "decode:intended:reference-sequences-unsupported": {
       "class": "c",
       "reason": "The runtime refuses a value that carries references — a future type's value with a non-zero reference count, an opaque func or service reference — with invalid_principal: reference sequences are outside this codec, documented in crates/candid-core-ts/README.md (\"opaque reference values … and external reference sequences are refused\"). The candid crate skips a future type's reference count."
@@ -121,6 +125,7 @@
     "r/leb128_wide_field_id": "decode:intended:leb128-minimality",
     "r/reference_absorbs_identical_func_in_opt": "decode:reference:empty-normalization",
     "r/reference_accepts_non_subtype_func": "decode:reference:empty-normalization",
+    "r/reference_quota_skipped_vec": "decode:intended:reference-quota",
     "r/reference_refuses_identical_func": "decode:reference:empty-normalization",
     "r/reference_skips_invalid_utf8_method": "decode:ts-rejects:invalid_utf8"
   },

@@ -35,11 +35,13 @@
 //!   exactly `principal` and `method` strings → `func`.
 //! - `vec nat8` (blob): Uint8Array → `vec` of `nat8`; `vec T`: array → `vec`.
 //! - record: tuple-shaped types take arrays (index = id), other records take
-//!   objects (`_N_` keys are id N, other keys their label hash); fields the
-//!   type lacks convert blind.
+//!   objects keyed as the runtime keys them (a named field by its name, a
+//!   numbered one as `_N_`); a key that is no field of the type becomes a
+//!   field with an id the type does not use, its value converted blind.
 //! - variant: an object whose keys are `tag` (a string) and optionally `value`
-//!   → `variant` with the tag's id, payload converted at the arm (blind if the
-//!   arm is unknown), or `null` when `value` is absent.
+//!   → `variant` with the arm's id (an unused id when the tag is no arm), the
+//!   payload converted at the arm (blind if the arm is unknown), or `null` when
+//!   `value` is absent.
 
 use candid::types::value::IDLValue;
 use candid::types::{Type, TypeInner};
@@ -511,6 +513,42 @@ fn integral_in(desc: &Value, min: f64, max: f64) -> Option<i64> {
     }
 }
 
+/// The id of the field or arm whose domain key is `key`: its source name
+/// when named, `_N_` when numbered. Keys are matched against the type's own
+/// labels, never hashed: `""` hashes to 0, the id of a field the runtime
+/// keys `_0_`, and two different keys must not denote one field.
+fn key_id(fields: &[candid::types::Field], key: &str) -> Option<u32> {
+    fields
+        .iter()
+        .find(|field| label_key(&field.id) == key)
+        .map(|field| field.id.get_id())
+}
+
+/// Ids no field of the type uses, for keys that denote no field (so the
+/// reference sees a field set or an arm the type does not have).
+struct FreshIds {
+    used: Vec<u32>,
+    next: u32,
+}
+
+impl FreshIds {
+    fn new(used: impl Iterator<Item = u32>) -> Self {
+        FreshIds {
+            used: used.collect(),
+            next: u32::MAX,
+        }
+    }
+
+    fn next(&mut self) -> u32 {
+        while self.used.contains(&self.next) {
+            self.next -= 1;
+        }
+        let id = self.next;
+        self.used.push(id);
+        id
+    }
+}
+
 /// HostValue JSON for `desc` at `ty`, under the mapping in the module docs.
 pub fn host_value(env: &TypeEnv, ty: &Type, desc: &Value) -> Value {
     let Some(resolved) = trace(env, ty) else {
@@ -648,11 +686,13 @@ pub fn host_value(env: &TypeEnv, ty: &Type, desc: &Value) -> Value {
                     .unwrap_or_default();
                 json!({ "kind": "record", "fields": converted })
             } else if !tuple && tag == "o" {
+                let mut fresh = FreshIds::new(fields.iter().map(|field| field.id.get_id()));
                 let converted: Vec<Value> = entries(desc)
                     .map(|list| {
                         list.iter()
                             .map(|entry| {
-                                let id = label_id(entry[0].as_str().unwrap_or(""));
+                                let key = entry[0].as_str().unwrap_or("");
+                                let id = key_id(fields, key).unwrap_or_else(|| fresh.next());
                                 json!({ "id": id, "value": field_at(id, &entry[1]) })
                             })
                             .collect()
@@ -672,7 +712,9 @@ pub fn host_value(env: &TypeEnv, ty: &Type, desc: &Value) -> Value {
                     && list.len() <= 2 =>
             {
                 let tag_text = entry(list, "tag").and_then(|v| v[1].as_str()).unwrap_or("");
-                let id = label_id(tag_text);
+                let id = key_id(arms, tag_text).unwrap_or_else(|| {
+                    FreshIds::new(arms.iter().map(|arm| arm.id.get_id())).next()
+                });
                 let payload = match entry(list, "value") {
                     None => json!({ "kind": "null" }),
                     Some(value) => match arms.iter().find(|arm| arm.id.get_id() == id) {

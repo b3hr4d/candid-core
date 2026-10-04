@@ -509,9 +509,12 @@ pub fn wire_has_empty_record(bytes: &[u8]) -> bool {
 /// The reference decoder's configuration. Unconfigured, the `candid` crate
 /// bounds no work (its documentation asks canister code to set a quota), and
 /// a vector of a zero-sized type with a forged length of 2^40 then runs for
-/// hours. The decoding quota (which charges skipped values 50x) is set well
-/// above anything a generated message needs; the runtime's own element
-/// budget (`maxElements`, 1,000,000) refuses those messages first.
+/// hours. The decoding quota (which charges skipped values 50x) is far above
+/// what any unmutated generated message needs; a forged length can still
+/// exhaust it below the runtime's own element budget (`maxElements`,
+/// 1,000,000) — about ten thousand skipped `null`s do — and the verdict
+/// mapping reports that as the harness policy it is
+/// (`decode:intended:reference-quota`).
 pub const DECODING_QUOTA: usize = 2_000_000;
 
 fn config() -> candid::DecoderConfig {
