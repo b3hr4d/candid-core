@@ -37,7 +37,7 @@ compiler = ["candid-core/compiler"]
 # itself uses for candid_parser. Dev-dependencies never reach a downstream
 # consumer, so the library boundary claim above is untouched; the featureless
 # build is separately enforced by `cargo check -p candid-core-ts` in CI.
-candid-core = { path = "../..", default-features = false, features = ["compiler"] }
+candid-core = { path = "../..", default-features = false, features = ["compiler", "host-value"] }
 # The authoritative Candid name hash, used by tests to state expected `_id_`
 # keys without hardcoding hash values — the same authority candid-core itself
 # pins its internal hash against.
