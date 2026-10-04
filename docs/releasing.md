@@ -209,7 +209,17 @@ that, because every fixture under `tests/` is deliberately outside the archive.
 - [`CHANGELOG.md`](../CHANGELOG.md) has an entry for the version being released,
   and it states the pre-1.0 API and wire instability, the migrations, and the
   known limitations honestly. Deferred work is named with its issue number
-  rather than omitted.
+  rather than omitted. Between releases, user-visible changes that are on
+  `main` but in no crate release accumulate in an `## Unreleased` section at
+  the top of that file; release prep renames it to the heading of the version
+  being released, as it does for the npm changelogs' ([every publish after
+  that](#every-publish-after-that)), leaving no `## Unreleased` section behind.
+  One gap is open: `verify_semver.py` looks for a `**BREAKING**`
+  acknowledgement only under `## Unreleased`, and it compares against the
+  last crates.io release, so on a release commit whose changelog has been
+  renamed it finds no acknowledgement. A release that carries an acknowledged
+  break therefore cannot pass that gate on its release commit until the gate
+  also reads the section of the version being released.
 - ADR status in [verification.md](verification.md) matches reality. An ADR is
   **Verified** only when every gate in its required-verification list has a
   *recorded run*. Wiring a CI job is not evidence that it ran.

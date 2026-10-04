@@ -7,6 +7,49 @@ release procedure that produces an entry here is [docs/releasing.md](docs/releas
 API, the serialized Contract/Compilation/envelope shapes, the canonical bytes,
 and therefore the identities computed over them. Pin an exact version.
 
+## Unreleased
+
+### Source input
+
+- **A `.did` source may begin with one UTF-8 byte order mark** ([issue #176],
+  [PR #177]). Windows editors and PowerShell 5.1 write `EF BB BF` before UTF-8
+  text, and every entry point refused such a file with `did_parse_error`
+  "Unknown token … at bytes 0..3", quoting a character the reader cannot see.
+  The mark is not Candid syntax, so the compiler now skips exactly one leading
+  U+FEFF immediately before tokenizing, and nowhere else. Every entry point
+  shares that parse helper: `compile_did`, `compile_did_with_options`,
+  `compile_did_with_context`, `compile_with_resolver` (the entry source and
+  every imported one), `compile_did_file`, `compile_did_file_with_options`,
+  `compile_did_file_with_context`, the `candid-core` binary's `compile`,
+  `--envelope` included, and the `SourceInfo` rederivation behind
+  `SourceInfo::validate` and the `Compilation` loaders (`from_json_with_limits`,
+  `from_slice_with_limits`, `try_from_raw`, and their `_with_context` forms);
+  `@candid-core/cli`'s `didToContract` and `didToModule`, which embed this
+  source, inherit it. In this one place `candid-core` accepts a superset of
+  what upstream `candid_parser` accepts.
+
+  Everything that describes the raw source keeps the mark. A marked file and
+  its unmarked twin share `contract_id` and `interface_id`, and differ in
+  `source_bundle_id`, which hashes the raw bytes, mark included (it is a
+  raw-source bundle identity, ADR 0001). The `SourceInfo` source text keeps
+  the mark, resolver digests cover it, and the byte limits count it, so
+  `max_source_bytes` sees three more bytes than the twin. Parse diagnostics
+  still index the file as stored: their spans and "at bytes" text count the
+  mark. A second mark, a mark after any other byte, and U+FFFE stay unknown
+  tokens, and the UTF-16 marks stay invalid UTF-8.
+
+  Nothing `0.1.0-beta.3` accepts changes its output or any identity, because a
+  marked source failed there. The reverse does not hold: a Compilation document
+  whose `SourceInfo` carries a marked source, such as `candid-core compile`
+  output for a marked file, validates with this change and does not validate
+  under `0.1.0-beta.3`, whose rederivation fails on the mark. Error precedence
+  changes for marked input only: the `source_nesting` preflight now tokenizes
+  past the mark too, so an over-nested marked source reports
+  `resource_limit_exceeded` naming `source_nesting` where `0.1.0-beta.3`
+  reported `did_parse_error` on the mark. No public API, error code, or
+  serialized shape changed, so this entry acknowledges no break. ADR 0004
+  records the rule, and `tests/source_bom.rs` pins each case above.
+
 ## 0.1.0-beta.3 — published 2026-08-24
 
 The third prerelease, and the first that carries a fix for a defect in an
@@ -375,3 +418,5 @@ have seen them:
 [issue #148]: https://github.com/b3hr4d/candid-core/issues/148
 [issue #152]: https://github.com/b3hr4d/candid-core/issues/152
 [issue #153]: https://github.com/b3hr4d/candid-core/issues/153
+[issue #176]: https://github.com/b3hr4d/candid-core/issues/176
+[PR #177]: https://github.com/b3hr4d/candid-core/pull/177
