@@ -2617,3 +2617,146 @@ test("issue paths stay exact after composite siblings, in every walker", () => {
     assert.strictEqual(validated.issues[0].path, "$[1].n");
   }
 });
+
+// ---------------------------------------------------------------------------
+// Absorbed mismatches restore the path (issue #209)
+// ---------------------------------------------------------------------------
+
+test("an absorbed mismatch leaves no stale path segments for a later issue", () => {
+  // An expected opt that absorbs a mismatch thrown inside its constituent
+  // rewinds the cursor and skips; it must also cut the path back to its own,
+  // or every segment the abandoned descent pushed is still there and the next
+  // issue anywhere later in the message is reported under them.
+  const wireOf = (schema: AnySchema, value: unknown): Uint8Array =>
+    bytesOf(encode(schema as Schema<unknown>, value), "the wire value");
+
+  // The issue's reproduction, pinned whole: `a` is absorbed to null, `b` is
+  // the hard type_mismatch, at `$.b` (it was `$.a.b`).
+  assert.deepStrictEqual(
+    decode(
+      c.record({ a: c.opt(c.record({ x: c.nat })), b: c.nat }),
+      wireOf(c.record({ a: c.record({ x: c.int }), b: c.text }), { a: { x: 5n }, b: "hi" }),
+    ),
+    {
+      ok: false,
+      issues: [{ code: "type_mismatch", path: "$.b", message: "wire type -15 at expected nat" }],
+    },
+  );
+
+  // Each row: the absorbed value, then a later issue, at the path it would
+  // have had if the absorbed field had decoded. (The paths before the fix
+  // are in the comments.)
+  const rows: readonly [string, AnySchema, unknown, AnySchema, string][] = [
+    [
+      // Was `$.a.p.q.b`: the mismatch sits three records below the opt.
+      "three records deep, then a failing sibling field",
+      c.record({ a: c.record({ p: c.record({ q: c.record({ x: c.int }) }) }), b: c.text }),
+      { a: { p: { q: { x: 5n } } }, b: "hi" },
+      c.record({ a: c.opt(c.record({ p: c.record({ q: c.record({ x: c.nat }) }) })), b: c.nat }),
+      "$.b",
+    ],
+    [
+      // Was `$[0][1].value`: the stale segments outlive the vec element.
+      "inside one vec element, then a failing later element",
+      c.vec(c.variant({ x: c.record({ a: c.record({ x: c.int }) }), y: c.text })),
+      [
+        { tag: "x", value: { a: { x: 1n } } },
+        { tag: "y", value: "s" },
+      ],
+      c.vec(c.variant({ x: c.record({ a: c.opt(c.record({ x: c.nat })) }), y: c.nat })),
+      "$[1].value",
+    ],
+  ];
+  for (const [name, wire, value, expected, path] of rows) {
+    const decoded = decode(expected as Schema<unknown>, wireOf(wire, value));
+    assert(!decoded.ok, name);
+    if (!decoded.ok) {
+      assert.deepStrictEqual(
+        decoded.issues.map((issue) => [issue.code, issue.path]),
+        [["type_mismatch", path]],
+        name,
+      );
+    }
+  }
+
+  // Across arguments: was `$args[0]["args[1]"]`.
+  const args = encodeArgs([c.record({ x: c.int }), c.text], [{ x: 1n }, "s"]);
+  assert(args.ok);
+  if (args.ok) {
+    const decoded = decodeArgs([c.opt(c.record({ x: c.nat })), c.nat], args.bytes);
+    assert(!decoded.ok);
+    if (!decoded.ok) {
+      assert.strictEqual(decoded.issues[0].path, "$args[1]");
+    }
+  }
+
+  // A later resource refusal is a later issue too: was `$.a.b[10]`.
+  const budget = decode(
+    c.record({ a: c.opt(c.record({ x: c.nat })), b: c.vec(c.bool) }),
+    wireOf(c.record({ a: c.record({ x: c.int }), b: c.vec(c.bool) }), {
+      a: { x: 5n },
+      b: new Array<boolean>(50).fill(true),
+    }),
+    { maxElements: 20 },
+  );
+  assert(!budget.ok);
+  if (!budget.ok) {
+    assert.strictEqual(budget.issues[0].resource_limit?.resource, "value_elements");
+    assert.strictEqual(budget.issues[0].path, "$.b[10]");
+  }
+});
+
+test("a failing byte while skipping an absorbed constituent is reported at the opt", () => {
+  // Wire `record { r : record { a : int; b : opt text } }` with the opt tag
+  // of `b` set to 2. The expected `r : opt record { a : nat; … }` mismatches
+  // at `a` before `b` is read, absorbs, rewinds, and skips the constituent:
+  // the skip meets the bad tag, a hard error, at the absorbing opt's path —
+  // `$.r`, never the abandoned descent's `$.r.a`.
+  const encoded = encode(c.record({ r: c.record({ a: c.int, b: c.opt(c.text) }) }), {
+    r: { a: 5n, b: "hi" },
+  });
+  assert(encoded.ok);
+  if (encoded.ok) {
+    const bytes = Uint8Array.from(encoded.bytes);
+    // The value section ends `05` (a), `01` (b's tag), `02 68 69` ("hi").
+    assert.deepStrictEqual(Array.from(bytes.subarray(-5)), [0x05, 0x01, 0x02, 0x68, 0x69]);
+    bytes[bytes.length - 4] = 0x02;
+    assert.deepStrictEqual(
+      decode(c.record({ r: c.opt(c.record({ a: c.nat, b: c.opt(c.text) })) }), bytes),
+      {
+        ok: false,
+        issues: [
+          { code: "invalid_tag_byte", path: "$.r", message: "an opt value starts with 0 or 1" },
+        ],
+      },
+    );
+    // With a well-formed tag the same message decodes, `r` absorbed to null.
+    assert.deepStrictEqual(
+      decode(c.record({ r: c.opt(c.record({ a: c.nat, b: c.opt(c.text) })) }), encoded.bytes),
+      { ok: true, value: { r: null } },
+    );
+  }
+  // The skip's very first steps, before it opens a frame of its own: wire
+  // `record { r : variant { a : int } }` whose value ends after the variant
+  // index. The descent pushes `value` and mismatches (int at nat) before any
+  // int byte is read; the skip re-reads the index and runs out of input in
+  // the payload — truncated at `$.r`, not `$.r.value`. So the path is cut
+  // before the skip starts, not after it.
+  assert.deepStrictEqual(
+    decode(
+      c.record({ r: c.opt(c.variant({ a: c.nat })) }),
+      message(
+        [
+          [0x6c, 0x01, 0x72, 0x01],
+          [0x6b, 0x01, 0x61, 0x7c],
+        ],
+        [[0x00]],
+        [0x00],
+      ),
+    ),
+    {
+      ok: false,
+      issues: [{ code: "truncated", path: "$.r", message: "unexpected end of input" }],
+    },
+  );
+});

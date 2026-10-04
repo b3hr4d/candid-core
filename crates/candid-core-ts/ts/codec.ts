@@ -2243,7 +2243,9 @@ type ServiceWire = Extract<WireEntry, { readonly kind: "service" }>;
  * An expected `opt` decoding its constituent — the absorption frame. `start`
  * has not begun the constituent; `decoding` is waiting for it, and is the
  * phase a `CoercionMismatch` unwinds to; `absorbed` is set by that unwinding
- * (rewind and skip next); `skipping` waits for the skip.
+ * (rewind and skip next); `skipping` waits for the skip. `rewind` and
+ * `pathLength` are the cursor and the path depth at the opt itself, both
+ * restored when a mismatch is absorbed.
  */
 interface OptFrame {
   readonly kind: "opt";
@@ -2252,6 +2254,7 @@ interface OptFrame {
   readonly depth: number;
   readonly skipDepth: number;
   readonly rewind: number;
+  readonly pathLength: number;
   phase: "start" | "decoding" | "absorbed" | "skipping";
 }
 
@@ -2780,8 +2783,8 @@ class Decoder {
    * unwinds the stack to that frame — the nearest one, as the recursive
    * walk's `try`/`catch` did — which then rewinds and skips (see
    * `resumeOpt`). With no such frame the mismatch propagates: at top level it
-   * is the spec's hard error. Nothing unwound pops a path segment, exactly as
-   * the recursive walk's unwinding did not.
+   * is the spec's hard error. Nothing unwound pops a path segment; the
+   * absorbing frame truncates the path back to its own (issue #209).
    */
   private run(path: PathSegment[]): unknown {
     const stack = this.stack;
@@ -3003,6 +3006,7 @@ class Decoder {
       depth: inner.depth,
       skipDepth: depth + 1,
       rewind: this.offset,
+      pathLength: path.length,
       phase: "start",
     });
     return PENDING;
@@ -3036,6 +3040,11 @@ class Decoder {
         // by the absorption depth — charges are for work performed, and the
         // rewound walk performed it.
         this.offset = frame.rewind;
+        // The abandoned descent's path segments go too (issue #209): the
+        // unwinding popped none of them, so without this the skip below and
+        // every later issue would be reported under the absorbed value's
+        // stale segments. The skip reports at the opt's own path.
+        path.length = frame.pathLength;
         frame.phase = "skipping";
         if (!this.enterSkip(frame.wire, path, frame.skipDepth)) {
           return;
