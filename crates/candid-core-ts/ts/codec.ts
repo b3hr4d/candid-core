@@ -379,8 +379,37 @@ function describe(value: unknown): string {
   return typeof value;
 }
 
+// The module's own control-flow exceptions, `Halt` and `CoercionMismatch`,
+// are recognised by identity, never by `instanceof` (issue #199). The catch
+// sites that ask "is this ours?" see whatever user code threw — a getter, a
+// Proxy trap, a rec thunk — and `instanceof` reads the thrown value's
+// prototype, which for a Proxy is a user-controlled `getPrototypeOf` trap: a
+// trap that throws raised its exception from inside the catch block and
+// escaped the no-throw guarantee. A `WeakSet` lookup is keyed by the object
+// itself and runs no user code, so a thrown value that is not one of ours —
+// hostile or not — is simply "not ours" and reaches the catch-all. Each
+// constructor registers its own instance; neither class is exported, so
+// nothing else is ever registered.
+const halts = new WeakSet<object>();
+const mismatches = new WeakSet<object>();
+
 /** A checked halt: issues past this point must not be recorded. */
-class Halt extends Error {}
+class Halt extends Error {
+  constructor() {
+    super();
+    halts.add(this);
+  }
+}
+
+/** True only for a `Halt` this module threw; reads nothing from `error`. */
+function isHalt(error: unknown): boolean {
+  return typeof error === "object" && error !== null && halts.has(error);
+}
+
+/** True only for a `CoercionMismatch` this module threw; reads nothing from `error`. */
+function isCoercionMismatch(error: unknown): error is CoercionMismatch {
+  return typeof error === "object" && error !== null && mismatches.has(error);
+}
 
 /**
  * True when `error` is an engine reporting that its own call stack ran out:
@@ -712,7 +741,7 @@ function encodeWith(
       // catch-all so it is never labelled a value problem. The walks are
       // iterative (issue #192); what overflows is user code they called.
       encoder.stackExhausted(path);
-    } else if (!(error instanceof Halt)) {
+    } else if (!isHalt(error)) {
       // The fail-closed choke point: a hostile value that throws while being
       // read becomes an issue, never an escaping exception.
       encoder.issues.push({
@@ -2141,7 +2170,14 @@ function decodeWith(
     }
     return { ok: true, values };
   } catch (error) {
-    if (error instanceof CoercionMismatch) {
+    if (isStackExhaustion(error)) {
+      // A property of the host, not of the schema: checked before the
+      // catch-all so it is never labelled a schema problem. The walks are
+      // iterative (issue #192); what overflows is user code they called.
+      // (A `CoercionMismatch` is a plain `Error`, never stack-shaped, so
+      // asking this first moves no verdict.)
+      decoder.stackExhausted(path);
+    } else if (isCoercionMismatch(error)) {
       // A type-level mismatch with no enclosing expected `opt` to absorb it
       // is the spec's hard error.
       decoder.issues.push({
@@ -2149,12 +2185,7 @@ function decodeWith(
         path: error.path,
         message: error.detail,
       });
-    } else if (isStackExhaustion(error)) {
-      // A property of the host, not of the schema: checked before the
-      // catch-all so it is never labelled a schema problem. The walks are
-      // iterative (issue #192); what overflows is user code they called.
-      decoder.stackExhausted(path);
-    } else if (!(error instanceof Halt)) {
+    } else if (!isHalt(error)) {
       // The schema-side choke point: a rec thunk (or other schema surface)
       // that throws becomes an issue, never an escaping exception.
       decoder.issues.push({
@@ -2178,6 +2209,7 @@ class CoercionMismatch extends Error {
     this.code = code;
     this.path = path;
     this.detail = detail;
+    mismatches.add(this);
   }
 }
 
@@ -2760,7 +2792,7 @@ class Decoder {
         }
         return this.result;
       } catch (error) {
-        if (!(error instanceof CoercionMismatch)) {
+        if (!isCoercionMismatch(error)) {
           throw error;
         }
         let at = stack.length - 1;
