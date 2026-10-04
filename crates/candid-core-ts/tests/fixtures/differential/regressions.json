@@ -161,6 +161,16 @@
       "did": "type F = func () -> ();\n",
       "expected": [],
       "hex": "4449444c016a000000010001010001ff"
+    },
+    {
+      "name": "future_type_reference_count",
+      "target": "decode",
+      "note": "A value of a future type (opcode -2462, no data bytes) that declares one reference, read at reserved. The reference skips it; the runtime refuses invalid_principal: reference sequences are unsupported by this codec, as documented (intended).",
+      "did": "type R = reserved;\n",
+      "expected": [
+        "R"
+      ],
+      "hex": "4449444c01e26c0001000001"
     }
   ]
 }

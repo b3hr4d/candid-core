@@ -32,6 +32,10 @@
       "class": "c",
       "reason": "The runtime refuses a non-minimal LEB128/SLEB128 group (overlong_leb128, or invalid_length when a u32 field's group is longer than five bytes although its value fits); the candid crate accepts it. Settled on #103 (decision 4): the spec's strict-inverse reading."
     },
+    "decode:intended:reference-sequences-unsupported": {
+      "class": "c",
+      "reason": "The runtime refuses a value that carries references — a future type's value with a non-zero reference count, an opaque func or service reference — with invalid_principal: reference sequences are outside this codec, documented in crates/candid-core-ts/README.md (\"opaque reference values … and external reference sequences are refused\"). The candid crate skips a future type's reference count."
+    },
     "decode:reference:empty-normalization": {
       "class": "b",
       "reason": "The candid crate rewrites an uninhabited recursive record (a record that reaches itself through record fields only) to empty in the wire type table, and never in the expected types (TypeEnv::replace_empty, called from binary_parser::Header::to_types). Inside a func or service signature that makes its reference subtype check accept a type that is not a subtype (empty <: E) and refuse identical types (E <: empty); under an opt the refusal is absorbed to null. The runtime compares the types as written, as the spec's subtyping does. Attributed only where the reference flags such a record in the wire table (wire_empty_record).",
@@ -111,6 +115,7 @@
     "r/contract_rootless_arena": "contract:ts-accepts:rootless_type_arena",
     "r/contract_unknown_key": "contract:ts-accepts:json_unknown_field",
     "r/empty_method_name": "decode:intended:empty-method-name",
+    "r/future_type_reference_count": "decode:intended:reference-sequences-unsupported",
     "r/leb128_overlong_nat_value": "decode:intended:leb128-minimality",
     "r/leb128_overlong_type_count": "decode:intended:leb128-minimality",
     "r/leb128_wide_field_id": "decode:intended:leb128-minimality",

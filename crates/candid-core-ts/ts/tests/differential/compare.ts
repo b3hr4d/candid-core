@@ -325,10 +325,19 @@ function runDecode(kase: DecodeLine, env: Loaded): Outcome {
  *   and `encode`, which refuse it too (as does candid-core's HostValue
  *   validator); the reference accepts it. The reference flags these inputs
  *   (`flags: ["empty_method"]`).
+ * - `reference-sequences-unsupported`: a value carrying references (a future
+ *   type's value with a non-zero reference count; an opaque func or service
+ *   reference) is refused here (`invalid_principal`), a documented limit of
+ *   this codec (README: "opaque reference values … and external reference
+ *   sequences are refused"); the reference skips the count. A principal
+ *   longer than 29 bytes, the code's other source, the reference refuses too.
  */
 function intendedWire(code: string, ref: Reference): string | null {
   if (code === "overlong_leb128") {
     return "decode:intended:leb128-minimality";
+  }
+  if (code === "invalid_principal") {
+    return "decode:intended:reference-sequences-unsupported";
   }
   if (code === "invalid_length") {
     return ref.flags?.includes("empty_method") === true
