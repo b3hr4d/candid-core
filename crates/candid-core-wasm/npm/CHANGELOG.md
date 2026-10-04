@@ -14,6 +14,35 @@ fixtures.
 grammar, the library API, and the request/response shapes. Pin an exact
 version.
 
+## Unreleased
+
+### A long run of comments is refused with a resource diagnostic
+
+The embedded compiler now refuses a `.did` file with more than 256 consecutive
+comments between two tokens. The upstream Candid tokenizer it embeds spends one
+stack frame on each comment it skips, so the compiler counts the run first,
+without recursing, and refuses an over-long one before that tokenizer runs.
+Before, a long enough run exhausted the WebAssembly stack: measured on a local
+build (rustc 1.87.0, Node 24.2, macOS arm64), `gen` compiled a file with 2 609
+consecutive `//` lines and failed at 2 610 with `internal_error` "Maximum call
+stack size exceeded"; the threshold moves with the toolchain and the engine.
+
+- **This refuses files that `gen` accepted before**: any `.did` in the bundle
+  with a run of 257 to about 2 600 comments, such as a license header written
+  as `//` lines. `gen`, `didToContract` and `didToModule` report
+  `resource_limit_exceeded` with resource `source_nesting`, limit 256 and
+  `observed` 257, through the existing diagnostic path (the
+  `{ ok: false, diagnostics }` document, or `--json`) with exit status 1. A
+  longer run, which failed with `internal_error` before, gets the same
+  diagnostic. The CLI compiles at the compiler's default limits and has no
+  flag to raise this one: write such a header as a single `/* */` block, which
+  counts as one comment, or shorten it. Line and block comments count alike;
+  blank lines between comments do not end a run, any token does, a nested
+  block comment counts once, and comment markers inside a string are not
+  comments.
+- **Nothing else moves.** A file within the limit generates the same module and
+  the same envelope, with the same identities and documentation, as before.
+
 ## 0.2.0-beta.1 — 2026-10-02
 
 Embeds `candid-core` 0.1.0-beta.3 and the `candid-core-ts` generator from the

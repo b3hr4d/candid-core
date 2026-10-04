@@ -1711,7 +1711,7 @@ fn hostile_doc_text_stays_inside_its_comment() {
     );
 }
 
-/// A 400 KB doc line and a 300-line doc block are emitted whole, with one terminator, and identically on every run.
+/// A 400 KB doc line and a 256-line doc block are emitted whole, with one terminator, and identically on every run.
 #[test]
 fn very_long_and_very_many_doc_lines_are_emitted_whole() {
     let long = "x".repeat(200_000);
@@ -1733,19 +1733,20 @@ fn very_long_and_very_many_doc_lines_are_emitted_whole() {
     );
     assert_eq!(output, generate_source(&source));
 
-    // Many lines: 300, because upstream's `candid_parser` reads a run of doc
-    // lines recursively and a debug-build test thread's stack gives out
-    // somewhere past 500 consecutive `//` lines, in the compiler before the
-    // generator is reached. That limit is not this slice's to lift.
+    // Many lines: 256, the most the compiler accepts under default limits.
+    // Upstream's `candid_parser` skips each comment of a run by recursing,
+    // so `Limits::max_source_nesting` bounds a run of consecutive comments
+    // (issue #219), and a longer doc block is refused in the compiler before
+    // the generator is reached. That limit is not this generator's to lift.
     let mut many = String::new();
-    for index in 0..300 {
+    for index in 0..256 {
         many.push_str(&format!("// line {index} */\n"));
     }
     many.push_str("type T = nat;\n");
     let output = generate_source(&many);
     assert_eq!(output.matches("/**").count(), 2);
     assert!(output.contains(" * line 0 *\\/\n"));
-    assert!(output.contains(" * line 299 *\\/\n"));
+    assert!(output.contains(" * line 255 *\\/\n"));
 }
 
 /// CRLF sources document the same as LF ones: the parser keeps a `\r` at the

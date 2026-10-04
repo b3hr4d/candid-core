@@ -1,19 +1,50 @@
 use super::*;
 
 /// Reject stack-hostile syntax before any recursive upstream parser or checker
-/// sees it. The token stream skips strings and comments, so their contents do
-/// not affect the operational nesting budget.
+/// sees it, counting two things against `max_source_nesting`.
+///
+/// **Comment runs**, first, by [`comment_run_preflight`]: the number of
+/// consecutive comments between two real tokens. Comments are not free. The
+/// pinned upstream `candid_parser::token::Tokenizer::next` skips a line or
+/// block comment by calling itself, so a run of comments costs it one stack
+/// frame each, and both the token loop below and the parser's own tokenizer
+/// run that recursion (issue #219). The scan is a byte loop rather than a
+/// `Tokenizer` pass for exactly that reason: the guard must not be built on
+/// the thing it guards.
+///
+/// **Structural nesting**, second, over the token stream: open delimiters
+/// plus a run of `opt`/`vec` constructors. Comment and string *contents*
+/// never count here; what a comment costs is the comment-run bound above.
 pub(super) fn check_source_nesting(
     source: &str,
     budget: &mut crate::budget::Budget<'_>,
 ) -> Result<(), CompileError> {
     let limits = budget.limits().clone();
+    // Scan and tokenize exactly the text the parser will see. A leading BOM
+    // left in would fail the first token, and the lexical-error early return
+    // below would then skip this preflight for the whole source.
+    let text = candid_text(source).0;
+    // Before the first `Tokenizer` use, and over the whole text: the
+    // tokenizer recurses through a comment run before it can report any
+    // lexical error that follows it. So this refusal takes precedence over a
+    // lexical diagnostic anywhere in the source, deliberately including one
+    // *before* the run, where the parser would have stopped first: telling
+    // the two apart would mean trusting a tokenizer pass over the prefix,
+    // and the scan is what decides where that prefix ends.
+    if let Err(observed) = comment_run_preflight(text.as_bytes(), limits.max_source_nesting) {
+        return Err(CompileError::resource_limit(
+            "source_nesting",
+            limits.max_source_nesting,
+            observed,
+            format!(
+                "Candid source has a run of {observed} consecutive comments, over the source nesting limit {}; a /* */ block counts as one comment",
+                limits.max_source_nesting
+            ),
+        ));
+    }
     let mut delimiters = 0usize;
     let mut unary = 0usize;
-    // Tokenize exactly the text the parser will see. A leading BOM left in
-    // would fail the first token, and the lexical-error early return below
-    // would then skip this preflight for the whole source.
-    for token in Tokenizer::new(candid_text(source).0) {
+    for token in Tokenizer::new(text) {
         budget
             .checkpoint()
             .map_err(|error| budget_error(error, DiagnosticPhase::Parse, "source preflight"))?;
@@ -48,6 +79,97 @@ pub(super) fn check_source_nesting(
         }
     }
     Ok(())
+}
+
+/// Count consecutive comments between two real tokens, without recursion and
+/// without the upstream tokenizer.
+///
+/// Returns `Ok(longest)`, the longest run in `text`, when no run exceeds
+/// `limit`, and `Err(limit + 1)` at the first comment that does: like the
+/// structural count, the refusal reports the count at which the limit was
+/// crossed, and the scan stops there.
+///
+/// It reads the bytes with the lexical facts the pinned upstream `Token`
+/// encodes, and no others:
+///
+/// - `//` opens a line comment that ends at the next `\n` (one comment);
+/// - `/*` opens a block comment that nests and ends at its matching `*/`
+///   (one comment however deeply it nests; an unclosed one still counts,
+///   since upstream reports it from the frame that opened it);
+/// - `"` opens a string that ends at the next `"` not consumed by a `\`
+///   escape, and nothing inside it is a comment;
+/// - space, tab, `\r` and `\n` are skipped and leave the run as it is, so
+///   blank lines between comments do not end a run;
+/// - every other byte starts a token or a lexical error, and either one makes
+///   upstream return instead of recursing, so it ends the run.
+///
+/// Where a malformed source makes these rules and upstream disagree, the
+/// disagreement starts at a lexical error, and both the parser and the token
+/// loop stop at the first lexical error, so nothing after it is ever
+/// tokenized. Linear in `text.len()`, constant stack, no allocation; it takes
+/// no budget checkpoint of its own, being one pass over a source that
+/// `max_source_bytes` has already bounded.
+pub(super) fn comment_run_preflight(text: &[u8], limit: usize) -> Result<usize, usize> {
+    let mut index = 0;
+    let mut run = 0usize;
+    let mut longest = 0usize;
+    while let Some(&byte) = text.get(index) {
+        match (byte, text.get(index + 1)) {
+            (b' ' | b'\t' | b'\r' | b'\n', _) => index += 1,
+            (b'/', Some(b'/' | b'*')) => {
+                run += 1;
+                if run > limit {
+                    return Err(run);
+                }
+                longest = longest.max(run);
+                let block = text[index + 1] == b'*';
+                index += 2;
+                if block {
+                    let mut depth = 1usize;
+                    while let Some(&byte) = text.get(index) {
+                        match (byte, text.get(index + 1)) {
+                            (b'/', Some(b'*')) => {
+                                depth += 1;
+                                index += 2;
+                            }
+                            (b'*', Some(b'/')) => {
+                                depth -= 1;
+                                index += 2;
+                                if depth == 0 {
+                                    break;
+                                }
+                            }
+                            _ => index += 1,
+                        }
+                    }
+                } else {
+                    index = text[index..]
+                        .iter()
+                        .position(|&byte| byte == b'\n')
+                        .map_or(text.len(), |offset| index + offset);
+                }
+            }
+            (b'"', _) => {
+                run = 0;
+                index += 1;
+                while let Some(&byte) = text.get(index) {
+                    match byte {
+                        b'\\' => index += 2,
+                        b'"' => {
+                            index += 1;
+                            break;
+                        }
+                        _ => index += 1,
+                    }
+                }
+            }
+            _ => {
+                run = 0;
+                index += 1;
+            }
+        }
+    }
+    Ok(longest)
 }
 
 /// Charge one traversal step of the `max_type_depth` guard walks against the
@@ -388,6 +510,159 @@ mod preflight_tests {
         source.push_str(&format!("type T{} = nat;\n", levels + 1));
         source.push_str("service : { go: (T1) -> () };");
         source
+    }
+
+    fn longest_comment_run(text: &str) -> usize {
+        comment_run_preflight(text.as_bytes(), usize::MAX).unwrap()
+    }
+
+    /// Issue #219's counting rules: comments between two real tokens, line
+    /// and block alike.
+    #[test]
+    fn comment_runs_count_line_and_block_comments_between_real_tokens() {
+        assert_eq!(longest_comment_run(""), 0);
+        assert_eq!(longest_comment_run("type T = nat;"), 0);
+        assert_eq!(longest_comment_run("//\n//\n//\n"), 3);
+        assert_eq!(longest_comment_run("// a\n// b\ntype T = nat;"), 2);
+        // Trailing comments recurse upstream as much as leading ones.
+        assert_eq!(longest_comment_run("type T = nat;\n// a\n// b\n// c"), 3);
+        // Alternating line and block comments count both.
+        assert_eq!(longest_comment_run("// a\n/* b */\n// c\n/* d */ x"), 4);
+        assert_eq!(longest_comment_run("/* a *//* b *//* c */"), 3);
+        // A real token resets the run; the longest run wins.
+        assert_eq!(longest_comment_run("// a\n// b\nx\n// c\ny"), 2);
+        assert_eq!(longest_comment_run("// a\nx // b\n// c\n// d\n"), 3);
+        // Any byte that is not trivia starts a token or a lexical error, and
+        // upstream returns on either, so it resets too.
+        assert_eq!(longest_comment_run("// a\n@\n// b"), 1);
+        assert_eq!(longest_comment_run("// a\n/ // b"), 1);
+    }
+
+    #[test]
+    fn comment_runs_ignore_whitespace_nesting_and_string_contents() {
+        // Blank lines and spaces neither count nor end a run.
+        assert_eq!(longest_comment_run(&"\n".repeat(10_000)), 0);
+        assert_eq!(longest_comment_run("// a\n\n\n   \t\r\n// b\n"), 2);
+        // A line comment ends only at `\n`, as upstream's `//[^\n]*` does: a
+        // bare `\r` (old Mac line endings) is part of the comment, so this
+        // is one comment, while CRLF endings end each line comment.
+        assert_eq!(longest_comment_run("// a\r// b\r// c"), 1);
+        assert_eq!(longest_comment_run("// a\r\n// b\r\n"), 2);
+        assert_eq!(longest_comment_run("// a\r\n// b\r\n// c\r\n"), 3);
+        // `\r` and `\t` between block comments are whitespace.
+        assert_eq!(longest_comment_run("/**/\r/**/\t/**/"), 3);
+        // Non-ASCII bytes inside a comment or a string are its contents;
+        // outside both they begin a token (or a lexical error) and reset.
+        assert_eq!(longest_comment_run("// \u{e9}\n/* \u{1f600} */ // b"), 3);
+        assert_eq!(longest_comment_run("\"\u{e9} // a\" x"), 0);
+        assert_eq!(longest_comment_run("// a\n\u{e9}\n// b"), 1);
+        // A nested block comment is one comment, however deep.
+        assert_eq!(longest_comment_run("/* /* /* */ */ */"), 1);
+        let deep = format!("{}{}", "/*".repeat(10_000), "*/".repeat(10_000));
+        assert_eq!(longest_comment_run(&deep), 1);
+        // Comment markers inside a block comment are its contents.
+        assert_eq!(longest_comment_run("/* // */ x"), 1);
+        assert_eq!(longest_comment_run("/* \" */ // b\n"), 2);
+        // Block markers inside a line comment are its contents.
+        assert_eq!(longest_comment_run("// /* \n x"), 1);
+        // Comment markers inside a string count as nothing, and the string
+        // is a real token.
+        assert_eq!(longest_comment_run(r#""// /* */""#), 0);
+        assert_eq!(longest_comment_run("// a\n\"//\"\n// b"), 1);
+        // An escaped quote does not end the string; an escaped backslash
+        // does not escape the quote after it.
+        assert_eq!(longest_comment_run(r#""\" // a" x"#), 0);
+        assert_eq!(longest_comment_run(r#""\\" // a"#), 1);
+    }
+
+    /// The edges where the upstream comment lexer's one-character error
+    /// skipping decides the nesting: `//*` inside a block opens a level,
+    /// `**/` closes one, and an unclosed block comment still counts.
+    #[test]
+    fn comment_runs_follow_the_upstream_block_comment_lexer() {
+        assert_eq!(longest_comment_run("/* //* */ */ // a"), 2);
+        assert_eq!(longest_comment_run("/* **/ // a"), 2);
+        assert_eq!(longest_comment_run("/*/ x */ // a"), 2);
+        assert_eq!(longest_comment_run("/**/ /***/ // a"), 3);
+        assert_eq!(longest_comment_run("// a\n/* never closed // b"), 2);
+        assert_eq!(longest_comment_run("x \"never closed // a"), 0);
+    }
+
+    #[test]
+    fn comment_run_refusal_reports_the_crossing_count() {
+        let run = "//\n".repeat(10);
+        assert_eq!(comment_run_preflight(run.as_bytes(), 10), Ok(10));
+        assert_eq!(comment_run_preflight(run.as_bytes(), 9), Err(10));
+        assert_eq!(comment_run_preflight(run.as_bytes(), 3), Err(4));
+        // Zero is a defined policy: any comment at all exceeds it.
+        assert_eq!(comment_run_preflight(b"type T = nat;", 0), Ok(0));
+        assert_eq!(comment_run_preflight(b"// a", 0), Err(1));
+    }
+
+    /// The scan against the pinned upstream lexer itself, over every source
+    /// of up to seven bytes drawn from the lexically significant alphabet
+    /// that upstream tokenizes without error: the longest run the scan
+    /// reports equals the most comments upstream skips between two of the
+    /// tokens it returns. The alphabet holds `\r` and `\t` as well as `\n`
+    /// and space, so a scan that ended a line comment at a bare `\r`, or
+    /// treated either as anything but whitespace, disagrees here.
+    #[test]
+    fn comment_runs_agree_with_the_upstream_tokenizer() {
+        const ALPHABET: &[u8] = b"/*\"\\\n\r\t a";
+        fn gap_comments(gap: &str) -> usize {
+            let (mut rest, mut longest) = (gap, 0);
+            loop {
+                rest = rest.trim_start_matches([' ', '\t', '\r', '\n']);
+                if rest.is_empty() {
+                    return longest;
+                }
+                longest += 1;
+                if let Some(line) = rest.strip_prefix("//") {
+                    rest = line.find('\n').map_or("", |end| &line[end..]);
+                } else {
+                    let mut body = rest.strip_prefix("/*").expect("a gap holds only comments");
+                    let mut depth = 1;
+                    while depth > 0 {
+                        let open = body.find("/*");
+                        let close = body.find("*/").expect("a valid gap closes its comments");
+                        if open.is_some_and(|open| open < close) {
+                            depth += 1;
+                            body = &body[open.unwrap() + 2..];
+                        } else {
+                            depth -= 1;
+                            body = &body[close + 2..];
+                        }
+                    }
+                    rest = body;
+                }
+            }
+        }
+        let mut compared = 0usize;
+        let mut text = Vec::new();
+        for length in 0..=7u32 {
+            for mut code in 0..ALPHABET.len().pow(length) {
+                text.clear();
+                for _ in 0..length {
+                    text.push(ALPHABET[code % ALPHABET.len()]);
+                    code /= ALPHABET.len();
+                }
+                let source = std::str::from_utf8(&text).unwrap();
+                let Ok(tokens) = Tokenizer::new(source).collect::<Result<Vec<_>, _>>() else {
+                    continue;
+                };
+                let mut expected = 0;
+                let mut gap_start = 0;
+                for (start, _, end) in &tokens {
+                    expected = expected.max(gap_comments(&source[gap_start..*start]));
+                    gap_start = *end;
+                }
+                expected = expected.max(gap_comments(&source[gap_start..]));
+                assert_eq!(longest_comment_run(source), expected, "{source:?}");
+                compared += 1;
+            }
+        }
+        // The corpus is not vacuous: this many sources lex cleanly.
+        assert_eq!(compared, 392_192);
     }
 
     #[test]

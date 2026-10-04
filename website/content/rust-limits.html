@@ -402,8 +402,9 @@ cargo run --example bounded_parsing
   <li>
     <strong>Running on a small stack?</strong>
     <code>max_source_nesting</code> and <code>max_value_nesting</code> bound lexical
-    nesting <em>before</em> a recursive decoder runs. Rejecting costs constant stack;
-    accepting still recurses. Note that raising <code>max_value_nesting</code> above
+    nesting <em>before</em> a recursive decoder runs, and <code>max_source_nesting</code>
+    also bounds a run of consecutive comments, which the upstream tokenizer skips one
+    stack frame at a time. Rejecting costs constant stack; accepting still recurses. Note that raising <code>max_value_nesting</code> above
     128 has no effect, because <code>serde_json</code> applies a fixed 128-frame
     recursion ceiling underneath that this crate deliberately does not disable.
   </li>

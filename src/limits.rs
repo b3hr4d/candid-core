@@ -224,6 +224,43 @@ limit_fields! {
     /// Maximum import edges across a resolved bundle.
     max_import_edges / with_max_import_edges = 1024;
     /// Maximum lexical nesting accepted before invoking the upstream parser.
+    ///
+    /// Two things count against it, each on its own, and a refusal of either
+    /// reports `source_nesting`:
+    ///
+    /// - **Structural nesting**: open delimiters plus a run of `opt`/`vec`
+    ///   constructors, which the upstream type checker and this crate's
+    ///   lowering descend through.
+    /// - **Comment runs**: the number of consecutive comments, line (`//`) or
+    ///   block (`/* */`), between two real tokens. Comments are not free.
+    ///   The pinned upstream tokenizer skips each comment by calling itself,
+    ///   so a run costs it one stack frame per comment, and it runs twice
+    ///   over every source (issue #219). Whitespace costs nothing and ends
+    ///   nothing, so blank lines between comments do not end a run; any real
+    ///   token does; a nested block comment counts once; comment markers
+    ///   inside a string literal are not comments. A long license header is
+    ///   one comment if it is written as a single `/* */` block.
+    ///
+    /// Both are checked by constant-stack scans before the upstream parser
+    /// runs, so rejecting costs no recursion, and no input can drive an abort
+    /// by exceeding this limit. Accepting a comment run still recurses, at a
+    /// measured cost per comment (macOS arm64, rustc 1.87.0, every compile
+    /// entry point alike):
+    ///
+    /// | Profile | Stack per comment | A run at the default 256 |
+    /// |---|---|---|
+    /// | debug | ~3.1 KB | ~800 KB |
+    /// | release | ~590 B | ~150 KB |
+    ///
+    /// so the default fits Rust's 2 MiB spawned-thread stack in a debug
+    /// build with room to spare. `tests/deep_nesting.rs` compiles a run at
+    /// the default on exactly that stack through every entry point, and pins
+    /// both figures to within a factor of two on every platform CI tests
+    /// (the release figure in a dedicated `--release` step). By the same
+    /// figures, raising this above about 330 stops being safe on a 1 MiB
+    /// debug stack, and above about 670 on a 2 MiB one (measured ceilings:
+    /// 334 and 672); a host on a smaller stack, such as a browser WASM
+    /// embedding, whose stack was not measured, should lower it.
     max_source_nesting / with_max_source_nesting = 256;
     /// Maximum semantic type nesting lowered from a checked Candid program.
     max_type_depth / with_max_type_depth = 256;
