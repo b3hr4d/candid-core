@@ -58,6 +58,8 @@ export interface EnvLine {
   readonly env: string;
   readonly did: string;
   readonly envelope: { readonly contract: unknown };
+  /** One canonical field written with two spellings (see `main.rs`). */
+  readonly label_collision?: boolean;
 }
 
 interface Reference {
@@ -384,14 +386,45 @@ const EMPTY_NORMALIZATION_SYMPTOMS = new Set([
 
 export function decodeCategory(ref: Reference, ours: Ours): string | null {
   const category = decodeSymptom(ref, ours);
+  if (category === null) {
+    return null;
+  }
   if (
-    category !== null &&
     EMPTY_NORMALIZATION_SYMPTOMS.has(category) &&
     ref.flags?.includes("wire_empty_record") === true
   ) {
     return "decode:reference:empty-normalization";
   }
+  // The reference reads a func or service value where the wire type is
+  // `empty` (its subtype relation has `empty <: t` and is all it checks for
+  // references); this runtime refuses, no value inhabiting `empty`.
+  if (
+    category === "decode:ts-rejects:type_mismatch" &&
+    ref.flags?.includes("wire_empty") === true
+  ) {
+    return "decode:reference:empty-wire-value";
+  }
   return category;
+}
+
+/**
+ * Symptoms of one canonical field written with two spellings (`d` in one
+ * declaration, `100` in another): the field-name table attaches names to
+ * canonical nodes, so this runtime keys both occurrences by the name while
+ * the reference, and the mapping, read each declaration's own labels.
+ */
+const LABEL_COLLISION_SYMPTOMS = new Set([
+  "decode:value-mismatch",
+  "validate:ts-rejects:missing_field",
+  "validate:ts-rejects:unexpected_field",
+]);
+
+function withEnv(category: string | null, envLine: EnvLine): string | null {
+  return category !== null &&
+    envLine.label_collision === true &&
+    (LABEL_COLLISION_SYMPTOMS.has(category) || category.startsWith("validate:ts-accepts:"))
+    ? "env:label-collision"
+    : category;
 }
 
 function decodeSymptom(ref: Reference, ours: Ours): string | null {
@@ -472,7 +505,15 @@ function verdictCategory(target: string, ref: Reference, ours: Ours): string | n
     }
     return `${target}:ts-rejects:${ours.code}`;
   }
-  return ours.verdict === "accept" ? `${target}:ts-accepts:${ref.class ?? "?"}` : null;
+  if (ours.verdict !== "accept") {
+    return null;
+  }
+  // The HostValue JSON decoder's budgets (64 levels of JSON nesting, …) are a
+  // policy of that ABI, not of the domain: this runtime's own `maxDepth`
+  // (256 schema steps) admits deeper values.
+  return ref.class === "host_value_limit"
+    ? `${target}:intended:limit-policy`
+    : `${target}:ts-accepts:${ref.class ?? "?"}`;
 }
 
 /** Replay one JSON edit, exactly as `contract::apply` does in Rust. */
@@ -580,17 +621,19 @@ export function runCorpus(corpus: Corpus): Outcome[] {
     if (env === undefined || envLine === undefined) {
       throw new Error(`${kase.id}: unknown environment ${kase.env}`);
     }
+    let outcome: Outcome;
     switch (kase.kind) {
       case "decode":
-        outcomes.push(runDecode(kase, env));
+        outcome = runDecode(kase, env);
         break;
       case "validate":
-        outcomes.push(runValidate(kase, env));
+        outcome = runValidate(kase, env);
         break;
       case "contract":
-        outcomes.push(runContract(kase, envLine));
+        outcome = runContract(kase, envLine);
         break;
     }
+    outcomes.push({ ...outcome, category: withEnv(outcome.category, envLine) });
   }
   return outcomes;
 }

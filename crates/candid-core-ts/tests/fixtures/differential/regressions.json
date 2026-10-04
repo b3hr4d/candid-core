@@ -193,6 +193,242 @@
           ]
         }
       ]
+    },
+    {
+      "name": "reference_reads_func_from_empty_wire",
+      "target": "decode",
+      "note": "One argument whose wire type is empty, followed by the bytes of a func reference, read at a func type. No value has type empty, yet the reference decodes aaaaa-aa.f: it reads a reference value through its subtype relation alone, where empty <: t holds. The runtime refuses type_mismatch. Reference bug.",
+      "did": "type F = func () -> ();\n",
+      "expected": [
+        "F"
+      ],
+      "hex": "4449444c00016f0101000166"
+    },
+    {
+      "name": "reference_unsound_subtype_memo",
+      "target": "decode",
+      "note": "func () -> (W3) read at func () -> (E3). W7 <: E7 is false (W5 has an arm x that V lacks), and the reference refuses W7 at E7 on its own; but checking W3 <: E3 visits c : opt W5 first, assumes (W5, V), proves (W7, E7) under that assumption, retracts (W5, V) when x fails (the opt rule then accepts c), and keeps (W7, E7) in its memo, so v : W7 <: E7 is answered true. The runtime refuses type_mismatch. Reference bug (unsound coinductive memo).",
+      "did": "type W5 = variant { a : W7; x : text };\ntype W7 = variant { c : W5 };\ntype W3 = variant { c : opt W5; v : W7 };\ntype FW = func () -> (W3);\ntype V = variant { a : E7 };\ntype E7 = variant { c : V };\ntype E3 = variant { c : opt V; v : E7 };\ntype FE = func () -> (E3);\n",
+      "expected": [
+        "FE"
+      ],
+      "hex": "4449444c056a000101006b02630276046e036b02610478716b0163030100010100016d"
+    },
+    {
+      "name": "label_collision_numbered_field",
+      "target": "decode",
+      "note": "record { x : record { 100 : text } } where another declaration writes the same canonical record as record { d : text } (the label hash of d is 100). The field-name table attaches names to canonical nodes, so the runtime keys B's field as d; the reference (and the source) say 100. Same bytes, same id, different domain key.",
+      "did": "type A = record { c : record { d : text } };\ntype B = record { x : record { 100 : text } };\n",
+      "expected": [
+        "B"
+      ],
+      "hex": "4449444c026c0178016c01647101000176"
+    },
+    {
+      "name": "validate_hostvalue_nesting_limit",
+      "target": "validate",
+      "note": "A vec nested 40 levels deep at type T = vec T. Its HostValue JSON nests 80 containers, past the HostValue decoder's max_value_nesting (64), so the reference refuses it as a limit; the runtime's maxDepth (256 schema steps) admits it. A policy difference of the HostValue ABI (intended).",
+      "did": "type T = vec T;\n",
+      "type": "T",
+      "value": [
+        "a",
+        [
+          [
+            "a",
+            [
+              [
+                "a",
+                [
+                  [
+                    "a",
+                    [
+                      [
+                        "a",
+                        [
+                          [
+                            "a",
+                            [
+                              [
+                                "a",
+                                [
+                                  [
+                                    "a",
+                                    [
+                                      [
+                                        "a",
+                                        [
+                                          [
+                                            "a",
+                                            [
+                                              [
+                                                "a",
+                                                [
+                                                  [
+                                                    "a",
+                                                    [
+                                                      [
+                                                        "a",
+                                                        [
+                                                          [
+                                                            "a",
+                                                            [
+                                                              [
+                                                                "a",
+                                                                [
+                                                                  [
+                                                                    "a",
+                                                                    [
+                                                                      [
+                                                                        "a",
+                                                                        [
+                                                                          [
+                                                                            "a",
+                                                                            [
+                                                                              [
+                                                                                "a",
+                                                                                [
+                                                                                  [
+                                                                                    "a",
+                                                                                    [
+                                                                                      [
+                                                                                        "a",
+                                                                                        [
+                                                                                          [
+                                                                                            "a",
+                                                                                            [
+                                                                                              [
+                                                                                                "a",
+                                                                                                [
+                                                                                                  [
+                                                                                                    "a",
+                                                                                                    [
+                                                                                                      [
+                                                                                                        "a",
+                                                                                                        [
+                                                                                                          [
+                                                                                                            "a",
+                                                                                                            [
+                                                                                                              [
+                                                                                                                "a",
+                                                                                                                [
+                                                                                                                  [
+                                                                                                                    "a",
+                                                                                                                    [
+                                                                                                                      [
+                                                                                                                        "a",
+                                                                                                                        [
+                                                                                                                          [
+                                                                                                                            "a",
+                                                                                                                            [
+                                                                                                                              [
+                                                                                                                                "a",
+                                                                                                                                [
+                                                                                                                                  [
+                                                                                                                                    "a",
+                                                                                                                                    [
+                                                                                                                                      [
+                                                                                                                                        "a",
+                                                                                                                                        [
+                                                                                                                                          [
+                                                                                                                                            "a",
+                                                                                                                                            [
+                                                                                                                                              [
+                                                                                                                                                "a",
+                                                                                                                                                [
+                                                                                                                                                  [
+                                                                                                                                                    "a",
+                                                                                                                                                    [
+                                                                                                                                                      [
+                                                                                                                                                        "a",
+                                                                                                                                                        [
+                                                                                                                                                          [
+                                                                                                                                                            "a",
+                                                                                                                                                            [
+                                                                                                                                                              [
+                                                                                                                                                                "a",
+                                                                                                                                                                [
+                                                                                                                                                                  [
+                                                                                                                                                                    "a",
+                                                                                                                                                                    []
+                                                                                                                                                                  ]
+                                                                                                                                                                ]
+                                                                                                                                                              ]
+                                                                                                                                                            ]
+                                                                                                                                                          ]
+                                                                                                                                                        ]
+                                                                                                                                                      ]
+                                                                                                                                                    ]
+                                                                                                                                                  ]
+                                                                                                                                                ]
+                                                                                                                                              ]
+                                                                                                                                            ]
+                                                                                                                                          ]
+                                                                                                                                        ]
+                                                                                                                                      ]
+                                                                                                                                    ]
+                                                                                                                                  ]
+                                                                                                                                ]
+                                                                                                                              ]
+                                                                                                                            ]
+                                                                                                                          ]
+                                                                                                                        ]
+                                                                                                                      ]
+                                                                                                                    ]
+                                                                                                                  ]
+                                                                                                                ]
+                                                                                                              ]
+                                                                                                            ]
+                                                                                                          ]
+                                                                                                        ]
+                                                                                                      ]
+                                                                                                    ]
+                                                                                                  ]
+                                                                                                ]
+                                                                                              ]
+                                                                                            ]
+                                                                                          ]
+                                                                                        ]
+                                                                                      ]
+                                                                                    ]
+                                                                                  ]
+                                                                                ]
+                                                                              ]
+                                                                            ]
+                                                                          ]
+                                                                        ]
+                                                                      ]
+                                                                    ]
+                                                                  ]
+                                                                ]
+                                                              ]
+                                                            ]
+                                                          ]
+                                                        ]
+                                                      ]
+                                                    ]
+                                                  ]
+                                                ]
+                                              ]
+                                            ]
+                                          ]
+                                        ]
+                                      ]
+                                    ]
+                                  ]
+                                ]
+                              ]
+                            ]
+                          ]
+                        ]
+                      ]
+                    ]
+                  ]
+                ]
+              ]
+            ]
+          ]
+        ]
+      ]
     }
   ]
 }

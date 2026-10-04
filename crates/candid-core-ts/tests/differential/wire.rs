@@ -410,10 +410,16 @@ impl Cursor<'_> {
     }
 }
 
-/// The record entries of a message's type table, as table indices of their
-/// fields' types (primitive field types omitted); `None` for a table that
-/// does not parse.
-fn table_records(bytes: &[u8]) -> Option<Vec<Option<Vec<usize>>>> {
+/// A parsed type table: the record entries (as table indices of their fields'
+/// types, primitive field types omitted) and whether any type reference in
+/// the table or the argument list is the primitive `empty`.
+struct Table {
+    records: Vec<Option<Vec<usize>>>,
+    mentions_empty: bool,
+}
+
+/// `None` for a table that does not parse.
+fn table_records(bytes: &[u8]) -> Option<Table> {
     let mut cursor = Cursor { bytes, at: 0 };
     for expected in *b"DIDL" {
         if cursor.byte()? != expected {
@@ -425,11 +431,18 @@ fn table_records(bytes: &[u8]) -> Option<Vec<Option<Vec<usize>>>> {
         return None;
     }
     let mut entries = Vec::new();
+    let mut mentions_empty = false;
+    let mut note = |ty: i64| {
+        if ty == -17 {
+            mentions_empty = true;
+        }
+        ty
+    };
     for _ in 0..count {
         let opcode = cursor.sleb()?;
         entries.push(match opcode {
             -18 | -19 => {
-                cursor.sleb()?;
+                note(cursor.sleb()?);
                 None
             }
             -20 | -21 => {
@@ -437,7 +450,7 @@ fn table_records(bytes: &[u8]) -> Option<Vec<Option<Vec<usize>>>> {
                 let mut refs = Vec::new();
                 for _ in 0..fields {
                     cursor.leb()?;
-                    let ty = cursor.sleb()?;
+                    let ty = note(cursor.sleb()?);
                     if ty >= 0 {
                         refs.push(usize::try_from(ty).ok()?);
                     }
@@ -447,7 +460,7 @@ fn table_records(bytes: &[u8]) -> Option<Vec<Option<Vec<usize>>>> {
             -22 => {
                 for _ in 0..2 {
                     for _ in 0..cursor.leb()? {
-                        cursor.sleb()?;
+                        note(cursor.sleb()?);
                     }
                 }
                 for _ in 0..cursor.leb()? {
@@ -459,14 +472,31 @@ fn table_records(bytes: &[u8]) -> Option<Vec<Option<Vec<usize>>>> {
                 for _ in 0..cursor.leb()? {
                     let length = usize::try_from(cursor.leb()?).ok()?;
                     cursor.at = cursor.at.checked_add(length)?;
-                    cursor.sleb()?;
+                    note(cursor.sleb()?);
                 }
                 None
             }
             _ => return None,
         });
     }
-    Some(entries)
+    for _ in 0..cursor.leb()? {
+        note(cursor.sleb()?);
+    }
+    Some(Table {
+        records: entries,
+        mentions_empty,
+    })
+}
+
+/// Whether the message's type table or argument list mentions `empty`. The
+/// reference's subtype relation has `empty <: t` for every `t`, and it reads
+/// a func or service value through that relation alone, so where the wire
+/// says `empty` and the expected type is a reference it decodes a value no
+/// wire type can carry; the runtime refuses (`type_mismatch`: no value
+/// inhabits `empty`). The verdict mapping attributes that symptom to the
+/// reference on flagged messages (`decode:reference:empty-wire-value`).
+pub fn wire_mentions_empty(bytes: &[u8]) -> bool {
+    table_records(bytes).is_some_and(|table| table.mentions_empty)
 }
 
 /// Whether the message's type table holds a record type the reference
@@ -480,9 +510,10 @@ fn table_records(bytes: &[u8]) -> Option<Vec<Option<Vec<usize>>>> {
 /// the reference's rule exactly so the verdict mapping can attribute those
 /// divergences (`decode:reference:empty-normalization`).
 pub fn wire_has_empty_record(bytes: &[u8]) -> bool {
-    let Some(entries) = table_records(bytes) else {
+    let Some(table) = table_records(bytes) else {
         return false;
     };
+    let entries = table.records;
     // 0 = unvisited, 1 = in progress, 2 = empty, 3 = not empty.
     fn empty(entries: &[Option<Vec<usize>>], state: &mut [u8], index: usize) -> bool {
         match state.get(index).copied() {
@@ -546,12 +577,18 @@ fn quota_exhausted(error: &candid::Error) -> bool {
 /// the expected types, or at the wire types for a `coercion` rejection) is a
 /// func reference with an empty method name; `wire_empty_record` when the
 /// wire type table holds a record the reference rewrites to `empty` (see
-/// `wire_has_empty_record`).
+/// `wire_has_empty_record`); `wire_empty` when the table or the argument
+/// list mentions `empty` (see `wire_mentions_empty`).
 pub fn reference_verdict(env: &TypeEnv, bytes: &[u8], expected: &[Type]) -> Value {
     let mut verdict = reference_verdict_unflagged(env, bytes, expected);
+    let mut flags = verdict["flags"].as_array().cloned().unwrap_or_default();
     if wire_has_empty_record(bytes) {
-        let mut flags = verdict["flags"].as_array().cloned().unwrap_or_default();
         flags.push(json!("wire_empty_record"));
+    }
+    if wire_mentions_empty(bytes) {
+        flags.push(json!("wire_empty"));
+    }
+    if !flags.is_empty() {
         verdict["flags"] = Value::Array(flags);
     }
     verdict

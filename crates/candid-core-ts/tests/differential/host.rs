@@ -42,7 +42,8 @@
 //! - variant: an object whose keys are `tag` (a string) and optionally `value`
 //!   → `variant` with the arm's id (an unused id when the tag is no arm), the
 //!   payload converted at the arm (blind if the arm is unknown), or `null` when
-//!   `value` is absent.
+//!   `value` is absent; a `value` beside a `null`-payload arm's tag is outside
+//!   the domain (its one shape is `{ tag }`), so that object converts blind.
 
 use candid::types::value::IDLValue;
 use candid::types::{Type, TypeInner};
@@ -735,12 +736,17 @@ pub fn host_value(env: &TypeEnv, ty: &Type, desc: &Value) -> Value {
                 let id = key_id(arms, tag_text).unwrap_or_else(|| {
                     FreshIds::new(arms.iter().map(|arm| arm.id.get_id())).next()
                 });
-                let payload = match entry(list, "value") {
-                    None => json!({ "kind": "null" }),
-                    Some(value) => match arms.iter().find(|arm| arm.id.get_id() == id) {
-                        Some(arm) => host_value(env, &arm.ty, value),
-                        None => host_blind(value),
-                    },
+                let arm = arms.iter().find(|arm| arm.id.get_id() == id);
+                let bare_arm = arm.is_some_and(|arm| {
+                    matches!(trace(env, &arm.ty).as_deref(), Some(TypeInner::Null))
+                });
+                let payload = match (entry(list, "value"), arm) {
+                    (None, _) => json!({ "kind": "null" }),
+                    // A `null`-payload arm's one domain shape is `{ tag }`:
+                    // a present `value` is outside it, so it stays blind.
+                    (Some(_), Some(_)) if bare_arm => return host_blind(desc),
+                    (Some(value), Some(arm)) => host_value(env, &arm.ty, value),
+                    (Some(value), None) => host_blind(value),
                 };
                 json!({ "kind": "variant", "id": id, "value": payload })
             }

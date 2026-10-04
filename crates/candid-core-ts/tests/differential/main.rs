@@ -85,6 +85,7 @@ struct Built {
     types: TypeEnv,
     envelope: Value,
     contract: candid_core::Contract,
+    label_collision: bool,
 }
 
 fn reference_env(source: &str) -> Option<TypeEnv> {
@@ -98,8 +99,33 @@ fn reference_env(source: &str) -> Option<TypeEnv> {
 /// loader reads, normalized as `wire_vectors.rs` normalizes the coercion
 /// golden's (a fixed producer block, a canonical reparse, field names in the
 /// `org.candid-core.field-names/v1` extension).
-fn envelope_of(source: &str) -> Option<(Value, candid_core::Contract)> {
+/// Whether two source spellings of one field share a canonical container:
+/// the same `(container, id)` written with a name in one declaration and
+/// numbered (or under another name) in another. The field-name table attaches
+/// names to canonical nodes, so the runtime keys every occurrence by the one
+/// name, while the reference reads each declaration's own labels.
+fn label_collision(compilation: &candid_core::Compilation) -> bool {
+    let Some(info) = compilation.source_info() else {
+        return false;
+    };
+    let mut spellings: std::collections::BTreeMap<(u32, u32), std::collections::BTreeSet<String>> =
+        std::collections::BTreeMap::new();
+    for provenance in info.field_labels() {
+        let spelling = match &provenance.label {
+            candid_core::SourceLabel::Named { name } => format!("name:{name}"),
+            _ => "number".to_string(),
+        };
+        spellings
+            .entry((provenance.container, provenance.id))
+            .or_default()
+            .insert(spelling);
+    }
+    spellings.values().any(|set| set.len() > 1)
+}
+
+fn envelope_of(source: &str) -> Option<(Value, candid_core::Contract, bool)> {
     let compilation = candid_core::compile_did(source).ok()?;
+    let collision = label_collision(&compilation);
     let mut document = serde_json::to_value(compilation.contract()).ok()?;
     document["producer"] = json!({
         "name": "candid-core",
@@ -126,17 +152,19 @@ fn envelope_of(source: &str) -> Option<(Value, candid_core::Contract)> {
             &candid_core::Limits::default(),
         )
         .ok()?;
-    Some((serde_json::to_value(&envelope).ok()?, contract))
+    Some((serde_json::to_value(&envelope).ok()?, contract, collision))
 }
 
 fn build_from_source(env: types::Env) -> Option<Built> {
     let types = wire::guarded(|| reference_env(&env.source)).ok()??;
-    let (envelope, contract) = wire::guarded(|| envelope_of(&env.source)).ok()??;
+    let (envelope, contract, label_collision) =
+        wire::guarded(|| envelope_of(&env.source)).ok()??;
     Some(Built {
         env,
         types,
         envelope,
         contract,
+        label_collision,
     })
 }
 
@@ -261,7 +289,12 @@ fn host_verdict(built: &Built, name: &str, host: &Value) -> Value {
     let limits = candid_core::Limits::default();
     let value = match candid_core::HostValue::from_json_with_limits(&host.to_string(), &limits) {
         Ok(value) => value,
-        Err(_) => return json!({ "verdict": "reject", "class": "host_value_json" }),
+        Err(candid_core::HostValueJsonError::Malformed(_)) => {
+            return json!({ "verdict": "reject", "class": "host_value_json" });
+        }
+        // Size, nesting, depth and element budgets of the HostValue JSON
+        // decoder: a policy, distinct from a malformed value.
+        Err(_) => return json!({ "verdict": "reject", "class": "host_value_limit" }),
     };
     let Some(declaration) = built
         .contract
@@ -331,12 +364,16 @@ fn contract_case(built: &Built, rng: &mut Rng, id: String, env_id: &str) -> Valu
 }
 
 fn env_line(env_id: &str, built: &Built) -> Value {
-    json!({
+    let mut line = json!({
         "kind": "env",
         "env": env_id,
         "did": built.env.source,
         "envelope": built.envelope,
-    })
+    });
+    if built.label_collision {
+        line["label_collision"] = json!(true);
+    }
+    line
 }
 
 fn generate_env(seed: u64, seeds: &Seeds, lines: &mut Vec<Value>) {
