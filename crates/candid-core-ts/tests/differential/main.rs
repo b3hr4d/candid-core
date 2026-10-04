@@ -35,8 +35,10 @@
 //! # Campaign mode
 //!
 //! `differential_campaign` (ignored) writes a corpus for other seeds to a file
-//! of your choosing; `ts/tests/differential/campaign.ts` replays it. See
-//! `docs/verification.md` ("Differential fuzz").
+//! of your choosing; `ts/tests/differential/campaign.ts` replays it, and
+//! `differential_verdicts` (ignored) answers the reference's verdict for
+//! hand-minimized inputs. The procedure is in `docs/verification.md` (the
+//! differential-fuzz entry under "Enforced in this repository").
 #![cfg(feature = "compiler")]
 
 mod contract;
