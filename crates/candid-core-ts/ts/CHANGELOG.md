@@ -13,6 +13,34 @@ entry here is [docs/releasing.md] in that repository.
 API, the inferred domain types, the codec's wire behaviour, and the codes and
 `$`-rooted paths validation reports. Pin an exact version.
 
+## Unreleased
+
+### A thrown value whose prototype cannot be read no longer escapes the codec
+
+No export, type, issue code, path, wire byte or validation verdict changed.
+
+- **`encode`, `encodeArgs`, `decode` and `decodeArgs` keep their no-throw
+  guarantee against a hostile thrown value** (issue #199). When user code a
+  walk calls — a getter, a Proxy trap, a `rec` thunk — threw a value that
+  makes `instanceof` throw (a Proxy whose `getPrototypeOf` trap throws, or a
+  revoked Proxy), the codec's catch blocks raised that trap's exception out of
+  the call instead of reporting an issue. Such a value is now reported like any
+  other thrown value: `unreadable_value` from `encode`, `unsupported_schema`
+  from `decode`, at the path being examined. `validate` was never affected.
+- **How.** The codec's catch blocks no longer ask `instanceof` whether a caught
+  value is one of the module's own control-flow exceptions; those are
+  recognised by identity, which reads nothing from the thrown value. A thrown
+  value carrying an engine's stack-overflow `name` and `message` is still
+  reported as `resource_limit_exceeded` with resource `stack`, whatever its
+  prototype does, and that check now comes first in `decode` as it already did
+  in `encode`.
+- **The thrown value, not a trap's exception, is what is classified.** Inside
+  an `opt` that was decoding, a trap's exception used to replace the thrown
+  value before `decode` labelled it, so a trap throwing a stack-overflow
+  `RangeError` was reported as `stack`. The thrown value is now what `decode`
+  classifies, so that case is `unsupported_schema`, like the same value thrown
+  anywhere else.
+
 ## 0.3.0-beta.1 — 2026-10-02
 
 Pairs with `candid-core` 0.1.0-beta.3.
