@@ -218,8 +218,8 @@
 //! and release profiles. Depth costs heap, not stack; output size is a
 //! separate matter, and this crate does not bound it.
 //!
-//! That walk ends only because of the cycle rule: **every cycle in the type
-//! graph passes through a declared node.** A declared node renders as its
+//! That walk ends only because of the cycle rule: **every cycle the module
+//! renders passes through a declared node.** A declared node renders as its
 //! declaration's name, which is how `type L = opt L` is written at all; an
 //! undeclared node renders its structure in place, so a cycle through no
 //! declaration would never end, and a TypeScript type alias has no spelling
@@ -227,9 +227,15 @@
 //! the rule, since a recursive Candid type needs a name. Contract validation
 //! does not require it, so a Contract read from a document or built from a
 //! draft can break it, and the generator refuses that Contract whole, before
-//! rendering anything, with [`TsGenError::UndeclaredCycle`]. The reported
-//! node is the first found by a depth-first search over the undeclared nodes
-//! in arena order, children in edge order, that closes a cycle.
+//! rendering anything, with [`TsGenError::UndeclaredCycle`]. The rule covers
+//! exactly what the renderer walks — the bodies of the declarations the
+//! module emits, the actor's service and its surviving methods' signatures —
+//! so a cycle the module never renders does not refuse: one in a class
+//! actor's init args (not rendered, issue #104), or one reachable only from
+//! an omitted declaration or method. Every Contract that generated before
+//! issue #218 still generates, byte-identically. The reported node is the
+//! first found that closes a cycle, by a depth-first search from those roots
+//! in render order, children in edge order.
 //! `schemaFromContract` accepts the same graph, because it builds every edge
 //! lazily and needs no names; it is the one refusal the two do not share.
 //!
@@ -376,8 +382,9 @@ pub enum TsGenError {
     /// A type reference points outside the Contract arena. A validated
     /// Contract cannot contain one; this guards the unvalidated path.
     DanglingTypeRef { reference: TypeRef },
-    /// The type graph has a cycle through no declared node; `reference` is a
-    /// node on it (see "Bounded generation" in the crate docs for which). A
+    /// A cycle the module would render passes through no declared node;
+    /// `reference` is a node on it (see "Bounded generation" in the crate
+    /// docs for which, and for the cycles the module never renders). A
     /// generated type alias has no spelling for an anonymous cycle, and the
     /// renderer, which stops only at declared nodes, would expand it without
     /// end. No Candid source produces one — a recursive Candid type needs a
@@ -562,7 +569,7 @@ pub fn generate_module(
     };
     let declared = first_names(contract);
     let analysis = omissions::analyze(contract, names, &declared)?;
-    cycles::check(contract, &declared)?;
+    cycles::check(contract, &declared, &analysis)?;
     let module = Generator {
         contract,
         names,
@@ -577,6 +584,23 @@ pub fn generate_module(
         module,
         omitted: analysis.omitted,
     })
+}
+
+/// The actor's service node, and whether the actor is a service class, whose
+/// init args the module does not render (issue #104). `None` without an
+/// actor. Shared by the emitter and the cycle rule, which must agree on what
+/// the actor surface walks.
+fn actor_service(contract: &Contract) -> Result<Option<(TypeRef, bool)>, TsGenError> {
+    let Some(actor) = contract.actor() else {
+        return Ok(None);
+    };
+    Ok(Some(match actor {
+        candid_core::Actor::Service { service } => (*service, false),
+        candid_core::Actor::Class { class } => match omissions::node(contract, *class)? {
+            TypeNode::Class { service, .. } => (*service, true),
+            _ => (*class, false),
+        },
+    }))
 }
 
 /// The module-local binding of a declaration: `$` plus its name. Candid
@@ -753,14 +777,7 @@ impl Generator<'_> {
         // tuple. A call layer takes `Actor` explicitly, because `c.rec` erases
         // method structure from a schema's type.
         let mut actor_out = String::new();
-        if let Some(actor) = self.contract.actor() {
-            let (service_ty, is_class) = match actor {
-                candid_core::Actor::Service { service } => (*service, false),
-                candid_core::Actor::Class { class } => match self.node(*class)? {
-                    TypeNode::Class { service, .. } => (*service, true),
-                    _ => (*class, false),
-                },
-            };
+        if let Some((service_ty, is_class)) = actor_service(self.contract)? {
             let mut methods = match self.node(service_ty)? {
                 TypeNode::Service { methods } => methods.clone(),
                 _ => Vec::new(),
@@ -983,7 +1000,8 @@ impl Generator<'_> {
 
     /// Render a type expression. A declared node renders as its first name;
     /// anything else renders its structure. Since issue #218 two things that
-    /// were assumed are enforced: every cycle passes through a declared node
+    /// were assumed are enforced: every cycle the renderer walks passes
+    /// through a declared node
     /// (`cycles::check`, run before any rendering, refuses the Contract
     /// otherwise), so expanding undeclared structure always reaches a leaf or
     /// a name; and the walk keeps its pending work on an explicit stack

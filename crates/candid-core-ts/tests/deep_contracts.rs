@@ -13,7 +13,8 @@
 mod support;
 
 use candid_core::{
-    Contract, ContractDraft, Declaration, Field, Limits, PrimitiveType, TypeNode, TypeRef,
+    Actor, Contract, ContractDraft, Declaration, Field, Limits, MethodMode, PrimitiveType,
+    ServiceMethod, TypeNode, TypeRef,
 };
 use candid_core_ts::{generate_module, GeneratedModule, TsGenError, TsNames, TsOptions};
 use support::{in_child_process, on_small_stack};
@@ -105,14 +106,27 @@ fn a_1500_level_chain_generates_on_a_small_stack() {
 /// first refused depth is 1,811, `canonicalization_work` observed 10,010,366
 /// against 10,000,000), so a trusted host raised `max_canonicalization_work`
 /// to build it (about 12.2M work units). Canonicalization is quadratic in
-/// this chain's depth and dominates the test's time, so it builds once, at
-/// the raised limit, and does not re-read.
+/// this chain's depth and dominates the test's time, so it builds at the
+/// raised limit and does not re-read, and the test checks that default
+/// limits refuse the chain — that it is beyond the ceiling — in the release
+/// profile only, where that second canonicalization is cheap.
 #[test]
 fn a_chain_beyond_the_default_ceiling_generates_on_a_small_stack() {
     in_child_process(
         "a_chain_beyond_the_default_ceiling_generates_on_a_small_stack",
         || {
             const DEPTH: usize = 2_000;
+            if !cfg!(debug_assertions) {
+                let refusal = opt_chain(DEPTH)
+                    .build()
+                    .expect_err("default limits refuse the chain");
+                let limit = refusal
+                    .violations
+                    .iter()
+                    .find_map(|violation| violation.resource_limit.as_ref())
+                    .expect("a resource limit refuses the chain");
+                assert_eq!(limit.resource, "canonicalization_work");
+            }
             let limits = Limits::default().with_max_canonicalization_work(15_000_000);
             let contract = opt_chain(DEPTH)
                 .build_with_limits(&limits)
@@ -124,54 +138,219 @@ fn a_chain_beyond_the_default_ceiling_generates_on_a_small_stack() {
     );
 }
 
-/// A cycle through `members` (arena indices `0..`, each member's edge
-/// pointing at the next and the last at the first), reached from a declared
-/// `D = variant { 2 : <member 0> }`, with the members at the indices in
-/// `declare` declared too, as `N{index}`. The Contract is built and then
-/// re-read, as one from a registry or an agent arrives.
-fn cycle(members: Vec<TypeNode>, declare: &[TypeRef]) -> Contract {
-    let entry = TypeRef::try_from(members.len()).expect("the cycle fits a TypeRef");
-    let mut types = members;
-    types.push(TypeNode::Variant {
-        fields: vec![Field { id: 2, ty: 0 }],
-    });
-    let mut declarations = vec![Declaration {
-        name: "D".to_string(),
-        ty: entry,
-    }];
-    for &index in declare {
-        declarations.push(Declaration {
-            name: format!("N{index}"),
-            ty: index,
-        });
-    }
-    let contract = ContractDraft::new(types, declarations, None)
+/// Candid's field and method name hash.
+fn name_hash(name: &str) -> u32 {
+    name.bytes().fold(0u32, |hash, byte| {
+        hash.wrapping_mul(223).wrapping_add(byte.into())
+    })
+}
+
+/// Build a draft and re-read it, as a Contract from a registry or an agent
+/// arrives.
+fn reread(types: Vec<TypeNode>, declarations: Vec<Declaration>, actor: Option<Actor>) -> Contract {
+    let contract = ContractDraft::new(types, declarations, actor)
         .build()
         .expect("Contract validation accepts every cycle");
     Contract::from_json(&serde_json::to_string(&contract).expect("the Contract serializes"))
         .expect("the document is a valid canonical Contract")
 }
 
-/// `record { 1 : opt <the record> }`, as two nodes.
-fn two_nodes() -> Vec<TypeNode> {
-    vec![
-        TypeNode::Record {
-            fields: vec![Field { id: 1, ty: 1 }],
-        },
-        TypeNode::Opt { inner: 0 },
-    ]
+/// How a shape's cycle is reached.
+#[derive(Clone, Copy)]
+enum Entry {
+    /// From a declared `D = variant { 2 : <member 0> }`.
+    Declaration,
+    /// Only from the actor: `service { call : <member 0> }`, member 0 a
+    /// `func`.
+    Actor,
 }
 
-/// `record -> opt -> vec -> record`.
-fn three_nodes() -> Vec<TypeNode> {
-    vec![
-        TypeNode::Record {
-            fields: vec![Field { id: 1, ty: 1 }],
-        },
-        TypeNode::Opt { inner: 2 },
-        TypeNode::Vec { inner: 0 },
-    ]
+/// A cycle among `members[..cycle]` (draft indices `0..`), possibly with
+/// further non-cycle nodes after them, reached from `entry`.
+struct Shape {
+    name: &'static str,
+    members: fn() -> Vec<TypeNode>,
+    cycle: TypeRef,
+    entry: Entry,
 }
+
+/// The shape's Contract, with the members at the draft indices in `declare`
+/// declared as `N{index}`.
+fn shape_contract(shape: &Shape, declare: &[TypeRef]) -> Contract {
+    let mut types = (shape.members)();
+    let entry = TypeRef::try_from(types.len()).expect("the shape fits a TypeRef");
+    let mut declarations = Vec::new();
+    let mut actor = None;
+    match shape.entry {
+        Entry::Declaration => {
+            types.push(TypeNode::Variant {
+                fields: vec![Field { id: 2, ty: 0 }],
+            });
+            declarations.push(Declaration {
+                name: "D".to_string(),
+                ty: entry,
+            });
+        }
+        Entry::Actor => {
+            types.push(TypeNode::Service {
+                methods: vec![method("call", 0)],
+            });
+            actor = Some(Actor::Service { service: entry });
+        }
+    }
+    for &index in declare {
+        declarations.push(Declaration {
+            name: format!("N{index}"),
+            ty: index,
+        });
+    }
+    reread(types, declarations, actor)
+}
+
+/// Where member 0 landed in the canonical arena: the node the entry
+/// references, which is where the search enters the cycle, and so the node
+/// whose incoming edge closes it.
+fn entered(contract: &Contract) -> TypeRef {
+    if let Some(declaration) = contract.declarations().iter().find(|d| d.name == "D") {
+        match &contract.types()[declaration.ty as usize] {
+            TypeNode::Variant { fields } => fields[0].ty,
+            other => panic!("D is the entry variant: {other:?}"),
+        }
+    } else {
+        match contract.actor() {
+            Some(Actor::Service { service }) => match &contract.types()[*service as usize] {
+                TypeNode::Service { methods } => methods[0].function,
+                other => panic!("the actor is the entry service: {other:?}"),
+            },
+            other => panic!("the shape has an entry: {other:?}"),
+        }
+    }
+}
+
+fn method(name: &str, function: TypeRef) -> ServiceMethod {
+    ServiceMethod {
+        name: name.to_string(),
+        id: name_hash(name),
+        function,
+    }
+}
+
+fn func(args: Vec<TypeRef>) -> TypeNode {
+    TypeNode::Func {
+        args,
+        results: Vec::new(),
+        mode: MethodMode::Update,
+    }
+}
+
+/// Every edge kind the renderer follows, each on an undeclared cycle.
+const SHAPES: &[Shape] = &[
+    // `record { 1 : opt <the record> }`.
+    Shape {
+        name: "record and opt",
+        members: || {
+            vec![
+                TypeNode::Record {
+                    fields: vec![Field { id: 1, ty: 1 }],
+                },
+                TypeNode::Opt { inner: 0 },
+            ]
+        },
+        cycle: 2,
+        entry: Entry::Declaration,
+    },
+    // `record -> opt -> vec -> record`.
+    Shape {
+        name: "record, opt and vec",
+        members: || {
+            vec![
+                TypeNode::Record {
+                    fields: vec![Field { id: 1, ty: 1 }],
+                },
+                TypeNode::Opt { inner: 2 },
+                TypeNode::Vec { inner: 0 },
+            ]
+        },
+        cycle: 3,
+        entry: Entry::Declaration,
+    },
+    // `variant { 1 : opt <the variant> }`.
+    Shape {
+        name: "variant arm",
+        members: || {
+            vec![
+                TypeNode::Variant {
+                    fields: vec![Field { id: 1, ty: 1 }],
+                },
+                TypeNode::Opt { inner: 0 },
+            ]
+        },
+        cycle: 2,
+        entry: Entry::Declaration,
+    },
+    // `record { 1 : func (<the record>) -> () }`: the builder renders the
+    // func's arguments.
+    Shape {
+        name: "func argument",
+        members: || {
+            vec![
+                TypeNode::Record {
+                    fields: vec![Field { id: 1, ty: 1 }],
+                },
+                func(vec![0]),
+            ]
+        },
+        cycle: 2,
+        entry: Entry::Declaration,
+    },
+    // `service { m : func (opt <the service>) -> () }`.
+    Shape {
+        name: "service method",
+        members: || {
+            vec![
+                TypeNode::Service {
+                    methods: vec![method("m", 1)],
+                },
+                func(vec![2]),
+                TypeNode::Opt { inner: 0 },
+            ]
+        },
+        cycle: 3,
+        entry: Entry::Declaration,
+    },
+    // `record { 0 : opt <the tuple>; 1 : nat }`.
+    Shape {
+        name: "tuple element",
+        members: || {
+            vec![
+                TypeNode::Record {
+                    fields: vec![Field { id: 0, ty: 1 }, Field { id: 1, ty: 2 }],
+                },
+                TypeNode::Opt { inner: 0 },
+                TypeNode::Primitive {
+                    primitive: PrimitiveType::Nat,
+                },
+            ]
+        },
+        cycle: 2,
+        entry: Entry::Declaration,
+    },
+    // `func (service { m : <the func> }) -> ()`, reached only from the
+    // actor's `call` method: the signatures and the actor's builder walk it.
+    Shape {
+        name: "func and service under the actor",
+        members: || {
+            vec![
+                func(vec![1]),
+                TypeNode::Service {
+                    methods: vec![method("m", 0)],
+                },
+            ]
+        },
+        cycle: 2,
+        entry: Entry::Actor,
+    },
+];
 
 #[test]
 fn cycles_through_no_declaration_are_refused() {
@@ -187,29 +366,22 @@ fn cycles_through_no_declaration_are_refused() {
              TypeScript type alias cannot spell an anonymous cycle (issue #218)"
         );
 
-        for (name, members) in [("two-node", two_nodes()), ("three-node", three_nodes())] {
-            let contract = cycle(members, &[]);
-            // The canonical arena orders the nodes. The search starts from
-            // the first undeclared node in that order — every cycle member,
-            // here, since only `D` is declared — and reports the node whose
-            // incoming edge closes the cycle, which is that start.
-            let first = contract
-                .types()
-                .iter()
-                .position(|node| !matches!(node, TypeNode::Variant { .. }))
-                .map(|index| TypeRef::try_from(index).expect("arena indices fit a TypeRef"))
-                .expect("the cycle has members");
+        for shape in SHAPES {
+            let contract = shape_contract(shape, &[]);
+            let first = entered(&contract);
             let refusal = generate_small(contract).expect_err("an undeclared cycle refuses");
             assert_eq!(
                 refusal,
                 TsGenError::UndeclaredCycle { reference: first },
-                "{name}"
+                "{}",
+                shape.name
             );
             assert!(
                 refusal
                     .to_string()
                     .starts_with(&format!("type node {first} lies on a cycle")),
-                "{name}: the message names the node: {refusal}"
+                "{}: the message names the node: {refusal}",
+                shape.name
             );
         }
     });
@@ -218,31 +390,119 @@ fn cycles_through_no_declaration_are_refused() {
 #[test]
 fn the_same_cycle_with_one_member_declared_generates() {
     in_child_process("the_same_cycle_with_one_member_declared_generates", || {
-        for (name, members, count) in [
-            ("two-node", two_nodes as fn() -> Vec<TypeNode>, 2),
-            ("three-node", three_nodes, 3),
-        ] {
-            for member in 0..count {
-                let module = generate_small(cycle(members(), &[member])).unwrap_or_else(|error| {
-                    panic!("{name}: declaring member {member} must generate: {error}")
-                });
-                assert!(module.omitted.is_empty(), "{name}: {:?}", module.omitted);
+        for shape in SHAPES {
+            for member in 0..shape.cycle {
+                let module =
+                    generate_small(shape_contract(shape, &[member])).unwrap_or_else(|error| {
+                        panic!(
+                            "{}: declaring member {member} must generate: {error}",
+                            shape.name
+                        )
+                    });
+                assert!(
+                    module.omitted.is_empty(),
+                    "{}: {:?}",
+                    shape.name,
+                    module.omitted
+                );
             }
         }
         // One text in full: the cycle written through the declared record.
-        let module = generate_small(cycle(three_nodes(), &[0])).expect("generates");
+        let module = generate_small(shape_contract(&SHAPES[1], &[0])).expect("generates");
         assert_eq!(
-                module.module,
-                "// Generated by candid-core-ts from a candid-core Contract. Do not edit.\n\
-                 import * as $ from \"@candid-core/schema\";\n\
-                 \n\
-                 type $D = { tag: \"_2_\"; value: $N0 };\n\
-                 const $D: $.Schema<$D> = $.c.rec(() => $.c.variant({ _2_: $N0 }));\n\
-                 export { $D as D };\n\
-                 \n\
-                 type $N0 = { _1_: Array<$N0> | null };\n\
-                 const $N0: $.Schema<$N0> = $.c.rec(() => $.c.record({ _1_: $.c.opt($.c.vec($N0)) }));\n\
-                 export { $N0 as N0 };\n"
-            );
+            module.module,
+            "// Generated by candid-core-ts from a candid-core Contract. Do not edit.\n\
+             import * as $ from \"@candid-core/schema\";\n\
+             \n\
+             type $D = { tag: \"_2_\"; value: $N0 };\n\
+             const $D: $.Schema<$D> = $.c.rec(() => $.c.variant({ _2_: $N0 }));\n\
+             export { $D as D };\n\
+             \n\
+             type $N0 = { _1_: Array<$N0> | null };\n\
+             const $N0: $.Schema<$N0> = $.c.rec(() => $.c.record({ _1_: $.c.opt($.c.vec($N0)) }));\n\
+             export { $N0 as N0 };\n"
+        );
     });
 }
+
+/// The rule covers only what the module renders, so a cycle through no
+/// declaration that the renderer never walks does not refuse, and these
+/// Contracts generate exactly what they generated before issue #218: one in
+/// a class actor's init args, which the module does not render (issue #104),
+/// and one reachable only from a declaration the module omits (issue #189).
+#[test]
+fn cycles_the_module_never_renders_do_not_refuse() {
+    in_child_process("cycles_the_module_never_renders_do_not_refuse", || {
+        // `service : (opt <self>) -> {}`, the opt a cycle through no
+        // declaration.
+        let contract = reread(
+            vec![
+                TypeNode::Class {
+                    init: vec![1],
+                    service: 2,
+                },
+                TypeNode::Opt { inner: 1 },
+                TypeNode::Service {
+                    methods: Vec::new(),
+                },
+            ],
+            Vec::new(),
+            Some(Actor::Class { class: 0 }),
+        );
+        let module = generate_small(contract).expect("init args are never rendered");
+        assert!(module.omitted.is_empty());
+        assert_eq!(CLASS_INIT_CYCLE_MODULE.len(), 364);
+        assert_eq!(module.module, CLASS_INIT_CYCLE_MODULE);
+
+        // `type D = record { 5 : <opt self> }`, field 5 labelled `_3_`, a
+        // reserved name, so `D` is omitted and nothing renders the cycle.
+        let contract = reread(
+            vec![
+                TypeNode::Record {
+                    fields: vec![Field { id: 5, ty: 1 }],
+                },
+                TypeNode::Opt { inner: 1 },
+            ],
+            vec![Declaration {
+                name: "D".to_string(),
+                ty: 0,
+            }],
+            None,
+        );
+        let record = contract.declarations()[0].ty;
+        let mut names = TsNames::new();
+        names.insert(record, 5, "_3_");
+        let module =
+            on_small_stack(move || generate_module(&contract, &names, &TsOptions::default()))
+                .expect("an omitted declaration is never rendered");
+        assert_eq!(
+            module
+                .omitted
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>(),
+            ["type D (reserved_field_name)"]
+        );
+        assert_eq!(module.module, OMITTED_CYCLE_MODULE);
+    });
+}
+
+/// What `cycles_the_module_never_renders_do_not_refuse`'s class actor
+/// generated before issue #218 (364 bytes).
+const CLASS_INIT_CYCLE_MODULE: &str = "\
+// Generated by candid-core-ts from a candid-core Contract. Do not edit.
+import * as $ from \"@candid-core/schema\";
+
+const $actor: $.Schema<$.Principal> = $.c.rec(() => $.c.service({  }));
+type $Actor = {
+
+};
+export { $actor as actor, type $Actor as Actor };
+// Note: the actor is a service class; init args are install-time metadata not exposed here (issue #104).
+";
+/// What `cycles_the_module_never_renders_do_not_refuse`'s omitted
+/// declaration generated before issue #218.
+const OMITTED_CYCLE_MODULE: &str = "\
+// Generated by candid-core-ts from a candid-core Contract. Do not edit.
+// Omitted: type D (reserved_field_name)
+";

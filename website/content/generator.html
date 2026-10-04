@@ -455,8 +455,9 @@ not share.</p>
     </tr>
     <tr>
       <td><code>UndeclaredCycle { reference }</code></td>
-      <td>The type graph has a cycle that passes through no declared node; <code>reference</code> is a
-      node on it. A declared node renders as its name, which is what ends a recursive type, and a
+      <td>A cycle the module would render passes through no declared node; <code>reference</code> is
+      a node on it. A cycle the module never renders — in a class actor's init args, or reachable
+      only from an omitted declaration or method — does not refuse. A declared node renders as its name, which is what ends a recursive type, and a
       TypeScript type alias has no spelling for an anonymous cycle. No <code>.did</code> source
       produces one — a recursive Candid type needs a name — but Contract validation accepts every
       cycle, so a Contract read with <code>Contract::from_json</code> can hold one.

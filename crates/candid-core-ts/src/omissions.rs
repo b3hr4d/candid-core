@@ -108,7 +108,7 @@ pub(crate) fn children(node: &TypeNode) -> Vec<TypeRef> {
     }
 }
 
-fn node(contract: &Contract, reference: TypeRef) -> Result<&TypeNode, TsGenError> {
+pub(crate) fn node(contract: &Contract, reference: TypeRef) -> Result<&TypeNode, TsGenError> {
     contract
         .types()
         .get(reference as usize)
