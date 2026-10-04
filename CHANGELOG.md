@@ -50,6 +50,50 @@ and therefore the identities computed over them. Pin an exact version.
   serialized shape changed, so this entry acknowledges no break. ADR 0004
   records the rule, and `tests/source_bom.rs` pins each case above.
 
+### Resource bounds
+
+- **A long run of consecutive comments is refused instead of aborting the
+  host** ([issue #219]). The pinned upstream `candid_parser` tokenizer skips a
+  comment by calling itself, so every comment between two real tokens costs it
+  a stack frame, and it runs twice over each source: in the `source_nesting`
+  preflight itself and in the parser. A flat run of `//` lines a few kilobytes
+  long overflowed the stack and aborted the process, which no caller can catch:
+  measured on macOS arm64, the first abort came at 673 comments (about 2 KB of
+  `//` lines) on a 2 MiB thread in a debug build and at 3 554 in release, and
+  `max_source_bytes` admits 349 525 such lines. Every entry
+  point was exposed: `compile_did` and its variants, `compile_with_resolver`,
+  `compile_did_file` and its variants, the `candid-core` binary's `compile`,
+  and the `SourceInfo` rederivation behind `SourceInfo::validate` and the
+  `Compilation` loaders.
+
+  A constant-stack byte scan now counts consecutive comments, line and block
+  alike, before that tokenizer first runs, and refuses a run longer than
+  `max_source_nesting` (default 256) with `resource_limit_exceeded` naming
+  `source_nesting`, `observed` being the limit plus one. Whitespace neither
+  counts nor ends a run, so blank lines between comments do not split one; any
+  real token ends it; a nested block comment counts once; comment markers
+  inside a string literal are not comments. A run at the default costs about
+  800 KB of stack in a debug build and 150 KB in release (measured, and stated
+  in `Limits::max_source_nesting`).
+
+  **This refuses input that compiled before**: a `.did` with more than 256
+  consecutive comments anywhere, such as a long license header written as `//`
+  lines, now fails under default limits. Raise the limit with
+  `Limits::with_max_source_nesting`, or write the header as one `/* */` block,
+  which counts once (a `//` header directly above a declaration is also its
+  documentation, which a block comment is not). `@candid-core/cli`'s `gen`,
+  `didToContract` and `didToModule` embed this compiler at the default limits
+  and expose no override, so they refuse such a file too. A comment-run refusal
+  also takes precedence over a lexical error anywhere in the source, because
+  upstream would recurse through the run before reaching the error; inside the
+  limit, a lexical error still reports the parser's own diagnostic. Inputs
+  within the limit compile exactly as before: the same Contract, the same
+  `contract_id`, `interface_id` and `source_bundle_id`, and the same
+  `SourceInfo` documentation. No public API, error code, resource name, limit
+  default, or serialized shape changed. `tests/deep_nesting.rs` pins each case
+  above, including every entry point refusing the largest run
+  `max_source_bytes` admits on a 64 KiB stack.
+
 ## 0.1.0-beta.3 — published 2026-08-24
 
 The third prerelease, and the first that carries a fix for a defect in an
@@ -420,3 +464,4 @@ have seen them:
 [issue #153]: https://github.com/b3hr4d/candid-core/issues/153
 [issue #176]: https://github.com/b3hr4d/candid-core/issues/176
 [PR #177]: https://github.com/b3hr4d/candid-core/pull/177
+[issue #219]: https://github.com/b3hr4d/candid-core/issues/219

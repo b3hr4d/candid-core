@@ -126,7 +126,7 @@
       <td><code>max_source_nesting</code></td>
       <td>256</td>
       <td><code>source_nesting</code></td>
-      <td><em>Lexical</em> nesting: open delimiters plus a run of <code>opt</code>/<code>vec</code> constructors, counted over a token scan before the recursive upstream parser is invoked.</td>
+      <td><em>Lexical</em> nesting: open delimiters plus a run of <code>opt</code>/<code>vec</code> constructors, counted over a token scan before the recursive upstream parser is invoked. Also bounds a run of consecutive comments between two tokens, line and block alike, since the upstream tokenizer spends a stack frame on each; a single <code>/* */</code> block counts once.</td>
       <td><span class="pill accent">compiler</span></td>
     </tr>
     <tr>

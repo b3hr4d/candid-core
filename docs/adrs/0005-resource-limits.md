@@ -40,7 +40,11 @@ Existing conveniences use `Limits::default`, which is exactly `LimitsProfile::In
 The compiler revalidates every resolver result before digesting or parsing it and owns source-count, per-source-byte, and bundle-byte accounting. Resolver implementations may reject inputs earlier, but cannot bypass compiler enforcement. Inline compilation uses the same accounting and source-sidecar generation propagates validation failures without panicking.
 
 Source token nesting is bounded before the recursive upstream parser or type
-checker is invoked. Checked Candid types are depth-validated with an explicit
+checker is invoked. So are runs of consecutive comments, under the same
+`max_source_nesting` limit: the pinned upstream tokenizer skips each comment by
+calling itself, so a comment run costs it one stack frame per comment, and a
+constant-stack byte scan refuses an over-long run before that tokenizer first
+runs (issue #219). Checked Candid types are depth-validated with an explicit
 work stack, and Contract lowering plus provenance collection likewise use
 explicit work stacks rather than recursive descent.
 

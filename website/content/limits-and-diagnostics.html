@@ -189,9 +189,10 @@ token.cancel();
 <p>
   Two pairs of limits look redundant and are not. For DID source,
   <code>max_source_nesting</code> scans the token stream of the raw text and counts open delimiters
-  plus any run of <code>opt</code>/<code>vec</code> constructors, before the recursive upstream
-  parser is ever invoked; <code>max_type_depth</code> counts the checked semantic type depth
-  afterwards. For host values, the crate's self-describing JSON encoding of Candid values,
+  plus any run of <code>opt</code>/<code>vec</code> constructors, and separately bounds a run of
+  consecutive comments (each costs the upstream tokenizer a stack frame), before the recursive
+  upstream parser is ever invoked; <code>max_type_depth</code> counts the checked semantic type
+  depth afterwards. For host values, the crate's self-describing JSON encoding of Candid values,
   <code>max_value_nesting</code> counts JSON <code>{</code> and <code>[</code> containers in a
   constant-stack pre-scan before <code>serde_json</code> runs, while <code>max_value_depth</code>
   counts semantic value depth after decoding.
