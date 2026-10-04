@@ -2656,6 +2656,30 @@ test("an absorbed mismatch leaves no stale path segments for a later issue", () 
       "$.b",
     ],
     [
+      // Was `$.p.q.a.p.q.b`: the opt and the failing sibling share the
+      // prefix `$.p.q`, which the cut must keep — cutting to the root or one
+      // level too far would report `$.b` or `$.p.b`.
+      "below a shared prefix, then a failing sibling field",
+      c.record({
+        p: c.record({
+          q: c.record({
+            a: c.record({ p: c.record({ q: c.record({ x: c.int }) }) }),
+            b: c.text,
+          }),
+        }),
+      }),
+      { p: { q: { a: { p: { q: { x: 5n } } }, b: "hi" } } },
+      c.record({
+        p: c.record({
+          q: c.record({
+            a: c.opt(c.record({ p: c.record({ q: c.record({ x: c.nat }) }) })),
+            b: c.nat,
+          }),
+        }),
+      }),
+      "$.p.q.b",
+    ],
+    [
       // Was `$[0][1].value`: the stale segments outlive the vec element.
       "inside one vec element, then a failing later element",
       c.vec(c.variant({ x: c.record({ a: c.record({ x: c.int }) }), y: c.text })),
@@ -2759,4 +2783,28 @@ test("a failing byte while skipping an absorbed constituent is reported at the o
       issues: [{ code: "truncated", path: "$.r", message: "unexpected end of input" }],
     },
   );
+  // The same bad tag with the opt one record further down: the skip's issue
+  // keeps the opt's own prefix, `$.o.r`, not the root's `$.o` or `$`.
+  const nested = encode(
+    c.record({ o: c.record({ r: c.record({ a: c.int, b: c.opt(c.text) }) }) }),
+    { o: { r: { a: 5n, b: "hi" } } },
+  );
+  assert(nested.ok);
+  if (nested.ok) {
+    const bytes = Uint8Array.from(nested.bytes);
+    assert.deepStrictEqual(Array.from(bytes.subarray(-5)), [0x05, 0x01, 0x02, 0x68, 0x69]);
+    bytes[bytes.length - 4] = 0x02;
+    assert.deepStrictEqual(
+      decode(
+        c.record({ o: c.record({ r: c.opt(c.record({ a: c.nat, b: c.opt(c.text) })) }) }),
+        bytes,
+      ),
+      {
+        ok: false,
+        issues: [
+          { code: "invalid_tag_byte", path: "$.o.r", message: "an opt value starts with 0 or 1" },
+        ],
+      },
+    );
+  }
 });
