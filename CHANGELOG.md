@@ -9,11 +9,6 @@ and therefore the identities computed over them. Pin an exact version.
 
 ## Unreleased
 
-Changes on `main` that no crate release carries yet. The `0.1.0-beta.3`
-archive on crates.io does not have them. Release preparation renames this
-section to the heading of the version that ships them
-([docs/releasing.md](docs/releasing.md) §5).
-
 ### Source input
 
 - **A `.did` source may begin with one UTF-8 byte order mark** ([issue #176],
@@ -25,10 +20,13 @@ section to the heading of the version that ships them
   shares that parse helper: `compile_did`, `compile_did_with_options`,
   `compile_did_with_context`, `compile_with_resolver` (the entry source and
   every imported one), `compile_did_file`, `compile_did_file_with_options`,
-  `compile_did_file_with_context`, and the `candid-core` binary's `compile`,
-  `--envelope` included; `@candid-core/cli`'s `didToContract` and
-  `didToModule`, which embed this source, inherit it. In this one place
-  `candid-core` accepts a superset of what upstream `candid_parser` accepts.
+  `compile_did_file_with_context`, the `candid-core` binary's `compile`,
+  `--envelope` included, and the `SourceInfo` rederivation behind
+  `SourceInfo::validate` and the `Compilation` loaders (`from_json_with_limits`,
+  `from_slice_with_limits`, `try_from_raw`, and their `_with_context` forms);
+  `@candid-core/cli`'s `didToContract` and `didToModule`, which embed this
+  source, inherit it. In this one place `candid-core` accepts a superset of
+  what upstream `candid_parser` accepts.
 
   Everything that describes the raw source keeps the mark. A marked file and
   its unmarked twin share `contract_id` and `interface_id`, and differ in
@@ -41,13 +39,16 @@ section to the heading of the version that ships them
   tokens, and the UTF-16 marks stay invalid UTF-8.
 
   Nothing `0.1.0-beta.3` accepts changes its output or any identity, because a
-  marked source failed there. Error precedence changes for marked input only:
-  the `source_nesting` preflight now tokenizes past the mark too, so an
-  over-nested marked source reports `resource_limit_exceeded` naming
-  `source_nesting` where `0.1.0-beta.3` reported `did_parse_error` on the mark.
-  No public API, error code, or serialized shape changed, so this entry
-  acknowledges no break. ADR 0004 records the rule, and `tests/source_bom.rs`
-  pins each case above.
+  marked source failed there. The reverse does not hold: a Compilation document
+  whose `SourceInfo` carries a marked source, such as `candid-core compile`
+  output for a marked file, validates with this change and does not validate
+  under `0.1.0-beta.3`, whose rederivation fails on the mark. Error precedence
+  changes for marked input only: the `source_nesting` preflight now tokenizes
+  past the mark too, so an over-nested marked source reports
+  `resource_limit_exceeded` naming `source_nesting` where `0.1.0-beta.3`
+  reported `did_parse_error` on the mark. No public API, error code, or
+  serialized shape changed, so this entry acknowledges no break. ADR 0004
+  records the rule, and `tests/source_bom.rs` pins each case above.
 
 ## 0.1.0-beta.3 — published 2026-08-24
 
