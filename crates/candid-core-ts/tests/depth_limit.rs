@@ -17,8 +17,11 @@
 
 use std::path::PathBuf;
 
+mod support;
+
 use candid_core::compile_did;
 use candid_core_ts::{generate_module, TsNames, TsOptions};
+use support::{in_child_process, on_small_stack};
 
 /// The compiler's default semantic and lexical depth limit.
 const LIMIT: usize = 256;
@@ -123,18 +126,17 @@ fn the_compiler_accepts_depth_256_and_refuses_257_in_every_shape() {
 /// The generated module and the Contract envelope for each shape at the
 /// compiler's maximum, as `ts/tests/depth-limit.test.ts` consumes them.
 ///
-/// Run on a thread with a 64 MiB stack: `generate_module` recurses once per
-/// nesting level and overflows a default 2 MiB test thread on the depth-256
-/// inline shape (measured). That is the Rust generator's own recursion, not
-/// the TypeScript runtime this test is about, and is reported separately.
+/// Generation runs on a thread of `SMALL_STACK_BYTES` (issue #218: it uses
+/// constant call-stack depth in the nesting), in a child process because an
+/// overflow would abort it. Compilation stays on the test thread: the
+/// upstream parser and checker it calls have their own, larger floor, which
+/// the root crate's `tests/deep_nesting.rs` covers.
 #[test]
 fn depth_limit_modules_and_envelopes() {
-    std::thread::Builder::new()
-        .stack_size(64 << 20)
-        .spawn(emit_depth_limit_goldens)
-        .expect("the generation thread must start")
-        .join()
-        .expect("generation must not panic");
+    in_child_process(
+        "depth_limit_modules_and_envelopes",
+        emit_depth_limit_goldens,
+    );
 }
 
 fn emit_depth_limit_goldens() {
@@ -143,12 +145,11 @@ fn emit_depth_limit_goldens() {
         let source_info = compilation
             .source_info()
             .expect("compile_did retains provenance by default");
-        let module = generate_module(
-            compilation.contract(),
-            &TsNames::from_source_info(source_info),
-            &TsOptions::default(),
-        )
-        .unwrap_or_else(|error| panic!("{name}: the maximum depth must generate: {error}"));
+        let contract = compilation.contract().clone();
+        let names = TsNames::from_source_info(source_info);
+        let module =
+            on_small_stack(move || generate_module(&contract, &names, &TsOptions::default()))
+                .unwrap_or_else(|error| panic!("{name}: the maximum depth must generate: {error}"));
         assert!(
             module.omitted.is_empty(),
             "{name}: a depth fixture omits nothing: {:?}",

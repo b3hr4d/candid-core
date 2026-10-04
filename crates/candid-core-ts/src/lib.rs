@@ -195,8 +195,9 @@
 //! on a shortest path to a cause (edge order breaks ties); the exact rule
 //! lives in the `omissions` module and in its mirror in `schemaFromContract`,
 //! which omits the same entries for the same reasons. [`TsGenError`] is left
-//! for an invalid Contract graph only — the refusals `schemaFromContract`
-//! also makes whole-document (issue #129).
+//! for an invalid Contract graph — the refusals `schemaFromContract` also
+//! makes whole-document (issue #129) — and for a cycle through no
+//! declaration, which the loader accepts (see "Bounded generation" below).
 //!
 //! # Determinism
 //!
@@ -204,6 +205,33 @@
 //! omitted list: emission follows the Contract's canonical declaration and
 //! field order, and nothing in the output depends on time, environment, or
 //! map iteration order.
+//!
+//! # Bounded generation: constant stack, named cycles
+//!
+//! Generation uses constant call-stack depth in the Contract's nesting
+//! (issue #218). The renderer keeps the composites it is in the middle of on
+//! an explicit stack rather than the call stack, as ADR 0005 asks of every
+//! graph walk, so a validated Contract of any depth generates on a small
+//! thread: the 256-level types the compiler accepts, and the far deeper
+//! chains `Contract::from_json` accepts at default or raised limits. The
+//! tests run generation on a 64 KiB thread (512 KiB on Windows) in the dev
+//! and release profiles. Depth costs heap, not stack; output size is a
+//! separate matter, and this crate does not bound it.
+//!
+//! That walk ends only because of the cycle rule: **every cycle in the type
+//! graph passes through a declared node.** A declared node renders as its
+//! declaration's name, which is how `type L = opt L` is written at all; an
+//! undeclared node renders its structure in place, so a cycle through no
+//! declaration would never end, and a TypeScript type alias has no spelling
+//! for an anonymous cycle. Every Contract compiled from Candid source keeps
+//! the rule, since a recursive Candid type needs a name. Contract validation
+//! does not require it, so a Contract read from a document or built from a
+//! draft can break it, and the generator refuses that Contract whole, before
+//! rendering anything, with [`TsGenError::UndeclaredCycle`]. The reported
+//! node is the first found by a depth-first search over the undeclared nodes
+//! in arena order, children in edge order, that closes a cycle.
+//! `schemaFromContract` accepts the same graph, because it builds every edge
+//! lazily and needs no names; it is the one refusal the two do not share.
 //!
 //! # What is deliberately not claimed
 //!
@@ -217,6 +245,7 @@ use std::fmt;
 
 use candid_core::{Contract, Field, PrimitiveType, ServiceMethod, TypeNode, TypeRef};
 
+mod cycles;
 mod docs;
 mod omissions;
 
@@ -317,14 +346,22 @@ impl Default for TsOptions {
     }
 }
 
-/// A refusal of the whole Contract. Since issue #189 only an *invalid*
-/// Contract refuses: a declaration the module cannot represent is omitted
-/// instead (see [`Omission`]), and no error path emits placeholder
-/// TypeScript. Every public [`Contract`] is validated on construction, so
-/// neither variant is reachable through this crate's API today; both guard
-/// the graph invariants the emitter relies on, and they refuse exactly the
-/// documents `schemaFromContract` refuses (class placement, issue #129;
-/// dangling references).
+/// A refusal of the whole Contract. Since issue #189 only a Contract graph
+/// the emitter cannot walk refuses: a declaration the module cannot
+/// represent is omitted instead (see [`Omission`]), and no error path emits
+/// placeholder TypeScript.
+///
+/// Every public [`Contract`] is validated on construction, so
+/// [`UnsupportedConstruct`](Self::UnsupportedConstruct) and
+/// [`DanglingTypeRef`](Self::DanglingTypeRef) are not reachable through this
+/// crate's API today; they guard the graph invariants the emitter relies on,
+/// and refuse exactly the documents `schemaFromContract` refuses (class
+/// placement, issue #129; dangling references).
+/// [`UndeclaredCycle`](Self::UndeclaredCycle) *is* reachable — from a
+/// validated Contract no Candid source produced (issue #218) — and is the one
+/// refusal `schemaFromContract` does not share. Refusals are checked in that
+/// order: a declared class and dangling references first, then the cycle
+/// rule, then a class nested in a value type as rendering meets it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TsGenError {
     /// A `class` type is named by a declaration or nested inside a value
@@ -339,6 +376,16 @@ pub enum TsGenError {
     /// A type reference points outside the Contract arena. A validated
     /// Contract cannot contain one; this guards the unvalidated path.
     DanglingTypeRef { reference: TypeRef },
+    /// The type graph has a cycle through no declared node; `reference` is a
+    /// node on it (see "Bounded generation" in the crate docs for which). A
+    /// generated type alias has no spelling for an anonymous cycle, and the
+    /// renderer, which stops only at declared nodes, would expand it without
+    /// end. No Candid source produces one — a recursive Candid type needs a
+    /// name — but Contract validation accepts any cycle, so a Contract read
+    /// with `Contract::from_json` or built from a `ContractDraft` can hold
+    /// one. `schemaFromContract` accepts the same graph: the loader needs no
+    /// name for a node.
+    UndeclaredCycle { reference: TypeRef },
 }
 
 impl fmt::Display for TsGenError {
@@ -355,6 +402,12 @@ impl fmt::Display for TsGenError {
                     "type reference {reference} is outside the Contract arena"
                 )
             }
+            Self::UndeclaredCycle { reference } => write!(
+                f,
+                "type node {reference} lies on a cycle that passes through no \
+                 declaration; a TypeScript type alias cannot spell an anonymous \
+                 cycle (issue #218)"
+            ),
         }
     }
 }
@@ -509,6 +562,7 @@ pub fn generate_module(
     };
     let declared = first_names(contract);
     let analysis = omissions::analyze(contract, names, &declared)?;
+    cycles::check(contract, &declared)?;
     let module = Generator {
         contract,
         names,
@@ -594,6 +648,55 @@ struct Generator<'a> {
 struct Member {
     docs: Vec<String>,
     text: String,
+}
+
+/// What entering a node yields: its whole text, or the frame that collects
+/// its children's.
+enum Entered {
+    Text(String),
+    Frame(Frame),
+}
+
+/// One composite on the renderer's explicit stack (issue #218): the node's
+/// own data, the pieces rendered so far, and what the recursive renderer kept
+/// in locals — the alias indent level to restore. The next child is the one
+/// after the pieces collected so far, in edge order.
+enum Frame {
+    Opt {
+        inner: TypeRef,
+        boxed: bool,
+        rendered: Option<String>,
+    },
+    Vec {
+        inner: TypeRef,
+        rendered: Option<String>,
+    },
+    Tuple {
+        fields: Vec<Field>,
+        elements: Vec<String>,
+    },
+    Record {
+        reference: TypeRef,
+        fields: Vec<Field>,
+        level: usize,
+        members: Vec<Member>,
+    },
+    Variant {
+        reference: TypeRef,
+        fields: Vec<Field>,
+        level: usize,
+        arms: Vec<Vec<Member>>,
+    },
+    Func {
+        arguments: usize,
+        children: Vec<TypeRef>,
+        rendered: Vec<String>,
+        mode: candid_core::MethodMode,
+    },
+    Service {
+        methods: Vec<ServiceMethod>,
+        members: Vec<String>,
+    },
 }
 
 impl Generator<'_> {
@@ -878,40 +981,117 @@ impl Generator<'_> {
             .ok_or(TsGenError::DanglingTypeRef { reference })
     }
 
-    /// Render a type expression. Declared nodes render as their first name —
-    /// which is what terminates recursion, since every Candid cycle passes
-    /// through a declaration.
+    /// Render a type expression. A declared node renders as its first name;
+    /// anything else renders its structure. Since issue #218 two things that
+    /// were assumed are enforced: every cycle passes through a declared node
+    /// (`cycles::check`, run before any rendering, refuses the Contract
+    /// otherwise), so expanding undeclared structure always reaches a leaf or
+    /// a name; and the walk keeps its pending work on an explicit stack
+    /// ([`Frame`]), so its call-stack depth is constant in the nesting.
     fn render(
         &mut self,
         reference: TypeRef,
         declaration: &str,
         target: Target,
     ) -> Result<String, TsGenError> {
-        if let Some(name) = self.declared.get(&reference) {
-            // The named shortcut is only sound if the alias it references was
-            // actually emitted. A declared func/service/class was *skipped*
-            // with a header note, so a reference to its name would be an
-            // undefined type in the output — exactly the silent hole the
-            // fail-closed rule exists to prevent.
-            if matches!(self.node(reference)?, TypeNode::Class { .. }) {
-                return Err(TsGenError::UnsupportedConstruct {
-                    declaration: declaration.to_string(),
-                    kind: "class",
-                });
-            }
-            return Ok(local(name));
-        }
-        self.render_structure(reference, declaration, target)
+        self.walk(reference, true, declaration, target)
     }
 
+    /// Render a node's own structure, even when it is declared: the
+    /// right-hand side of its declaration. Its children render as [`render`]
+    /// does.
+    ///
+    /// [`render`]: Self::render
     fn render_structure(
         &mut self,
         reference: TypeRef,
         declaration: &str,
         target: Target,
     ) -> Result<String, TsGenError> {
-        match self.node(reference)?.clone() {
-            TypeNode::Primitive { primitive } => Ok(self.primitive(primitive, target).to_string()),
+        self.walk(reference, false, declaration, target)
+    }
+
+    /// The renderer: a loop over an explicit stack of [`Frame`]s, one per
+    /// composite being rendered, each holding what was the continuation of a
+    /// recursive call (issue #218, ADR 0005). Children are entered in edge
+    /// order and every state change a recursive call made around a child —
+    /// the alias indent — is made and undone at the same points, so the text,
+    /// and the first error when there is one, are those of a depth-first
+    /// recursive rendering.
+    fn walk(
+        &mut self,
+        root: TypeRef,
+        by_name: bool,
+        declaration: &str,
+        target: Target,
+    ) -> Result<String, TsGenError> {
+        let mut stack: Vec<Frame> = Vec::new();
+        let mut entering = Some((root, by_name));
+        let mut finished: Option<String> = None;
+        loop {
+            if let Some((reference, by_name)) = entering.take() {
+                match self.enter(reference, by_name, declaration, target)? {
+                    Entered::Text(text) => finished = Some(text),
+                    Entered::Frame(frame) => {
+                        stack.push(frame);
+                        // Every frame but the root's is an undeclared node,
+                        // and with the cycle rule checked no path repeats
+                        // one, so the stack never outgrows the arena. Should
+                        // the rule ever go unchecked, this ends the walk
+                        // instead of letting it consume memory forever.
+                        assert!(
+                            stack.len() <= self.contract.types().len(),
+                            "the renderer met a cycle through no declaration, \
+                             which `cycles::check` refuses before rendering"
+                        );
+                    }
+                }
+            }
+            let Some(frame) = stack.last_mut() else {
+                return Ok(finished.expect("an empty stack follows a finished expression"));
+            };
+            if let Some(text) = finished.take() {
+                self.accept(frame, text, target);
+            }
+            match self.next_child(frame, target)? {
+                Some(child) => entering = Some((child, true)),
+                None => {
+                    let frame = stack.pop().expect("the frame being closed is on the stack");
+                    finished = Some(self.close(frame, target));
+                }
+            }
+        }
+    }
+
+    /// Start rendering one node: its whole text when it has no children to
+    /// render, else the frame that will collect them.
+    fn enter(
+        &mut self,
+        reference: TypeRef,
+        by_name: bool,
+        declaration: &str,
+        target: Target,
+    ) -> Result<Entered, TsGenError> {
+        if by_name {
+            if let Some(name) = self.declared.get(&reference) {
+                // The named shortcut is only sound if the alias it references
+                // was actually emitted. A declared class is refused before
+                // rendering, so a reference to its name would be an undefined
+                // type in the output — exactly the silent hole the fail-closed
+                // rule exists to prevent.
+                if matches!(self.node(reference)?, TypeNode::Class { .. }) {
+                    return Err(TsGenError::UnsupportedConstruct {
+                        declaration: declaration.to_string(),
+                        kind: "class",
+                    });
+                }
+                return Ok(Entered::Text(local(name)));
+            }
+        }
+        Ok(match self.node(reference)?.clone() {
+            TypeNode::Primitive { primitive } => {
+                Entered::Text(self.primitive(primitive, target).to_string())
+            }
             TypeNode::Opt { inner } => {
                 // `T | null` reads as an absent value should — but it can only
                 // carry Candid's optionality when `T` itself can never be
@@ -927,11 +1107,10 @@ impl Generator<'_> {
                 // `OptDomain` type and its walkers apply the identical rule,
                 // and the invariant annotation makes `tsc` prove agreement.
                 let boxed = admits_null(self.node(inner)?);
-                let inner = self.render(inner, declaration, target)?;
-                Ok(match target {
-                    Target::Alias if boxed => format!("{{ some: {inner} }} | null"),
-                    Target::Alias => format!("{inner} | null"),
-                    Target::Builder => format!("$.c.opt({inner})"),
+                Entered::Frame(Frame::Opt {
+                    inner,
+                    boxed,
+                    rendered: None,
                 })
             }
             TypeNode::Vec { inner } => {
@@ -945,64 +1124,47 @@ impl Generator<'_> {
                     primitive: PrimitiveType::Nat8,
                 } = self.node(inner)?
                 {
-                    return Ok(match target {
-                        Target::Alias => "Uint8Array".to_string(),
-                        Target::Builder => "$.c.blob()".to_string(),
-                    });
+                    return Ok(Entered::Text(
+                        match target {
+                            Target::Alias => "Uint8Array",
+                            Target::Builder => "$.c.blob()",
+                        }
+                        .to_string(),
+                    ));
                 }
-                let inner = self.render(inner, declaration, target)?;
-                Ok(match target {
-                    Target::Alias => format!("Array<{inner}>"),
-                    Target::Builder => format!("$.c.vec({inner})"),
+                Entered::Frame(Frame::Vec {
+                    inner,
+                    rendered: None,
                 })
             }
             TypeNode::Record { fields } => {
                 if fields.is_empty() {
                     // `{}` means "anything non-nullish" in TypeScript; an empty
                     // Candid record is a unit value, and this is its honest type.
-                    return Ok(match target {
-                        Target::Alias => "Record<string, never>".to_string(),
-                        Target::Builder => "$.c.unit()".to_string(),
-                    });
+                    return Ok(Entered::Text(
+                        match target {
+                            Target::Alias => "Record<string, never>",
+                            Target::Builder => "$.c.unit()",
+                        }
+                        .to_string(),
+                    ));
                 }
                 if is_tuple_shaped(&fields) {
-                    let mut elements = Vec::with_capacity(fields.len());
-                    for field in &fields {
-                        elements.push(self.render(field.ty, declaration, target)?);
-                    }
-                    return Ok(match target {
-                        Target::Alias => format!("[{}]", elements.join(", ")),
-                        Target::Builder => format!("$.c.tuple([{}])", elements.join(", ")),
-                    });
+                    let elements = Vec::with_capacity(fields.len());
+                    return Ok(Entered::Frame(Frame::Tuple { fields, elements }));
                 }
                 // Members of a multi-line object sit one level in; a member's
-                // own nested object indents from there.
+                // own nested object indents from there. `close` restores it.
                 let level = self.indent;
                 if target == Target::Alias {
                     self.indent = level + 1;
                 }
-                let mut members = Vec::with_capacity(fields.len());
-                for field in &fields {
-                    let key = self.field_key(reference, field.id, target);
-                    let value = self.render(field.ty, declaration, target)?;
-                    let docs = self
-                        .names
-                        .provenance
-                        .field_docs(&self.origins, reference, field.id)
-                        .to_vec();
-                    members.push(Member {
-                        docs,
-                        text: property(&key, &value),
-                    });
-                }
-                self.indent = level;
-                Ok(match target {
-                    Target::Alias => Self::object_type(&members, level),
-                    Target::Builder => {
-                        let texts: Vec<&str> =
-                            members.iter().map(|member| member.text.as_str()).collect();
-                        format!("$.c.record({{ {} }})", texts.join(", "))
-                    }
+                let members = Vec::with_capacity(fields.len());
+                Entered::Frame(Frame::Record {
+                    reference,
+                    fields,
+                    level,
+                    members,
                 })
             }
             TypeNode::Variant { fields } => {
@@ -1010,11 +1172,98 @@ impl Generator<'_> {
                     // A variant with no tags is uninhabited. The builder's
                     // `VariantInfer<{}>` distributes over no arms and infers
                     // `never`, matching the alias by construction.
-                    return Ok(match target {
-                        Target::Alias => "never".to_string(),
-                        Target::Builder => "$.c.variant({})".to_string(),
-                    });
+                    return Ok(Entered::Text(
+                        match target {
+                            Target::Alias => "never",
+                            Target::Builder => "$.c.variant({})",
+                        }
+                        .to_string(),
+                    ));
                 }
+                let level = self.indent;
+                let arms = Vec::with_capacity(fields.len());
+                Entered::Frame(Frame::Variant {
+                    reference,
+                    fields,
+                    level,
+                    arms,
+                })
+            }
+            TypeNode::Func {
+                args,
+                results,
+                mode,
+            } => {
+                // A func *value* is inert reference data — `{ principal,
+                // method }` — while the signature lives in the builder
+                // (issue #104).
+                match target {
+                    Target::Alias => {
+                        self.uses_principal = true;
+                        Entered::Text(format!(
+                            "{{ principal: {}; method: string }}",
+                            self.principal
+                        ))
+                    }
+                    Target::Builder => {
+                        let arguments = args.len();
+                        let mut children = args;
+                        children.extend(results);
+                        let rendered = Vec::with_capacity(children.len());
+                        Entered::Frame(Frame::Func {
+                            arguments,
+                            children,
+                            rendered,
+                            mode,
+                        })
+                    }
+                }
+            }
+            TypeNode::Service { methods } => {
+                // A service *value* is the principal of a running service.
+                match target {
+                    Target::Alias => {
+                        self.uses_principal = true;
+                        Entered::Text(self.principal.to_string())
+                    }
+                    Target::Builder => {
+                        let members = Vec::with_capacity(methods.len());
+                        Entered::Frame(Frame::Service { methods, members })
+                    }
+                }
+            }
+            TypeNode::Class { .. } => {
+                return Err(TsGenError::UnsupportedConstruct {
+                    declaration: declaration.to_string(),
+                    kind: "class",
+                })
+            }
+        })
+    }
+
+    /// The next child a frame renders, after making the state change the
+    /// recursive renderer made before that call; `None` when the frame has
+    /// every piece it needs.
+    fn next_child(
+        &mut self,
+        frame: &mut Frame,
+        target: Target,
+    ) -> Result<Option<TypeRef>, TsGenError> {
+        Ok(match frame {
+            Frame::Opt {
+                inner, rendered, ..
+            }
+            | Frame::Vec { inner, rendered } => rendered.is_none().then_some(*inner),
+            Frame::Tuple { fields, elements } => fields.get(elements.len()).map(|field| field.ty),
+            Frame::Record {
+                fields, members, ..
+            } => fields.get(members.len()).map(|field| field.ty),
+            Frame::Variant {
+                reference,
+                fields,
+                level,
+                arms,
+            } => {
                 // A discriminated union: `tag` is the label as a string
                 // literal type, `value` carries the payload and is omitted for
                 // a `null` payload, because Candid's bare `ok` and `ok : null`
@@ -1029,141 +1278,195 @@ impl Generator<'_> {
                 // omission analysis leaves out every declaration and method
                 // that would render one (`ambiguous_variant_arm`) instead of
                 // emitting text the equality gate would reject.
-                let level = self.indent;
-                let mut arms = Vec::with_capacity(fields.len());
-                for field in &fields {
-                    match target {
-                        Target::Alias => {
-                            let tag = self.tag_literal(reference, field.id);
-                            let payload_is_null = matches!(
-                                self.node(field.ty)?,
-                                TypeNode::Primitive {
-                                    primitive: PrimitiveType::Null
-                                }
-                            );
-                            let docs = self
-                                .names
-                                .provenance
-                                .field_docs(&self.origins, reference, field.id)
-                                .to_vec();
-                            let mut members = vec![Member {
-                                docs,
-                                text: format!("tag: {tag}"),
-                            }];
-                            if !payload_is_null {
-                                // An expanded arm's members are three levels
-                                // in: `| ` on the union line, then the object.
-                                self.indent = level + 3;
-                                let value = self.render(field.ty, declaration, target)?;
-                                self.indent = level;
-                                members.push(Member {
-                                    docs: Vec::new(),
-                                    text: property("value", &value),
-                                });
-                            }
-                            arms.push(members);
-                        }
-                        Target::Builder => {
-                            let key = self.field_key(reference, field.id, target);
-                            let value = self.render(field.ty, declaration, target)?;
-                            arms.push(vec![Member {
-                                docs: Vec::new(),
-                                text: property(&key, &value),
-                            }]);
-                        }
+                while let Some(field) = fields.get(arms.len()) {
+                    if target == Target::Builder {
+                        return Ok(Some(field.ty));
                     }
+                    let payload_is_null = matches!(
+                        self.node(field.ty)?,
+                        TypeNode::Primitive {
+                            primitive: PrimitiveType::Null
+                        }
+                    );
+                    if !payload_is_null {
+                        // An expanded arm's members are three levels in:
+                        // `| ` on the union line, then the object. `accept`
+                        // restores the union's level.
+                        self.indent = *level + 3;
+                        return Ok(Some(field.ty));
+                    }
+                    let tag = self.tag_member(*reference, field.id);
+                    arms.push(vec![tag]);
                 }
-                Ok(match target {
-                    Target::Alias => {
-                        let plain = |members: &[Member]| {
-                            members
-                                .iter()
-                                .all(|member| member.docs.is_empty() && !member.text.contains('\n'))
-                        };
-                        if arms.iter().all(|members| plain(members)) {
-                            let arms: Vec<String> = arms
-                                .iter()
-                                .map(|members| Self::object_type(members, level))
-                                .collect();
-                            arms.join(" | ")
-                        } else {
-                            // Documented arms: one arm per line, the union
-                            // opened on its own line as Prettier lays it out.
-                            let mut out = String::new();
-                            for members in &arms {
-                                out.push('\n');
-                                out.push_str(&"  ".repeat(level + 1));
-                                out.push_str("| ");
-                                out.push_str(&Self::object_type(members, level + 2));
-                            }
-                            out
-                        }
-                    }
-                    Target::Builder => {
-                        let arms: Vec<&str> = arms
-                            .iter()
-                            .map(|members| members[0].text.as_str())
-                            .collect();
-                        format!("$.c.variant({{ {} }})", arms.join(", "))
-                    }
-                })
+                None
             }
-            TypeNode::Func {
-                args,
-                results,
-                mode,
+            Frame::Func {
+                children, rendered, ..
+            } => children.get(rendered.len()).copied(),
+            Frame::Service { methods, members } => {
+                methods.get(members.len()).map(|method| method.function)
+            }
+        })
+    }
+
+    /// Hand a frame the text of the child it last asked for, undoing the
+    /// state change made before that child.
+    fn accept(&mut self, frame: &mut Frame, text: String, target: Target) {
+        match frame {
+            Frame::Opt { rendered, .. } | Frame::Vec { rendered, .. } => *rendered = Some(text),
+            Frame::Tuple { elements, .. } => elements.push(text),
+            Frame::Record {
+                reference,
+                fields,
+                members,
+                ..
             } => {
-                // A func *value* is inert reference data — `{ principal,
-                // method }` — while the signature lives in the builder
-                // (issue #104).
+                let field = &fields[members.len()];
+                let key = self.field_key(*reference, field.id, target);
+                let docs = self
+                    .names
+                    .provenance
+                    .field_docs(&self.origins, *reference, field.id)
+                    .to_vec();
+                members.push(Member {
+                    docs,
+                    text: property(&key, &text),
+                });
+            }
+            Frame::Variant {
+                reference,
+                fields,
+                level,
+                arms,
+            } => {
+                let field = &fields[arms.len()];
                 match target {
                     Target::Alias => {
-                        self.uses_principal = true;
-                        Ok(format!(
-                            "{{ principal: {}; method: string }}",
-                            self.principal
-                        ))
+                        self.indent = *level;
+                        let tag = self.tag_member(*reference, field.id);
+                        arms.push(vec![
+                            tag,
+                            Member {
+                                docs: Vec::new(),
+                                text: property("value", &text),
+                            },
+                        ]);
                     }
                     Target::Builder => {
-                        let mut rendered_args = Vec::with_capacity(args.len());
-                        for arg in &args {
-                            rendered_args.push(self.render(*arg, declaration, target)?);
-                        }
-                        let mut rendered_results = Vec::with_capacity(results.len());
-                        for result in &results {
-                            rendered_results.push(self.render(*result, declaration, target)?);
-                        }
-                        Ok(format!(
-                            "$.c.func([{}], [{}], \"{}\")",
-                            rendered_args.join(", "),
-                            rendered_results.join(", "),
-                            mode_text(mode),
-                        ))
+                        let key = self.field_key(*reference, field.id, target);
+                        arms.push(vec![Member {
+                            docs: Vec::new(),
+                            text: property(&key, &text),
+                        }]);
                     }
                 }
             }
-            TypeNode::Service { methods } => {
-                // A service *value* is the principal of a running service.
+            Frame::Func { rendered, .. } => rendered.push(text),
+            Frame::Service { methods, members } => {
+                let key = method_key(&methods[members.len()].name);
+                members.push(format!("{key}: {text}"));
+            }
+        }
+    }
+
+    /// A finished frame's text.
+    fn close(&mut self, frame: Frame, target: Target) -> String {
+        match frame {
+            Frame::Opt {
+                boxed, rendered, ..
+            } => {
+                let inner = rendered.expect("an opt closes after its inner type");
                 match target {
-                    Target::Alias => {
-                        self.uses_principal = true;
-                        Ok(self.principal.to_string())
-                    }
+                    Target::Alias if boxed => format!("{{ some: {inner} }} | null"),
+                    Target::Alias => format!("{inner} | null"),
+                    Target::Builder => format!("$.c.opt({inner})"),
+                }
+            }
+            Frame::Vec { rendered, .. } => {
+                let inner = rendered.expect("a vec closes after its element type");
+                match target {
+                    Target::Alias => format!("Array<{inner}>"),
+                    Target::Builder => format!("$.c.vec({inner})"),
+                }
+            }
+            Frame::Tuple { elements, .. } => match target {
+                Target::Alias => format!("[{}]", elements.join(", ")),
+                Target::Builder => format!("$.c.tuple([{}])", elements.join(", ")),
+            },
+            Frame::Record { level, members, .. } => {
+                self.indent = level;
+                match target {
+                    Target::Alias => Self::object_type(&members, level),
                     Target::Builder => {
-                        let mut members = Vec::with_capacity(methods.len());
-                        for method in &methods {
-                            let key = method_key(&method.name);
-                            let value = self.render(method.function, declaration, target)?;
-                            members.push(format!("{key}: {value}"));
-                        }
-                        Ok(format!("$.c.service({{ {} }})", members.join(", ")))
+                        let texts: Vec<&str> =
+                            members.iter().map(|member| member.text.as_str()).collect();
+                        format!("$.c.record({{ {} }})", texts.join(", "))
                     }
                 }
             }
-            TypeNode::Class { .. } => Err(TsGenError::UnsupportedConstruct {
-                declaration: declaration.to_string(),
-                kind: "class",
-            }),
+            Frame::Variant { level, arms, .. } => match target {
+                Target::Alias => {
+                    let plain = |members: &[Member]| {
+                        members
+                            .iter()
+                            .all(|member| member.docs.is_empty() && !member.text.contains('\n'))
+                    };
+                    if arms.iter().all(|members| plain(members)) {
+                        let arms: Vec<String> = arms
+                            .iter()
+                            .map(|members| Self::object_type(members, level))
+                            .collect();
+                        arms.join(" | ")
+                    } else {
+                        // Documented arms: one arm per line, the union
+                        // opened on its own line as Prettier lays it out.
+                        let mut out = String::new();
+                        for members in &arms {
+                            out.push('\n');
+                            out.push_str(&"  ".repeat(level + 1));
+                            out.push_str("| ");
+                            out.push_str(&Self::object_type(members, level + 2));
+                        }
+                        out
+                    }
+                }
+                Target::Builder => {
+                    let arms: Vec<&str> = arms
+                        .iter()
+                        .map(|members| members[0].text.as_str())
+                        .collect();
+                    format!("$.c.variant({{ {} }})", arms.join(", "))
+                }
+            },
+            Frame::Func {
+                arguments,
+                rendered,
+                mode,
+                ..
+            } => {
+                let (args, results) = rendered.split_at(arguments);
+                format!(
+                    "$.c.func([{}], [{}], \"{}\")",
+                    args.join(", "),
+                    results.join(", "),
+                    mode_text(mode),
+                )
+            }
+            Frame::Service { members, .. } => {
+                format!("$.c.service({{ {} }})", members.join(", "))
+            }
+        }
+    }
+
+    /// A variant arm's `tag` member in an alias, with the arm's docs.
+    fn tag_member(&self, container: TypeRef, id: u32) -> Member {
+        Member {
+            docs: self
+                .names
+                .provenance
+                .field_docs(&self.origins, container, id)
+                .to_vec(),
+            text: format!("tag: {}", self.tag_literal(container, id)),
         }
     }
 
