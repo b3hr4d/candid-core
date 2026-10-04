@@ -30,16 +30,20 @@ No export, type, issue code, path, wire byte or validation verdict changed.
 - **How.** The codec's catch blocks no longer ask `instanceof` whether a caught
   value is one of the module's own control-flow exceptions; those are
   recognised by identity, which reads nothing from the thrown value. A thrown
-  value carrying an engine's stack-overflow `name` and `message` is still
-  reported as `resource_limit_exceeded` with resource `stack`, whatever its
-  prototype does, and that check now comes first in `decode` as it already did
-  in `encode`.
-- **The thrown value, not a trap's exception, is what is classified.** Inside
+  value carrying an engine's stack-overflow `name` and `message` is reported
+  as `resource_limit_exceeded` with resource `stack`, whatever its prototype
+  does, and that check now comes first in `decode` as it already did in
+  `encode`.
+- **The thrown value, not a trap's exception, is what is classified.** Below
   an `opt` that was decoding, a trap's exception used to replace the thrown
-  value before `decode` labelled it, so a trap throwing a stack-overflow
-  `RangeError` was reported as `stack`. The thrown value is now what `decode`
-  classifies, so that case is `unsupported_schema`, like the same value thrown
-  anywhere else.
+  value before `decode` labelled it. The thrown value is now what `decode`
+  classifies there, as it already was everywhere else, which changes the label
+  in two opposite directions:
+  - a thrown value whose `getPrototypeOf` trap throws a stack-overflow
+    `RangeError` was reported as `stack`, and is now `unsupported_schema`;
+  - a thrown value carrying an engine's stack-overflow `name` and `message`
+    whose `getPrototypeOf` trap throws was reported as `unsupported_schema`,
+    and is now `stack`.
 
 ## 0.3.0-beta.1 — 2026-10-02
 
