@@ -255,12 +255,12 @@ limit_fields! {
     /// so the default fits Rust's 2 MiB spawned-thread stack in a debug
     /// build with room to spare. `tests/deep_nesting.rs` compiles a run at
     /// the default on exactly that stack through every entry point, and pins
-    /// both figures to within a factor of two on every platform the suite
-    /// runs on. By the same figures, raising this above about 330 stops
-    /// being safe on a 1 MiB debug stack, and above about 670 on a 2 MiB one
-    /// (measured ceilings: 334 and 672); a host on a smaller stack, such as
-    /// a browser WASM embedding, whose stack was not measured, should lower
-    /// it.
+    /// both figures to within a factor of two on every platform CI tests
+    /// (the release figure in a dedicated `--release` step). By the same
+    /// figures, raising this above about 330 stops being safe on a 1 MiB
+    /// debug stack, and above about 670 on a 2 MiB one (measured ceilings:
+    /// 334 and 672); a host on a smaller stack, such as a browser WASM
+    /// embedding, whose stack was not measured, should lower it.
     max_source_nesting / with_max_source_nesting = 256;
     /// Maximum semantic type nesting lowered from a checked Candid program.
     max_type_depth / with_max_type_depth = 256;

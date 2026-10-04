@@ -543,6 +543,19 @@ mod preflight_tests {
         // Blank lines and spaces neither count nor end a run.
         assert_eq!(longest_comment_run(&"\n".repeat(10_000)), 0);
         assert_eq!(longest_comment_run("// a\n\n\n   \t\r\n// b\n"), 2);
+        // A line comment ends only at `\n`, as upstream's `//[^\n]*` does: a
+        // bare `\r` (old Mac line endings) is part of the comment, so this
+        // is one comment, while CRLF endings end each line comment.
+        assert_eq!(longest_comment_run("// a\r// b\r// c"), 1);
+        assert_eq!(longest_comment_run("// a\r\n// b\r\n"), 2);
+        assert_eq!(longest_comment_run("// a\r\n// b\r\n// c\r\n"), 3);
+        // `\r` and `\t` between block comments are whitespace.
+        assert_eq!(longest_comment_run("/**/\r/**/\t/**/"), 3);
+        // Non-ASCII bytes inside a comment or a string are its contents;
+        // outside both they begin a token (or a lexical error) and reset.
+        assert_eq!(longest_comment_run("// \u{e9}\n/* \u{1f600} */ // b"), 3);
+        assert_eq!(longest_comment_run("\"\u{e9} // a\" x"), 0);
+        assert_eq!(longest_comment_run("// a\n\u{e9}\n// b"), 1);
         // A nested block comment is one comment, however deep.
         assert_eq!(longest_comment_run("/* /* /* */ */ */"), 1);
         let deep = format!("{}{}", "/*".repeat(10_000), "*/".repeat(10_000));
@@ -590,10 +603,12 @@ mod preflight_tests {
     /// of up to seven bytes drawn from the lexically significant alphabet
     /// that upstream tokenizes without error: the longest run the scan
     /// reports equals the most comments upstream skips between two of the
-    /// tokens it returns.
+    /// tokens it returns. The alphabet holds `\r` and `\t` as well as `\n`
+    /// and space, so a scan that ended a line comment at a bare `\r`, or
+    /// treated either as anything but whitespace, disagrees here.
     #[test]
     fn comment_runs_agree_with_the_upstream_tokenizer() {
-        const ALPHABET: &[u8] = b"/*\"\\\n a";
+        const ALPHABET: &[u8] = b"/*\"\\\n\r\t a";
         fn gap_comments(gap: &str) -> usize {
             let (mut rest, mut longest) = (gap, 0);
             loop {
@@ -647,7 +662,7 @@ mod preflight_tests {
             }
         }
         // The corpus is not vacuous: this many sources lex cleanly.
-        assert_eq!(compared, 56_344);
+        assert_eq!(compared, 392_192);
     }
 
     #[test]

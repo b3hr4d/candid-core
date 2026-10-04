@@ -40,6 +40,12 @@ jobs:
         run: cargo clippy --all-targets --all-features --locked -- -D warnings
       - name: Test
         run: cargo test --all-targets --locked
+      # Every other test step builds the debug profile, so without this the
+      # release half of the per-comment stack cost that
+      # `Limits::max_source_nesting` documents (issue #219) would be pinned
+      # only by a manual `--release` run, and could go stale unnoticed.
+      - name: Pin the release stack cost of a comment run
+        run: cargo test --release --locked --test deep_nesting comment_run_stack_cost_matches_the_documented_figure
   features:
     name: Feature matrix
     runs-on: ubuntu-latest

@@ -717,7 +717,9 @@ const COST_PROBE_STACK_BYTES: usize = 4 * 1024 * 1024;
 
 /// Acceptance criterion 6 of issue #219: the documented stack cost per
 /// comment is a measurement, pinned here within a factor of two either way
-/// on every platform the suite runs on. With the limit lifted, a run the
+/// on every platform the suite runs on. The debug figure is checked by every
+/// test run; the release figure by Verify's stable job, which runs this test
+/// with `--release` on each of its platforms. With the limit lifted, a run the
 /// probe stack holds at twice the documented cost compiles, and a run that
 /// needs it at half the documented cost overflows it.
 #[test]
