@@ -258,6 +258,8 @@ function deepEqual(left: unknown, right: unknown): boolean {
 
 export interface Loaded {
   readonly schemas: { readonly [name: string]: AnySchema } | null;
+  /** The loader's first issue code when it refused the envelope. */
+  readonly refusal?: string;
 }
 
 /** Load every environment's schemas once. */
@@ -265,9 +267,27 @@ export function loadEnvs(corpus: Corpus): Map<string, Loaded> {
   const loaded = new Map<string, Loaded>();
   for (const [id, env] of corpus.envs) {
     const built = schemaFromContract(env.envelope);
-    loaded.set(id, { schemas: built.ok ? built.schemas : null });
+    loaded.set(
+      id,
+      built.ok
+        ? { schemas: built.schemas }
+        : { schemas: null, refusal: firstIssue(built.issues).code },
+    );
   }
   return loaded;
+}
+
+/**
+ * The loader refused an envelope candid-core itself compiled: every case in
+ * that environment is a divergence (the reference accepted the Contract),
+ * never a skip.
+ */
+function envRefused(kase: CaseLine, env: Loaded): Outcome {
+  return {
+    id: kase.id,
+    category: `env:ts-refuses-contract:${env.refusal ?? "?"}`,
+    ours: { verdict: "reject", code: env.refusal ?? "?", path: "$" },
+  };
 }
 
 /** What this runtime answered, in a form small enough to report. */
@@ -293,7 +313,7 @@ function firstIssue(issues: readonly { code: string; path: string }[]): {
 
 function runDecode(kase: DecodeLine, env: Loaded): Outcome {
   if (env.schemas === null) {
-    return { id: kase.id, category: null, ours: { verdict: "skip", reason: "env_refused" } };
+    return envRefused(kase, env);
   }
   const schemas: AnySchema[] = [];
   for (const name of kase.expected) {
@@ -423,7 +443,7 @@ function decodeSymptom(ref: Reference, ours: Ours): string | null {
 
 function runValidate(kase: ValidateLine, env: Loaded): Outcome {
   if (env.schemas === null) {
-    return { id: kase.id, category: null, ours: { verdict: "skip", reason: "env_refused" } };
+    return envRefused(kase, env);
   }
   const schema = env.schemas[kase.type];
   if (schema === undefined) {

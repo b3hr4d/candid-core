@@ -30,7 +30,10 @@ const totals: Record<string, number> = {};
 const categories: Record<string, { count: number; examples: unknown[] }> = {};
 for (const outcome of outcomes) {
   const kase = byId.get(outcome.id);
-  const key = `${kase?.kind ?? "?"}:${outcome.ours.verdict}`;
+  const key =
+    outcome.ours.verdict === "skip"
+      ? `${kase?.kind ?? "?"}:skip:${outcome.ours.reason}`
+      : `${kase?.kind ?? "?"}:${outcome.ours.verdict}`;
   totals[key] = (totals[key] ?? 0) + 1;
   if (outcome.category === null) {
     continue;
