@@ -17,7 +17,10 @@ API, the inferred domain types, the codec's wire behaviour, and the codes and
 
 ### A thrown value whose prototype cannot be read no longer escapes the codec
 
-No export, type, issue code, path, wire byte or validation verdict changed.
+No export, type, path or wire byte changed, and `validate`'s verdicts are
+unchanged. One `decode` classification moved: below an `opt` that was
+decoding, a hostile thrown value can now get a different issue code (the last
+bullet).
 
 - **`encode`, `encodeArgs`, `decode` and `decodeArgs` keep their no-throw
   guarantee against a hostile thrown value** (issue #199). When user code a
