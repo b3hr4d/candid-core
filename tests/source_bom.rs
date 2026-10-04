@@ -246,6 +246,32 @@ fn a_bom_does_not_bypass_the_source_nesting_preflight() {
 }
 
 #[test]
+fn a_bom_does_not_bypass_the_comment_run_preflight() {
+    // Issue #219: the comment-run scan reads the same text the tokenizer
+    // does, after the mark. An in-limit header keeps the BOM-less twin's
+    // semantic identities and documentation; one comment more is refused.
+    let headed = |lines: usize| format!("{}{SERVICE}", "// header\n".repeat(lines));
+    let limits = Limits::default().with_max_source_nesting(32);
+    let context = RuntimeContext::new(limits);
+    let plain = compile_did_with_context(&headed(32), CompileOptions::default(), &context).unwrap();
+    let marked =
+        compile_did_with_context(&with_bom(&headed(32)), CompileOptions::default(), &context)
+            .unwrap();
+    assert_eq!(identities(&marked), identities(&plain));
+    assert_eq!(
+        marked.source_info().unwrap().declarations(),
+        plain.source_info().unwrap().declarations()
+    );
+    let diagnostic = first_diagnostic(
+        compile_did_with_context(&with_bom(&headed(33)), CompileOptions::default(), &context)
+            .unwrap_err(),
+    );
+    let resource = diagnostic.resource_limit.expect("a resource refusal");
+    assert_eq!(resource.resource, "source_nesting");
+    assert_eq!((resource.limit, resource.observed), (32, 33));
+}
+
+#[test]
 fn the_bom_counts_against_the_source_byte_limit() {
     // Limits bound raw bytes, the same bytes the digest and bundle id cover.
     let limit = SERVICE.len();
