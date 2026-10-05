@@ -620,36 +620,41 @@ pub struct Scan {
 }
 
 impl Scan {
-    /// Why a decode case is outside the generation bounds, or `None` when
-    /// it is within them. A case outside is redrawn, never judged: within
-    /// the bounds the runtime's budgets cannot decide a verdict, and the
-    /// reference's decoding quota (sized from this scan) cannot run out.
-    ///
-    /// The runtime walks the *expected* types, which nest deeper than the
-    /// wire where a coercion inserts an `opt` (an expected `opt` reading a
-    /// non-`opt` wire value). Where the reference decoded the message, its
-    /// values at the expected types (`decoded`, see `reference_judgement`)
-    /// measure that nesting exactly; elsewhere the bound is static: up to
-    /// `expansion` `opt` levels above every wire level (see `expansion`).
-    pub fn outside_bounds(&self, expansion: usize, decoded: Option<usize>) -> Option<&'static str> {
-        let factor = 1 + expansion;
-        let nesting = match decoded {
-            Some(levels) => levels.max(self.levels) + 2,
-            None => (self.levels + 2).saturating_mul(factor),
-        };
+    /// Why a decode case's message is outside the generation bounds that
+    /// the scan alone decides, or `None`: checked *before* the reference
+    /// runs, since such a message (a forged length of a zero-sized type) can
+    /// cost the reference hours. A case outside is redrawn, never judged:
+    /// within the bounds the runtime's budgets cannot decide a verdict, and
+    /// the reference's decoding quota (sized from this scan) cannot run out.
+    /// `expansion` is the most `opt` levels a coercion can insert above a
+    /// wire value at the expected types (see `expansion`).
+    pub fn outside_bounds(&self, expansion: usize) -> Option<&'static str> {
         if self.unbounded {
             Some("unbounded")
         } else if self.claimed_types > GEN_TABLE_ENTRIES {
             Some("table_entries")
         } else if self.max_length > GEN_LENGTH {
             Some("length")
-        } else if nesting > GEN_LEVELS {
-            Some("levels")
-        } else if (self.values + 16).saturating_mul(4 * factor) > GEN_ELEMENTS {
+        } else if (self.values + 16).saturating_mul(4 * (1 + expansion)) > GEN_ELEMENTS {
             Some("values")
         } else {
             None
         }
+    }
+
+    /// Whether a decode case nests too deep at the expected types, checked
+    /// once the reference has run. The runtime walks the *expected* types,
+    /// which nest deeper than the wire where a coercion inserts an `opt` (an
+    /// expected `opt` reading a non-`opt` wire value). Where the reference
+    /// decoded the message, its values at the expected types (`decoded`, see
+    /// `reference_judgement`) measure that nesting exactly; elsewhere the
+    /// bound is static: up to `expansion` `opt` levels above every wire level.
+    pub fn too_deep(&self, expansion: usize, decoded: Option<usize>) -> bool {
+        let nesting = match decoded {
+            Some(levels) => levels.max(self.levels) + 2,
+            None => (self.levels + 2).saturating_mul(1 + expansion),
+        };
+        nesting > GEN_LEVELS
     }
 }
 

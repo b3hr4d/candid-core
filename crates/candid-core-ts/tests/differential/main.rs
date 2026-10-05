@@ -355,8 +355,10 @@ fn draft_decode(built: &Built, rng: &mut Rng) -> DecodeDraft {
     }
 }
 
-/// A drafted decode case judged by the reference, and why it is outside
-/// the generation bounds (see `wire::Scan::outside_bounds`), or `None`.
+/// A drafted decode case judged by the reference, or why it is outside the
+/// generation bounds: what the scan decides is checked before the reference
+/// runs (`wire::Scan::outside_bounds`), the nesting at the expected types
+/// after (`wire::Scan::too_deep`).
 fn judge_decode(
     built: &Built,
     draft: DecodeDraft,
@@ -368,11 +370,17 @@ fn judge_decode(
         .iter()
         .map(|name| find(&built.types, name))
         .collect();
-    let (verdict, decoded) = wire::reference_judgement(&built.types, &draft.bytes, &types);
-    let outside = match wire::expansion(&built.types, &types) {
-        None => Some("opt_cycle"),
-        Some(expansion) => wire::scan(&draft.bytes).outside_bounds(expansion, decoded),
+    let Some(expansion) = wire::expansion(&built.types, &types) else {
+        return (Value::Null, Some("opt_cycle"));
     };
+    let scan = wire::scan(&draft.bytes);
+    if let Some(bound) = scan.outside_bounds(expansion) {
+        return (Value::Null, Some(bound));
+    }
+    let (verdict, decoded) = wire::reference_judgement(&built.types, &draft.bytes, &types);
+    if scan.too_deep(expansion, decoded) {
+        return (Value::Null, Some("levels"));
+    }
     let line = json!({
         "kind": "decode",
         "id": id,
@@ -387,7 +395,7 @@ fn judge_decode(
         "hex": wire::hex(&draft.bytes),
         "ref": verdict,
     });
-    (line, outside)
+    (line, None)
 }
 
 /// Draft cases with `draft` until one is within the generation bounds,
