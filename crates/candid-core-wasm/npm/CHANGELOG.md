@@ -39,12 +39,9 @@ dist-tag stays on 0.2.0-beta.1.
 0.2.0-beta.1). The modules this generator emits need that release's
 `Principal` export and boxed options, which 0.2.0 does not have, and the
 generator and that release's `schemaFromContract` agree on blobs and on
-omitted declarations only when both come from the same release. A mismatched
-pair does not work either way (measured with npm 11.3.0): when the peer's exact
-version is published, npm refuses the install with `ERESOLVE could not
-resolve`; when it is not, the peer being optional, npm only warns `ERESOLVE
-overriding peer dependency` and installs without the schema package, and the
-result does not type-check. Install the pair at exact versions.
+omitted declarations only when both come from the same release. npm refuses
+to install a mismatched pair (measured with npm 11.3.0: `ERESOLVE could not
+resolve`, exit status 1). Install the pair at exact versions.
 
 **Upgrading from 0.1.0.** 0.2.0 is 0.2.0-beta.1 plus the changes in this
 entry, so the upgrade is this entry and the 0.2.0-beta.1 entry below, read
@@ -63,22 +60,24 @@ The embedded compiler now refuses a `.did` file with more than 256 consecutive
 comments between two tokens. The upstream Candid tokenizer it embeds spends one
 stack frame on each comment it skips, so the compiler counts the run first,
 without recursing, and refuses an over-long one before that tokenizer runs.
-Before, a long enough run exhausted the WebAssembly stack: measured on a local
-build of 0.2.0-beta.1's source (rustc 1.87.0, Node 24.2, macOS arm64), `gen`
-compiled a file with 2 609 consecutive `//` lines and failed at 2 610 with
-`internal_error` "Maximum call stack size exceeded"; the threshold moves with
-the toolchain and the engine.
+Before, a long enough run exhausted the WebAssembly stack: measured with the
+published tarballs (Node 24.2, macOS arm64), 0.2.0-beta.1's `gen` compiled a
+file with 2 728 consecutive `//` lines and failed at 2 729 with
+`internal_error` "Maximum call stack size exceeded", and 0.1.0's compiled
+2 825 and crashed at 2 826 with an uncaught `RangeError`; the threshold moves
+with the toolchain and the engine.
 
 - **BREAKING (input)**: this refuses files that `gen` accepted before: any
-  `.did` in the bundle with a run of 257 to about 2 600 comments, such as a
-  license header written as `//` lines. `gen`, `didToContract` and `didToModule` report
-  `resource_limit_exceeded` with resource `source_nesting`, limit 256 and
-  `observed` 257, through the existing diagnostic path (the
-  `{ ok: false, diagnostics }` document, or `--json`) with exit status 1. A
-  longer run, which failed with `internal_error` before, gets the same
-  diagnostic. The CLI compiles at the compiler's default limits and has no
-  flag to raise this one: write such a header as a single `/* */` block, which
-  counts as one comment, or shorten it. Line and block comments count alike;
+  `.did` in the bundle with a run of 257 to about 2 700 or 2 800 comments,
+  such as a license header written as `//` lines. `gen`, `didToContract` and
+  `didToModule` report `resource_limit_exceeded` with resource
+  `source_nesting`, limit 256 and `observed` 257, through the existing
+  diagnostic path (the `{ ok: false, diagnostics }` document, or `--json`)
+  with exit status 1. A longer run, which failed with `internal_error` before
+  (an uncaught `RangeError` in 0.1.0), gets the same diagnostic. The CLI
+  compiles at the compiler's default limits and has no flag to raise this one:
+  write such a header as a single `/* */` block, which counts as one comment,
+  or shorten it. Line and block comments count alike;
   blank lines between comments do not end a run, any token does, a nested
   block comment counts once, and comment markers inside a string are not
   comments.
