@@ -194,7 +194,7 @@ export interface ValidateOptions {
    * Maximum value depth, mirroring `Limits::max_value_depth`: the root is at
    * 0, each constructor's children one below it (a variant's `null` payload
    * included), and a node deeper than this is refused. A `rec` hop is not a
-   * level (issue #231); more than this many consecutive hops resolving one
+   * level; more than this many consecutive hops resolving one
    * reference are refused instead, so with a `maxDepth` below a schema's
    * longest hop chain (one for a Contract-loaded schema, two for a generated
    * module) a value is refused where it reaches that chain, even a value the

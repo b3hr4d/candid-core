@@ -357,7 +357,7 @@ export interface CodecOptions {
   /**
    * Value depth cap, mirroring `Limits::max_value_depth`: the root is at 0,
    * each constructor's children one below it, and a value deeper than this
-   * is refused. A `rec` hop is not a level (issue #231); more than this many
+   * is refused. A `rec` hop is not a level; more than this many
    * consecutive hops resolving one reference are refused instead, so a
    * value gets the same verdict with or without `rec` whenever this is at
    * least the schema's longest hop chain (one for a Contract-loaded schema,

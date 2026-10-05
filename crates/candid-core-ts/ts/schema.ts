@@ -818,7 +818,7 @@ export const c = {
    * can never hit a temporal-dead-zone reference, and recursion needs no
    * special casing at emission time. A hop is an indirection, not a level
    * of the value: it charges neither a walk's depth budget nor its element
-   * budget (issue #231). A chain of more than `maxDepth` consecutive hops
+   * budget. A chain of more than `maxDepth` consecutive hops
    * resolving one reference is refused with `value_depth`, which is what
    * makes a mis-built `c.rec(() => self)` terminate instead of hanging.
    *
