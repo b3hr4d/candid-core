@@ -147,10 +147,20 @@
     {
       "name": "contract_field_as_array",
       "target": "contract",
-      "note": "A record field written as a JSON array, serde's sequence form of the struct. Contract::from_json accepts it; schemaFromContract refuses it (invalid_contract_document) (#235, finding 14).",
+      "note": "A record field written as a JSON array, serde's sequence form of the struct. Contract::from_json accepted it; schemaFromContract refuses it (invalid_contract_document); Contract::from_json refuses it too since #235 (finding 14).",
       "origin": "minimized from campaign case c/7011301/19",
       "did": "type R = record { a : nat; b : nat };\n",
-      "ops": [{"op": "set", "path": ["types", 0, "fields", 0], "value": [97, 1]}]
+      "ops": [{"op": "set", "path": ["types", 0, "fields", 0], "value": [97, 1]}],
+      "agrees": "Both refuse since #235: the Rust loaders refuse a struct written as a JSON array (invalid type: sequence), as schemaFromContract does."
+    },
+    {
+      "name": "contract_declaration_as_array",
+      "target": "contract",
+      "note": "A declaration written as a JSON array, serde's sequence form of the struct, the issue's second repro. Contract::from_json accepted it; schemaFromContract refuses it (invalid_contract_document); Contract::from_json refuses it too since #235 (finding 14).",
+      "origin": "written by hand from #235's second repro",
+      "did": "type R = record { a : nat; b : nat };\n",
+      "ops": [{"op": "set", "path": ["declarations", 0], "value": ["R", 0]}],
+      "agrees": "Both refuse since #235: the Rust loaders refuse a struct written as a JSON array (invalid type: sequence), as schemaFromContract does."
     },
     {
       "name": "contract_declarations_absent",

@@ -6,8 +6,7 @@
     "104": "Settled decision 1 of #104: a func value's method name is non-empty (the runtime's decode refuses an empty one with invalid_length, for round-trip symmetry with validate and encode; the candid crate accepts it), and opaque references and external reference sequences stay refused (a future value with a non-zero reference count: invalid_principal). Triage: each generated case agrees once the runtime's empty-name check is reversed (and nothing else).",
     "227": "Upstream defects of the candid crate 0.10.30, found by this fuzz; the reference is wrong in each listed case and the runtime is right: wire-side-only empty normalization (item 1), values read from an empty wire type (item 2), the unsound coinductive subtype memo (item 3), a skipped func reference's method name not checked for UTF-8 (item 4). Each case is a hand-minimized vector with its analysis in regressions.json.",
     "228": "schemaFromContract accepts Contract documents Contract::from_json refuses: orphan type nodes (item 7), unknown keys (item 6), a rootless arena (item 8); the runtime's loader is the wrong side. Item 9 (a document without declarations, which the runtime refuses and the reference accepts) awaits the owner's call. Triage: the reference's first violation names the rule, and the runtime's loader has no such check.",
-    "229": "Field names attach to the shared canonical node, so a declaration that spells a field by number (or another name) is decoded and validated under another declaration's spelling (d for 100, y for 121); the owner's question on #229. Triage: each decode case's values equal the reference's once every key and tag is read as its label id; each validate case's value uses the declaration's own spelling.",
-    "235": "Contract::from_json accepts a struct written as a JSON array (serde's sequence form), e.g. a record field or a declaration; schemaFromContract refuses it (invalid_contract_document). Whether the format admits the sequence form is the owner's call (#235); candid-core writes objects only."
+    "229": "Field names attach to the shared canonical node, so a declaration that spells a field by number (or another name) is decoded and validated under another declaration's spelling (d for 100, y for 121); the owner's question on #229. Triage: each decode case's values equal the reference's once every key and tag is read as its label id; each validate case's value uses the declaration's own spelling."
   },
   "cases": {
     "d/10/15": {
@@ -207,11 +206,6 @@
     },
     "r/contract_declarations_absent": {
       "issue": 228,
-      "side": "owner-call",
-      "symptom": "ts=reject:invalid_contract_document ref=accept"
-    },
-    "r/contract_field_as_array": {
-      "issue": 235,
       "side": "owner-call",
       "symptom": "ts=reject:invalid_contract_document ref=accept"
     },
