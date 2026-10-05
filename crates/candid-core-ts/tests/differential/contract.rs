@@ -274,6 +274,12 @@ fn structural(rng: &mut Rng, document: &Value) -> Option<Vec<Value>> {
         _ => ("duplicate_field_id", "unsorted_field_ids"),
     };
     if rng.chance(1, 2) {
+        // An earlier edit of the same case may have replaced the field or
+        // method with a value that is neither an object nor null (a `null`
+        // becomes an object holding the copied key): nothing to rekey then.
+        if !(items[j].is_object() || items[j].is_null()) {
+            return None;
+        }
         let mut item = items[j].clone();
         item["id"] = items[j - 1]["id"].clone();
         if key == "methods" {
