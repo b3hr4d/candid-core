@@ -10,56 +10,6 @@
     "231": "The runtime charges a rec hop a step (#231): decode and validate refuse the first decoded node at Candid level 128 (257 steps) where the candid crate (no depth budget) accepts, and validate's tag-only arm is charged its rec hop but not its null, one level unlike candid-core's max_value_depth (the boundary vectors past maxDepth on the decoded paths, the path of coercion-inserted opts, and an expected reserved field, whose rec hop moves the bound by one wire level). The same step charges an element too, so validate reaches maxElements well before candid-core's max_value_elements counts as many HostValue nodes (validate_elements_record_vec_null_499998: 1,000,001 runtime steps, 500,000 HostValue nodes; validate_elements_mixed_vec_34481_pad_22); #231 states the depth half, and the element half is reported to the lead to add there. Random generation stays strictly below these bounds; only these exact boundary vectors cross them. Owner's call on #231."
   },
   "cases": {
-    "c/15/0": {
-      "issue": 228,
-      "side": "runtime",
-      "symptom": "ts=accept ref=reject:orphan_type_node"
-    },
-    "c/16/1": {
-      "issue": 228,
-      "side": "runtime",
-      "symptom": "ts=accept ref=reject:orphan_type_node"
-    },
-    "c/17/2": {
-      "issue": 228,
-      "side": "runtime",
-      "symptom": "ts=accept ref=reject:orphan_type_node"
-    },
-    "c/19/0": {
-      "issue": 228,
-      "side": "runtime",
-      "symptom": "ts=accept ref=reject:orphan_type_node"
-    },
-    "c/19/4": {
-      "issue": 228,
-      "side": "runtime",
-      "symptom": "ts=accept ref=reject:orphan_type_node"
-    },
-    "c/2/3": {
-      "issue": 228,
-      "side": "runtime",
-      "symptom": "ts=accept ref=reject:orphan_type_node"
-    },
-    "c/4/4": {
-      "issue": 228,
-      "side": "runtime",
-      "symptom": "ts=accept ref=reject:orphan_type_node"
-    },
-    "c/4/6": {
-      "issue": 228,
-      "side": "runtime",
-      "symptom": "ts=accept ref=reject:orphan_type_node"
-    },
-    "c/7/6": {
-      "issue": 228,
-      "side": "runtime",
-      "symptom": "ts=accept ref=reject:orphan_type_node"
-    },
-    "c/8/4": {
-      "issue": 228,
-      "side": "runtime",
-      "symptom": "ts=accept ref=reject:json_unknown_field"
-    },
     "d/10/15": {
       "issue": 103,
       "side": "decision",
@@ -280,25 +230,10 @@
       "side": "decision",
       "symptom": "ts=accept ref=reject:invalid_contract_id_format"
     },
-    "r/contract_orphan_type_node": {
-      "issue": 228,
-      "side": "runtime",
-      "symptom": "ts=accept ref=reject:orphan_type_node"
-    },
     "r/contract_producer_edit": {
       "issue": 102,
       "side": "decision",
       "symptom": "ts=accept ref=reject:json_invalid_type"
-    },
-    "r/contract_rootless_arena": {
-      "issue": 228,
-      "side": "runtime",
-      "symptom": "ts=accept ref=reject:rootless_type_arena"
-    },
-    "r/contract_unknown_key": {
-      "issue": 228,
-      "side": "runtime",
-      "symptom": "ts=accept ref=reject:json_unknown_field"
     },
     "r/depth_coercion_inserted_opts": {
       "issue": 231,

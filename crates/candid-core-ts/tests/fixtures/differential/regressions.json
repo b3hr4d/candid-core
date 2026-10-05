@@ -49,26 +49,29 @@
     {
       "name": "contract_unknown_key",
       "target": "contract",
-      "note": "An unknown key on a type node. Contract::from_json refuses it (unknown field); schemaFromContract accepts it (#228, item 6).",
+      "note": "An unknown key on a type node. Contract::from_json refuses it (unknown field); schemaFromContract refuses it too since #232 (#228, item 6).",
       "origin": "written by hand after run-3 case c/1000002/11",
       "did": "type T0 = nat;\n",
-      "ops": [{"op": "set", "path": ["types", 0, "extra"], "value": false}]
+      "ops": [{"op": "set", "path": ["types", 0, "extra"], "value": false}],
+      "agrees": "Both refuse since #232 (#228 item 6): the TS loader closes every object's key set, as Contract::from_json does with deny_unknown_fields."
     },
     {
       "name": "contract_orphan_type_node",
       "target": "contract",
-      "note": "A type node no declaration reaches. Contract::from_json refuses it (orphan_type_node); schemaFromContract accepts it (#228, item 7).",
+      "note": "A type node no declaration reaches. Contract::from_json refuses it (orphan_type_node); schemaFromContract refuses it too since #232 (#228, item 7).",
       "origin": "written by hand after run-3 case c/1000000/8",
       "did": "type T0 = nat;\n",
-      "ops": [{"op": "insert", "path": ["types", 1], "value": {"kind": "primitive", "primitive": "text"}}]
+      "ops": [{"op": "insert", "path": ["types", 1], "value": {"kind": "primitive", "primitive": "text"}}],
+      "agrees": "Both refuse since #232 (#228 item 7): the TS loader refuses a type node no root reaches, as Contract::from_json does."
     },
     {
       "name": "contract_rootless_arena",
       "target": "contract",
-      "note": "A non-empty arena with no declaration and no actor. Contract::from_json refuses it (rootless_type_arena); schemaFromContract accepts it (#228, item 8).",
+      "note": "A non-empty arena with no declaration and no actor. Contract::from_json refuses it (rootless_type_arena); schemaFromContract refuses it too since #232 (#228, item 8).",
       "origin": "written by hand after run-3 case c/1001109/14",
       "did": "type T0 = nat;\n",
-      "ops": [{"op": "set", "path": ["declarations"], "value": []}]
+      "ops": [{"op": "set", "path": ["declarations"], "value": []}],
+      "agrees": "Both refuse since #232 (#228 item 8): the TS loader refuses a non-empty arena with no declaration and no actor, as Contract::from_json does."
     },
     {
       "name": "contract_identities_edit",
