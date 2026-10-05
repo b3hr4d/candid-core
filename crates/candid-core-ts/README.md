@@ -208,7 +208,8 @@ tables, zero-width element bombs, and depth exhaustion. A seeded differential
 fuzz (issue #196, `tests/differential/`) holds `decodeArgs`, `validate` and
 `schemaFromContract` to the `candid` crate, candid-core's HostValue validator
 and `Contract::from_json` over a committed corpus, against a reviewed list of
-the divergences that remain and why. Not demonstrated:
+the divergences that remain, each by case id with its issue and exact
+symptom. Not demonstrated:
 opaque reference values (form tag `0`) and external reference sequences are
 refused, `func`/`service` values have no schema counterpart and only skip,
 and no claim is made about agent envelope formats or any bytes beyond the

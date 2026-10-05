@@ -289,7 +289,8 @@ jobs:
       # describe — so a failure here is a mapping regression, not flake. It
       # also replays the differential corpus (ts/tests/differential.test.ts,
       # issue #196): every case must agree with the reference or show exactly
-      # the divergence tests/goldens/differential/divergences.json lists for it.
+      # the symptom tests/goldens/differential/divergences.json lists for its
+      # case id, with its issue.
       - name: Run the schema runtime tests
         working-directory: crates/candid-core-ts/ts
         run: npm test
