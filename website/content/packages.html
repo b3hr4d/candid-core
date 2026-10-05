@@ -55,7 +55,7 @@
 </callout>
 
 <callout type="note" title="Published as a beta">
-  <p>The table above shows <code>latest</code> and <code>beta</code>. The sections below describe the packages as the repository builds them, published under the npm <code>beta</code> dist-tag as <code>@candid-core/schema</code> <code>0.3.0-beta.1</code> and <code>@candid-core/cli</code> <code>0.2.0-beta.1</code>: <code>latest</code> <code>0.2.0</code> still has two more subpaths and an optional peer, and <code>latest</code> <code>0.1.0</code> still emits the old module layout. <a href="migrating-from-0-2.html">Migrating from 0.2.0</a> lists every difference, and each is recorded in the package changelogs under <code>0.3.0-beta.1</code> and <code>0.2.0-beta.1</code>.</p>
+  <p>The table above shows <code>latest</code> and <code>beta</code>. The sections below describe the packages as the repository builds them, published under the npm <code>beta</code> dist-tag as <code>@candid-core/schema</code> <code>0.3.0-beta.1</code> and <code>@candid-core/cli</code> <code>0.2.0-beta.1</code>: <code>latest</code> <code>0.2.0</code> still has two more subpaths and an optional peer, and <code>latest</code> <code>0.1.0</code> still emits the old module layout. <a href="migrating-from-0-2.html">Migrating from 0.2.0</a> lists every difference, and each is recorded in the package changelogs under <code>0.3.0-beta.1</code> and <code>0.2.0-beta.1</code>. The repository has moved on since: it is prepared as <code>@candid-core/schema</code> <code>0.3.0</code> and <code>@candid-core/cli</code> <code>0.2.0</code> for <code>latest</code>, not yet published, and the changes since the betas are recorded under those two versions.</p>
 </callout>
 
 <h2>Which one do I need?</h2>
@@ -220,7 +220,7 @@ pub fn generate_module(
 
 <ul>
   <li><strong>Manifest:</strong> <code>crates/candid-core-ts/ts/package.json</code>.</li>
-  <li><strong>Published:</strong> yes, on <a href="https://www.npmjs.com/package/@candid-core/schema">npm</a>. Released versions are <code>0.0.0-bootstrap</code>, <code>0.1.0</code>, <code>0.1.1</code>, <code>0.2.0</code> and <code>0.3.0-beta.1</code>; <code>0.2.0</code> is <code>latest</code>, <code>0.3.0-beta.1</code> is <code>beta</code>, and both pair with <code>candid-core</code> <code>0.1.0-beta.3</code>.</li>
+  <li><strong>Published:</strong> yes, on <a href="https://www.npmjs.com/package/@candid-core/schema">npm</a>. Released versions are <code>0.0.0-bootstrap</code>, <code>0.1.0</code>, <code>0.1.1</code>, <code>0.2.0</code> and <code>0.3.0-beta.1</code>; <code>0.2.0</code> is <code>latest</code>, <code>0.3.0-beta.1</code> is <code>beta</code>, and both pair with <code>candid-core</code> <code>0.1.0-beta.3</code>. <code>0.3.0</code>, which pairs with it too, is prepared for <code>latest</code> and not yet published.</li>
   <li><strong>ESM only</strong> (<code>"type": "module"</code>), <code>sideEffects: false</code>, Apache-2.0. The tarball ships <code>dist</code>, <code>README.md</code>, <code>CHANGELOG.md</code> and <code>LICENSE</code>.</li>
   <li><strong>Versions independently</strong> of the Rust crate. Its changelog names the <code>candid-core</code> version each release pairs with.</li>
 </ul>
@@ -256,7 +256,7 @@ npx @candid-core/cli@0.2.0-beta.1 gen ./service.did -o ./generated
 <ul>
   <li><strong>Manifest:</strong> <code>crates/candid-core-wasm/npm/package.json</code>.</li>
   <li><strong>Binary name:</strong> <code>candid-core-cli</code>, at <code>./bin/cli.js</code>.</li>
-  <li><strong>Exports:</strong> <code>"."</code> → <code>./lib/index.js</code> under a <code>types</code> condition, plus <code>./package.json</code>. ESM only, Apache-2.0, no runtime dependencies; the single peer, <code>@candid-core/schema</code> at exactly <code>0.3.0-beta.1</code> (<code>^0.2.0</code> in the published <code>0.1.0</code>), is declared optional. The one devDependency is <code>playwright-core</code> for the browser tests.</li>
+  <li><strong>Exports:</strong> <code>"."</code> → <code>./lib/index.js</code> under a <code>types</code> condition, plus <code>./package.json</code>. ESM only, Apache-2.0, no runtime dependencies; the single peer, <code>@candid-core/schema</code> at exactly <code>0.3.0</code> (exactly <code>0.3.0-beta.1</code> in the published <code>0.2.0-beta.1</code>, <code>^0.2.0</code> in the published <code>0.1.0</code>), is declared optional. The one devDependency is <code>playwright-core</code> for the browser tests.</li>
   <li><strong>CLI grammar:</strong> <code>candid-core-cli gen &lt;service.did&gt;... [-o &lt;dir&gt;] [--json] [--check]</code> (<code>0.1.0</code> takes one entry and neither flag). <code>-o</code> defaults to the current working directory. Output names come from each entry file's stem: <code>service.did</code> writes <code>service.ts</code> and <code>service.envelope.json</code>, and prints the content-addressed identities.</li>
   <li><strong>Library exports:</strong> <code>didToContract(sources)</code> and <code>didToModule(sources)</code>, each taking either a string of Candid text or a <code>{ entry, files }</code> bundle, plus <code>init(input)</code>, which loads the embedded WebAssembly module once and needs no argument under Node.</li>
 </ul>

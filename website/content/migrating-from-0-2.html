@@ -1,19 +1,21 @@
 <p>
   This page is for code written against the published <code>@candid-core/schema</code>
   <code>0.2.0</code> or <code>@candid-core/cli</code> <code>0.1.0</code>. Every other page on this
-  site describes the surface the repository builds now, published on 2026-10-02 as
-  <code>@candid-core/schema</code> <code>0.3.0-beta.1</code> and <code>@candid-core/cli</code>
-  <code>0.2.0-beta.1</code> under the npm <code>beta</code> dist-tag; <code>latest</code> stays on
+  site describes the surface the repository builds now, prepared as
+  <code>@candid-core/schema</code> <code>0.3.0</code> and <code>@candid-core/cli</code>
+  <code>0.2.0</code> for the npm <code>latest</code> dist-tag and not yet published. Most of it
+  was published on 2026-10-02 as <code>0.3.0-beta.1</code> and <code>0.2.0-beta.1</code> under the
+  <code>beta</code> dist-tag; until the stable pair is published, <code>latest</code> stays on
   <code>0.2.0</code> and <code>0.1.0</code>. The record of each change, with the reasoning, is
-  the <code>0.3.0-beta.1</code> entry of the
+  the <code>0.3.0</code> and <code>0.3.0-beta.1</code> entries of the
   <a href="https://github.com/b3hr4d/candid-core/blob/main/crates/candid-core-ts/ts/CHANGELOG.md"><code>@candid-core/schema</code> changelog</a>
-  and the <code>0.2.0-beta.1</code> entry of the
+  and the <code>0.2.0</code> and <code>0.2.0-beta.1</code> entries of the
   <a href="https://github.com/b3hr4d/candid-core/blob/main/crates/candid-core-wasm/npm/CHANGELOG.md"><code>@candid-core/cli</code> changelog</a>.
 </p>
 
 <p>
   Both changelogs state the compatibility non-goal in one line:
-  <code>@candid-core/schema</code> 0.3 betas break the 0.2 API (principal values are canonical text,
+  <code>@candid-core/schema</code> 0.3 breaks the 0.2 API (principal values are canonical text,
   collapsing opts are boxed, every <code>vec nat8</code> is a <code>Uint8Array</code>, generated
   modules use a new binding layout and may omit declarations, and the <code>./actor</code>, <code>./transport-icp</code>, <code>./forms</code> and
   <code>./labels</code> subpaths are gone); there is no compatibility layer.
@@ -34,9 +36,20 @@ npm install --save-dev --save-exact @candid-core/cli@beta
 
 <p>
   Keep both exact: one beta may break the next, and while the two packages move in lockstep every
-  schema beta is paired with a new CLI beta that peers it exactly. Because the peer is optional, npm
-  only warns about a mismatched pair (<code>ERESOLVE overriding peer dependency</code>); it does not
-  refuse it.
+  schema beta is paired with a new CLI beta that peers it exactly. A mismatched pair does not work
+  either way: npm refuses it (<code>ERESOLVE could not resolve</code>) when the peer's exact version
+  is published, and when it is not, the peer being optional, npm only warns
+  (<code>ERESOLVE overriding peer dependency</code>) and leaves the schema package out.
+</p>
+
+<p>
+  The stable pair, <code>@candid-core/schema</code> <code>0.3.0</code> and
+  <code>@candid-core/cli</code> <code>0.2.0</code> with the CLI's peer at exactly
+  <code>0.3.0</code>, is prepared for <code>latest</code> and not yet published. Once it is, a
+  plain install selects it:
+  <code>npm install --save-exact @candid-core/schema</code> and
+  <code>npm install --save-dev --save-exact @candid-core/cli</code>. Until then those lines install
+  <code>0.2.0</code> and <code>0.1.0</code>.
 </p>
 
 <p>

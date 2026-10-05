@@ -585,11 +585,14 @@ exact peer, even when the generator did not change. The schema package stays
 
 One pull request carries both packages, because the CLI's packaging gate
 installs the local schema tarball beside the CLI tarball and compiles against
-it. A schema version the CLI's exact peer does not name does not fail the
-install itself — the peer is optional, so npm only warns `ERESOLVE overriding
-peer dependency`, and in the case measured (npm 11.3.0) leaves the schema
-package out of the tree — and the gate then fails compiling the consumer
-(`TS2307` for `@candid-core/schema/contract`). It contains, and contains only:
+it. A schema version the CLI's exact peer does not name fails that gate
+either way, at one of two steps (both measured with npm 11.3.0). When the peer
+names a version the registry does not hold, the install itself succeeds — the
+peer is optional, so npm only warns `ERESOLVE overriding peer dependency` and
+leaves the schema package out of the tree — and the gate fails compiling the
+consumer (`TS2307` for `@candid-core/schema/contract`). When the peer names a
+published version, such as the last beta, npm refuses the install with
+`ERESOLVE could not resolve`. It contains, and contains only:
 
 1. `crates/candid-core-ts/ts/package.json` and the two root entries of its
    `package-lock.json` at the schema beta; `crates/candid-core-wasm/npm/package.json`
@@ -700,10 +703,44 @@ schema changed, saying so in its entry), raises the exact peer, adds both
 version specs to `UNPUBLISHED_NPM_SPECS`, and diffs the public API against
 the previous beta. Dispatch order is again schema first.
 
+### A stable release of the pair
+
+A stable pair (`0.3.0` / `0.2.0`, the first) is the same pull request, items 1
+to 7, with these differences:
+
+- The versions carry no prerelease suffix, and the CLI's exact peer names the
+  stable schema version.
+- Each changelog entry is written for a reader upgrading from the last
+  *stable* version (`0.2.0` / `0.1.0`), not from the previous beta. The beta
+  entries stay as they were published: they are history, and they shipped in
+  their own tarballs. The stable entry says that it and the beta entries
+  below it are one upgrade, summarises every break between the last stable
+  version and this one, and then lists, with each **BREAKING** item kept,
+  what changed since the last beta.
+- The public-API diff in the release notes is against the previous stable
+  release, rebuilt from its `gitHead` as in item 5; a line says what moved
+  since the last beta.
+- The package READMEs describe the stable release with plain install lines,
+  `npm install --save-exact @candid-core/schema` and
+  `npm install --save-dev --save-exact @candid-core/cli`, and say what the
+  previous stable version lacks.
+- `UNPUBLISHED_NPM_SPECS` names the two exact versions only: `latest` and
+  `beta` both resolve already.
+- Both workflows are dispatched with `--field dist-tag=latest`, schema first,
+  `stable-off-latest` unset. Afterwards `latest` names the stable pair and
+  `beta` still names the last betas; nothing moves `beta`.
+- On publish day the follow-up pull request empties `UNPUBLISHED_NPM_SPECS`,
+  turns the prose install lines into blocks, and rewrites the release note on
+  each TypeScript page (`NOTE_TITLE`), which until then says which beta the
+  page describes.
+
+If the merge slips past the date in the two changelog headings, a commit
+correcting the date comes first and is the one dispatched, as for a beta.
+
 ### Promoting to `latest`
 
 The supported way to move `latest` is a stable release through the workflows
-(`0.3.0` with `dist-tag=latest`). Pointing `latest` at an already-published
+(`0.3.0` with `dist-tag=latest`, above). Pointing `latest` at an already-published
 version by hand, a beta included, is the owner's act outside the workflows,
 with an interactive login exactly as for the bootstrap:
 

@@ -15,7 +15,7 @@
     emits modules in the old layout with an object-shaped principal type, exits 1 with
     <code>ts_generation_refused</code> for an interface with one declaration it cannot represent, and
     returns no <code>omitted</code> list. <a href="migrating-from-0-2.html">Migrating from 0.2.0</a> lists every difference with before and after code,
-    and each is recorded in the package changelog under <code>0.2.0-beta.1</code>.
+    and each is recorded in the package changelog under <code>0.2.0-beta.1</code>. The repository has moved on since: it is prepared as <code>0.2.0</code> for <code>latest</code>, not yet published, and the changes since the beta are recorded under <code>0.2.0</code>.
   </p>
 </callout>
 
@@ -75,11 +75,12 @@ npx @candid-core/cli@0.2.0-beta.1 gen ./service.did -o ./generated
       <td>Runtime dependencies</td>
       <td>
         None. <code>@candid-core/schema</code> is declared as an <em>optional</em> peer at exactly
-        <code>0.3.0-beta.1</code> — every module the CLI emits imports from it, but a
+        <code>0.3.0</code> — every module the CLI emits imports from it, but a
         consumer calling only <code>didToContract</code> never loads it. The modules this page's
         generator emits need the <code>Principal</code> export that 0.2.0 lacks, and while the two
-        packages move in lockstep every schema beta is paired with a CLI beta that names it
-        exactly. The published <code>0.1.0</code> still declares <code>^0.2.0</code>. The one
+        packages move in lockstep every schema release is paired with a CLI release that names it
+        exactly. The published <code>0.2.0-beta.1</code> declares exactly <code>0.3.0-beta.1</code>,
+        and the published <code>0.1.0</code> still declares <code>^0.2.0</code>. The one
         devDependency, <code>playwright-core</code>, drives the browser test
       </td>
     </tr>
