@@ -32,8 +32,9 @@
 <p>
   <code>candid-core-ts</code> is a library crate, not a command. Its entry point produces one
   TypeScript module for the whole Contract, leaving out — and listing in the result's
-  <code>omitted</code> — any declaration it cannot represent, with what references it. Only an invalid
-  Contract graph refuses:
+  <code>omitted</code> — any declaration it cannot represent, with what references it. Only a
+  Contract graph it cannot walk refuses: an invalid one, or one whose rendered types hold a cycle
+  through no declaration:
 </p>
 
 <pre data-lang="rust" data-file="crates/candid-core-ts/src/lib.rs">

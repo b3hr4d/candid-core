@@ -144,11 +144,30 @@ methods, each by name, and the module's header carries one
 module that omits nothing is byte-identical to what the generator emitted
 before. The `omissions` fixture pins the closure, and a test proves that
 everything the module keeps is byte-identical to a module generated with the
-omitted declarations deleted from the source. Only an invalid Contract graph
-still refuses the whole module (`TsGenError`: a class outside the actor root,
-a dangling reference) — which no validated `Contract`, and so no `.did`
-source, can reach. `schemaFromContract` omits exactly the same entries for the
+omitted declarations deleted from the source. Only a Contract graph the
+emitter cannot walk refuses the whole module (`TsGenError`): a class outside
+the actor root or a dangling reference, which no validated `Contract`, and so
+no `.did` source, can reach, and a cycle through no declaration, below, which
+a validated `Contract` no `.did` source produced can. `schemaFromContract` omits exactly the same entries for the
 same Contract and reports them as its result's `omitted`.
+
+**Generation uses constant call-stack depth in the Contract's nesting, and
+every cycle the module renders must pass through a declaration** (issue
+#218). The renderer keeps
+its pending work on an explicit stack, so a Contract of any depth generates
+on a small thread (the tests use 64 KiB, 512 KiB on Windows, in the dev and
+release profiles), whether it is a 256-level type the compiler accepts or a
+far deeper chain read with `Contract::from_json`. A declared node renders as
+its name, which is what ends a recursive type; a cycle through no declaration
+has no TypeScript spelling, and a Contract holding one is refused whole with
+`TsGenError::UndeclaredCycle`, naming a node on the cycle. No `.did` source
+produces one, since a recursive Candid type needs a name, but Contract
+validation accepts every cycle, so a Contract document can. The rule covers
+only what the module renders: a cycle in a class actor's init args, or one
+reachable only from an omitted declaration or method, does not refuse, so
+every Contract that generated before still generates, byte-identically.
+`schemaFromContract` accepts that graph — it needs no names — and this is the
+one refusal the two do not share.
 
 **Golden tests carry the mapping decisions.** Each fixture under
 `tests/fixtures/` must generate byte-identical output to its checked-in golden

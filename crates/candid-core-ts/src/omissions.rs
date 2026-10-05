@@ -96,7 +96,7 @@ fn name_cause(name: &str) -> Option<OmissionReason> {
 
 /// A node's outgoing edges, in edge order. A class has none: it exists only
 /// at the actor root, which is never rendered as a whole.
-fn children(node: &TypeNode) -> Vec<TypeRef> {
+pub(crate) fn children(node: &TypeNode) -> Vec<TypeRef> {
     match node {
         TypeNode::Primitive { .. } | TypeNode::Class { .. } => Vec::new(),
         TypeNode::Opt { inner } | TypeNode::Vec { inner } => vec![*inner],
@@ -108,7 +108,7 @@ fn children(node: &TypeNode) -> Vec<TypeRef> {
     }
 }
 
-fn node(contract: &Contract, reference: TypeRef) -> Result<&TypeNode, TsGenError> {
+pub(crate) fn node(contract: &Contract, reference: TypeRef) -> Result<&TypeNode, TsGenError> {
     contract
         .types()
         .get(reference as usize)
