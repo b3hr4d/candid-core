@@ -158,8 +158,15 @@ schema's longest hop chain (see the last bullet but one).
   500,001). Such a value was one `validate` refuses under the same
   `maxDepth`; the refusal now matches `validate`'s, with the same path and
   `observed` depth, and as candid-core's `validate_host_value` refuses the
-  same value. A missing required field is still charged nothing, so an
-  enclosing `opt` absorbs it as before.
+  same value. This holds wherever the field falls, after the wire's last
+  field or between two it carries. A missing required field is still
+  charged nothing, so an enclosing `opt` absorbs it as before, unless the
+  record also omits an `opt`-like field earlier in id order whose `null`
+  already crosses `maxDepth` or `maxElements`. **That `null` is now refused**
+  where `decode` used to return the enclosing `opt` as `null` (for example
+  `record {}` read at `opt record { a : opt nat; b : nat }` with
+  `maxDepth: 1`, now `value_depth` at `$.a`), exactly as the same `null`
+  read from the wire is refused.
 - **A `rec` chain has a cap of its own.** More than `maxDepth` consecutive
   hops resolving one reference are refused with `value_depth`, `observed`
   being the chain's length — the bound `encode`'s type table already applied

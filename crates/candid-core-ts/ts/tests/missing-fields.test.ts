@@ -14,7 +14,13 @@
 // `validate_host_value` refuses the same domain value,
 // `validate_missing_opt_field_257_levels`), and
 // `elements_missing_opt_fields_vec_499999_and_arg` and
-// `elements_missing_opt_fields_vec_500000` for `maxElements`.
+// `elements_missing_opt_fields_vec_500000` for `maxElements`. The same pairs
+// pin a `null` and a `reserved` field (`depth_missing_null_field_*`,
+// `depth_missing_reserved_field_*`) and a field omitted before one the wire
+// carries (`depth_missing_opt_field_between_*`,
+// `elements_missing_opt_fields_between_*`). The corpus compares no paths, so
+// that a field omitted between two wire fields is charged at its own level,
+// before the next wire field, is pinned only here.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -244,4 +250,105 @@ test("a missing required field is charged nothing: an enclosing opt still absorb
     limit: 1,
     observed: 2,
   });
+});
+
+/**
+ * A field the wire skips over between two fields it carries: expected
+ * `record { a : record { b : L; z : nat } }` read from a wire
+ * `record { a : record { z : nat } }`. `b` sorts before `z`, so it is
+ * supplied while the decoder walks the wire's fields, not after them.
+ */
+const skippedBetween = bytesOf(encode(c.record({ a: c.record({ z: c.nat }) }), { a: { z: 1n } }));
+
+function expectingBBeforeZ(leaf: AnySchema): AnySchema {
+  return c.record({ a: c.record({ b: leaf, z: c.nat }) });
+}
+
+test("a field omitted between two wire fields is charged at its own level, before the next wire field", () => {
+  for (const [name, leaf] of LEAVES) {
+    const schema = expectingBBeforeZ(leaf);
+    // b and z at level 2: exactly maxDepth 2.
+    const at = decode(schema, skippedBetween, { maxDepth: 2 });
+    assert.deepStrictEqual(at, { ok: true, value: { a: { b: null, z: 1n } } }, name);
+    assert.deepStrictEqual(
+      validate(schema, at.ok ? at.value : undefined, { maxDepth: 2 }),
+      {
+        ok: true,
+      },
+      name,
+    );
+    // One past: refused at b, the first node at level 2 in id order.
+    const resource_limit = { resource: "value_depth", limit: 1, observed: 2 };
+    const past = decode(schema, skippedBetween, { maxDepth: 1 });
+    assert.deepStrictEqual(
+      past.ok ? undefined : past.issues.map((issue) => [issue.path, issue.resource_limit]),
+      [["$.a.b", resource_limit]],
+      name,
+    );
+    const refused = validate(schema, { a: { b: null, z: 1n } }, { maxDepth: 1 });
+    assert.deepStrictEqual(
+      refused.ok ? undefined : refused.issues[0].resource_limit,
+      resource_limit,
+      name,
+    );
+  }
+});
+
+test("a field omitted between two wire fields is one element, charged before the next wire field", () => {
+  // What the wire's own nodes cost, read at the wire's own type.
+  const wireLeast = leastElements((maxElements) =>
+    decode(c.record({ a: c.record({ z: c.nat }) }), skippedBetween, { maxElements }),
+  );
+  for (const [name, leaf] of LEAVES) {
+    const schema = expectingBBeforeZ(leaf);
+    // The supplied b is one element more.
+    const least = leastElements((maxElements) => decode(schema, skippedBetween, { maxElements }));
+    assert.strictEqual(least, wireLeast + 1, name);
+    // b is charged before z: one below the bound z crosses it, two below b.
+    const refusal = (maxElements: number): unknown => {
+      const refused = decode(schema, skippedBetween, { maxElements });
+      return refused.ok ? undefined : [refused.issues[0].path, refused.issues[0].resource_limit];
+    };
+    assert.deepStrictEqual(
+      refusal(least - 1),
+      ["$.a.z", { resource: "value_elements", limit: least - 1, observed: least }],
+      name,
+    );
+    assert.deepStrictEqual(
+      refusal(least - 2),
+      ["$.a.b", { resource: "value_elements", limit: least - 2, observed: least - 1 }],
+      name,
+    );
+  }
+});
+
+test("an omitted opt-like field charged before a missing required one can cross the bound an enclosing opt would absorb", () => {
+  const emptyRecord = bytesOf(encode(c.record({}), {}));
+  for (const [name, leaf] of LEAVES) {
+    // opt at level 0, the record at 1, its fields at 2. `a` sorts before
+    // `b`: its supplied null is charged first, at level 2, and refused there
+    // exactly as the same null read from the wire is.
+    assert.deepStrictEqual(
+      decode(c.opt(c.record({ a: leaf, b: c.nat })), emptyRecord, { maxDepth: 1 }),
+      {
+        ok: false,
+        issues: [
+          {
+            code: "resource_limit_exceeded",
+            path: "$.a",
+            message: "value_depth limit 1 exceeded",
+            resource_limit: { resource: "value_depth", limit: 1, observed: 2 },
+          },
+        ],
+      },
+      name,
+    );
+    // With the required field first, its mismatch is met first and the
+    // enclosing opt absorbs the record to null, as before.
+    assert.deepStrictEqual(
+      decode(c.opt(c.record({ a: c.nat, b: leaf })), emptyRecord, { maxDepth: 1 }),
+      { ok: true, value: null },
+      name,
+    );
+  }
 });
