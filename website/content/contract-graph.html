@@ -293,6 +293,25 @@ pub struct Field {
 ]
 </pre>
 
+<h3>A node has one name per label id</h3>
+
+<p>
+  <strong>Known limitation (issue #229).</strong> The first number of each triple is a node of the
+  graph, not a declaration, and canonicalisation merges structurally identical nodes. Two declarations
+  whose records have the same shape and the same label ids are one node, so they share one name per
+  id, whatever each source spelled. In
+  <code>type A = record { c : record { d : text } }; type B = record { x : record { 100 : text } };</code>
+  the label hash of <code>d</code> is 100, so both inner records are one node, and the table carries
+  <code>d</code> for it: <code>B</code>'s inner field is named <code>d</code>, not <code>_100_</code>,
+  in the generated module and in <code>schemaFromContract</code>. The wire bytes are the same either
+  way. A named spelling beats a numeric one, in any declaration and in any order, because numeric and
+  positional labels carry no name. When two different names share a hash, the one the provenance
+  sidecar lists last wins, not the first written. Keeping names per declaration would change the
+  Contract format, so it is deferred. The rule is spelled out in
+  <a href="schema-from-contract.html#a-shared-node-has-one-name-per-label-id">the
+  <code>schemaFromContract</code> page</a>.
+</p>
+
 <h3>Service methods are the exception</h3>
 
 <p>
