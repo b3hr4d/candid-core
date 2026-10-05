@@ -1160,11 +1160,12 @@ test("envelope-carried names are hash-enforced exactly like caller-supplied ones
 test("the envelope shell fails closed on malformed shapes", () => {
   // Unknown envelope keys are refused, mirroring the Rust loader's
   // deny_unknown_fields — including the hybrid that carries contract markers
-  // beside a contract key.
+  // beside a contract key. Since issue #228 under the loader's one code for
+  // that rule, at the key's own path.
   failsWith(
     schemaFromContract({ contract: ownerDocument(), format: "candid-core" }),
-    "invalid_contract_document",
-    "$",
+    "unknown_key",
+    "$.format",
   );
   // extensions must be a JSON object.
   for (const extensions of [null, [], "names", 5]) {
