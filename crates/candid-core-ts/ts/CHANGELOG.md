@@ -153,6 +153,13 @@ schema's longest hop chain (see the last bullet but one).
   chain refuses a value where it reaches that chain, even one the same
   schema built with no `rec` accepts: at `maxDepth: 0`, `c.rec(() => c.nat)`
   refuses `1n` and `c.nat` accepts it. That was so before as well.
+  Resolving a chain is not charged against `maxElements`, so its cost is
+  bounded by `maxDepth` hops per resolution instead: a few thunk calls per
+  constructor for a generated or Contract-loaded schema, but a hand-built
+  schema with long chains multiplies the work per constructor by their
+  length, and with a raised `maxDepth` a self-referential chain costs
+  `maxDepth` thunk calls in `validate` and `decode` before it is refused,
+  where the element charge stopped it at `maxElements` before.
 - **Unchanged:** every issue code, the `stack` refusal for user code that
   overflows the host stack, the examined-record-key element charge,
   `encode`'s type-table depth charge (#192), and the work bound: a hostile

@@ -451,6 +451,36 @@ test("a rec chain longer than maxDepth is refused, a self-referential one includ
   }
 });
 
+test("encode's value walk caps a rec chain itself, where its type table saw none", () => {
+  // Encode's type table resolves a chain first and refuses any chain it
+  // sees as too long, so the value walk's own cap is reached only through a
+  // thunk that answers differently later: here the table's resolution sees
+  // `nat`, and the value walk then meets the self-reference. The thunk turns
+  // back into `nat` after a long run of hops, so a cap that is too loose or
+  // absent ends in an accepted encode rather than a hang.
+  for (const maxDepth of [4, 256]) {
+    let calls = 0;
+    const S: AnySchema = c.rec(() => {
+      calls += 1;
+      return calls === 1 || calls > 10_000 ? c.nat : S;
+    });
+    const result = encode(S, 1n, { maxDepth });
+    assert(!result.ok, `maxDepth ${maxDepth}`);
+    if (!result.ok) {
+      assert.strictEqual(result.issues.length, 1);
+      assert.strictEqual(result.issues[0].code, "resource_limit_exceeded");
+      assert.strictEqual(result.issues[0].path, "$");
+      assert.deepStrictEqual(result.issues[0].resource_limit, {
+        resource: "value_depth",
+        limit: maxDepth,
+        observed: maxDepth + 1,
+      });
+    }
+    // One call for the table, then maxDepth hops that resolve to S.
+    assert.strictEqual(calls, 1 + maxDepth);
+  }
+});
+
 test("the chain cap is maxDepth itself: below a schema's hop chain, rec refuses what no rec accepts", () => {
   // A design call (the cap reuses maxDepth rather than a floor of its own),
   // pinned so a change to it is deliberate. At maxDepth 0 a root scalar is

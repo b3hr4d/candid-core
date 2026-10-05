@@ -50,10 +50,17 @@
 // exception a value raises into a terminal `unreadable_value` issue at the
 // path being examined. `maxElements` charges every constructor the walk
 // reads (a tag-only arm's `null`, spelled by absence, is read from nothing
-// and charged nothing) and every examined record key; it bounds the work
-// this walker performs, not the
-// engine's own key-list materialization, which JavaScript enumeration
-// (`Object.keys` and `for..in` alike) pays in one linear step at loop entry.
+// and charged nothing) and every examined record key; it bounds the
+// constructors and keys this walker reads, not the engine's own key-list
+// materialization, which JavaScript enumeration (`Object.keys` and `for..in`
+// alike) pays in one linear step at loop entry. Resolving a `rec` chain is
+// work it does not charge (issue #231): each resolution runs at most
+// `maxDepth` hops, so a schema whose chains are a few hops long (one for a
+// Contract-loaded schema, two for a generated module) adds a few thunk calls
+// per constructor, while a hand-built schema with long chains multiplies the
+// work per constructor by their length, and with a raised `maxDepth` a
+// self-referential `c.rec(() => self)` costs `maxDepth` thunk calls before
+// it is refused.
 //
 // # Strictness decisions (fail closed, recorded on issue #102)
 //

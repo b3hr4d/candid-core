@@ -84,7 +84,10 @@
 // is charged alike through a generated module, a Contract-loaded schema or
 // a schema built with no `rec`; the hop chain's own cap is `maxDepth`, so
 // with a `maxDepth` below a schema's longest chain a value is refused where
-// it reaches that chain), and `maxNumericBytes` caps a single unbounded
+// it reaches that chain, and resolving a chain is uncharged work of at most
+// `maxDepth` thunk calls per resolution — a few for a generated or
+// Contract-loaded schema, up to `maxDepth` per constructor for a hand-built
+// one with long chains), and `maxNumericBytes` caps a single unbounded
 // `nat`/`int` encoding. Decode stops at the first hard error: the wire
 // format cannot be resynchronized after one, so the issue list is short by
 // design. Every walk — the encoder's type table and value walk, the decoder's
