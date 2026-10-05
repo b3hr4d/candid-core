@@ -239,6 +239,11 @@ jobs:
           set -euxo pipefail
           cargo clippy -p candid-core-ts --all-targets --locked -- -D warnings
           cargo clippy -p candid-core-ts --all-targets --features compiler --locked -- -D warnings
+      # With `compiler`, this includes the differential fuzz's reference half
+      # (issue #196): tests/differential regenerates the committed seeded
+      # corpus (a fixed count, no time budget, per #39) with the `candid`
+      # crate's verdicts and requires tests/goldens/differential/corpus.jsonl
+      # byte for byte.
       - name: Test both feature configurations
         run: |
           set -euxo pipefail
@@ -281,7 +286,11 @@ jobs:
       # and the exact-pinned Node above is the entire runtime. The suite
       # includes the golden cross-check — the dynamically loaded Contract JSON
       # schemas must validate exactly the values the generated builders
-      # describe — so a failure here is a mapping regression, not flake.
+      # describe — so a failure here is a mapping regression, not flake. It
+      # also replays the differential corpus (ts/tests/differential.test.ts,
+      # issue #196): every case must agree with the reference or show exactly
+      # the symptom tests/goldens/differential/divergences.json lists for its
+      # case id, with its issue.
       - name: Run the schema runtime tests
         working-directory: crates/candid-core-ts/ts
         run: npm test
