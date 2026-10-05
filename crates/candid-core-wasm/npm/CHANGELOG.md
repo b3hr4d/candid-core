@@ -46,7 +46,7 @@ stack size exceeded"; the threshold moves with the toolchain and the engine.
 ### A type on a cycle through `opt` alone is refused
 
 The embedded compiler now refuses a type that lies on a cycle passing only
-through `opt` (issue #234): `type T = opt T;`, `type T = opt opt T;`,
+through `opt`: `type T = opt T;`, `type T = opt opt T;`,
 `type A = opt B; type B = opt A;`, or the same through an alias. Decoding a
 value that is not an `opt` at such a type unwraps `opt` without end, so no
 decoder can answer for it; a generated schema for it ended in a depth refusal.
