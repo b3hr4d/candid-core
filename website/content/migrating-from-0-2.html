@@ -80,7 +80,7 @@ npm install --save-dev --save-exact @candid-core/cli@beta
     <tr><td>A declaration that cannot be represented is omitted, not refused</td><td>A script that relied on the generator's non-zero exit</td><td><a href="#omission">Omission</a></td></tr>
     <tr><td>Closed unions gain or lose a member</td><td>An exhaustive <code>switch</code> over a resource or a contract code</td><td><a href="#unions">Closed unions</a></td></tr>
     <tr><td><code>schemaFromContract</code> refuses unknown keys, unreachable type nodes and a rootless arena</td><td>A hand-written or tool-mutated Contract document</td><td><a href="#contract-loading">Stricter Contract loading</a></td></tr>
-    <tr><td>A <code>rec</code> hop no longer counts against <code>maxDepth</code> or <code>maxElements</code></td><td>A value at exactly a caller-set <code>maxDepth</code> that ends in a tag-only variant, or whose message omits an <code>opt</code> field</td><td><a href="#rec-hops">Resource limits</a></td></tr>
+    <tr><td>A <code>rec</code> hop no longer counts against <code>maxDepth</code> or <code>maxElements</code></td><td>A value with a tag-only variant at exactly a caller-set <code>maxDepth</code>, or a message that omits an <code>opt</code> field at a <code>maxDepth</code> edge or past <code>maxElements</code>, which a large message reaches at the default limits</td><td><a href="#rec-hops">Resource limits</a></td></tr>
     <tr><td>The CLI refuses a run of more than 256 consecutive comments</td><td>A <code>.did</code> with a long <code>//</code> header</td><td><a href="#comment-runs">Long comment runs</a></td></tr>
     <tr><td>The CLI refuses a type on a cycle through <code>opt</code> alone</td><td>A script that matched on <code>ts_generation_refused</code> for it</td><td><a href="#opt-cycles">Cycles through opt</a></td></tr>
   </tbody>
@@ -613,8 +613,7 @@ void kind;
   <code>maxElements</code> at about 500,000 elements. Now a generated, a Contract-loaded and a
   hand-built schema of one type accept the same values, 256 levels deep at the defaults as candid-core
   does, and 1,000,000 elements wide, where <code>validate</code> and <code>encode</code> also count
-  each record key they examine. Two narrow cases are refused that were accepted, both only at a
-  limit you lowered or at its exact edge:
+  each record or variant key they examine. Two narrow cases are refused that were accepted:
 </p>
 
 <ul>
@@ -627,16 +626,20 @@ void kind;
   <li>
     a message that omits an <code>opt</code>, <code>null</code> or <code>reserved</code> field: the
     <code>null</code> that <code>decode</code> supplies is now charged at the field's own level and as one
-    element, so a record at exactly <code>maxDepth</code> that omits one, or a message whose omitted
-    fields cross <code>maxElements</code>, is refused with <code>resource_limit_exceeded</code>, as
-    <code>validate</code> refuses the same value.
+    element. A record at exactly a <code>maxDepth</code> you set that omits one is refused, and so is a
+    message whose omitted fields take it past <code>maxElements</code>, which can happen at the default
+    limits: a <code>vec</code> of more than 500,000 records that each omit such a field the reader
+    expects costs one element more per record, so a <code>vec record {}</code> of 600,000 elements
+    read at <code>vec record { x : opt nat }</code> is now refused. Both are refused with
+    <code>resource_limit_exceeded</code>, as <code>validate</code> refuses the same value.
   </li>
 </ul>
 
 <p>
   A chain of more than <code>maxDepth</code> consecutive hops is still refused with
-  <code>value_depth</code>, so with <code>maxDepth</code> set below 2 a generated module refuses a value
-  at its first declaration reference. The changelog's <code>0.3.0</code> entry lists every case.
+  <code>value_depth</code>, so with <code>maxDepth</code> set to 0 a generated module refuses a value at
+  its first declaration reference, and at 1 wherever it reaches an alias of another declaration (a
+  two-hop chain). The changelog's <code>0.3.0</code> entry lists every case.
 </p>
 
 <h2 id="contract-loading">Stricter Contract loading</h2>

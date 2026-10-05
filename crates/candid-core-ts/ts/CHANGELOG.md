@@ -61,8 +61,8 @@ group in the order the 0.3.0-beta.1 entry gives them:
   path after an absorbed coercion mismatch; and `rec` hops no longer charged
   against `maxDepth` or `maxElements`, so a generated or Contract-loaded
   schema accepts recursive values as deep as candid-core does and, but for
-  the examined record keys `maxElements` also counts, as wide, with two
-  narrow refusals of input accepted before (a tag-only variant at
+  the examined record and variant keys `maxElements` also counts, as wide,
+  with two narrow refusals of input accepted before (a tag-only variant at
   exactly a caller-set `maxDepth`, and a field the wire omits, now charged
   at its own level).
 
