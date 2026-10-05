@@ -628,8 +628,8 @@ void kind;
     <code>null</code> that <code>decode</code> supplies is now charged at the field's own level and as one
     element. A record at exactly a <code>maxDepth</code> you set that omits one is refused, and so is a
     message whose omitted fields take it past <code>maxElements</code>, which can happen at the default
-    limits: a <code>vec</code> of more than 500,000 records that each omit such a field the reader
-    expects costs one element more per record, so a <code>vec record {}</code> of 600,000 elements
+    limits: a <code>vec</code> of 500,000 or more records that each omit such a field the reader
+    expects costs one element more per record, so a <code>vec record {}</code> of 500,000 elements
     read at <code>vec record { x : opt nat }</code> is now refused. Both are refused with
     <code>resource_limit_exceeded</code>, as <code>validate</code> refuses the same value.
   </li>
