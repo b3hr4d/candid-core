@@ -29,9 +29,11 @@ a stability window after that, not with it.
 
 **Upgrading from 0.2.0.** 0.3.0 is 0.3.0-beta.1 plus the changes in this
 entry, so the upgrade is this entry and the 0.3.0-beta.1 entry below, read
-together; every break in either is marked **BREAKING**, and none of the
-changes here undoes one there. Grouped, and within each group in the order
-the 0.3.0-beta.1 entry gives them:
+together. Every break in either is marked **BREAKING** but one, the
+`encode` depth rule named below, which the 0.3.0-beta.1 entry lists as
+**Changed** because only a schema's type table shows it. None of the changes
+here undoes one there. Grouped, and within each group in the order the
+0.3.0-beta.1 entry gives them:
 
 - what stops resolving: the `./actor`, `./transport-icp`, `./forms` and
   `./labels` subpaths, and the optional `@icp-sdk/core` peer;
@@ -46,7 +48,11 @@ the 0.3.0-beta.1 entry gives them:
 - what changes behaviour: a structural type table, so encoded bytes no longer
   depend on how a schema was built; `TypeError` on an unknown or invalid
   option; and iterative walkers, with `encode` charging `maxDepth` for Candid
-  nesting only, which only widens what is accepted;
+  nesting only: every type the compiler accepts encodes through its generated
+  module at the default limits, and an encode may be accepted where it was
+  refused (a type reached through many aliases, a `schemaFromContract` schema
+  deeper than about 128 levels), and refused where it was accepted (a shallow
+  value in a hand-built schema nested past the limit);
 - and, in this entry: the Contract documents `schemaFromContract` refuses
   because candid-core refuses them, with three new `ContractIssueCode`
   members; a hostile thrown value no longer escaping the codec; and the right
@@ -94,7 +100,7 @@ and fixture in the repository is loaded by the suite to show it.
   (`$.format`), not `invalid_contract_document` at `$`. The envelope shell was
   already closed; it now reports under the one code the rule has. Which
   envelopes are refused did not change.
-- **`ContractIssueCode` gains three members**, `unknown_key`,
+- **BREAKING (type): `ContractIssueCode` gains three members**, `unknown_key`,
   `orphan_type_node` and `rootless_type_arena` (17 in all); the union is
   closed, so an exhaustive `switch` over it stops compiling until it handles
   them. `orphan_type_node` and `rootless_type_arena` are candid-core's own

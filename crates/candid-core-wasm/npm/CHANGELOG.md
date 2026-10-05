@@ -41,7 +41,8 @@ dist-tag stays on 0.2.0-beta.1.
 generator and that release's `schemaFromContract` agree on blobs and on
 omitted declarations only when both come from the same release. npm refuses
 to install a mismatched pair (measured with npm 11.3.0: `ERESOLVE could not
-resolve`, exit status 1). Install the pair at exact versions.
+resolve`, exit status 1); the 0.2.0-beta.1 entry below says npm only warns,
+which was wrong for a published peer. Install the pair at exact versions.
 
 **Upgrading from 0.1.0.** 0.2.0 is 0.2.0-beta.1 plus the changes in this
 entry, so the upgrade is this entry and the 0.2.0-beta.1 entry below, read
