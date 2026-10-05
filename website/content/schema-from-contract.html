@@ -220,6 +220,40 @@ export type SchemaFromContractResult =
   </p>
 </callout>
 
+<h3>A shared node has one name per label id</h3>
+
+<p>
+  <strong>Known limitation (issue #229).</strong> A name table entry is keyed by
+  <code>(container, id)</code>, and the container is a node of the canonical graph, not a
+  declaration. Canonicalization merges structurally identical nodes, so two declarations whose
+  records have the same shape and the same label ids are one node and share their names, whatever
+  each source spelled:
+</p>
+
+<pre data-lang="candid">
+type A = record { c : record { d : text } };
+type B = record { x : record { 100 : text } };
+</pre>
+
+<p>
+  The label hash of <code>d</code> is 100, so both inner records are one node, and
+  <code>B</code>'s inner field loads as <code>d</code>, not <code>_100_</code>. That is the key
+  <code>validate</code>, <code>encode</code> and <code>decode</code> use, and the generated module
+  renders the same one. The wire bytes are identical either way: the codec hashes
+  <code>d</code> to 100, which is the id <code>_100_</code> spells. Only the key differs.
+</p>
+
+<p>
+  A named spelling always beats a numeric one, in any declaration and in any order, because a
+  numeric or positional label carries no name and never enters the table. Two different names for
+  one id need a 32-bit hash collision, such as <code>cemxzwyk</code> and <code>amxawvks</code>. Then
+  the name the provenance sidecar lists <em>last</em> wins, not the first one written. The sidecar
+  sorts occurrences by source file, then declaration name, then path inside the declaration, and
+  puts the service's own inline types after every declaration, so the order of the declarations in
+  the file does not matter. Keeping names per declaration would change the Contract format, so
+  it is deferred. Until then, spell a field the same way in every declaration that shares its node.
+</p>
+
 <h2>Why the name table is hash-enforced</h2>
 
 <p>

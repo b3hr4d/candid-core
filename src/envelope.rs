@@ -147,7 +147,7 @@ impl ContractEnvelope {
     ) -> Result<Self, ContractJsonError> {
         let mut budget = context.budget();
         let raw: RawContractEnvelope =
-            crate::budget::decode_bounded(&mut budget, input.len(), || {
+            crate::budget::decode_bounded(&mut budget, input.as_bytes(), &["extensions"], || {
                 serde_json::from_str(input)
             })?;
         Self::from_raw_with_budget(raw, &mut budget)
@@ -167,7 +167,7 @@ impl ContractEnvelope {
     ) -> Result<Self, ContractJsonError> {
         let mut budget = context.budget();
         let raw: RawContractEnvelope =
-            crate::budget::decode_bounded(&mut budget, input.len(), || {
+            crate::budget::decode_bounded(&mut budget, input, &["extensions"], || {
                 serde_json::from_slice(input)
             })?;
         Self::from_raw_with_budget(raw, &mut budget)
