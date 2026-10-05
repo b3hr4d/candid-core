@@ -1027,6 +1027,177 @@
       "agrees": "Both accept: neither loader requires a service's methods in name order.",
       "did": "type S = service { a : () -> (); b : () -> () };\n",
       "ops": [{"op": "set", "path": ["types", 0, "methods", 0], "value": {"function": 1, "id": 98, "name": "b"}, "edit": "unsorted_method_names"}, {"op": "set", "path": ["types", 0, "methods", 1], "value": {"function": 1, "id": 97, "name": "a"}}]
+    },
+    {
+      "name": "depth_coercion_opts_63_levels_opt_blob",
+      "target": "decode",
+      "note": "A wire chain W0 = vec W1, ..., W62 = vec W63, W63 = blob (every vec of one element, a one-byte blob) read at E0 = vec opt E1, ..., E62 = vec opt E63, E63 = opt blob: the coercion inserts an opt at every level (the expected opt reads a wire vec) and one more above the blob, so the expected-side value nests 128 levels on a 64-level wire. Its blob byte is charged exactly 256 depth steps (measured: the least maxDepth that accepts it), four per level on this path, so the vector pins the decoder's depth charge for an opt the coercion inserts.",
+      "origin": "written for the issue #196 review, fix round 2",
+      "agrees": "Both accept: exactly at the runtime's maxDepth (256 steps) on the path of coercion-inserted opts.",
+      "did": "type W0 = vec W1;\ntype W1 = vec W2;\ntype W2 = vec W3;\ntype W3 = vec W4;\ntype W4 = vec W5;\ntype W5 = vec W6;\ntype W6 = vec W7;\ntype W7 = vec W8;\ntype W8 = vec W9;\ntype W9 = vec W10;\ntype W10 = vec W11;\ntype W11 = vec W12;\ntype W12 = vec W13;\ntype W13 = vec W14;\ntype W14 = vec W15;\ntype W15 = vec W16;\ntype W16 = vec W17;\ntype W17 = vec W18;\ntype W18 = vec W19;\ntype W19 = vec W20;\ntype W20 = vec W21;\ntype W21 = vec W22;\ntype W22 = vec W23;\ntype W23 = vec W24;\ntype W24 = vec W25;\ntype W25 = vec W26;\ntype W26 = vec W27;\ntype W27 = vec W28;\ntype W28 = vec W29;\ntype W29 = vec W30;\ntype W30 = vec W31;\ntype W31 = vec W32;\ntype W32 = vec W33;\ntype W33 = vec W34;\ntype W34 = vec W35;\ntype W35 = vec W36;\ntype W36 = vec W37;\ntype W37 = vec W38;\ntype W38 = vec W39;\ntype W39 = vec W40;\ntype W40 = vec W41;\ntype W41 = vec W42;\ntype W42 = vec W43;\ntype W43 = vec W44;\ntype W44 = vec W45;\ntype W45 = vec W46;\ntype W46 = vec W47;\ntype W47 = vec W48;\ntype W48 = vec W49;\ntype W49 = vec W50;\ntype W50 = vec W51;\ntype W51 = vec W52;\ntype W52 = vec W53;\ntype W53 = vec W54;\ntype W54 = vec W55;\ntype W55 = vec W56;\ntype W56 = vec W57;\ntype W57 = vec W58;\ntype W58 = vec W59;\ntype W59 = vec W60;\ntype W60 = vec W61;\ntype W61 = vec W62;\ntype W62 = vec W63;\ntype W63 = blob;\ntype E0 = vec opt E1;\ntype E1 = vec opt E2;\ntype E2 = vec opt E3;\ntype E3 = vec opt E4;\ntype E4 = vec opt E5;\ntype E5 = vec opt E6;\ntype E6 = vec opt E7;\ntype E7 = vec opt E8;\ntype E8 = vec opt E9;\ntype E9 = vec opt E10;\ntype E10 = vec opt E11;\ntype E11 = vec opt E12;\ntype E12 = vec opt E13;\ntype E13 = vec opt E14;\ntype E14 = vec opt E15;\ntype E15 = vec opt E16;\ntype E16 = vec opt E17;\ntype E17 = vec opt E18;\ntype E18 = vec opt E19;\ntype E19 = vec opt E20;\ntype E20 = vec opt E21;\ntype E21 = vec opt E22;\ntype E22 = vec opt E23;\ntype E23 = vec opt E24;\ntype E24 = vec opt E25;\ntype E25 = vec opt E26;\ntype E26 = vec opt E27;\ntype E27 = vec opt E28;\ntype E28 = vec opt E29;\ntype E29 = vec opt E30;\ntype E30 = vec opt E31;\ntype E31 = vec opt E32;\ntype E32 = vec opt E33;\ntype E33 = vec opt E34;\ntype E34 = vec opt E35;\ntype E35 = vec opt E36;\ntype E36 = vec opt E37;\ntype E37 = vec opt E38;\ntype E38 = vec opt E39;\ntype E39 = vec opt E40;\ntype E40 = vec opt E41;\ntype E41 = vec opt E42;\ntype E42 = vec opt E43;\ntype E43 = vec opt E44;\ntype E44 = vec opt E45;\ntype E45 = vec opt E46;\ntype E46 = vec opt E47;\ntype E47 = vec opt E48;\ntype E48 = vec opt E49;\ntype E49 = vec opt E50;\ntype E50 = vec opt E51;\ntype E51 = vec opt E52;\ntype E52 = vec opt E53;\ntype E53 = vec opt E54;\ntype E54 = vec opt E55;\ntype E55 = vec opt E56;\ntype E56 = vec opt E57;\ntype E57 = vec opt E58;\ntype E58 = vec opt E59;\ntype E59 = vec opt E60;\ntype E60 = vec opt E61;\ntype E61 = vec opt E62;\ntype E62 = vec opt E63;\ntype E63 = opt blob;\n",
+      "expected": ["E0"],
+      "hex": "4449444c406d016d026d036d046d056d066d076d086d096d0a6d0b6d0c6d0d6d0e6d0f6d106d116d126d136d146d156d166d176d186d196d1a6d1b6d1c6d1d6d1e6d1f6d206d216d226d236d246d256d266d276d286d296d2a6d2b6d2c6d2d6d2e6d2f6d306d316d326d336d346d356d366d376d386d396d3a6d3b6d3c6d3d6d3e6d3f6d7b0100(01*63)0100"
+    },
+    {
+      "name": "depth_coercion_opts_64_levels_nat",
+      "target": "decode",
+      "note": "A wire chain W0 = vec W1, ..., W63 = vec nat (every vec of one element, the nat 5) read at E0 = vec opt E1, ..., E63 = vec opt nat: an opt inserted at every level, so the nat sits 128 levels down on the expected side and is charged 257 depth steps (measured), one past maxDepth; the runtime refuses (value_depth), the reference, which has no depth budget, accepts (#231: the rec-hop charge decides where the bound falls on a decoded path).",
+      "origin": "written for the issue #196 review, fix round 2",
+      "did": "type W0 = vec W1;\ntype W1 = vec W2;\ntype W2 = vec W3;\ntype W3 = vec W4;\ntype W4 = vec W5;\ntype W5 = vec W6;\ntype W6 = vec W7;\ntype W7 = vec W8;\ntype W8 = vec W9;\ntype W9 = vec W10;\ntype W10 = vec W11;\ntype W11 = vec W12;\ntype W12 = vec W13;\ntype W13 = vec W14;\ntype W14 = vec W15;\ntype W15 = vec W16;\ntype W16 = vec W17;\ntype W17 = vec W18;\ntype W18 = vec W19;\ntype W19 = vec W20;\ntype W20 = vec W21;\ntype W21 = vec W22;\ntype W22 = vec W23;\ntype W23 = vec W24;\ntype W24 = vec W25;\ntype W25 = vec W26;\ntype W26 = vec W27;\ntype W27 = vec W28;\ntype W28 = vec W29;\ntype W29 = vec W30;\ntype W30 = vec W31;\ntype W31 = vec W32;\ntype W32 = vec W33;\ntype W33 = vec W34;\ntype W34 = vec W35;\ntype W35 = vec W36;\ntype W36 = vec W37;\ntype W37 = vec W38;\ntype W38 = vec W39;\ntype W39 = vec W40;\ntype W40 = vec W41;\ntype W41 = vec W42;\ntype W42 = vec W43;\ntype W43 = vec W44;\ntype W44 = vec W45;\ntype W45 = vec W46;\ntype W46 = vec W47;\ntype W47 = vec W48;\ntype W48 = vec W49;\ntype W49 = vec W50;\ntype W50 = vec W51;\ntype W51 = vec W52;\ntype W52 = vec W53;\ntype W53 = vec W54;\ntype W54 = vec W55;\ntype W55 = vec W56;\ntype W56 = vec W57;\ntype W57 = vec W58;\ntype W58 = vec W59;\ntype W59 = vec W60;\ntype W60 = vec W61;\ntype W61 = vec W62;\ntype W62 = vec W63;\ntype W63 = vec W64;\ntype W64 = nat;\ntype E0 = vec opt E1;\ntype E1 = vec opt E2;\ntype E2 = vec opt E3;\ntype E3 = vec opt E4;\ntype E4 = vec opt E5;\ntype E5 = vec opt E6;\ntype E6 = vec opt E7;\ntype E7 = vec opt E8;\ntype E8 = vec opt E9;\ntype E9 = vec opt E10;\ntype E10 = vec opt E11;\ntype E11 = vec opt E12;\ntype E12 = vec opt E13;\ntype E13 = vec opt E14;\ntype E14 = vec opt E15;\ntype E15 = vec opt E16;\ntype E16 = vec opt E17;\ntype E17 = vec opt E18;\ntype E18 = vec opt E19;\ntype E19 = vec opt E20;\ntype E20 = vec opt E21;\ntype E21 = vec opt E22;\ntype E22 = vec opt E23;\ntype E23 = vec opt E24;\ntype E24 = vec opt E25;\ntype E25 = vec opt E26;\ntype E26 = vec opt E27;\ntype E27 = vec opt E28;\ntype E28 = vec opt E29;\ntype E29 = vec opt E30;\ntype E30 = vec opt E31;\ntype E31 = vec opt E32;\ntype E32 = vec opt E33;\ntype E33 = vec opt E34;\ntype E34 = vec opt E35;\ntype E35 = vec opt E36;\ntype E36 = vec opt E37;\ntype E37 = vec opt E38;\ntype E38 = vec opt E39;\ntype E39 = vec opt E40;\ntype E40 = vec opt E41;\ntype E41 = vec opt E42;\ntype E42 = vec opt E43;\ntype E43 = vec opt E44;\ntype E44 = vec opt E45;\ntype E45 = vec opt E46;\ntype E46 = vec opt E47;\ntype E47 = vec opt E48;\ntype E48 = vec opt E49;\ntype E49 = vec opt E50;\ntype E50 = vec opt E51;\ntype E51 = vec opt E52;\ntype E52 = vec opt E53;\ntype E53 = vec opt E54;\ntype E54 = vec opt E55;\ntype E55 = vec opt E56;\ntype E56 = vec opt E57;\ntype E57 = vec opt E58;\ntype E58 = vec opt E59;\ntype E59 = vec opt E60;\ntype E60 = vec opt E61;\ntype E61 = vec opt E62;\ntype E62 = vec opt E63;\ntype E63 = vec opt E64;\ntype E64 = nat;\n",
+      "expected": ["E0"],
+      "hex": "4449444c406d016d026d036d046d056d066d076d086d096d0a6d0b6d0c6d0d6d0e6d0f6d106d116d126d136d146d156d166d176d186d196d1a6d1b6d1c6d1d6d1e6d1f6d206d216d226d236d246d256d266d276d286d296d2a6d2b6d2c6d2d6d2e6d2f6d306d316d326d336d346d356d366d376d386d396d3a6d3b6d3c6d3d6d3e6d3f6d7d0100(01*64)05"
+    },
+    {
+      "name": "depth_reserved_arg_vec_256_levels",
+      "target": "decode",
+      "note": "W = vec W nested 256 levels (the innermost empty) read at the argument type R = reserved: the reserved value absorbs the wire value and the decoder skips it from step 1, one step per wire level, so the innermost vec is charged 256 depth steps (measured), exactly the runtime's maxDepth.",
+      "origin": "written for the issue #196 review, fix round 2",
+      "agrees": "Both accept (null): exactly at the runtime's maxDepth (256 steps) on the skip path of an expected reserved argument.",
+      "did": "type W = vec W;\ntype R = reserved;\n",
+      "expected": ["R"],
+      "hex": "4449444c016d000100(01*255)00"
+    },
+    {
+      "name": "depth_reserved_arg_vec_257_levels",
+      "target": "decode",
+      "note": "W = vec W nested 257 levels (the innermost empty) read at the argument type R = reserved: the reserved value absorbs the wire value and the decoder skips it from step 1, one step per wire level, so the innermost vec is charged 257 depth steps (measured), one past maxDepth; the runtime refuses (value_depth), the reference, which has no depth budget, accepts (#103, scope item 3: an explicit recursion depth limit; no rec hop on this path).",
+      "origin": "written for the issue #196 review, fix round 2",
+      "did": "type W = vec W;\ntype R = reserved;\n",
+      "expected": ["R"],
+      "hex": "4449444c016d000100(01*256)00"
+    },
+    {
+      "name": "depth_reserved_field_vec_254_levels",
+      "target": "decode",
+      "note": "A wire record { a : W }, W = vec W nested 254 levels (the innermost empty), read at S = record { a : reserved }: the reserved field absorbs the wire value and the decoder skips it below the field's rec hop, one step per wire level, so the innermost vec is charged 256 depth steps (measured), exactly the runtime's maxDepth.",
+      "origin": "written for the issue #196 review, fix round 2",
+      "agrees": "Both accept: exactly at the runtime's maxDepth (256 steps) on the skip path of an expected reserved field.",
+      "did": "type W = vec W;\ntype S = record { a : reserved };\ntype X = record { a : W };\n",
+      "expected": ["S"],
+      "hex": "4449444c026d006c016100010101(01*252)00"
+    },
+    {
+      "name": "depth_reserved_field_vec_255_levels",
+      "target": "decode",
+      "note": "A wire record { a : W }, W = vec W nested 255 levels (the innermost empty), read at S = record { a : reserved }: the reserved field absorbs the wire value and the decoder skips it below the field's rec hop, one step per wire level, so the innermost vec is charged 257 depth steps (measured), one past maxDepth; the runtime refuses (value_depth), the reference, which has no depth budget, accepts (#231: the field's rec hop moves the bound by one wire level).",
+      "origin": "written for the issue #196 review, fix round 2",
+      "did": "type W = vec W;\ntype S = record { a : reserved };\ntype X = record { a : W };\n",
+      "expected": ["S"],
+      "hex": "4449444c026d006c016100010101(01*253)00"
+    },
+    {
+      "name": "chain_vec_blob_127_levels",
+      "target": "decode",
+      "note": "A declaration chain T0 = vec T1, ..., T126 = vec T127, T127 = blob, every vec of one element and a one-byte blob: 127 decoded vecs (the deepest at 253 steps), the blob at 255 and its byte at 256 (measured). A decoded vec's element is charged from the vec's own depth (Decoder.resume, case vec), a path the opt, variant and record chains do not take.",
+      "origin": "written for the issue #196 review, fix round 2",
+      "agrees": "Both accept: exactly at the runtime's maxDepth (256 steps) on the decoded vec path.",
+      "did": "type T0 = vec T1;\ntype T1 = vec T2;\ntype T2 = vec T3;\ntype T3 = vec T4;\ntype T4 = vec T5;\ntype T5 = vec T6;\ntype T6 = vec T7;\ntype T7 = vec T8;\ntype T8 = vec T9;\ntype T9 = vec T10;\ntype T10 = vec T11;\ntype T11 = vec T12;\ntype T12 = vec T13;\ntype T13 = vec T14;\ntype T14 = vec T15;\ntype T15 = vec T16;\ntype T16 = vec T17;\ntype T17 = vec T18;\ntype T18 = vec T19;\ntype T19 = vec T20;\ntype T20 = vec T21;\ntype T21 = vec T22;\ntype T22 = vec T23;\ntype T23 = vec T24;\ntype T24 = vec T25;\ntype T25 = vec T26;\ntype T26 = vec T27;\ntype T27 = vec T28;\ntype T28 = vec T29;\ntype T29 = vec T30;\ntype T30 = vec T31;\ntype T31 = vec T32;\ntype T32 = vec T33;\ntype T33 = vec T34;\ntype T34 = vec T35;\ntype T35 = vec T36;\ntype T36 = vec T37;\ntype T37 = vec T38;\ntype T38 = vec T39;\ntype T39 = vec T40;\ntype T40 = vec T41;\ntype T41 = vec T42;\ntype T42 = vec T43;\ntype T43 = vec T44;\ntype T44 = vec T45;\ntype T45 = vec T46;\ntype T46 = vec T47;\ntype T47 = vec T48;\ntype T48 = vec T49;\ntype T49 = vec T50;\ntype T50 = vec T51;\ntype T51 = vec T52;\ntype T52 = vec T53;\ntype T53 = vec T54;\ntype T54 = vec T55;\ntype T55 = vec T56;\ntype T56 = vec T57;\ntype T57 = vec T58;\ntype T58 = vec T59;\ntype T59 = vec T60;\ntype T60 = vec T61;\ntype T61 = vec T62;\ntype T62 = vec T63;\ntype T63 = vec T64;\ntype T64 = vec T65;\ntype T65 = vec T66;\ntype T66 = vec T67;\ntype T67 = vec T68;\ntype T68 = vec T69;\ntype T69 = vec T70;\ntype T70 = vec T71;\ntype T71 = vec T72;\ntype T72 = vec T73;\ntype T73 = vec T74;\ntype T74 = vec T75;\ntype T75 = vec T76;\ntype T76 = vec T77;\ntype T77 = vec T78;\ntype T78 = vec T79;\ntype T79 = vec T80;\ntype T80 = vec T81;\ntype T81 = vec T82;\ntype T82 = vec T83;\ntype T83 = vec T84;\ntype T84 = vec T85;\ntype T85 = vec T86;\ntype T86 = vec T87;\ntype T87 = vec T88;\ntype T88 = vec T89;\ntype T89 = vec T90;\ntype T90 = vec T91;\ntype T91 = vec T92;\ntype T92 = vec T93;\ntype T93 = vec T94;\ntype T94 = vec T95;\ntype T95 = vec T96;\ntype T96 = vec T97;\ntype T97 = vec T98;\ntype T98 = vec T99;\ntype T99 = vec T100;\ntype T100 = vec T101;\ntype T101 = vec T102;\ntype T102 = vec T103;\ntype T103 = vec T104;\ntype T104 = vec T105;\ntype T105 = vec T106;\ntype T106 = vec T107;\ntype T107 = vec T108;\ntype T108 = vec T109;\ntype T109 = vec T110;\ntype T110 = vec T111;\ntype T111 = vec T112;\ntype T112 = vec T113;\ntype T113 = vec T114;\ntype T114 = vec T115;\ntype T115 = vec T116;\ntype T116 = vec T117;\ntype T117 = vec T118;\ntype T118 = vec T119;\ntype T119 = vec T120;\ntype T120 = vec T121;\ntype T121 = vec T122;\ntype T122 = vec T123;\ntype T123 = vec T124;\ntype T124 = vec T125;\ntype T125 = vec T126;\ntype T126 = vec T127;\ntype T127 = blob;\n",
+      "expected": ["T0"],
+      "hex": "4449444c80016d016d026d036d046d056d066d076d086d096d0a6d0b6d0c6d0d6d0e6d0f6d106d116d126d136d146d156d166d176d186d196d1a6d1b6d1c6d1d6d1e6d1f6d206d216d226d236d246d256d266d276d286d296d2a6d2b6d2c6d2d6d2e6d2f6d306d316d326d336d346d356d366d376d386d396d3a6d3b6d3c6d3d6d3e6d3f6dc0006dc1006dc2006dc3006dc4006dc5006dc6006dc7006dc8006dc9006dca006dcb006dcc006dcd006dce006dcf006dd0006dd1006dd2006dd3006dd4006dd5006dd6006dd7006dd8006dd9006dda006ddb006ddc006ddd006dde006ddf006de0006de1006de2006de3006de4006de5006de6006de7006de8006de9006dea006deb006dec006ded006dee006def006df0006df1006df2006df3006df4006df5006df6006df7006df8006df9006dfa006dfb006dfc006dfd006dfe006dff006d7b0100(01*127)0100"
+    },
+    {
+      "name": "chain_vec_128_levels_empty_blob",
+      "target": "decode",
+      "note": "A declaration chain T0 = vec T1, ..., T127 = vec T128, T128 = blob, every vec of one element and an empty blob: the blob sits at level 128 and is charged 257 depth steps (measured), one past maxDepth; the runtime refuses (value_depth), the reference, which has no depth budget, accepts (#231).",
+      "origin": "written for the issue #196 review, fix round 2",
+      "did": "type T0 = vec T1;\ntype T1 = vec T2;\ntype T2 = vec T3;\ntype T3 = vec T4;\ntype T4 = vec T5;\ntype T5 = vec T6;\ntype T6 = vec T7;\ntype T7 = vec T8;\ntype T8 = vec T9;\ntype T9 = vec T10;\ntype T10 = vec T11;\ntype T11 = vec T12;\ntype T12 = vec T13;\ntype T13 = vec T14;\ntype T14 = vec T15;\ntype T15 = vec T16;\ntype T16 = vec T17;\ntype T17 = vec T18;\ntype T18 = vec T19;\ntype T19 = vec T20;\ntype T20 = vec T21;\ntype T21 = vec T22;\ntype T22 = vec T23;\ntype T23 = vec T24;\ntype T24 = vec T25;\ntype T25 = vec T26;\ntype T26 = vec T27;\ntype T27 = vec T28;\ntype T28 = vec T29;\ntype T29 = vec T30;\ntype T30 = vec T31;\ntype T31 = vec T32;\ntype T32 = vec T33;\ntype T33 = vec T34;\ntype T34 = vec T35;\ntype T35 = vec T36;\ntype T36 = vec T37;\ntype T37 = vec T38;\ntype T38 = vec T39;\ntype T39 = vec T40;\ntype T40 = vec T41;\ntype T41 = vec T42;\ntype T42 = vec T43;\ntype T43 = vec T44;\ntype T44 = vec T45;\ntype T45 = vec T46;\ntype T46 = vec T47;\ntype T47 = vec T48;\ntype T48 = vec T49;\ntype T49 = vec T50;\ntype T50 = vec T51;\ntype T51 = vec T52;\ntype T52 = vec T53;\ntype T53 = vec T54;\ntype T54 = vec T55;\ntype T55 = vec T56;\ntype T56 = vec T57;\ntype T57 = vec T58;\ntype T58 = vec T59;\ntype T59 = vec T60;\ntype T60 = vec T61;\ntype T61 = vec T62;\ntype T62 = vec T63;\ntype T63 = vec T64;\ntype T64 = vec T65;\ntype T65 = vec T66;\ntype T66 = vec T67;\ntype T67 = vec T68;\ntype T68 = vec T69;\ntype T69 = vec T70;\ntype T70 = vec T71;\ntype T71 = vec T72;\ntype T72 = vec T73;\ntype T73 = vec T74;\ntype T74 = vec T75;\ntype T75 = vec T76;\ntype T76 = vec T77;\ntype T77 = vec T78;\ntype T78 = vec T79;\ntype T79 = vec T80;\ntype T80 = vec T81;\ntype T81 = vec T82;\ntype T82 = vec T83;\ntype T83 = vec T84;\ntype T84 = vec T85;\ntype T85 = vec T86;\ntype T86 = vec T87;\ntype T87 = vec T88;\ntype T88 = vec T89;\ntype T89 = vec T90;\ntype T90 = vec T91;\ntype T91 = vec T92;\ntype T92 = vec T93;\ntype T93 = vec T94;\ntype T94 = vec T95;\ntype T95 = vec T96;\ntype T96 = vec T97;\ntype T97 = vec T98;\ntype T98 = vec T99;\ntype T99 = vec T100;\ntype T100 = vec T101;\ntype T101 = vec T102;\ntype T102 = vec T103;\ntype T103 = vec T104;\ntype T104 = vec T105;\ntype T105 = vec T106;\ntype T106 = vec T107;\ntype T107 = vec T108;\ntype T108 = vec T109;\ntype T109 = vec T110;\ntype T110 = vec T111;\ntype T111 = vec T112;\ntype T112 = vec T113;\ntype T113 = vec T114;\ntype T114 = vec T115;\ntype T115 = vec T116;\ntype T116 = vec T117;\ntype T117 = vec T118;\ntype T118 = vec T119;\ntype T119 = vec T120;\ntype T120 = vec T121;\ntype T121 = vec T122;\ntype T122 = vec T123;\ntype T123 = vec T124;\ntype T124 = vec T125;\ntype T125 = vec T126;\ntype T126 = vec T127;\ntype T127 = vec T128;\ntype T128 = blob;\n",
+      "expected": ["T0"],
+      "hex": "4449444c81016d016d026d036d046d056d066d076d086d096d0a6d0b6d0c6d0d6d0e6d0f6d106d116d126d136d146d156d166d176d186d196d1a6d1b6d1c6d1d6d1e6d1f6d206d216d226d236d246d256d266d276d286d296d2a6d2b6d2c6d2d6d2e6d2f6d306d316d326d336d346d356d366d376d386d396d3a6d3b6d3c6d3d6d3e6d3f6dc0006dc1006dc2006dc3006dc4006dc5006dc6006dc7006dc8006dc9006dca006dcb006dcc006dcd006dce006dcf006dd0006dd1006dd2006dd3006dd4006dd5006dd6006dd7006dd8006dd9006dda006ddb006ddc006ddd006dde006ddf006de0006de1006de2006de3006de4006de5006de6006de7006de8006de9006dea006deb006dec006ded006dee006def006df0006df1006df2006df3006df4006df5006df6006df7006df8006df9006dfa006dfb006dfc006dfd006dfe006dff006d80016d7b0100(01*128)00"
+    },
+    {
+      "name": "elements_mixed_vec_45453_pad_17",
+      "target": "decode",
+      "note": "D = record { items : vec M; pad : blob } with 45,453 decoded elements and a 17-byte pad, read at its own type. Each element M = record { r : record { x : nat8 }; v : variant { a : opt text; b }; t : record { nat8; text }; o : opt nat8 } holds a record, a variant, an opt the wire carries and one inside the variant, a tuple, text and nat8s, so an over-charge of any of these node kinds pushes the total past the bound: 22 element charges per element, 17 for the rest, one per pad byte, 1,000,000 in all (measured: the least maxElements that accepts it). The reference's values are recorded as a digest (values_digest). Written as a run (`(<hex>*<count>)`).",
+      "origin": "written for the issue #196 review, fix round 2",
+      "agrees": "Both accept: exactly at the runtime's maxElements on the decoded record, variant, opt, tuple and text paths.",
+      "did": "type M = record { r : record { x : nat8 }; v : variant { a : opt text; b }; t : record { nat8; text }; o : opt nat8 };\ntype D = record { items : vec M; pad : blob };\n",
+      "expected": ["D"],
+      "hex": "4449444c096c02d3a2d5020780d8b2900c016d026c046f067203740576046c01787b6b026108627f6c02007b01716e7b6d7b6e71010011(00*17)8de302(0105070101740001026869*45453)"
+    },
+    {
+      "name": "elements_mixed_vec_45453_pad_18",
+      "target": "decode",
+      "note": "D = record { items : vec M; pad : blob } with 45,453 decoded elements and a 18-byte pad, read at its own type. Each element M = record { r : record { x : nat8 }; v : variant { a : opt text; b }; t : record { nat8; text }; o : opt nat8 } holds a record, a variant, an opt the wire carries and one inside the variant, a tuple, text and nat8s, so an over-charge of any of these node kinds pushes the total past the bound: 22 element charges per element, 17 for the rest, one per pad byte, 1,000,001 in all (measured: the least maxElements that accepts it). The reference's values are recorded as a digest (values_digest). Written as a run (`(<hex>*<count>)`). One past maxElements: the runtime refuses (value_elements), the reference, which has no element budget, accepts (#103, scope item 3: an explicit element-count limit).",
+      "origin": "written for the issue #196 review, fix round 2",
+      "did": "type M = record { r : record { x : nat8 }; v : variant { a : opt text; b }; t : record { nat8; text }; o : opt nat8 };\ntype D = record { items : vec M; pad : blob };\n",
+      "expected": ["D"],
+      "hex": "4449444c096c02d3a2d5020780d8b2900c016d026c046f067203740576046c01787b6b026108627f6c02007b01716e7b6d7b6e71010012(00*18)8de302(0105070101740001026869*45453)"
+    },
+    {
+      "name": "validate_elements_mixed_vec_34482_pad_7",
+      "target": "validate",
+      "note": "A value of V = record { items : vec M; pad : vec null } with 34,482 items and 7 pad nulls (run descriptors). Each element M = record { r : record { x : nat8 }; v : variant { a : opt text; b }; t : record { nat8; text }; o : opt nat8 } holds a record, a variant, an opt and one inside the variant, a tuple, text and nat8s, so an over-charge of any of these node kinds pushes the total past the bound: validate charges 29 element steps per item (each node, each rec hop, each examined record key), 2 per pad null and 8 for the rest, 1,000,000 in all (measured: the least maxElements that accepts it); validate_host_value counts far fewer HostValue nodes (no rec hops, no keys) and accepts.",
+      "origin": "written for the issue #196 review, fix round 2",
+      "agrees": "Both accept: exactly at the runtime's maxElements on validate's record, variant, opt, tuple and text paths.",
+      "did": "type M = record { r : record { x : nat8 }; v : variant { a : opt text; b }; t : record { nat8; text }; o : opt nat8 };\ntype V = record { items : vec M; pad : vec null };\n",
+      "type": "V",
+      "value": ["o", [["items", ["r", 34482, ["o", [["r", ["o", [["x", ["f", "401c000000000000"]]]]], ["v", ["o", [["tag", ["s", "a"]], ["value", ["s", "hi"]]]]], ["t", ["a", [["f", "3ff0000000000000"], ["s", "t"]]]], ["o", ["f", "4014000000000000"]]]]]], ["pad", ["r", 7, ["n"]]]]]
+    },
+    {
+      "name": "validate_elements_mixed_vec_34481_pad_22",
+      "target": "validate",
+      "note": "A value of V = record { items : vec M; pad : vec null } with 34,481 items and 22 pad nulls (run descriptors). Each element M = record { r : record { x : nat8 }; v : variant { a : opt text; b }; t : record { nat8; text }; o : opt nat8 } holds a record, a variant, an opt and one inside the variant, a tuple, text and nat8s, so an over-charge of any of these node kinds pushes the total past the bound: validate charges 29 element steps per item (each node, each rec hop, each examined record key), 2 per pad null and 8 for the rest, 1,000,001 in all (measured: the least maxElements that accepts it); validate_host_value counts far fewer HostValue nodes (no rec hops, no keys) and accepts. One past maxElements: validate refuses (value_elements), validate_host_value accepts (#231's rec-hop charge on the element budget, as validate_elements_record_vec_null_499998).",
+      "origin": "written for the issue #196 review, fix round 2",
+      "did": "type M = record { r : record { x : nat8 }; v : variant { a : opt text; b }; t : record { nat8; text }; o : opt nat8 };\ntype V = record { items : vec M; pad : vec null };\n",
+      "type": "V",
+      "value": ["o", [["items", ["r", 34481, ["o", [["r", ["o", [["x", ["f", "401c000000000000"]]]]], ["v", ["o", [["tag", ["s", "a"]], ["value", ["s", "hi"]]]]], ["t", ["a", [["f", "3ff0000000000000"], ["s", "t"]]]], ["o", ["f", "4014000000000000"]]]]]], ["pad", ["r", 22, ["n"]]]]]
+    },
+    {
+      "name": "bytes_text_message_10485760",
+      "target": "decode",
+      "note": "A message of exactly 10,485,760 bytes: one text argument of 10,485,749 bytes \"a\" read at T = text, so the longest text both sides decode is pinned too. The runtime's maxBytes is 10,485,760 (measured: the least maxBytes that accepts the message is 10,485,760); the reference has no input-size budget. Written as a run (`(<hex>*<count>)`). The reference's values are recorded as a digest (values_digest).",
+      "origin": "written for the issue #196 review, fix round 2",
+      "agrees": "Both accept: exactly at the runtime's maxBytes.",
+      "did": "type T = text;\n",
+      "expected": ["T"],
+      "hex": "4449444c000171f5ffff04(61*10485749)"
+    },
+    {
+      "name": "bytes_text_message_10485761",
+      "target": "decode",
+      "note": "A message of exactly 10,485,761 bytes: one text argument of 10,485,750 bytes \"a\" read at T = text, so the longest text both sides decode is pinned too. The runtime's maxBytes is 10,485,760 (measured: the least maxBytes that accepts the message is 10,485,761); the reference has no input-size budget. Written as a run (`(<hex>*<count>)`). One byte past maxBytes: the runtime refuses before reading the header (resource bytes), the reference accepts (#103, scope item 3: an input byte ceiling).",
+      "origin": "written for the issue #196 review, fix round 2",
+      "did": "type T = text;\n",
+      "expected": ["T"],
+      "hex": "4449444c000171f6ffff04(61*10485750)"
+    },
+    {
+      "name": "numeric_nat_1048576_groups",
+      "target": "decode",
+      "note": "An extra argument of type nat (expected none, so both sides skip it) whose minimal LEB128 form is 1,048,576 groups (2^7340025: zero groups, then 01). The runtime's maxNumericBytes is 1,048,576 (measured: the least that accepts it is 1,048,576); the candid crate has no such budget. The skip path reads the value with the same lebBig the decoded path uses; a decoded value this long is not compared because the reference's domain mapping (num-bigint's decimal conversion) is quadratic in its length. Written as a run (`(<hex>*<count>)`).",
+      "origin": "written for the issue #196 review, fix round 2",
+      "agrees": "Both accept: exactly at the runtime's maxNumericBytes for an unbounded nat.",
+      "did": "type T = nat;\n",
+      "expected": [],
+      "hex": "4449444c00017d(80*1048575)01"
+    },
+    {
+      "name": "numeric_nat_1048577_groups",
+      "target": "decode",
+      "note": "An extra argument of type nat (expected none, so both sides skip it) whose minimal LEB128 form is 1,048,577 groups (2^7340032: zero groups, then 01). The runtime's maxNumericBytes is 1,048,576 (measured: the least that accepts it is 1,048,577); the candid crate has no such budget. The skip path reads the value with the same lebBig the decoded path uses; a decoded value this long is not compared because the reference's domain mapping (num-bigint's decimal conversion) is quadratic in its length. Written as a run (`(<hex>*<count>)`). One group past maxNumericBytes: the runtime refuses (resource numeric_bytes), the reference accepts (#103, scope item 3: explicit, fail-closed bounds; the numeric byte cap is the runtime's documented Limits budget for one nat or int).",
+      "origin": "written for the issue #196 review, fix round 2",
+      "did": "type T = nat;\n",
+      "expected": [],
+      "hex": "4449444c00017d(80*1048576)01"
+    },
+    {
+      "name": "numeric_int_1048576_groups",
+      "target": "decode",
+      "note": "An extra argument of type int (expected none, so both sides skip it) whose minimal LEB128 form is 1,048,576 groups (2^7340025: zero groups, then 01). The runtime's maxNumericBytes is 1,048,576 (measured: the least that accepts it is 1,048,576); the candid crate has no such budget. The skip path reads the value with the same slebBig the decoded path uses; a decoded value this long is not compared because the reference's domain mapping (num-bigint's decimal conversion) is quadratic in its length. Written as a run (`(<hex>*<count>)`).",
+      "origin": "written for the issue #196 review, fix round 2",
+      "agrees": "Both accept: exactly at the runtime's maxNumericBytes for an unbounded int.",
+      "did": "type T = int;\n",
+      "expected": [],
+      "hex": "4449444c00017c(80*1048575)01"
+    },
+    {
+      "name": "numeric_int_1048577_groups",
+      "target": "decode",
+      "note": "An extra argument of type int (expected none, so both sides skip it) whose minimal LEB128 form is 1,048,577 groups (2^7340032: zero groups, then 01). The runtime's maxNumericBytes is 1,048,576 (measured: the least that accepts it is 1,048,577); the candid crate has no such budget. The skip path reads the value with the same slebBig the decoded path uses; a decoded value this long is not compared because the reference's domain mapping (num-bigint's decimal conversion) is quadratic in its length. Written as a run (`(<hex>*<count>)`). One group past maxNumericBytes: the runtime refuses (resource numeric_bytes), the reference accepts (#103, scope item 3: explicit, fail-closed bounds; the numeric byte cap is the runtime's documented Limits budget for one nat or int).",
+      "origin": "written for the issue #196 review, fix round 2",
+      "did": "type T = int;\n",
+      "expected": [],
+      "hex": "4449444c00017c(80*1048576)01"
     }
   ]
 }

@@ -135,6 +135,35 @@ const DEEP_SALT: u64 = 0xdee9_0000_0000_0000;
 /// #231).
 const VALIDATE_DEPTH: usize = 127;
 
+/// The runtime's default budgets, as the corpus header states them: the
+/// TypeScript suite checks them against `codec.ts`'s and `validate.ts`'s
+/// `DEFAULT_MAX_*`, so the header cannot drift from the runtime it pins.
+/// Generated cases stay below every one of them (`bounds`), and exact
+/// regression vectors (`regressions.json`) pin each exactly at the bound and
+/// past it (one step past wherever the shape allows) on the paths they
+/// name, and nowhere else: `maxBytes` (`bytes_text_message_*`),
+/// `maxTypeTableEntries` (`table_entries_*`, aligned with the reference's
+/// `max_type_len`), `maxNumericBytes` for a skipped `nat` and `int`
+/// (`numeric_*_groups`), `maxDepth` on the decoded
+/// variant, opt, record and vec chains, coercion-inserted `opt`s, the skip of
+/// an extra field, an absorbed value and an expected `reserved` argument and
+/// field, and on validate's vec, variant, record and opt chains; and
+/// `maxElements` for a skipped vec, a decoded vec of `null`, a blob and a
+/// decoded vec of mixed elements (record, variant, `opt`, tuple, text), and
+/// validate's vec, record and mixed values.
+fn runtime_budgets() -> Value {
+    json!({
+        "decode": {
+            "maxBytes": 10_485_760,
+            "maxTypeTableEntries": wire::GEN_TABLE_ENTRIES,
+            "maxDepth": 256,
+            "maxElements": 1_000_000,
+            "maxNumericBytes": 1_048_576,
+        },
+        "validate": { "maxDepth": 256, "maxElements": 1_000_000 },
+    })
+}
+
 /// How many drafts a case may take to fall within the generation bounds
 /// before the generator gives up (a generator defect, not a verdict).
 const MAX_DRAFTS: usize = 256;
@@ -833,9 +862,11 @@ fn header(about: &str, seeds: &Seeds, redraws: &Redraws) -> Value {
         "bounds": {
             "levels": wire::GEN_LEVELS,
             "elements": wire::GEN_ELEMENTS,
+            "length": wire::GEN_LENGTH,
             "table_entries": wire::GEN_TABLE_ENTRIES,
             "validate_max_value_depth": VALIDATE_DEPTH,
         },
+        "runtime_budgets": runtime_budgets(),
         "redraws": redraws.envs,
         "case_redraws": redraws.cases,
     })

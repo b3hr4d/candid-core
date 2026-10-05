@@ -49,6 +49,8 @@ import {
   type Outcome,
   type Reference,
 } from "./differential/compare.ts";
+import * as codec from "../codec.ts";
+import * as validation from "../validate.ts";
 
 /** Why a listed case diverges: the side that is wrong, or a settled decision. */
 type Side = "reference" | "runtime" | "decision" | "owner-call" | "unclassified";
@@ -136,6 +138,29 @@ test("the committed corpus is the fixed seeded count, over every target", () => 
     );
     assert.deepStrictEqual([...verdicts].sort(), ["accept", "reject"], kind);
   }
+});
+
+// The header states the runtime budgets the corpus pins (generated cases
+// stay below each; exact vectors sit at each bound and one past it), so it
+// must name this runtime's defaults: a changed default regenerates the
+// header and its vectors with it.
+test("the corpus header states this runtime's default budgets", () => {
+  assert.deepStrictEqual(
+    (corpus.header as { readonly runtime_budgets?: unknown }).runtime_budgets,
+    {
+      decode: {
+        maxBytes: codec.DEFAULT_MAX_BYTES,
+        maxTypeTableEntries: codec.DEFAULT_MAX_TYPE_TABLE_ENTRIES,
+        maxDepth: codec.DEFAULT_MAX_DEPTH,
+        maxElements: codec.DEFAULT_MAX_ELEMENTS,
+        maxNumericBytes: codec.DEFAULT_MAX_NUMERIC_BYTES,
+      },
+      validate: {
+        maxDepth: validation.DEFAULT_MAX_DEPTH,
+        maxElements: validation.DEFAULT_MAX_ELEMENTS,
+      },
+    },
+  );
 });
 
 test("the reference judges every case of the corpus", () => {
@@ -279,14 +304,23 @@ const SWAPS = new Set(["unsorted_field_ids", "unsorted_variant_ids", "unsorted_m
 
 /**
  * The structural edit a case applies alone, or null: a generated decode
- * case whose only mutation is the edit, a decode vector `r/table_<edit>`, or
- * a contract case (generated or the vector `r/contract_<edit>`) whose ops
- * are exactly the edit's (one op, or a swap's two).
+ * case whose only mutation is the edit, a decode vector `r/table_<edit>`
+ * that both sides refuse in the type table (the reference while reading
+ * the header, this runtime with `malformed_type_table`: its name alone is
+ * no evidence that its bytes carry the edit), or a contract case (generated
+ * or the vector `r/contract_<edit>`) whose ops are exactly the edit's (one
+ * op, or a swap's two).
  */
-function editAlone(kase: CaseLine): string | null {
+function editAlone(kase: CaseLine, ours: Outcome["ours"] | undefined): string | null {
   if (kase.kind === "decode") {
     if (kase.id.startsWith("r/table_")) {
-      return kase.id.slice("r/table_".length);
+      const edit = kase.id.slice("r/table_".length);
+      const refused =
+        kase.ref.verdict === "reject" &&
+        kase.ref.class === "header" &&
+        ours?.verdict === "reject" &&
+        ours.code === "malformed_type_table";
+      return STRUCTURAL.includes(edit) && refused ? edit : null;
     }
     return STRUCTURAL.includes(kase.mutation) ? kase.mutation : null;
   }
@@ -306,8 +340,9 @@ function editAlone(kase: CaseLine): string | null {
 // also occur alone on each target, where its own check decides the verdict.
 test("every structural edit occurs alone in some case of each target", () => {
   const alone = { decode: new Set<string>(), contract: new Set<string>() };
+  const ours = new Map(outcomes().map((outcome) => [outcome.id, outcome.ours]));
   for (const kase of corpus.cases) {
-    const edit = editAlone(kase);
+    const edit = editAlone(kase, ours.get(kase.id));
     if (edit !== null && (kase.kind === "decode" || kase.kind === "contract")) {
       alone[kase.kind].add(edit);
     }
