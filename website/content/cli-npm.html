@@ -14,7 +14,7 @@
     the npm <code>beta</code> dist-tag. <code>latest</code> is still <code>0.1.0</code>, which has the old behaviour: it
     emits modules in the old layout with an object-shaped principal type, exits 1 with
     <code>ts_generation_refused</code> for an interface with one declaration it cannot represent, and
-    returns no <code>omitted</code> list. <a href="migrating-from-0-2.html">Migrating from 0.2.0</a> lists every difference with before and after code,
+    returns no <code>omitted</code> list. <a href="migrating-from-0-2.html">Migrating from 0.2.0</a> shows what each break means, with before and after code,
     and each is recorded in the package changelog under <code>0.2.0-beta.1</code>. The repository has moved on since: it is prepared as <code>0.2.0</code> for <code>latest</code>, not yet published, and the changes since the beta are recorded under <code>0.2.0</code>.
   </p>
 </callout>
@@ -192,6 +192,19 @@ wrote generated/basic.envelope.json
 }
 </pre>
 
+<p>
+  Inside a file, the compiler refuses a run of more than 256 consecutive comments between two tokens,
+  line and block comments alike, with <code>resource_limit_exceeded</code> and resource
+  <code>source_nesting</code> (limit 256, <code>observed</code> 257): the upstream tokenizer spends a
+  stack frame on each comment it skips, so the run is counted first. This is new in
+  <code>0.2.0</code>; earlier releases compiled such a run up to a stack-dependent length and then
+  failed (<code>internal_error</code> in <code>0.2.0-beta.1</code>, an uncaught
+  <code>RangeError</code> in <code>0.1.0</code>). A license header written as hundreds of <code>//</code>
+  lines is the likely case: write it as one <code>/* */</code> block, which counts as one comment.
+  The CLI has no flag to raise the limit. <a href="reference-limits.html">Limits</a> lists it with the
+  others.
+</p>
+
 <h3>Exit codes</h3>
 
 <p>They follow the native binary's convention exactly.</p>
@@ -243,7 +256,7 @@ wrote generated/basic.envelope.json
 <h2>Several entries, <code>--json</code> and <code>--check</code></h2>
 
 <p>
-  This section describes the unreleased command on <code>main</code>. Each entry generates its own
+  Since <code>0.2.0-beta.1</code> (<code>0.1.0</code> takes one entry and neither flag). Each entry generates its own
   <code>&lt;stem&gt;.ts</code> and <code>&lt;stem&gt;.envelope.json</code> into the one
   <code>-o</code>, byte for byte what a run of that entry alone writes, and a failing entry does not
   stop the others: every entry is attempted, and the exit status is <code>1</code> if any failed.

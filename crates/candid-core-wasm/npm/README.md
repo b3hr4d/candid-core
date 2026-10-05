@@ -20,7 +20,8 @@ out — no eval, no network, and nothing generated is ever executed.
 > Every change since 0.1.0 is recorded under `0.2.0` and `0.2.0-beta.1` in
 > the [changelog](./CHANGELOG.md), which ships in the tarball, and the
 > [migration notes](https://b3hr4d.github.io/candid-core/migrating-from-0-2.html)
-> show each one as before and after code.
+> show what each break means for your code, with before and after code where
+> the compiler shows it.
 
 ```sh
 npx @candid-core/cli gen ./service.did -o ./generated
@@ -78,6 +79,10 @@ can overturn, each implemented in one place in `bin/cli.js`:
   own directory, and the bundle limits (256 files, 1 MiB per file, 8 MiB in
   all) apply to each entry's bundle separately. Entries in the same directory
   share one read of it, so they are not counted twice against each other.
+  Inside a file, a run of more than 256 consecutive comments between two
+  tokens is refused with `resource_limit_exceeded` (resource
+  `source_nesting`), since 0.2.0; write a long header as one `/* */` block,
+  which counts as one comment.
 - *Duplicate stems.* Two entries with the same stem (`a/service.did` and
   `b/service.did`, or the same file twice) would write the same output, so the
   run is refused as a usage error (exit 64) before any work. Stems compare

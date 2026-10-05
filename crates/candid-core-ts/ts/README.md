@@ -27,7 +27,8 @@ handling included ([principal values](#principal-values) below).
 > Every change since 0.2.0 is recorded under `0.3.0` and `0.3.0-beta.1` in
 > the [changelog](./CHANGELOG.md), which ships in the tarball, and the
 > [migration notes](https://b3hr4d.github.io/candid-core/migrating-from-0-2.html)
-> show each one as before and after code.
+> show what each break means for your code, with before and after code where
+> the compiler shows it.
 
 ```ts
 import { c, principal, type Infer } from "@candid-core/schema";

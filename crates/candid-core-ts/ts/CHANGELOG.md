@@ -30,20 +30,23 @@ a stability window after that, not with it.
 **Upgrading from 0.2.0.** 0.3.0 is 0.3.0-beta.1 plus the changes in this
 entry, so the upgrade is this entry and the 0.3.0-beta.1 entry below, read
 together; every break in either is marked **BREAKING**, and none of the
-changes here undoes one there. In the order the 0.3.0-beta.1 entry gives them:
+changes here undoes one there. Grouped, and within each group in the order
+the 0.3.0-beta.1 entry gives them:
 
 - what stops resolving: the `./actor`, `./transport-icp`, `./forms` and
   `./labels` subpaths, and the optional `@icp-sdk/core` peer;
 - what changes shape: principals are canonical text (`Principal`,
   `principal()`, `isPrincipal()`; `PrincipalValue` and `DecodedPrincipal` are
   gone, and validation and encoding are strict); an `opt` whose inner type
-  admits `null` is boxed as `{ some: v } | null` (`OptDomain`, `isBoxedOpt`);
+  admits `null` is boxed as `{ some: v } | null` (`OptDomain`, `isBoxedOpt`),
+  and `ContractIssueCode` loses `unrepresentable_option`;
   `schemaFromContract` builds a blob for every `vec nat8`, and leaves out what
-  the generator leaves out, reporting it in a required `omitted`;
+  the generator leaves out, reporting it in a required `omitted`; and a
+  `"stack"` resource in both resource unions;
 - what changes behaviour: a structural type table, so encoded bytes no longer
   depend on how a schema was built; `TypeError` on an unknown or invalid
-  option; iterative walkers, with `encode` charging `maxDepth` for Candid
-  nesting only; and a `"stack"` resource in both resource unions;
+  option; and iterative walkers, with `encode` charging `maxDepth` for Candid
+  nesting only, which only widens what is accepted;
 - and, in this entry: the Contract documents `schemaFromContract` refuses
   because candid-core refuses them, with three new `ContractIssueCode`
   members; a hostile thrown value no longer escaping the codec; and the right
