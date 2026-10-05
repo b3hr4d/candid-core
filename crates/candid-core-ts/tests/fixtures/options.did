@@ -12,8 +12,6 @@ type AliasedOuter = opt MaybeText;
 type Nothing = null;
 type OptNothing = opt Nothing;
 type OptOptEmpty = opt OptEmpty;
-// Recursion: the inner of `Chain` is `Chain`'s own opt node.
-type Chain = opt Chain;
 // Mutual recursion through opt: `Ping` wraps a record (unboxed), `Pong`
 // wraps `Ping`, an opt (boxed).
 type Ping = opt record { pong : Pong };

@@ -26,6 +26,8 @@ The Rust boundary is the only component permitted to parse DID text or apply Can
 
 `candid_parser` is authoritative for the source program's meaning.  The builder only projects its checked semantic result into the Contract arena.  It does not reimplement alias resolution, field hashing, recursive-type handling, function/service references, service-class constructors, or method-mode validation.
 
+It adds one refusal of its own, on the lowered arena, where aliases are resolved ([issue #234]): a type that lies on a cycle whose every edge leaves an `opt` node — `type T = opt T;`, `type T = opt opt T;`, `type A = opt B; type B = opt A;`, or the same through an alias, `type A = B; type B = opt A;` — fails with `did_type_check_error` naming the first such declaration in name order, scoped to the source that declares it. `candid_parser` accepts these types, but decoding a value that is not an `opt` at one unwraps `opt` without end: Candid's coercion has no finite derivation there. Any other constructor on the cycle (`record`, `variant`, `vec`, `func`, `service`) makes it productive, so `type L = opt record { head : nat; tail : L }` compiles as before. Every compile entry point shares the check, the `SourceInfo` rederivation included. Contract validation does not apply it: a Contract document holding such a cycle still loads.
+
 ### Feature layering
 
 The diagram above is also the dependency layering, and it is enforced by Cargo features rather than by convention. Everything above the "Contract builder" line is the `compiler` feature; everything below it is the base a `default-features = false` consumer gets. All features are enabled by default, so this changes nothing for an existing dependency.
@@ -57,6 +59,7 @@ Three consequences are load-bearing:
 * **Imported-bundle compilation is `compiler` surface too** ([issue #21]). `compile_with_resolver` loads the bundle once through the resolver, merges it into one virtual program with the public `candid_parser` merged-program APIs (`IDLMergedProg::new`/`merge`/`decs`/`resolve_actor`), type-checks it with `check_prog`, and lowers it — the same backend provenance rederivation uses, so the two cannot drift. `filesystem-compiler` is what a *native file* caller needs: `compile_did_file` reads through `WorkspaceResolver` and keeps `candid_parser::check_file` over a materialized copy of the bundle as its authority. `src/compile/differential.rs` compares the two backends on the same logical bundles and requires byte-identical Contracts and provenance for valid input and identical stable codes and phases for invalid input.
 
 [issue #21]: https://github.com/b3hr4d/candid-core/issues/21
+[issue #234]: https://github.com/b3hr4d/candid-core/issues/234
 
 `ic_principal` is a direct dependency rather than a re-export borrowed from `candid_parser::Principal`. `candid::Principal` *is* `ic_principal::Principal` — a plain `pub use` — so accepted and rejected principal text, the error variants, and their rendered messages are unchanged; taking it directly is what keeps a host that only validates values out of the parser stack.
 

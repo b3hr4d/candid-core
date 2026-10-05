@@ -120,6 +120,17 @@ for each UTF-8 byte b of the name:
   variant field IDs are taken from the parser's own labels.
 </p>
 
+<p>
+  The compiler also adds one refusal of its own
+  (<a href="https://github.com/b3hr4d/candid-core/issues/234">issue #234</a>): a type that lies
+  on a cycle passing only through <code>opt</code>, such as <code>type T = opt T;</code>.
+  <code>candid_parser</code> accepts that type, but decoding a value that is not an
+  <code>opt</code> at it would unwrap <code>opt</code> without end, so compiling it fails with
+  <code>did_type_check_error</code>, as the
+  <a href="reference-diagnostics.html">diagnostics reference</a> lists. Contract validation does
+  not apply the rule: a Contract document that already holds such a type still loads.
+</p>
+
 <h2>And a parser with no budget does whatever the input asks</h2>
 
 <p>

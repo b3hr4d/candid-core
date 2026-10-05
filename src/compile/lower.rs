@@ -34,6 +34,11 @@ pub(super) fn lower_checked(
             }
         }
     };
+    // The type graph is final here: every declaration and the actor are
+    // lowered, and provenance collection below adds no node that can lie on
+    // a cycle. Checking before it keeps the refusal independent of
+    // `include_source_info`.
+    refuse_opt_only_cycles(&lowerer.nodes, &lowerer.named_refs, source_units)?;
 
     let mut raw_source_info = RawSourceInfo::default();
     if options.include_source_info {
@@ -394,6 +399,84 @@ fn check_type_depth(
         }
     }
     Ok(())
+}
+
+/// Refuse a type that lies on a cycle passing only through `opt` (issue
+/// #234): `type T = opt T;`, `type T = opt opt T;`, `type A = opt B; type B =
+/// opt A;`, and the same through an alias, `type A = B; type B = opt A;`.
+///
+/// The rule, over the lowered arena (where aliases are already resolved: an
+/// alias adds no node, and a name maps to the node its terminal type
+/// lowered to): a node is refused when it lies on a cycle of the type graph
+/// whose every edge leaves an `opt` node. Any other constructor on the cycle
+/// — `record`, `variant`, `vec`, `func`, `service` — makes it productive:
+/// `opt record { T }`, `opt vec T`, `opt variant { a : T }`, `record { a :
+/// opt T }` and `opt func (T) -> ()` all compile as before.
+///
+/// Why: Candid's coercion of a wire value that is not `opt`, `null` or
+/// `reserved` at an expected `opt t` goes on to coerce it at `t`. At such a
+/// type that unwraps `opt` without end, so decoding has no finite derivation:
+/// the reference `candid` crate stops only at its stack guard, and a runtime
+/// only at its depth budget. `candid_parser` accepts these types; this is
+/// candid-core's own refusal, made at compile time only. A Contract document
+/// that already holds such a type still loads (`Contract::from_json`,
+/// `schemaFromContract`); decoding at it still ends in a depth refusal.
+///
+/// The `opt` edges form a graph of out-degree at most one, and
+/// [`nesting::cyclic_nodes`] marks its cycle members with explicit stacks
+/// (ADR 0005: no recursion on attacker-controlled depth), in time linear in
+/// the arena. One diagnostic names the first declaration, in name order,
+/// whose node is marked; every cycle passes through a declaration, because
+/// only a name lets a type refer back to itself.
+fn refuse_opt_only_cycles(
+    nodes: &[Option<TypeNode>],
+    named_refs: &BTreeMap<String, TypeRef>,
+    source_units: &[SourceUnit],
+) -> Result<(), CompileError> {
+    let edges: Vec<(usize, usize)> = nodes
+        .iter()
+        .enumerate()
+        .filter_map(|(index, node)| match node {
+            Some(TypeNode::Opt { inner }) => Some((index, *inner as usize)),
+            _ => None,
+        })
+        .filter(|&(_, inner)| inner < nodes.len())
+        .collect();
+    if edges.is_empty() {
+        return Ok(());
+    }
+    let cyclic = nesting::cyclic_nodes(nodes.len(), &edges);
+    if !cyclic.iter().any(|&on_cycle| on_cycle) {
+        return Ok(());
+    }
+    let name = named_refs
+        .iter()
+        .find(|(_, reference)| cyclic[**reference as usize])
+        .map(|(name, _)| name.as_str())
+        .ok_or_else(|| lower_error("an opt-only cycle passes through no declaration"))?;
+    let mut diagnostic = Diagnostic::compiler(
+        "did_type_check_error",
+        DiagnosticPhase::TypeCheck,
+        format!(
+            "type {name} lies on a cycle that passes only through opt; candid-core refuses \
+             it, because decoding a value that is not an opt at such a type unwraps opt \
+             without end"
+        ),
+    );
+    // Scope the diagnostic to the source declaring the name when exactly one
+    // does; the upstream AST carries no byte spans for declarations.
+    let mut declaring = source_units.iter().filter(|unit| {
+        unit.program
+            .decs
+            .iter()
+            .any(|declaration| matches!(declaration, Dec::TypD(binding) if binding.id == name))
+    });
+    if let (Some(unit), None) = (declaring.next(), declaring.next()) {
+        diagnostic.span = Some(SourceSpan::source_only(&unit.name));
+    }
+    Err(CompileError {
+        diagnostics: vec![diagnostic],
+    })
 }
 
 fn source_imports(source_units: &[SourceUnit]) -> Vec<SourceImportInfo> {

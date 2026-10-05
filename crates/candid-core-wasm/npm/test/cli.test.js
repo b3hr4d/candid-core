@@ -193,6 +193,23 @@ test("compile failures print the diagnostics document and exit 1", () => {
   assert.strictEqual(response.diagnostics[0].code, "did_parse_error");
 });
 
+// Issue #234: the embedded compiler refuses a type on a cycle through `opt`
+// alone, which `gen` accepted before.
+test("an opt-only cycle is refused with did_type_check_error naming the type", () => {
+  const scratch = mkdtempSync(path.join(tmpdir(), "candid-cli-opt-cycle-"));
+  writeFileSync(path.join(scratch, "cycle.did"), "type T = opt T;\nservice : { m : (T) -> () };\n");
+  const run = gen(["gen", path.join(scratch, "cycle.did")]);
+  assert.strictEqual(run.status, 1, run.stderr);
+  const response = JSON.parse(run.stdout);
+  assert.strictEqual(response.ok, false);
+  assert.strictEqual(response.diagnostics[0].code, "did_type_check_error");
+  assert.match(
+    response.diagnostics[0].message,
+    /^type T lies on a cycle that passes only through opt/,
+  );
+  assert.deepStrictEqual(readdirSync(scratch), ["cycle.did"], "nothing is written");
+});
+
 test("usage errors exit 64 with the usage text on stderr", () => {
   for (const argv of [
     [],

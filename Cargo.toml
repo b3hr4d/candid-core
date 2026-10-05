@@ -261,6 +261,12 @@ required-features = ["compiler"]
 name = "source_bom"
 required-features = ["compiler"]
 
+# Issue #234: the compiler refuses an opt-only cycle; the native-file case
+# inside is gated on `filesystem-compiler`.
+[[test]]
+name = "opt_only_cycle"
+required-features = ["compiler"]
+
 [[test]]
 name = "source_identity_bounds"
 required-features = ["compiler"]

@@ -5,12 +5,6 @@ type $AliasedOuter = { some: $MaybeText } | null;
 const $AliasedOuter: $.Schema<$AliasedOuter> = $.c.rec(() => $.c.opt($MaybeText));
 export { $AliasedOuter as AliasedOuter };
 
-/** Recursion: the inner of `Chain` is `Chain`'s own opt node. */
-type $Chain = { some: $Chain } | null;
-/** Recursion: the inner of `Chain` is `Chain`'s own opt node. */
-const $Chain: $.Schema<$Chain> = $.c.rec(() => $.c.opt($Chain));
-export { $Chain as Chain };
-
 /** Variant arms whose payloads are collapsing opts carry `value`. */
 type $Change = { tag: "set"; value: $AliasedOuter } | { tag: "keep" } | { tag: "clear"; value: $OptNothing };
 /** Variant arms whose payloads are collapsing opts carry `value`. */
