@@ -35,6 +35,9 @@
 //!   reference's check); `service`: string → `service`; `func`: an object with
 //!   exactly `principal` and `method` strings → `func`.
 //! - `vec nat8` (blob): Uint8Array → `vec` of `nat8`; `vec T`: array → `vec`.
+//!   A value of the other of the two shapes converts to an empty `record`
+//!   when blind conversion could match (an empty array at a blob, a
+//!   Uint8Array at another `vec`): the runtime's `validate` refuses both.
 //! - record: tuple-shaped types take arrays (index = id), other records take
 //!   objects keyed as the runtime keys them (a named field by its name, a
 //!   numbered one as `_N_`); a key that is no field of the type becomes a
@@ -650,8 +653,13 @@ pub fn host_value(env: &TypeEnv, ty: &Type, desc: &Value) -> Value {
                     host_blind(desc)
                 } else {
                     // Only a Uint8Array is a blob in the domain; an array
-                    // converts with its elements blind, so it never matches.
+                    // converts with its elements blind, so it never matches,
+                    // and an empty one to an empty record (an empty `vec`
+                    // would match: the campaign found it, v/7034732/53).
                     match tag {
+                        "a" if desc[1].as_array().is_some_and(Vec::is_empty) => {
+                            json!({ "kind": "record", "fields": [] })
+                        }
                         "a" => json!({
                             "kind": "vec",
                             "values": desc[1].as_array().map(|items| items
@@ -676,6 +684,11 @@ pub fn host_value(env: &TypeEnv, ty: &Type, desc: &Value) -> Value {
                     })
                     .unwrap_or_default();
                 json!({ "kind": "vec", "values": values })
+            } else if tag == "y" {
+                // A Uint8Array is not an array of the runtime's domain for a
+                // non-blob `vec`; blind, it would be a `vec` of `nat8`, which
+                // an empty one (or any one at `vec reserved`) matches.
+                json!({ "kind": "record", "fields": [] })
             } else {
                 host_blind(desc)
             }

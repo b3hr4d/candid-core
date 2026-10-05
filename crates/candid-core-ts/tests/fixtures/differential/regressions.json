@@ -739,6 +739,26 @@
       "did": "type S = service { a : () -> (); b : () -> () };\n",
       "expected": ["S"],
       "hex": "4449444c026a00000069020162000161000101010100"
+    },
+    {
+      "name": "validate_empty_array_at_blob",
+      "target": "validate",
+      "note": "An empty JavaScript array at type blob. The runtime's blob domain is Uint8Array only, so validate refuses (invalid_type); the HostValue mapping used to convert the array blind to an empty vec, which the reference accepts as a vec nat8. The mapping now converts it to an empty record (host.rs), which the reference refuses.",
+      "origin": "minimized from v/7034732/53 (the redesign's campaign; a harness mapping defect)",
+      "agrees": "Both refuse: a value outside the blob domain.",
+      "did": "type T = blob;\n",
+      "type": "T",
+      "value": ["a", []]
+    },
+    {
+      "name": "validate_uint8array_at_vec_reserved",
+      "target": "validate",
+      "note": "An empty Uint8Array at type vec reserved. A non-blob vec takes a JavaScript array, so validate refuses (invalid_type); converted blind, the Uint8Array would be an empty vec, which the reference accepts. The mapping converts it to an empty record (host.rs), which the reference refuses.",
+      "origin": "written for the issue #196 redesign, beside validate_empty_array_at_blob",
+      "agrees": "Both refuse: a Uint8Array is not an array of a non-blob vec.",
+      "did": "type T = vec reserved;\n",
+      "type": "T",
+      "value": ["y", ""]
     }
   ]
 }
