@@ -25,7 +25,12 @@
 //! chains) add decode and validate cases whose values nest close to the
 //! runtime's depth bound. A drafted environment either side refuses, or one
 //! holding an `opt`-only cycle (`wire::opt_cycle`), is redrawn, and the corpus
-//! header counts redraws by reason.
+//! header counts redraws by reason. Since #234 candid-core's compiler refuses
+//! an `opt`-only cycle itself, so such a draft is counted as a compiler
+//! refusal (`reference=ok compiler=error`); the `opt_cycle` check stays as a
+//! backstop, and a count under it would mean the compiler accepted one. A
+//! regression vector whose source the compiler refuses supplies its Contract
+//! instead (`build_with_contract`).
 //!
 //! # No case is judged outside what both sides judge
 //!
@@ -171,8 +176,10 @@ fn runtime_budgets() -> Value {
 const MAX_DRAFTS: usize = 256;
 
 /// Redraws by reason: environments one side or both refused (keyed
-/// `reference=<outcome> compiler=<outcome>`) or that hold an `opt`-only
-/// cycle, and cases drafted outside the generation bounds (keyed
+/// `reference=<outcome> compiler=<outcome>`; candid-core's compiler refuses an
+/// `opt`-only cycle since #234) or that compile although they hold an
+/// `opt`-only cycle (`opt_cycle`), and cases drafted outside the generation
+/// bounds (keyed
 /// `<target>:<bound>`). The corpus header carries the counts, so a shape that
 /// is redrawn systematically shows up as a count instead of silently leaving
 /// coverage.
@@ -193,6 +200,10 @@ struct Built {
     types: TypeEnv,
     envelope: Value,
     contract: candid_core::Contract,
+    /// The diagnostic code candid-core's compiler refuses the source with,
+    /// for a regression vector that supplies its Contract instead
+    /// (`build_with_contract`); `None` when the envelope was compiled.
+    compile_refused: Option<String>,
 }
 
 fn reference_env(source: &str) -> Result<TypeEnv, &'static str> {
@@ -228,6 +239,14 @@ fn envelope_of(source: &str) -> Result<(Value, candid_core::Contract), &'static 
         .into_iter()
         .map(|((container, id), name)| json!([container, id, name]))
         .collect();
+    envelope_with_names(contract, triples)
+}
+
+/// The envelope of a normalized Contract and its field-name triples.
+fn envelope_with_names(
+    contract: candid_core::Contract,
+    triples: Vec<Value>,
+) -> Result<(Value, candid_core::Contract), &'static str> {
     let mut envelope = candid_core::ContractEnvelope::new(contract.clone());
     envelope
         .insert_extension(
@@ -251,6 +270,7 @@ fn build_from_source(env: types::Env) -> Result<Built, String> {
             types,
             envelope,
             contract,
+            compile_refused: None,
         }),
         (reference, compiled) => Err(format!(
             "reference={} compiler={}",
@@ -258,6 +278,53 @@ fn build_from_source(env: types::Env) -> Result<Built, String> {
             compiled.err().unwrap_or("ok")
         )),
     }
+}
+
+/// A regression environment whose source the reference accepts and
+/// candid-core's compiler refuses (an `opt`-only cycle since #234), run on
+/// the Contract the vector supplies (`types`, `declarations` and an optional
+/// `actor`, as a Contract document writes them): the Contract loaders still
+/// accept such a graph, so the runtime still meets it. The Contract is built
+/// through the model and normalized as `envelope_of` normalizes a compiled
+/// one; it carries no field names. Panics unless the compiler does refuse
+/// the source, so a supplied Contract never stands in for one it compiles.
+fn build_with_contract(source: &str, document: &Value) -> Result<Built, String> {
+    let types = reference_env(source).map_err(|reason| format!("reference={reason}"))?;
+    let code = match candid_core::compile_did(source) {
+        Ok(_) => return Err("the compiler accepts the source; drop its contract".to_string()),
+        Err(error) => error.diagnostics[0].code.clone(),
+    };
+    let nodes: Vec<candid_core::TypeNode> =
+        serde_json::from_value(document["types"].clone()).map_err(|e| e.to_string())?;
+    let declarations: Vec<candid_core::Declaration> =
+        serde_json::from_value(document["declarations"].clone()).map_err(|e| e.to_string())?;
+    let actor: Option<candid_core::Actor> = match document.get("actor") {
+        None => None,
+        Some(actor) => Some(serde_json::from_value(actor.clone()).map_err(|e| e.to_string())?),
+    };
+    let draft = candid_core::ContractDraft::new(nodes, declarations, actor);
+    let built = draft.build().map_err(|error| format!("{error:?}"))?;
+    let mut normalized = serde_json::to_value(&built).map_err(|e| e.to_string())?;
+    normalized["producer"] = json!({
+        "name": "candid-core",
+        "version": "0.0.0-golden",
+        "candid_version": "0.0.0-golden",
+        "candid_parser_version": "0.0.0-golden",
+    });
+    let contract =
+        candid_core::Contract::from_json(&normalized.to_string()).map_err(|e| e.to_string())?;
+    let (envelope, contract) = envelope_with_names(contract, Vec::new())?;
+    Ok(Built {
+        env: types::Env {
+            source: source.to_string(),
+            families: Vec::new(),
+            decls: 0,
+        },
+        types,
+        envelope,
+        contract,
+        compile_refused: Some(code),
+    })
 }
 
 /// An environment both sides accept and that holds no `opt`-only cycle;
@@ -714,12 +781,16 @@ fn contract_case(built: &Built, rng: &mut Rng, id: String, env_id: &str) -> Valu
 }
 
 fn env_line(env_id: &str, built: &Built) -> Value {
-    json!({
+    let mut line = json!({
         "kind": "env",
         "env": env_id,
         "did": built.env.source,
         "envelope": built.envelope,
-    })
+    });
+    if let Some(code) = &built.compile_refused {
+        line["compile_refused"] = json!(code);
+    }
+    line
 }
 
 fn generate_env(seed: u64, seeds: &Seeds, lines: &mut Vec<Value>, redraws: &mut Redraws) {
@@ -887,14 +958,18 @@ fn generate_regressions(lines: &mut Vec<Value>) {
     for vector in document["vectors"].as_array().expect("a vectors array") {
         let name = vector["name"].as_str().expect("a name");
         let source = vector["did"].as_str().expect("a did source").to_string();
-        let built = build_from_source(types::Env {
-            source,
-            families: Vec::new(),
-            decls: 0,
-        })
-        .unwrap_or_else(|reason| {
-            panic!("regression {name}: both sides must accept its source ({reason})")
-        });
+        let built = match vector.get("contract") {
+            None => build_from_source(types::Env {
+                source,
+                families: Vec::new(),
+                decls: 0,
+            })
+            .unwrap_or_else(|reason| {
+                panic!("regression {name}: both sides must accept its source ({reason})")
+            }),
+            Some(document) => build_with_contract(&source, document)
+                .unwrap_or_else(|reason| panic!("regression {name}: {reason}")),
+        };
         let env_id = format!("r/{name}");
         lines.push(env_line(&env_id, &built));
         let id = format!("r/{name}");
@@ -1222,15 +1297,25 @@ fn differential_rejudge() {
             let mut case: Value = deep_json(line);
             match case["kind"].as_str() {
                 Some("env") => {
-                    let rebuilt = build_from_source(types::Env {
-                        source: case["did"].as_str().expect("did").to_string(),
-                        families: Vec::new(),
-                        decls: 0,
-                    })
+                    let source = case["did"].as_str().expect("did").to_string();
+                    let rebuilt = if case["compile_refused"].is_string() {
+                        build_with_contract(&source, &case["envelope"]["contract"])
+                    } else {
+                        build_from_source(types::Env {
+                            source,
+                            families: Vec::new(),
+                            decls: 0,
+                        })
+                    }
                     .unwrap_or_else(|reason| panic!("{}: {reason}", case["env"]));
                     assert!(
                         rebuilt.envelope == case["envelope"],
                         "{}: the envelope rebuilt differently",
+                        case["env"]
+                    );
+                    assert!(
+                        rebuilt.compile_refused.as_deref() == case["compile_refused"].as_str(),
+                        "{}: the compiler's verdict changed",
                         case["env"]
                     );
                     let id = case["env"].as_str().expect("env").to_string();

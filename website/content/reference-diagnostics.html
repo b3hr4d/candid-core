@@ -314,7 +314,7 @@ pub struct ResourceLimitInfo {
   </thead>
   <tbody>
     <tr><td><code>did_parse_error</code></td><td><code>parse</code></td><td>The Candid parser rejected the text. Carries an exact span when the offsets index the original source; the materialized-bundle path withholds them, as the span rules above describe.</td></tr>
-    <tr><td><code>did_type_check_error</code></td><td><code>type_check</code></td><td>The source parses but does not type-check.</td></tr>
+    <tr><td><code>did_type_check_error</code></td><td><code>type_check</code></td><td>The source parses but does not type-check. Also candid-core's own refusal of a type that lies on a cycle passing only through <code>opt</code>, such as <code>type T = opt T;</code>, which <code>candid_parser</code> accepts: the message names the type, and the span names the source that declares it.</td></tr>
     <tr><td><code>did_load_error</code></td><td><code>load</code></td><td>A load-phase failure with no more specific code.</td></tr>
     <tr><td><code>contract_lowering_error</code></td><td><code>lower</code></td><td>An unstructured invariant failure while lowering the checked AST into the arena.</td></tr>
     <tr><td><code>did_import_cycle</code></td><td><code>load</code></td><td>Import resolution reached a source already on the stack.</td></tr>

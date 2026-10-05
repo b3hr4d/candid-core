@@ -148,7 +148,7 @@ JSON decoding and graph validation reject a Contract when any of these are false
 3. Field IDs and method IDs are Candid `u32` values. Aggregate field IDs are unique; service method names are non-empty and unique. Each method ID matches the Candid hash of its name; distinct method names may share that 32-bit hash.
 4. Function mode is exactly one supported value: `update`, `query`, `composite_query`, or `oneway`; `oneway` has no result refs.
 5. Declarations have valid names and refs; a class service ref targets a service node; actor shape agrees with its referenced node kind; and a class is valid only as the top-level `actor.kind = "class"` root. An `actor` property, when present, must be one of those two objects — an explicit `"actor": null` fails Contract JSON decoding rather than denoting an actorless Contract.
-6. Every node is reachable from an actor or declaration root (unless `types` is empty). Cycles are accepted; dangling refs, malformed JSON, and malformed graph structure are not.
+6. Every node is reachable from an actor or declaration root (unless `types` is empty). Cycles are accepted, a cycle through `opt` alone included (the compiler refuses to produce one since issue #234, and Contract validation still accepts it); dangling refs, malformed JSON, and malformed graph structure are not.
 
 ## What is intentionally outside this graph
 

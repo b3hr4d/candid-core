@@ -94,6 +94,48 @@ and therefore the identities computed over them. Pin an exact version.
   above, including every entry point refusing the largest run
   `max_source_bytes` admits on a 64 KiB stack.
 
+### Type checking
+
+- **A type on a cycle that passes only through `opt` is refused**
+  ([issue #234]). `type T = opt T;`, `type T = opt opt T;`, `type A = opt B;
+  type B = opt A;` and the same through an alias, `type A = B; type B = opt
+  A;`, type-check upstream, but decoding a value that is not an `opt` at such
+  a type unwraps `opt` without end: Candid's coercion has no finite derivation
+  there, so the reference `candid` crate stops only at its stack guard and a
+  runtime only at its depth budget. The rule, applied to the lowered Contract
+  arena, where aliases are already resolved: a type is refused when it lies on
+  a cycle of the type graph whose every edge leaves an `opt` node. Any other
+  constructor on the cycle (`record`, `variant`, `vec`, `func`, `service`)
+  makes it productive, so `type L = opt record { head : nat; tail : L }`,
+  `type T = opt vec T` and `type T = record { a : opt T }` compile as before.
+  The check reuses the iterative cycle marking of the type-depth preflight
+  (ADR 0005), linear in the arena.
+
+  The refusal is `did_type_check_error`, phase `type_check`, the code
+  `candid_parser`'s own cyclic-alias refusal already reports: "type T lies on
+  a cycle that passes only through opt; candid-core refuses it, because
+  decoding a value that is not an opt at such a type unwraps opt without end",
+  naming the first such declaration in name order, with a source-scoped span
+  naming the source that declares it (no byte offsets: the upstream AST
+  carries none for a declaration). Every entry point applies it:
+  `compile_did` and its variants, `compile_with_resolver`, `compile_did_file`
+  and its variants, the `candid-core` binary's `compile`, and the `SourceInfo`
+  rederivation behind `SourceInfo::validate` and the `Compilation` loaders;
+  `@candid-core/cli` embeds this compiler.
+
+  **This refuses input that compiled before**: a `.did` holding such a type
+  anywhere, whether or not the actor reaches it, now fails to compile, and a
+  `Compilation` document whose `SourceInfo` embeds such a source no longer
+  loads, because its provenance no longer rederives. The Contract loaders do
+  not change: a Contract document that holds such a cycle, written by hand or
+  by 0.1.0-beta.3, still loads through `Contract::from_json`, and
+  `ContractDraft::build` still accepts the graph; decoding a non-`opt` value at
+  it still ends in a runtime's depth refusal. Every other input compiles
+  exactly as before: the same Contract, `contract_id`, `interface_id`,
+  `source_bundle_id` and `SourceInfo`. No public API, error code, resource
+  name, limit or serialized shape changed. `tests/opt_only_cycle.rs` pins each
+  case above.
+
 ## 0.1.0-beta.3 — published 2026-08-24
 
 The third prerelease, and the first that carries a fix for a defect in an
@@ -465,3 +507,4 @@ have seen them:
 [issue #176]: https://github.com/b3hr4d/candid-core/issues/176
 [PR #177]: https://github.com/b3hr4d/candid-core/pull/177
 [issue #219]: https://github.com/b3hr4d/candid-core/issues/219
+[issue #234]: https://github.com/b3hr4d/candid-core/issues/234

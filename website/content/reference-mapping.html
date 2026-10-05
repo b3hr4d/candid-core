@@ -381,7 +381,7 @@ export { $actor as actor, type $Actor as Actor };
     <tr><td><code>type OptNull = opt null;</code></td><td><code>{ some: null } | null</code></td><td>The payload's only value is already <code>null</code>.</td></tr>
     <tr><td><code>type OptReserved = opt reserved;</code></td><td><code>{ some: unknown } | null</code></td><td><code>unknown</code> absorbs <code>null</code> entirely.</td></tr>
     <tr><td><code>type Inner = opt nat;</code> then <code>type Outer = opt Inner;</code></td><td><code>{ some: Inner } | null</code></td><td>Same as the first row: the alias changes the spelling, not the node.</td></tr>
-    <tr><td><code>type Chain = opt Chain;</code></td><td><code>{ some: Chain } | null</code></td><td>The inner node is the <code>opt</code> itself.</td></tr>
+    <tr><td><code>type Chain = opt Chain;</code></td><td><code>{ some: Chain } | null</code></td><td>The inner node is the <code>opt</code> itself. The compiler refuses this source (a cycle through <code>opt</code> alone), so only a Contract document that already holds the graph meets this row.</td></tr>
     <tr><td><code>type OptEmpty = opt empty;</code></td><td><code>never | null</code></td><td>Not boxed: <code>empty</code> has no values, so <code>null</code> is the only one.</td></tr>
   </tbody>
 </table>
