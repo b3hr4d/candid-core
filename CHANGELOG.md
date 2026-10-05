@@ -94,6 +94,48 @@ and therefore the identities computed over them. Pin an exact version.
   above, including every entry point refusing the largest run
   `max_source_bytes` admits on a 64 KiB stack.
 
+### Contract JSON
+
+- **A struct written as a JSON array is refused** ([issue #235]). Serde's
+  derived `Deserialize` also reads a struct written as an array of its field
+  values in declaration order, and an internally tagged enum written as
+  `[tag, field…]`, at any depth, so `Contract::from_json` accepted a record
+  field written `[97, 1]` and a declaration written `["R", 0]`, which
+  `@candid-core/schema`'s `schemaFromContract` refuses (found by the #196
+  differential fuzz). The Contract format is objects only: candid-core
+  writes nothing else, and its DTOs already deny unknown keys. The bounded
+  loaders now refuse that form at every struct position: the document, its
+  `identities`, `producer` and `actor`, a type node, a record field or variant
+  arm, a service method and a declaration; the envelope and its `contract`;
+  the Compilation, its `contract` and `source_info`, each entry of the
+  sidecar's collections, and an entry's `origin` and `label`. The error is the
+  one a value of the wrong type gets, `ContractJsonError::MalformedJson`
+  (`malformed_contract_json` from `candid-core validate`), with the message
+  `invalid type: sequence, expected an object at <path>, line <l> column <c>`,
+  `<path>` being `$`-rooted, such as `$.types[0].fields[0]`.
+
+  **This refuses input that loaded before**: a document with a struct written
+  as an array fails `Contract::from_json`, `from_json_with_limits`,
+  `from_json_with_context`, `from_slice_with_limits` and
+  `from_slice_with_context`, the same four `_with_limits`/`_with_context`
+  loaders of `ContractEnvelope` and of `Compilation`, and `candid-core
+  validate`. Write the object form. Every document candid-core writes,
+  `0.1.0-beta.3`'s included, is objects only and loads exactly as before, with
+  the same identities. A document the typed decode refuses keeps the decode's
+  own error, and envelope extension values stay free-form JSON. Not changed:
+  the serde DTOs themselves (`RawContract`, `ContractDraft`, `TypeNode`,
+  `RawSourceInfo` and the rest) still read the array form when a caller
+  decodes them with serde directly, so `Contract::try_from_raw` and
+  `Compilation::try_from_raw` take whatever the caller decoded. No public API,
+  error variant, code, or serialized shape changed.
+
+  The check is one forward pass over the bytes the typed decode has just
+  accepted, linear in their length, with an explicit stack. It allocates one
+  frame per open object or array, plus a short-lived string for each key
+  written with an escape, which it decodes as serde does.
+  `tests/struct_sequence_form.rs` pins each position and each loader entry
+  point.
+
 ## 0.1.0-beta.3 — published 2026-08-24
 
 The third prerelease, and the first that carries a fix for a defect in an
@@ -465,3 +507,4 @@ have seen them:
 [issue #176]: https://github.com/b3hr4d/candid-core/issues/176
 [PR #177]: https://github.com/b3hr4d/candid-core/pull/177
 [issue #219]: https://github.com/b3hr4d/candid-core/issues/219
+[issue #235]: https://github.com/b3hr4d/candid-core/issues/235
