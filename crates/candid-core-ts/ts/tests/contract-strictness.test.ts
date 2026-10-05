@@ -224,17 +224,19 @@ test("a type node no root reaches is refused (issue #228 case 7)", () => {
 });
 
 test("every edge reaches, the actor class's init included (issue #228 case 7)", () => {
-  // Nodes reached only through the actor: the service's func, and the
-  // class's init argument (the record), which no schema reads.
+  // Nodes reached only through the actor: the service's func, its result
+  // (node 5, which only the func's `results` edge reaches), and the class's
+  // init argument (the record), which no schema reads.
   loads(
     schemaFromContract(
       document(
         [
           { kind: "record", fields: [{ id: 1, type: 4 }] },
-          { kind: "func", args: [4], results: [4], mode: "query" },
+          { kind: "func", args: [4], results: [5], mode: "query" },
           { kind: "service", methods: [{ name: "m", id: candidLabelHash("m"), function: 1 }] },
           { kind: "class", init: [0], service: 2 },
           primitive("nat"),
+          primitive("text"),
         ],
         [],
         { kind: "class", class: 3 },
