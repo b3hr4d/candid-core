@@ -323,6 +323,44 @@
       "hex": "4449444c016d7f0100c0843d"
     },
     {
+      "name": "elements_skipped_vec_variant_499999",
+      "target": "decode",
+      "note": "An extra argument of type vec variant { a } with 499,999 elements, skipped: 1,000,000 element charges (measured), exactly the runtime's maxElements.",
+      "origin": "written for the issue #196 review, fix round 3",
+      "agrees": "Both accept: exactly at the runtime's maxElements on the skip path of a variant.",
+      "did": "type V = variant { a };\n",
+      "expected": [],
+      "hex": "4449444c026d016b01617f01009fc21e(00*499999)"
+    },
+    {
+      "name": "elements_skipped_vec_variant_500000",
+      "target": "decode",
+      "note": "elements_skipped_vec_variant_499999 with one more variant: 1,000,002 element charges (measured), past maxElements; the runtime refuses (resource value_elements), the reference, which has no element budget, accepts (#103, scope item 3: an explicit element-count limit, which the candid crate does not have).",
+      "origin": "written for the issue #196 review, fix round 3",
+      "did": "type V = variant { a };\n",
+      "expected": [],
+      "hex": "4449444c026d016b01617f0100a0c21e(00*500000)"
+    },
+    {
+      "name": "elements_skipped_vec_record_499999",
+      "target": "decode",
+      "note": "An extra argument of type vec record { a : null } with 499,999 elements (no bytes per element), skipped: 1,000,000 element charges (measured), exactly the runtime's maxElements.",
+      "origin": "written for the issue #196 review, fix round 3",
+      "agrees": "Both accept: exactly at the runtime's maxElements on the skip path of a non-empty record.",
+      "did": "type R = record { a : null };\n",
+      "expected": [],
+      "hex": "4449444c026d016c01617f01009fc21e"
+    },
+    {
+      "name": "elements_skipped_vec_record_500000",
+      "target": "decode",
+      "note": "elements_skipped_vec_record_499999 with one more record: 1,000,002 element charges (measured), past maxElements; the runtime refuses (resource value_elements), the reference, which has no element budget, accepts (#103, scope item 3: an explicit element-count limit, which the candid crate does not have).",
+      "origin": "written for the issue #196 review, fix round 3",
+      "did": "type R = record { a : null };\n",
+      "expected": [],
+      "hex": "4449444c026d016c01617f0100a0c21e"
+    },
+    {
       "name": "chain_opt_127_levels",
       "target": "decode",
       "note": "A chain of 127 declarations T0 = opt T1, …, T126 = opt T127, T127 = nat, and a value present at every level: 255 depth steps (measured), the deepest decoded node of an opt chain the runtime accepts (chain_opt_blob_127_levels reaches 256 through a blob byte).",
@@ -945,6 +983,26 @@
       "value": ["o", [["next", ["o", [["next", ["o", [["next", ["o", [["next", ["o", [["next", ["o", [["next", ["o", [["next", ["o", [["next", ["o", [["next", ["o", [["next", ["o", [["next", ["o", [["next", ["o", [["next", ["o", [["next", ["o", [["next", ["o", [["next", ["o", [["next", ["o", [["next", ["o", [["next", ["o", [["next", ["o", [["next", ["o", [["next", ["o", [["next", ["o", [["next", ["o", [["next", ["o", [["next", ["o", [["next", ["o", [["next", ["o", [["next", ["o", [["next", ["o", [["next", ["o", [["next", ["o", [["next", ["o", [["next", ["o", [["next", ["o", [["next", ["o", [["next", ["o", [["next", ["o", [["next", ["o", [["next", ["o", [["next", ["o", [["next", ["o", [["next", ["o", [["next", ["o", [["next", ["o", [["next", ["o", [["next", ["o", [["next", ["o", [["next", ["o", [["next", ["o", [["next", ["o", [["next", ["o", [["next", ["o", [["next", ["o", [["next", ["o", [["next", ["o", [["next", ["o", [["next", ["o", [["next", ["o", [["next", ["o", [["next", ["o", [["next", ["o", [["next", ["o", [["next", ["o", [["next", ["o", [["next", ["o", [["next", ["o", [["next", ["o", [["next", ["o", [["next", ["o", [["next", ["o", [["next", ["o", [["next", ["o", [["next", ["o", [["next", ["o", [["next", ["o", [["next", ["o", [["next", ["o", [["next", ["o", [["next", ["o", [["next", ["o", [["next", ["o", [["next", ["o", [["next", ["o", [["next", ["o", [["next", ["o", [["next", ["o", [["next", ["o", [["next", ["o", [["next", ["o", [["next", ["o", [["next", ["o", [["next", ["o", [["next", ["o", [["next", ["o", [["next", ["o", [["next", ["o", [["next", ["o", [["next", ["o", [["next", ["o", [["next", ["o", [["next", ["o", [["next", ["o", [["next", ["o", [["next", ["o", [["next", ["o", [["next", ["o", [["next", ["o", [["next", ["o", [["next", ["o", [["next", ["o", [["next", ["o", [["next", ["o", [["next", ["o", [["next", ["o", [["next", ["o", [["next", ["o", [["next", ["o", [["next", ["o", [["next", ["o", [["next", ["o", [["next", ["o", [["next", ["o", [["next", ["o", [["next", ["o", [["next", ["o", [["next", ["o", [["next", ["o", []]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]
     },
     {
+      "name": "validate_depth_tuple_chain_128_levels",
+      "target": "validate",
+      "note": "A named-tuple chain of 128 levels, T0 = record { T1 }, ..., T126 = record { T127 }, T127 = record {}: every link is validate's tuple path, and the innermost record sits at level 127, which validate charges 255 steps (measured) and the reference, configured with max_value_depth 127, admits.",
+      "origin": "written for the issue #196 review, fix round 3",
+      "agrees": "Both accept: the deepest tuple chain both aligned budgets admit.",
+      "did": "type T0 = record { T1 };\ntype T1 = record { T2 };\ntype T2 = record { T3 };\ntype T3 = record { T4 };\ntype T4 = record { T5 };\ntype T5 = record { T6 };\ntype T6 = record { T7 };\ntype T7 = record { T8 };\ntype T8 = record { T9 };\ntype T9 = record { T10 };\ntype T10 = record { T11 };\ntype T11 = record { T12 };\ntype T12 = record { T13 };\ntype T13 = record { T14 };\ntype T14 = record { T15 };\ntype T15 = record { T16 };\ntype T16 = record { T17 };\ntype T17 = record { T18 };\ntype T18 = record { T19 };\ntype T19 = record { T20 };\ntype T20 = record { T21 };\ntype T21 = record { T22 };\ntype T22 = record { T23 };\ntype T23 = record { T24 };\ntype T24 = record { T25 };\ntype T25 = record { T26 };\ntype T26 = record { T27 };\ntype T27 = record { T28 };\ntype T28 = record { T29 };\ntype T29 = record { T30 };\ntype T30 = record { T31 };\ntype T31 = record { T32 };\ntype T32 = record { T33 };\ntype T33 = record { T34 };\ntype T34 = record { T35 };\ntype T35 = record { T36 };\ntype T36 = record { T37 };\ntype T37 = record { T38 };\ntype T38 = record { T39 };\ntype T39 = record { T40 };\ntype T40 = record { T41 };\ntype T41 = record { T42 };\ntype T42 = record { T43 };\ntype T43 = record { T44 };\ntype T44 = record { T45 };\ntype T45 = record { T46 };\ntype T46 = record { T47 };\ntype T47 = record { T48 };\ntype T48 = record { T49 };\ntype T49 = record { T50 };\ntype T50 = record { T51 };\ntype T51 = record { T52 };\ntype T52 = record { T53 };\ntype T53 = record { T54 };\ntype T54 = record { T55 };\ntype T55 = record { T56 };\ntype T56 = record { T57 };\ntype T57 = record { T58 };\ntype T58 = record { T59 };\ntype T59 = record { T60 };\ntype T60 = record { T61 };\ntype T61 = record { T62 };\ntype T62 = record { T63 };\ntype T63 = record { T64 };\ntype T64 = record { T65 };\ntype T65 = record { T66 };\ntype T66 = record { T67 };\ntype T67 = record { T68 };\ntype T68 = record { T69 };\ntype T69 = record { T70 };\ntype T70 = record { T71 };\ntype T71 = record { T72 };\ntype T72 = record { T73 };\ntype T73 = record { T74 };\ntype T74 = record { T75 };\ntype T75 = record { T76 };\ntype T76 = record { T77 };\ntype T77 = record { T78 };\ntype T78 = record { T79 };\ntype T79 = record { T80 };\ntype T80 = record { T81 };\ntype T81 = record { T82 };\ntype T82 = record { T83 };\ntype T83 = record { T84 };\ntype T84 = record { T85 };\ntype T85 = record { T86 };\ntype T86 = record { T87 };\ntype T87 = record { T88 };\ntype T88 = record { T89 };\ntype T89 = record { T90 };\ntype T90 = record { T91 };\ntype T91 = record { T92 };\ntype T92 = record { T93 };\ntype T93 = record { T94 };\ntype T94 = record { T95 };\ntype T95 = record { T96 };\ntype T96 = record { T97 };\ntype T97 = record { T98 };\ntype T98 = record { T99 };\ntype T99 = record { T100 };\ntype T100 = record { T101 };\ntype T101 = record { T102 };\ntype T102 = record { T103 };\ntype T103 = record { T104 };\ntype T104 = record { T105 };\ntype T105 = record { T106 };\ntype T106 = record { T107 };\ntype T107 = record { T108 };\ntype T108 = record { T109 };\ntype T109 = record { T110 };\ntype T110 = record { T111 };\ntype T111 = record { T112 };\ntype T112 = record { T113 };\ntype T113 = record { T114 };\ntype T114 = record { T115 };\ntype T115 = record { T116 };\ntype T116 = record { T117 };\ntype T117 = record { T118 };\ntype T118 = record { T119 };\ntype T119 = record { T120 };\ntype T120 = record { T121 };\ntype T121 = record { T122 };\ntype T122 = record { T123 };\ntype T123 = record { T124 };\ntype T124 = record { T125 };\ntype T125 = record { T126 };\ntype T126 = record { T127 };\ntype T127 = record {};\n",
+      "type": "T0",
+      "value": ["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["o", []]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]
+    },
+    {
+      "name": "validate_depth_tuple_chain_129_levels",
+      "target": "validate",
+      "note": "A named-tuple chain of 129 levels: the innermost record sits at level 128, 257 steps (measured), one past both aligned budgets.",
+      "origin": "written for the issue #196 review, fix round 3",
+      "agrees": "Both refuse on value_depth: one past both aligned budgets.",
+      "did": "type T0 = record { T1 };\ntype T1 = record { T2 };\ntype T2 = record { T3 };\ntype T3 = record { T4 };\ntype T4 = record { T5 };\ntype T5 = record { T6 };\ntype T6 = record { T7 };\ntype T7 = record { T8 };\ntype T8 = record { T9 };\ntype T9 = record { T10 };\ntype T10 = record { T11 };\ntype T11 = record { T12 };\ntype T12 = record { T13 };\ntype T13 = record { T14 };\ntype T14 = record { T15 };\ntype T15 = record { T16 };\ntype T16 = record { T17 };\ntype T17 = record { T18 };\ntype T18 = record { T19 };\ntype T19 = record { T20 };\ntype T20 = record { T21 };\ntype T21 = record { T22 };\ntype T22 = record { T23 };\ntype T23 = record { T24 };\ntype T24 = record { T25 };\ntype T25 = record { T26 };\ntype T26 = record { T27 };\ntype T27 = record { T28 };\ntype T28 = record { T29 };\ntype T29 = record { T30 };\ntype T30 = record { T31 };\ntype T31 = record { T32 };\ntype T32 = record { T33 };\ntype T33 = record { T34 };\ntype T34 = record { T35 };\ntype T35 = record { T36 };\ntype T36 = record { T37 };\ntype T37 = record { T38 };\ntype T38 = record { T39 };\ntype T39 = record { T40 };\ntype T40 = record { T41 };\ntype T41 = record { T42 };\ntype T42 = record { T43 };\ntype T43 = record { T44 };\ntype T44 = record { T45 };\ntype T45 = record { T46 };\ntype T46 = record { T47 };\ntype T47 = record { T48 };\ntype T48 = record { T49 };\ntype T49 = record { T50 };\ntype T50 = record { T51 };\ntype T51 = record { T52 };\ntype T52 = record { T53 };\ntype T53 = record { T54 };\ntype T54 = record { T55 };\ntype T55 = record { T56 };\ntype T56 = record { T57 };\ntype T57 = record { T58 };\ntype T58 = record { T59 };\ntype T59 = record { T60 };\ntype T60 = record { T61 };\ntype T61 = record { T62 };\ntype T62 = record { T63 };\ntype T63 = record { T64 };\ntype T64 = record { T65 };\ntype T65 = record { T66 };\ntype T66 = record { T67 };\ntype T67 = record { T68 };\ntype T68 = record { T69 };\ntype T69 = record { T70 };\ntype T70 = record { T71 };\ntype T71 = record { T72 };\ntype T72 = record { T73 };\ntype T73 = record { T74 };\ntype T74 = record { T75 };\ntype T75 = record { T76 };\ntype T76 = record { T77 };\ntype T77 = record { T78 };\ntype T78 = record { T79 };\ntype T79 = record { T80 };\ntype T80 = record { T81 };\ntype T81 = record { T82 };\ntype T82 = record { T83 };\ntype T83 = record { T84 };\ntype T84 = record { T85 };\ntype T85 = record { T86 };\ntype T86 = record { T87 };\ntype T87 = record { T88 };\ntype T88 = record { T89 };\ntype T89 = record { T90 };\ntype T90 = record { T91 };\ntype T91 = record { T92 };\ntype T92 = record { T93 };\ntype T93 = record { T94 };\ntype T94 = record { T95 };\ntype T95 = record { T96 };\ntype T96 = record { T97 };\ntype T97 = record { T98 };\ntype T98 = record { T99 };\ntype T99 = record { T100 };\ntype T100 = record { T101 };\ntype T101 = record { T102 };\ntype T102 = record { T103 };\ntype T103 = record { T104 };\ntype T104 = record { T105 };\ntype T105 = record { T106 };\ntype T106 = record { T107 };\ntype T107 = record { T108 };\ntype T108 = record { T109 };\ntype T109 = record { T110 };\ntype T110 = record { T111 };\ntype T111 = record { T112 };\ntype T112 = record { T113 };\ntype T113 = record { T114 };\ntype T114 = record { T115 };\ntype T115 = record { T116 };\ntype T116 = record { T117 };\ntype T117 = record { T118 };\ntype T118 = record { T119 };\ntype T119 = record { T120 };\ntype T120 = record { T121 };\ntype T121 = record { T122 };\ntype T122 = record { T123 };\ntype T123 = record { T124 };\ntype T124 = record { T125 };\ntype T125 = record { T126 };\ntype T126 = record { T127 };\ntype T127 = record { T128 };\ntype T128 = record {};\n",
+      "type": "T0",
+      "value": ["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["a", [["o", []]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]
+    },
+    {
       "name": "validate_depth_record_chain_128_levels_leaf",
       "target": "validate",
       "note": "A named-record chain of 128 levels whose innermost record holds x : nat: the nat sits at level 128, 257 steps (measured: every edge is a rec hop), one past both aligned budgets.",
@@ -1065,6 +1123,44 @@
       "did": "type W = vec W;\ntype R = reserved;\n",
       "expected": ["R"],
       "hex": "4449444c016d000100(01*256)00"
+    },
+    {
+      "name": "skip_extra_arg_vec_257_levels",
+      "target": "decode",
+      "note": "W = vec W nested 257 levels (the innermost empty) sent as an extra argument (nothing expected): the decoder skips the extra argument from step 0 (decodeArgs' skipValue of an extra argument), one step per wire level, so the innermost vec is charged 256 depth steps (measured), exactly the runtime's maxDepth.",
+      "origin": "written for the issue #196 review, fix round 3",
+      "agrees": "Both accept: exactly at the runtime's maxDepth (256 steps) on the skip path of an extra argument.",
+      "did": "type W = vec W;\n",
+      "expected": [],
+      "hex": "4449444c016d000100(01*256)00"
+    },
+    {
+      "name": "skip_extra_arg_vec_258_levels",
+      "target": "decode",
+      "note": "skip_extra_arg_vec_257_levels one level deeper: the innermost skipped vec costs 257 steps (measured), one past maxDepth; the runtime refuses (value_depth), the reference, which has no depth budget, accepts (#103, scope item 3: an explicit recursion depth limit; no rec hop on this path).",
+      "origin": "written for the issue #196 review, fix round 3",
+      "did": "type W = vec W;\n",
+      "expected": [],
+      "hex": "4449444c016d000100(01*257)00"
+    },
+    {
+      "name": "skip_extra_arg_record_vec_257_levels",
+      "target": "decode",
+      "note": "An extra argument of wire type V = vec R, R = record { a : V }, alternating 128 one-element vecs and 128 records down to an empty vec, 257 levels: every record is skipped through the skip-record frame, and the innermost vec is charged 256 depth steps (measured), exactly the runtime's maxDepth.",
+      "origin": "written for the issue #196 review, fix round 3",
+      "agrees": "Both accept: exactly at the runtime's maxDepth (256 steps) on the skip path of a record nested in a skipped value.",
+      "did": "type V = vec R;\ntype R = record { a : V };\n",
+      "expected": [],
+      "hex": "4449444c026d016c0161000100(01*128)00"
+    },
+    {
+      "name": "skip_extra_arg_record_vec_258_levels",
+      "target": "decode",
+      "note": "skip_extra_arg_record_vec_257_levels with a record on top (the extra argument has wire type R), 258 levels: the innermost skipped vec costs 257 steps (measured), one past maxDepth; the runtime refuses (value_depth), the reference, which has no depth budget, accepts (#103, scope item 3: an explicit recursion depth limit; no rec hop on this path).",
+      "origin": "written for the issue #196 review, fix round 3",
+      "did": "type V = vec R;\ntype R = record { a : V };\n",
+      "expected": [],
+      "hex": "4449444c026d016c0161000101(01*128)00"
     },
     {
       "name": "depth_reserved_field_vec_254_levels",
