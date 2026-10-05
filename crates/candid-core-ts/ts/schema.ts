@@ -816,9 +816,11 @@ export const c = {
    * Lazy indirection — how a schema refers to itself. The generator wraps
    * every declaration in `rec`, so canonical (name-sorted) emission order
    * can never hit a temporal-dead-zone reference, and recursion needs no
-   * special casing at emission time. Each hop costs one traversal step
-   * against a walk's depth and element budgets, which is what makes a
-   * mis-built self-referential chain terminate instead of hanging.
+   * special casing at emission time. A hop is an indirection, not a level
+   * of the value: it charges neither a walk's depth budget nor its element
+   * budget. A chain of more than `maxDepth` consecutive hops
+   * resolving one reference is refused with `value_depth`, which is what
+   * makes a mis-built `c.rec(() => self)` terminate instead of hanging.
    *
    * The explicit `Schema<T>` annotation is not optional decoration: it is
    * what breaks the circular inference, and it is the equality the compiler

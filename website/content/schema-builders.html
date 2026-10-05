@@ -379,8 +379,10 @@ const List: Schema<List> = c.rec(() => c.record({ head: c.nat, tail: c.opt(List)
 </p>
 
 <p>
-  Each hop costs one traversal step against a walk's depth and element budgets, which is what makes
-  a mis-built self-referential chain terminate rather than hang.
+  A hop is an indirection, not a level of the value: it charges neither a walk's depth budget nor
+  its element budget. A chain of more than <code>maxDepth</code> consecutive hops resolving one
+  reference is refused with <code>value_depth</code>, which is what makes a mis-built
+  <code>c.rec(() =&gt; self)</code> terminate rather than hang.
 </p>
 
 <h2>Infer, and the invariance proof</h2>

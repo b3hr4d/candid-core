@@ -594,18 +594,20 @@ pub fn mutate_table(rng: &mut Rng, bytes: &mut Vec<u8>) -> Option<&'static str> 
 
 /// The deepest nesting, in composite levels at the *expected* types, a
 /// generated decode or validate case may reach. The runtime's default
-/// `maxDepth` (256) charges a Contract-loaded value two steps per level, the
-/// `rec` hop and the constructor (issue #231), and refuses the first node at
-/// level 128 (step 257), while the `candid` crate has no depth budget at all
-/// (its stack is its bound). The two cannot be configured alike, so random
-/// generation stays strictly below the runtime's bound, and the boundary
-/// itself is pinned only by exact regression vectors.
+/// `maxDepth` (256) refuses the first node past level 256, while the `candid`
+/// crate has no depth budget at all (its stack is its bound). The two cannot
+/// be configured alike, so random generation stays strictly below the
+/// runtime's bound, and the boundary itself is pinned only by exact
+/// regression vectors. The bound is half the runtime's: it was set when the
+/// runtime charged a `rec` hop a level as well (until issue #231), and is
+/// kept so the committed corpus's generated cases did not change with that
+/// fix.
 pub const GEN_LEVELS: usize = 127;
 
 /// The most values (as the scan counts them) a generated decode case's
 /// message may hold, before the expansion factor: the runtime's `maxElements`
-/// (1,000,000) charges every value read, decoded or skipped, each `rec` hop
-/// and each `opt` a coercion inserts, while the `candid` crate has no element
+/// (1,000,000) charges every value read, decoded or skipped, and each `opt`
+/// a coercion inserts, while the `candid` crate has no element
 /// budget. Random generation stays far below it (see `within_bounds`); the
 /// boundary is pinned by exact regression vectors.
 pub const GEN_ELEMENTS: usize = 250_000;

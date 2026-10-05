@@ -605,20 +605,23 @@ test("examined record keys are charged against the element budget", () => {
   }
 });
 
-test("a rec hop on a variant payload is charged exactly once", () => {
-  // Documented accounting: one extra element per rec hop. The dynamic loader
-  // wraps every arm edge in c.rec, so double-charging would reject valid
-  // values one budget step early.
-  // Cost model for { tag, value }: 1 variant node + 1 payload node + 2
-  // examined keys in the unknown-key scan = 4; the rec wrapper adds exactly
-  // its 1 hop.
+test("a rec hop on a variant payload charges nothing (issue #231)", () => {
+  // The dynamic loader wraps every arm edge in c.rec; a hop is an
+  // indirection, not a value, so the wrapped arm costs what the direct one
+  // does. Cost model for { tag, value }: 1 variant node + 1 payload node + 2
+  // examined keys in the unknown-key scan = 4.
   const direct = c.variant({ busy: c.nat32 });
   const wrapped = c.variant({ busy: c.rec(() => c.nat32) });
   const value = { tag: "busy", value: 3 };
-  assert.deepStrictEqual(validate(direct, value, { maxElements: 4 }), { ok: true });
-  assert.deepStrictEqual(validate(wrapped, value, { maxElements: 5 }), { ok: true });
-  const short = validate(wrapped, value, { maxElements: 4 });
-  assert(!short.ok);
+  for (const schema of [direct, wrapped]) {
+    assert.deepStrictEqual(validate(schema, value, { maxElements: 4 }), { ok: true });
+    const short = validate(schema, value, { maxElements: 3 });
+    assert.deepStrictEqual(short.ok ? undefined : short.issues[0].resource_limit, {
+      resource: "value_elements",
+      limit: 3,
+      observed: 4,
+    });
+  }
 });
 
 test("validate never throws on hostile values", () => {
@@ -739,7 +742,7 @@ test("a hostile deep value is refused with work bounded by maxDepth, not by its 
       issues: [
         {
           code: "resource_limit_exceeded",
-          path: `$${"[0]".repeat(maxDepth / 2)}`,
+          path: `$${"[0]".repeat(maxDepth + 1)}`,
           message: `value_depth limit ${maxDepth} exceeded (observed ${maxDepth + 1})`,
           resource_limit: { resource: "value_depth", limit: maxDepth, observed: maxDepth + 1 },
         },

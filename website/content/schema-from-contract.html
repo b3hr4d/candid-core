@@ -565,11 +565,6 @@ built.actor; // the service schema, when the document has one
     You want the interface pinned in review. A generated module is a diffable artefact; a document
     fetched at runtime is not.
   </li>
-  <li>
-    You are near the traversal depth limit. A dynamically built schema carries one extra
-    <code>rec</code> hop per arena edge, so a deeply nested value can trip
-    <code>value_depth</code> under the dynamic schema and not under the generated one.
-  </li>
 </ul>
 
 <h2>The cross-check that ties the two together</h2>
@@ -604,9 +599,9 @@ for (const [declaration, samples] of Object.entries(fixture.samples)) {
   reading names out of an extension cannot diverge from being handed them. And in the
   <a href="schema-codec.html">codec</a> suite, every reference wire vector is decoded twice — once
   under the generated schema and once under the dynamic one — and both must produce the same value
-  and re-encode to byte-identical output. The cross-check's own samples deliberately stay far from
-  the depth limit, because of the extra <code>rec</code> hop noted above: near-limit values would
-  diverge on the resource issue alone.
+  and re-encode to byte-identical output. A dynamically built schema carries one extra
+  <code>rec</code> hop per arena edge, which costs nothing against the depth and element budgets,
+  so near-limit values get the same verdict and the same resource issue under both.
 </p>
 
 <p>
