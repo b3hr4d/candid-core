@@ -567,9 +567,11 @@ pub fn random_env(rng: &mut Rng) -> Env {
 /// The recursive shapes of the deep environments (issue #196 review: the
 /// depth regime of the iterative walkers). `T0` is the shape; the siblings
 /// are a structural copy (`T1`) and a variation at the base (`T2`), so
-/// decode cases also coerce across deep values.
+/// decode cases also coerce across deep values. No shape is an `opt`-only
+/// cycle (`T = opt T`; see `wire::opt_cycle`): the `opt` chain is pinned by
+/// exact regression vectors instead.
 const DEEP_SHAPES: &[[&str; 3]] = &[
-    ["opt T0", "opt T1", "opt opt T2"],
+    ["opt vec T0", "opt vec T1", "opt opt vec T2"],
     ["vec T0", "vec T1", "vec opt T2"],
     [
         "record { opt T0 }",
@@ -590,10 +592,10 @@ const DEEP_SHAPES: &[[&str; 3]] = &[
 
 /// A deep environment: a recursive shape and its siblings, or a chain of
 /// declarations `T0 = c(T1)`, `T1 = c(T2)`, … nested `chain` constructors
-/// deep, whose values nest as deep as the chain (a deep type table). The
-/// chain stays within the compiler's `max_type_depth` (256), so both sides
-/// accept the environment; values of the recursive shapes nest as deep as
-/// the case asks.
+/// deep (a deep type table), whose values end early where an `opt` is absent,
+/// a `vec` empty or a variant takes its `b` arm. The chain stays within the
+/// compiler's `max_type_depth` (256), so both sides accept the environment;
+/// values nest as deep as the case asks, below the generation bound.
 pub fn deep_env(rng: &mut Rng) -> Env {
     if rng.chance(2, 3) {
         return shape_env(rng.pick(DEEP_SHAPES));
@@ -609,7 +611,8 @@ pub const DEEP_KINDS: usize = DEEP_SHAPES.len() + 1;
 /// A deep environment of a chosen kind (the committed corpus cycles through
 /// them, so every shape and a chain appear whatever the seeds draw): shape
 /// `kind` of `DEEP_SHAPES`, or for `kind == DEEP_SHAPES.len()` a chain of
-/// 129 to 255 constructors, past the 127 levels `maxDepth` always admits.
+/// 129 to 255 constructors, a type table deeper than the runtime's depth
+/// bound (values stop below it).
 pub fn deep_env_of_kind(rng: &mut Rng, kind: usize) -> Env {
     match DEEP_SHAPES.get(kind) {
         Some(shape) => shape_env(shape),

@@ -1,195 +1,390 @@
 {
-  "about": "Reviewed expected-divergence list of the issue #196 differential fuzz. `categories` (edited by hand) classifies every divergence category the verdict mapping in ts/tests/differential/compare.ts can report and that a corpus case shows: class a = a bug in the TypeScript runtime, b = a bug in the Rust reference, c = an intended difference. An attribution (…:intended:…, …:reference:…, env:label-collision) is made only on inputs whose reference-side flags carry its cause; a plain symptom (…:ts-rejects:…, …:ts-accepts:…, …:class:…, decode:value-mismatch) classified b or c is attributed per case (attributed: per-case), for the listed cases only. `cases` and `skipped` are rewritten by UPDATE_GOLDENS=1 npm test; ts/tests/differential.test.ts fails when a case diverges differently from this list, including when a listed divergence disappears.",
-  "categories": {
-    "contract:intended:identities-unchecked": {
-      "class": "c",
-      "reason": "schemaFromContract does not verify the identities hashes, by design (ts/contract.ts: verifying them needs canonicalization, candid-core's job); Contract::from_json refuses a document whose identities are wrong. Only cases whose graph alone the reference accepts land here."
-    },
-    "contract:intended:producer-unchecked": {
-      "class": "c",
-      "reason": "schemaFromContract does not read producer metadata, by design (ts/contract.ts); Contract::from_json refuses a malformed producer block. Only cases whose graph alone the reference accepts land here."
-    },
-    "contract:ts-accepts:json_unknown_field": {
-      "class": "a",
-      "reason": "schemaFromContract accepts a document carrying a key the Contract format does not define (on the root, a type node, a field, a declaration); Contract::from_json refuses it (deny_unknown_fields). The loader's own rule is that a future format revision must be adopted deliberately, not half-read, which it already applies to unknown node kinds and primitive names.",
-      "issue": "to be filed (see the #196 campaign report)"
-    },
-    "contract:ts-accepts:orphan_type_node": {
-      "class": "a",
-      "reason": "schemaFromContract accepts a type arena with a node no declaration or actor reaches; Contract::from_json refuses it (orphan_type_node, a structural validity rule of the format). Harmless to the schemas built, but the loader admits documents candid-core says are not Contracts.",
-      "issue": "to be filed (see the #196 campaign report)"
-    },
-    "contract:ts-accepts:rootless_type_arena": {
-      "class": "a",
-      "reason": "schemaFromContract accepts a non-empty type arena with no declaration and no actor; Contract::from_json refuses it (rootless_type_arena). The loader returns no schemas for it, but admits a document candid-core says is not a Contract.",
-      "issue": "to be filed (see the #196 campaign report)"
-    },
-    "contract:ts-rejects:invalid_contract_document": {
-      "class": "a",
-      "reason": "schemaFromContract refuses a Contract document with no declarations key (declarations must be an array); Contract::from_json accepts it, the key defaulting to empty (serde default on RawContract, documented for ContractDraft). candid-core's own serializer always writes the key, so only a hand-written or third-party document hits this; whether absence is part of the format is the owner's call.",
-      "issue": "to be filed (see the #196 campaign report)"
-    },
-    "decode:intended:empty-method-name": {
-      "class": "c",
-      "reason": "The runtime refuses a func reference with an empty method name (invalid_length) for round-trip symmetry: validate and encode refuse it, and so does candid-core's HostValue validator (empty_function_method). The candid crate accepts it. Attributed only where the scan of the message at its own wire types finds such a func value (flag empty_method), including one the reference never decodes because an opt above absorbs a later failure."
-    },
-    "decode:intended:leb128-minimality": {
-      "class": "c",
-      "reason": "The runtime refuses a non-minimal LEB128/SLEB128 group (overlong_leb128, or invalid_length when a u32 field's group is longer than five bytes although its value fits); the candid crate accepts it. Settled on #103 (decision 4): the spec's strict-inverse reading. Attributed only where the scan of the message at its own wire types meets a non-minimal group (flag non_minimal_leb128); the same codes on a message without one are plain symptoms."
-    },
-    "decode:intended:reference-sequences-unsupported": {
-      "class": "c",
-      "reason": "The runtime refuses a future type's value with a non-zero reference count (invalid_principal): reference sequences are outside this codec, documented in crates/candid-core-ts/README.md (\"opaque reference values … and external reference sequences are refused\"). The candid crate ignores the count. Attributed only where the scan finds such a value (flag future_references); an opaque reference (tag 0) the reference refuses too, and a principal longer than 29 bytes both refuse, so invalid_principal elsewhere is a plain symptom."
-    },
-    "decode:intended:ts-limit": {
-      "class": "c",
-      "reason": "The runtime refuses a message past its own budgets with resource_limit_exceeded: a value nested past maxDepth (256 depth steps by default: two per Candid level, a constructor and one rec hop or declaration reference, and one for a leaf; resource value_depth), or more values than maxElements (1,000,000, every value read, decoded or skipped, charged; resource value_elements). The candid crate is bounded only by its stack (the harness gives it 256 MiB) and the harness's decoding quota (retried under a quota sized to the message). A documented policy of the runtime (ADR 0005, issue #192). Attributed only on the budget the input exceeds: value_depth where the message's values, or the values the reference decoded from it at the expected types, nest deeper than 127 composite levels, which maxDepth always admits (flag deep_nesting); value_elements where the message holds more than half maxElements values (flag many_values). Any other refusal of that code is a plain symptom."
-    },
-    "decode:reference:empty-normalization": {
-      "class": "b",
-      "reason": "The candid crate rewrites an uninhabited recursive record (a record that reaches itself through record fields only) to empty in the wire type table, and never in the expected types (TypeEnv::replace_empty, called from binary_parser::Header::to_types). Inside a func or service signature that makes its reference subtype check accept a type that is not a subtype (empty <: E) and refuse identical types (E <: empty); under an opt the refusal is absorbed to null. The runtime compares the types as written, as the spec's subtyping does. Attributed only where the wire table holds such a record reachable from a func or service type, the only place the reference's subtype check runs (flag wire_empty_record), and for a value mismatch only where the two values differ nowhere but where one holds null and the other a func or service reference (the absorbed opt).",
-      "issue": "to be reported upstream (dfinity/candid); see the #196 campaign report"
-    },
-    "decode:reference:empty-wire-value": {
-      "class": "b",
-      "reason": "The candid crate decodes a func or service value where the wire type is empty: it checks reference values only through its subtype relation, in which empty <: t holds for every t, so it reads a value no wire type can carry. The runtime refuses (type_mismatch: no value inhabits empty). Attributed only where the message carries bytes at an empty wire type (flag wire_empty_value) and the runtime refuses with type_mismatch.",
-      "issue": "to be reported upstream (dfinity/candid); see the #196 campaign report"
-    },
-    "decode:reference:skipped-method-utf8": {
-      "class": "b",
-      "reason": "The candid crate does not check that a func reference's method name is UTF-8 when it skips the value (an extra argument, an expected reserved, an absorbing opt); it does check a skipped text, and checks the method name when it decodes the func. The runtime refuses invalid UTF-8 wherever it occurs, skipped or not. Attributed only where the scan finds a func value whose method name is not UTF-8 (flag invalid_method_utf8).",
-      "issue": "to be reported upstream (dfinity/candid); see the #196 campaign report"
-    },
-    "decode:ts-rejects:type_mismatch": {
-      "class": "b",
-      "reason": "The candid crate's reference subtype check memoizes coinductive assumptions unsoundly: a pair proven while another assumption was in force stays in its memo after that assumption fails (and the opt rule papers over the failure), so a later query answers true for a pair that is not a subtype (see reference_unsound_subtype_memo: W7 <: E7 is refused alone and accepted inside W3 <: E3). The runtime decides the relation without the leak and refuses. No input flag identifies this cause, so the class holds for the listed case only (minimized from campaign case d/1041528/158); any other case in this category is a new, unattributed divergence.",
-      "issue": "to be reported upstream (dfinity/candid); see the #196 campaign report",
-      "attributed": "per-case"
-    },
-    "env:label-collision": {
-      "class": "a",
-      "reason": "Field names attach to canonical Contract nodes (the org.candid-core.field-names/v1 table is keyed by container and id). When two declarations spell one canonical record differently — record { d : text } and record { 100 : text } — the runtime keys every occurrence by the name, so a value written at the numbered declaration decodes (and must validate) with key d instead of _100_. Wire bytes are unaffected; the domain key is not what the declaration says. Attributed per case: only where the case's declarations reach a Contract node holding a field or arm spelled two ways (flag label_collision), for a decoded value only when it equals the reference's once every label is read as its id, and for a validate acceptance only where the reference refused the field set or the arm (record_field_set_mismatch, unknown_variant_id).",
-      "issue": "to be filed (see the #196 campaign report)"
-    },
-    "validate:intended:ts-limit": {
-      "class": "c",
-      "reason": "validate refuses a value nested past its maxDepth (256 depth steps by default) with resource_limit_exceeded (resource value_depth). It charges a step for every rec hop as well as every constructor (ts/validate.ts: rec unwrapping included, so a mis-built self-referential rec chain terminates), so a value of a recursive type reaches maxDepth at 128 levels, while candid-core's validate_host_value, under max_value_depth = 256, counts one per container and accepts up to 257. A documented policy of the runtime (the decoder's decode:intended:ts-limit, ADR 0005, issue #192). Attributed only on that budget and where the HostValue the reference judged nests deeper than 127 composite levels (flag deep_nesting); any other limit refusal is a plain symptom."
-    }
+  "about": "Reviewed expected-divergence list of the issue #196 differential fuzz, keyed by case id. ts/tests/differential.test.ts accepts a divergence only when its case id is listed here with its issue and exactly the symptom observed (`ts=<this runtime's answer> ref=<the reference's>`, each refusal with its class or code, a value mismatch with a digest of this runtime's values); it fails on any other divergence, on a listed case that no longer diverges so, and on any case the reference did not judge. No rule attributes a divergence: each entry was triaged by hand. `side` says which side is wrong (reference, runtime), or that the runtime differs by a decision settled on the issue (decision), or that the issue awaits the owner's call (owner-call). `cases` and `skipped` are rewritten by UPDATE_GOLDENS=1 npm test, which keeps an entry only while its id and symptom are unchanged and writes any other divergence unclassified (issue 0) for review.",
+  "issues": {
+    "102": "Settled decisions 7 and 8 of #102: schemaFromContract does not verify the identities hashes (canonicalization is candid-core's job) and does not read producer metadata (untrusted provenance); Contract::from_json refuses a document whose identities or producer block is wrong. The driver restamps identities after any graph edit, so only an edit of identities or producer itself diverges.",
+    "103": "Settled decision 4 of #103: the runtime refuses a non-minimal LEB128/SLEB128 group (overlong_leb128, or invalid_length when a u32 field's group is longer than five bytes although its value fits), the candid crate accepts it. Triage: each generated case agrees with the reference once the runtime's minimality checks are reversed (and nothing else).",
+    "104": "Settled decision 1 of #104: a func value's method name is non-empty (the runtime's decode refuses an empty one with invalid_length, for round-trip symmetry with validate and encode; the candid crate accepts it), and opaque references and external reference sequences stay refused (a future value with a non-zero reference count: invalid_principal). Triage: each generated case agrees once the runtime's empty-name check is reversed (and nothing else).",
+    "227": "Upstream defects of the candid crate 0.10.30, found by this fuzz; the reference is wrong in each listed case and the runtime is right: wire-side-only empty normalization (item 1), values read from an empty wire type (item 2), the unsound coinductive subtype memo (item 3), a skipped func reference's method name not checked for UTF-8 (item 4). Each case is a hand-minimized vector with its analysis in regressions.json.",
+    "228": "schemaFromContract accepts Contract documents Contract::from_json refuses: orphan type nodes (item 7), unknown keys (item 6), a rootless arena (item 8); the runtime's loader is the wrong side. Item 9 (a document without declarations, which the runtime refuses and the reference accepts) awaits the owner's call. Triage: the reference's first violation names the rule, and the runtime's loader has no such check.",
+    "229": "Field names attach to the shared canonical node, so a declaration that spells a field by number (or another name) is decoded and validated under another declaration's spelling (d for 100, y for 121); the owner's question on #229. Triage: each decode case's values equal the reference's once every key and tag is read as its label id; each validate case's value uses the declaration's own spelling.",
+    "231": "The runtime's budgets are not the reference's: decode and validate charge a rec hop a depth step, so the runtime refuses the first node at Candid level 128 where the candid crate (no depth budget) accepts; validate's tag-only arm is charged its rec hop but not its null, one level unlike candid-core's max_value_depth; and the decoder's element budget (maxElements, which charges rec hops too) has no candid-crate counterpart. Random generation stays strictly below these bounds; only these exact boundary vectors cross them. Owner's call on #231 (the element budget may deserve its own issue)."
   },
   "cases": {
-    "c/10/2": "contract:ts-accepts:orphan_type_node",
-    "c/10/5": "contract:ts-accepts:orphan_type_node",
-    "c/11/6": "contract:ts-accepts:orphan_type_node",
-    "c/12/2": "contract:ts-accepts:orphan_type_node",
-    "c/12/7": "contract:ts-accepts:orphan_type_node",
-    "c/13/0": "contract:ts-accepts:orphan_type_node",
-    "c/13/1": "contract:ts-accepts:orphan_type_node",
-    "c/15/2": "contract:ts-accepts:orphan_type_node",
-    "c/16/3": "contract:ts-accepts:orphan_type_node",
-    "c/17/3": "contract:ts-accepts:orphan_type_node",
-    "c/17/6": "contract:ts-accepts:json_unknown_field",
-    "c/18/3": "contract:ts-accepts:json_unknown_field",
-    "c/18/4": "contract:ts-accepts:orphan_type_node",
-    "c/18/7": "contract:ts-accepts:json_unknown_field",
-    "c/2/2": "contract:ts-accepts:orphan_type_node",
-    "c/20/3": "contract:ts-accepts:orphan_type_node",
-    "c/20/7": "contract:ts-accepts:orphan_type_node",
-    "c/21/6": "contract:ts-accepts:orphan_type_node",
-    "c/23/4": "contract:ts-accepts:orphan_type_node",
-    "c/24/2": "contract:ts-accepts:json_unknown_field",
-    "c/24/6": "contract:ts-accepts:orphan_type_node",
-    "c/4/0": "contract:ts-accepts:orphan_type_node",
-    "c/4/4": "contract:ts-accepts:orphan_type_node",
-    "c/5/0": "contract:ts-accepts:orphan_type_node",
-    "c/7/0": "contract:ts-accepts:orphan_type_node",
-    "c/7/5": "contract:ts-accepts:orphan_type_node",
-    "c/8/1": "contract:ts-accepts:orphan_type_node",
-    "c/8/2": "contract:ts-accepts:orphan_type_node",
-    "c/9/4": "contract:ts-accepts:orphan_type_node",
-    "d/10/16": "decode:intended:leb128-minimality",
-    "d/10/34": "decode:intended:leb128-minimality",
-    "d/12/27": "decode:intended:leb128-minimality",
-    "d/13/11": "decode:intended:leb128-minimality",
-    "d/13/7": "decode:intended:leb128-minimality",
-    "d/13/9": "decode:intended:leb128-minimality",
-    "d/14/20": "decode:intended:leb128-minimality",
-    "d/15/16": "decode:intended:leb128-minimality",
-    "d/15/23": "decode:intended:leb128-minimality",
-    "d/16/14": "decode:intended:empty-method-name",
-    "d/17/26": "decode:intended:leb128-minimality",
-    "d/17/33": "env:label-collision",
-    "d/18/11": "env:label-collision",
-    "d/18/26": "env:label-collision",
-    "d/18/28": "env:label-collision",
-    "d/18/29": "decode:intended:leb128-minimality",
-    "d/18/35": "decode:intended:leb128-minimality",
-    "d/18/39": "env:label-collision",
-    "d/19/15": "decode:intended:leb128-minimality",
-    "d/19/18": "decode:intended:leb128-minimality",
-    "d/2/27": "decode:intended:leb128-minimality",
-    "d/20/35": "decode:intended:leb128-minimality",
-    "d/21/19": "decode:intended:leb128-minimality",
-    "d/21/24": "decode:intended:leb128-minimality",
-    "d/21/3": "decode:intended:leb128-minimality",
-    "d/22/12": "decode:intended:leb128-minimality",
-    "d/22/18": "decode:intended:leb128-minimality",
-    "d/22/33": "decode:intended:leb128-minimality",
-    "d/22/6": "decode:intended:leb128-minimality",
-    "d/23/17": "decode:intended:leb128-minimality",
-    "d/23/28": "decode:intended:leb128-minimality",
-    "d/23/4": "decode:intended:leb128-minimality",
-    "d/24/36": "decode:intended:leb128-minimality",
-    "d/3/2": "decode:intended:leb128-minimality",
-    "d/4/14": "decode:intended:leb128-minimality",
-    "d/4/17": "decode:intended:leb128-minimality",
-    "d/4/36": "decode:intended:leb128-minimality",
-    "d/4/5": "decode:intended:leb128-minimality",
-    "d/5/19": "decode:intended:leb128-minimality",
-    "d/8/17": "decode:intended:leb128-minimality",
-    "d/8/22": "decode:intended:leb128-minimality",
-    "d/8/5": "decode:intended:leb128-minimality",
-    "r/chain_opt_128_levels": "decode:intended:ts-limit",
-    "r/contract_declarations_absent": "contract:ts-rejects:invalid_contract_document",
-    "r/contract_identities_edit": "contract:intended:identities-unchecked",
-    "r/contract_orphan_type_node": "contract:ts-accepts:orphan_type_node",
-    "r/contract_producer_edit": "contract:intended:producer-unchecked",
-    "r/contract_rootless_arena": "contract:ts-accepts:rootless_type_arena",
-    "r/contract_unknown_key": "contract:ts-accepts:json_unknown_field",
-    "r/depth_coercion_inserted_opts": "decode:intended:ts-limit",
-    "r/depth_opt_129_levels": "decode:intended:ts-limit",
-    "r/depth_variant_128_levels": "decode:intended:ts-limit",
-    "r/elements_skipped_vec_1000000": "decode:intended:ts-limit",
-    "r/empty_method_name": "decode:intended:empty-method-name",
-    "r/empty_method_under_absorbed_opt": "decode:intended:empty-method-name",
-    "r/future_type_reference_count": "decode:intended:reference-sequences-unsupported",
-    "r/label_collision_numbered_field": "env:label-collision",
-    "r/leb128_overlong_nat_value": "decode:intended:leb128-minimality",
-    "r/leb128_overlong_type_count": "decode:intended:leb128-minimality",
-    "r/leb128_wide_field_id": "decode:intended:leb128-minimality",
-    "r/reference_absorbs_identical_func_in_opt": "decode:reference:empty-normalization",
-    "r/reference_accepts_non_subtype_func": "decode:reference:empty-normalization",
-    "r/reference_reads_func_from_empty_wire": "decode:reference:empty-wire-value",
-    "r/reference_refuses_identical_func": "decode:reference:empty-normalization",
-    "r/reference_skips_invalid_utf8_method": "decode:reference:skipped-method-utf8",
-    "r/reference_unsound_subtype_memo": "decode:ts-rejects:type_mismatch",
-    "r/validate_depth_vec_129_levels": "validate:intended:ts-limit",
-    "r/validate_depth_vec_257_levels": "validate:intended:ts-limit",
-    "v/18/3": "env:label-collision",
-    "v/24/2": "env:label-collision",
-    "v/24/9": "env:label-collision",
-    "xd/1/1": "decode:intended:ts-limit",
-    "xd/2/0": "decode:intended:ts-limit",
-    "xd/2/2": "decode:intended:ts-limit",
-    "xd/2/3": "decode:intended:ts-limit",
-    "xd/3/2": "decode:intended:ts-limit",
-    "xd/4/1": "decode:intended:ts-limit",
-    "xd/6/1": "decode:intended:ts-limit",
-    "xd/6/2": "decode:intended:ts-limit",
-    "xv/1/0": "validate:intended:ts-limit",
-    "xv/3/0": "validate:intended:ts-limit",
-    "xv/3/1": "validate:intended:ts-limit",
-    "xv/4/1": "validate:intended:ts-limit",
-    "xv/6/0": "validate:intended:ts-limit"
+    "c/15/0": {
+      "issue": 228,
+      "side": "runtime",
+      "symptom": "ts=accept ref=reject:orphan_type_node"
+    },
+    "c/16/1": {
+      "issue": 228,
+      "side": "runtime",
+      "symptom": "ts=accept ref=reject:orphan_type_node"
+    },
+    "c/17/2": {
+      "issue": 228,
+      "side": "runtime",
+      "symptom": "ts=accept ref=reject:orphan_type_node"
+    },
+    "c/19/0": {
+      "issue": 228,
+      "side": "runtime",
+      "symptom": "ts=accept ref=reject:orphan_type_node"
+    },
+    "c/19/4": {
+      "issue": 228,
+      "side": "runtime",
+      "symptom": "ts=accept ref=reject:orphan_type_node"
+    },
+    "c/2/3": {
+      "issue": 228,
+      "side": "runtime",
+      "symptom": "ts=accept ref=reject:orphan_type_node"
+    },
+    "c/4/4": {
+      "issue": 228,
+      "side": "runtime",
+      "symptom": "ts=accept ref=reject:orphan_type_node"
+    },
+    "c/4/6": {
+      "issue": 228,
+      "side": "runtime",
+      "symptom": "ts=accept ref=reject:orphan_type_node"
+    },
+    "c/7/6": {
+      "issue": 228,
+      "side": "runtime",
+      "symptom": "ts=accept ref=reject:orphan_type_node"
+    },
+    "c/8/4": {
+      "issue": 228,
+      "side": "runtime",
+      "symptom": "ts=accept ref=reject:json_unknown_field"
+    },
+    "d/10/15": {
+      "issue": 103,
+      "side": "decision",
+      "symptom": "ts=reject:invalid_length ref=accept"
+    },
+    "d/12/31": {
+      "issue": 103,
+      "side": "decision",
+      "symptom": "ts=reject:overlong_leb128 ref=accept"
+    },
+    "d/12/4": {
+      "issue": 103,
+      "side": "decision",
+      "symptom": "ts=reject:overlong_leb128 ref=accept"
+    },
+    "d/12/8": {
+      "issue": 103,
+      "side": "decision",
+      "symptom": "ts=reject:overlong_leb128 ref=accept"
+    },
+    "d/13/17": {
+      "issue": 103,
+      "side": "decision",
+      "symptom": "ts=reject:overlong_leb128 ref=reject:coercion"
+    },
+    "d/13/7": {
+      "issue": 103,
+      "side": "decision",
+      "symptom": "ts=reject:overlong_leb128 ref=reject:coercion"
+    },
+    "d/14/25": {
+      "issue": 103,
+      "side": "decision",
+      "symptom": "ts=reject:overlong_leb128 ref=accept"
+    },
+    "d/14/3": {
+      "issue": 103,
+      "side": "decision",
+      "symptom": "ts=reject:invalid_length ref=accept"
+    },
+    "d/14/34": {
+      "issue": 103,
+      "side": "decision",
+      "symptom": "ts=reject:overlong_leb128 ref=accept"
+    },
+    "d/14/8": {
+      "issue": 103,
+      "side": "decision",
+      "symptom": "ts=reject:overlong_leb128 ref=accept"
+    },
+    "d/15/14": {
+      "issue": 103,
+      "side": "decision",
+      "symptom": "ts=reject:overlong_leb128 ref=reject:coercion"
+    },
+    "d/15/36": {
+      "issue": 104,
+      "side": "decision",
+      "symptom": "ts=reject:invalid_length ref=accept"
+    },
+    "d/15/4": {
+      "issue": 104,
+      "side": "decision",
+      "symptom": "ts=reject:invalid_length ref=accept"
+    },
+    "d/16/14": {
+      "issue": 104,
+      "side": "decision",
+      "symptom": "ts=reject:invalid_length ref=accept"
+    },
+    "d/17/4": {
+      "issue": 103,
+      "side": "decision",
+      "symptom": "ts=reject:overlong_leb128 ref=accept"
+    },
+    "d/18/21": {
+      "issue": 103,
+      "side": "decision",
+      "symptom": "ts=reject:overlong_leb128 ref=accept"
+    },
+    "d/18/23": {
+      "issue": 229,
+      "side": "owner-call",
+      "symptom": "ts=accept#83829fd2 ref=accept"
+    },
+    "d/18/24": {
+      "issue": 229,
+      "side": "owner-call",
+      "symptom": "ts=accept#eeccfdd8 ref=accept"
+    },
+    "d/18/3": {
+      "issue": 103,
+      "side": "decision",
+      "symptom": "ts=reject:overlong_leb128 ref=accept"
+    },
+    "d/18/5": {
+      "issue": 103,
+      "side": "decision",
+      "symptom": "ts=reject:overlong_leb128 ref=accept"
+    },
+    "d/18/9": {
+      "issue": 229,
+      "side": "owner-call",
+      "symptom": "ts=accept#cff3d4f4 ref=accept"
+    },
+    "d/19/19": {
+      "issue": 103,
+      "side": "decision",
+      "symptom": "ts=reject:overlong_leb128 ref=accept"
+    },
+    "d/19/30": {
+      "issue": 103,
+      "side": "decision",
+      "symptom": "ts=reject:overlong_leb128 ref=accept"
+    },
+    "d/2/33": {
+      "issue": 103,
+      "side": "decision",
+      "symptom": "ts=reject:overlong_leb128 ref=accept"
+    },
+    "d/21/5": {
+      "issue": 103,
+      "side": "decision",
+      "symptom": "ts=reject:overlong_leb128 ref=reject:coercion"
+    },
+    "d/22/18": {
+      "issue": 103,
+      "side": "decision",
+      "symptom": "ts=reject:overlong_leb128 ref=reject:coercion"
+    },
+    "d/22/25": {
+      "issue": 103,
+      "side": "decision",
+      "symptom": "ts=reject:overlong_leb128 ref=accept"
+    },
+    "d/23/4": {
+      "issue": 103,
+      "side": "decision",
+      "symptom": "ts=reject:overlong_leb128 ref=reject:coercion"
+    },
+    "d/24/5": {
+      "issue": 229,
+      "side": "owner-call",
+      "symptom": "ts=accept#61116ae9 ref=accept"
+    },
+    "d/3/15": {
+      "issue": 103,
+      "side": "decision",
+      "symptom": "ts=reject:overlong_leb128 ref=accept"
+    },
+    "d/3/36": {
+      "issue": 103,
+      "side": "decision",
+      "symptom": "ts=reject:overlong_leb128 ref=accept"
+    },
+    "d/5/17": {
+      "issue": 103,
+      "side": "decision",
+      "symptom": "ts=reject:overlong_leb128 ref=accept"
+    },
+    "d/5/32": {
+      "issue": 103,
+      "side": "decision",
+      "symptom": "ts=reject:overlong_leb128 ref=accept"
+    },
+    "d/8/11": {
+      "issue": 104,
+      "side": "decision",
+      "symptom": "ts=reject:invalid_length ref=reject:coercion"
+    },
+    "d/8/15": {
+      "issue": 103,
+      "side": "decision",
+      "symptom": "ts=reject:overlong_leb128 ref=accept"
+    },
+    "d/8/19": {
+      "issue": 104,
+      "side": "decision",
+      "symptom": "ts=reject:invalid_length ref=reject:coercion"
+    },
+    "d/9/27": {
+      "issue": 103,
+      "side": "decision",
+      "symptom": "ts=reject:overlong_leb128 ref=accept"
+    },
+    "r/chain_opt_128_levels": {
+      "issue": 231,
+      "side": "owner-call",
+      "symptom": "ts=reject:resource_limit_exceeded/value_depth ref=accept"
+    },
+    "r/contract_declarations_absent": {
+      "issue": 228,
+      "side": "owner-call",
+      "symptom": "ts=reject:invalid_contract_document ref=accept"
+    },
+    "r/contract_identities_edit": {
+      "issue": 102,
+      "side": "decision",
+      "symptom": "ts=accept ref=reject:invalid_contract_id_format"
+    },
+    "r/contract_orphan_type_node": {
+      "issue": 228,
+      "side": "runtime",
+      "symptom": "ts=accept ref=reject:orphan_type_node"
+    },
+    "r/contract_producer_edit": {
+      "issue": 102,
+      "side": "decision",
+      "symptom": "ts=accept ref=reject:json_invalid_type"
+    },
+    "r/contract_rootless_arena": {
+      "issue": 228,
+      "side": "runtime",
+      "symptom": "ts=accept ref=reject:rootless_type_arena"
+    },
+    "r/contract_unknown_key": {
+      "issue": 228,
+      "side": "runtime",
+      "symptom": "ts=accept ref=reject:json_unknown_field"
+    },
+    "r/depth_coercion_inserted_opts": {
+      "issue": 231,
+      "side": "owner-call",
+      "symptom": "ts=reject:resource_limit_exceeded/value_depth ref=accept"
+    },
+    "r/depth_opt_129_levels": {
+      "issue": 231,
+      "side": "owner-call",
+      "symptom": "ts=reject:resource_limit_exceeded/value_depth ref=accept"
+    },
+    "r/depth_variant_128_levels": {
+      "issue": 231,
+      "side": "owner-call",
+      "symptom": "ts=reject:resource_limit_exceeded/value_depth ref=accept"
+    },
+    "r/elements_skipped_vec_1000000": {
+      "issue": 231,
+      "side": "owner-call",
+      "symptom": "ts=reject:resource_limit_exceeded/value_elements ref=accept"
+    },
+    "r/empty_method_name": {
+      "issue": 104,
+      "side": "decision",
+      "symptom": "ts=reject:invalid_length ref=accept"
+    },
+    "r/empty_method_under_absorbed_opt": {
+      "issue": 104,
+      "side": "decision",
+      "symptom": "ts=reject:invalid_length ref=accept"
+    },
+    "r/future_type_reference_count": {
+      "issue": 104,
+      "side": "decision",
+      "symptom": "ts=reject:invalid_principal ref=accept"
+    },
+    "r/label_collision_numbered_field": {
+      "issue": 229,
+      "side": "owner-call",
+      "symptom": "ts=accept#33aca867 ref=accept"
+    },
+    "r/leb128_overlong_nat_value": {
+      "issue": 103,
+      "side": "decision",
+      "symptom": "ts=reject:overlong_leb128 ref=accept"
+    },
+    "r/leb128_overlong_type_count": {
+      "issue": 103,
+      "side": "decision",
+      "symptom": "ts=reject:overlong_leb128 ref=accept"
+    },
+    "r/leb128_wide_field_id": {
+      "issue": 103,
+      "side": "decision",
+      "symptom": "ts=reject:invalid_length ref=accept"
+    },
+    "r/reference_absorbs_identical_func_in_opt": {
+      "issue": 227,
+      "side": "reference",
+      "symptom": "ts=accept#ddd9d117 ref=accept"
+    },
+    "r/reference_accepts_non_subtype_func": {
+      "issue": 227,
+      "side": "reference",
+      "symptom": "ts=reject:type_mismatch ref=accept"
+    },
+    "r/reference_reads_func_from_empty_wire": {
+      "issue": 227,
+      "side": "reference",
+      "symptom": "ts=reject:type_mismatch ref=accept"
+    },
+    "r/reference_refuses_identical_func": {
+      "issue": 227,
+      "side": "reference",
+      "symptom": "ts=accept ref=reject:coercion"
+    },
+    "r/reference_skips_invalid_utf8_method": {
+      "issue": 227,
+      "side": "reference",
+      "symptom": "ts=reject:invalid_utf8 ref=accept"
+    },
+    "r/reference_unsound_subtype_memo": {
+      "issue": 227,
+      "side": "reference",
+      "symptom": "ts=reject:type_mismatch ref=accept"
+    },
+    "r/validate_depth_variant_null_128_levels": {
+      "issue": 231,
+      "side": "owner-call",
+      "symptom": "ts=accept ref=reject:resource_limit_exceeded/value_depth"
+    },
+    "v/18/0": {
+      "issue": 229,
+      "side": "owner-call",
+      "symptom": "ts=reject:missing_field ref=accept"
+    },
+    "v/18/5": {
+      "issue": 229,
+      "side": "owner-call",
+      "symptom": "ts=reject:missing_field ref=accept"
+    },
+    "v/24/11": {
+      "issue": 229,
+      "side": "owner-call",
+      "symptom": "ts=reject:unknown_tag ref=accept"
+    }
   },
   "skipped": {}
 }

@@ -6,11 +6,13 @@
 //!
 //! - **decode** — `(wire types, bytes, expected types)` triples: a random
 //!   value at the wire types, encoded by the `candid` crate, optionally
-//!   mutated, decoded by `IDLArgs::from_bytes_with_types` (see `wire.rs`);
-//!   the TypeScript runner feeds the bytes to `decodeArgs` with schemas
-//!   `schemaFromContract` builds from the same declarations;
+//!   mutated (byte edits, a LEB128 group made non-minimal, or a structurally
+//!   invalid type table), decoded by `IDLArgs::from_bytes_with_types` (see
+//!   `wire.rs`); the TypeScript runner feeds the bytes to `decodeArgs` with
+//!   schemas `schemaFromContract` builds from the same declarations;
 //! - **validate** — a JavaScript domain value converted to a HostValue and
-//!   judged by `validate_host_value` (see `host.rs`); the runner calls
+//!   judged by `validate_host_value` (see `host.rs`) under limits aligned
+//!   with the runtime's depth budget (`VALIDATE_DEPTH`); the runner calls
 //!   `validate` with the same value;
 //! - **contract** — a compiled Contract document edited by JSON operations
 //!   and judged by `Contract::from_json` (see `contract.rs`); the runner calls
@@ -20,16 +22,22 @@
 //! types come from `candid_parser` over that source, and the Contract the
 //! TypeScript side loads comes from candid-core's compiler over the same text.
 //! Deep environments (`types::deep_env`: recursive shapes and declaration
-//! chains) add decode and validate cases whose values nest up to 300 levels,
-//! across the runtime's `maxDepth` and candid-core's `max_value_depth`; the
-//! committed corpus cycles through every kind (`types::deep_env_of_kind`). A
-//! drafted environment either side refuses is redrawn, and the corpus header
-//! counts redraws by reason.
+//! chains) add decode and validate cases whose values nest close to the
+//! runtime's depth bound. A drafted environment either side refuses, or one
+//! holding an `opt`-only cycle (`wire::opt_cycle`), is redrawn, and the corpus
+//! header counts redraws by reason.
 //!
-//! Every decode verdict carries `flags`: input properties the Rust side reads
-//! from the bytes at their own wire types (`wire::Scan`) or from the types,
-//! which the TypeScript runner requires before it attributes a symptom to an
-//! intended difference or to the reference — never anything the runtime says.
+//! # No case is judged outside what both sides judge
+//!
+//! The reference records a verdict for every case, or `inconclusive` when it
+//! refused on a budget of its own (its decoding quota, its stack guard, a
+//! HostValue construction budget) and so never judged the input. Generation
+//! is sized so that never happens: a decode case whose message is outside the
+//! bounds of `wire::Scan::outside_bounds` (nesting, values, a claimed table
+//! size: the runtime budgets the `candid` crate has no counterpart for) is
+//! redrawn before it is judged, and counted in the header's `case_redraws`.
+//! The committed corpus must hold no `inconclusive` case; a campaign counts
+//! them.
 //!
 //! # The committed corpus (CI)
 //!
@@ -39,19 +47,22 @@
 //! `tests/fixtures/differential/regressions.json`, and compares it with
 //! `tests/goldens/differential/corpus.jsonl` byte for byte. The TypeScript
 //! suite (`ts/tests/differential.test.ts`) replays that file and fails on any
-//! divergence that is not in the reviewed expected-divergence list. Regenerate
-//! deliberately with `UPDATE_GOLDENS=1 cargo test -p candid-core-ts --features
-//! compiler --test differential`, then review the diff.
+//! divergence whose case id and exact symptom are not in the reviewed list
+//! `tests/goldens/differential/divergences.json`, and on any listed case
+//! that no longer diverges so. Regenerate deliberately with
+//! `UPDATE_GOLDENS=1 cargo test -p candid-core-ts --features compiler --test
+//! differential`, then review the diff.
 //!
 //! # Campaign mode
 //!
 //! `differential_campaign` (ignored) writes a corpus for other seeds to a file
 //! of your choosing; `ts/tests/differential/campaign.ts` replays it;
 //! `differential_rejudge` (ignored) rebuilds each environment of an existing
-//! batch from its `did` and recomputes every reference verdict and flag with
-//! the current tree; and `differential_verdicts` (ignored) answers the
-//! reference's verdict for hand-minimized inputs. The procedure is in `docs/verification.md` (the
-//! differential-fuzz entry under "Enforced in this repository").
+//! batch from its `did` and recomputes every reference verdict with the
+//! current tree; and `differential_verdicts` (ignored) answers the reference's
+//! verdict for hand-minimized inputs. The procedure is in
+//! `docs/verification.md` (the differential-fuzz entry under "Enforced in this
+//! repository").
 #![cfg(feature = "compiler")]
 
 mod contract;
@@ -60,7 +71,7 @@ mod rng;
 mod types;
 mod wire;
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use candid::types::Type;
@@ -105,11 +116,36 @@ const CORPUS_SEEDS: Seeds = Seeds {
 /// environment is not the random environment of seed `s`.
 const DEEP_SALT: u64 = 0xdee9_0000_0000_0000;
 
-/// Environments drafted and redrawn because one side or both refused the
-/// source, keyed `reference=<outcome> compiler=<outcome>`: the corpus header
-/// carries the counts, so a shape the compiler (or the reference) refuses
-/// systematically shows up as a count instead of silently leaving coverage.
-type Redraws = BTreeMap<String, u64>;
+/// The value depth the reference's HostValue validator is configured with:
+/// the runtime's `validate` refuses the first node at Candid level 128 under
+/// its default `maxDepth` of 256 (a Contract-loaded schema charges a `rec`
+/// hop and a constructor per level, issue #231), and
+/// `validate_host_value` refuses the first node past level `max_value_depth`,
+/// so 127 makes the two budgets the same for every node the runtime steps
+/// on. The one place they still differ is a variant arm whose payload is
+/// `null`: the runtime charges the arm's `rec` hop but never steps on the
+/// `null`, the reference charges the `null` as a node one level down, so
+/// such an arm 128 levels down is accepted there and refused here. Random
+/// generation stays below that level (`wire::GEN_LEVELS`), and an exact
+/// vector pins it (`validate_depth_variant_null_128_levels`, listed with
+/// #231).
+const VALIDATE_DEPTH: usize = 127;
+
+/// How many drafts a case may take to fall within the generation bounds
+/// before the generator gives up (a generator defect, not a verdict).
+const MAX_DRAFTS: usize = 256;
+
+/// Redraws by reason: environments one side or both refused (keyed
+/// `reference=<outcome> compiler=<outcome>`) or that hold an `opt`-only
+/// cycle, and cases drafted outside the generation bounds (keyed
+/// `<target>:<bound>`). The corpus header carries the counts, so a shape that
+/// is redrawn systematically shows up as a count instead of silently leaving
+/// coverage.
+#[derive(Default)]
+struct Redraws {
+    envs: BTreeMap<String, u64>,
+    cases: BTreeMap<String, u64>,
+}
 
 fn manifest_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -122,66 +158,6 @@ struct Built {
     types: TypeEnv,
     envelope: Value,
     contract: candid_core::Contract,
-    /// Contract nodes holding a field spelled two ways (see
-    /// `label_collisions`).
-    collisions: BTreeSet<u64>,
-}
-
-impl Built {
-    /// Whether any of the named declarations reaches a node in
-    /// `collisions` through the Contract graph: only there does
-    /// `env:label-collision` apply to a case.
-    fn reaches_collision(&self, names: &[String]) -> bool {
-        if self.collisions.is_empty() {
-            return false;
-        }
-        let contract = &self.envelope["contract"];
-        let types = contract["types"].as_array().map_or(&[][..], Vec::as_slice);
-        let mut stack: Vec<u64> = contract["declarations"]
-            .as_array()
-            .map_or(&[][..], Vec::as_slice)
-            .iter()
-            .filter(|declaration| {
-                names
-                    .iter()
-                    .any(|name| declaration["name"].as_str() == Some(name))
-            })
-            .filter_map(|declaration| declaration["type"].as_u64())
-            .collect();
-        let mut seen = BTreeSet::new();
-        while let Some(index) = stack.pop() {
-            if !seen.insert(index) {
-                continue;
-            }
-            if self.collisions.contains(&index) {
-                return true;
-            }
-            let Some(node) = types.get(index as usize) else {
-                continue;
-            };
-            stack.extend(node["inner"].as_u64());
-            for key in ["fields", "methods"] {
-                for child in node[key].as_array().map_or(&[][..], Vec::as_slice) {
-                    stack.extend(child["type"].as_u64());
-                }
-            }
-            for key in ["args", "results"] {
-                for child in node[key].as_array().map_or(&[][..], Vec::as_slice) {
-                    stack.extend(child.as_u64());
-                }
-            }
-        }
-        false
-    }
-
-    /// Add the case-level `label_collision` flag to a reference verdict.
-    fn flag_collision(&self, names: &[String], verdict: &mut Value) {
-        if self.reaches_collision(names) {
-            let mut flags = verdict["flags"].as_array().cloned().unwrap_or_default();
-            flags.push(json!("label_collision"));
-            verdict["flags"] = Value::Array(flags);
-        }
-    }
 }
 
 fn reference_env(source: &str) -> Result<TypeEnv, &'static str> {
@@ -191,43 +167,12 @@ fn reference_env(source: &str) -> Result<TypeEnv, &'static str> {
     Ok(env)
 }
 
-/// The canonical containers that hold one field under two source
-/// spellings: the same `(container, id)` written with a name in one
-/// declaration and numbered (or under another name) in another. The
-/// field-name table attaches names to canonical nodes, so the runtime keys
-/// every occurrence by the one name, while the reference reads each
-/// declaration's own labels.
-fn label_collisions(compilation: &candid_core::Compilation) -> BTreeSet<u64> {
-    let Some(info) = compilation.source_info() else {
-        return BTreeSet::new();
-    };
-    let mut spellings: BTreeMap<(u32, u32), BTreeSet<String>> = BTreeMap::new();
-    for provenance in info.field_labels() {
-        let spelling = match &provenance.label {
-            candid_core::SourceLabel::Named { name } => format!("name:{name}"),
-            _ => "number".to_string(),
-        };
-        spellings
-            .entry((provenance.container, provenance.id))
-            .or_default()
-            .insert(spelling);
-    }
-    spellings
-        .into_iter()
-        .filter(|(_, set)| set.len() > 1)
-        .map(|((container, _), _)| u64::from(container))
-        .collect()
-}
-
-type Envelope = (Value, candid_core::Contract, BTreeSet<u64>);
-
 /// The Contract of `source` as the one-document envelope the TypeScript
 /// loader reads, normalized as `wire_vectors.rs` normalizes the coercion
 /// golden's (a fixed producer block, a canonical reparse, field names in the
 /// `org.candid-core.field-names/v1` extension).
-fn envelope_of(source: &str) -> Result<Envelope, &'static str> {
+fn envelope_of(source: &str) -> Result<(Value, candid_core::Contract), &'static str> {
     let compilation = candid_core::compile_did(source).map_err(|_| "error")?;
-    let collisions = label_collisions(&compilation);
     let mut document = serde_json::to_value(compilation.contract()).map_err(|_| "serialize")?;
     document["producer"] = json!({
         "name": "candid-core",
@@ -257,7 +202,7 @@ fn envelope_of(source: &str) -> Result<Envelope, &'static str> {
         )
         .map_err(|_| "extension")?;
     let envelope = serde_json::to_value(&envelope).map_err(|_| "serialize")?;
-    Ok((envelope, contract, collisions))
+    Ok((envelope, contract))
 }
 
 /// Both sides over one source: the environment, or why it is redrawn
@@ -266,12 +211,11 @@ fn build_from_source(env: types::Env) -> Result<Built, String> {
     let reference = wire::guarded(|| reference_env(&env.source)).unwrap_or(Err("panic"));
     let compiled = wire::guarded(|| envelope_of(&env.source)).unwrap_or(Err("panic"));
     match (reference, compiled) {
-        (Ok(types), Ok((envelope, contract, collisions))) => Ok(Built {
+        (Ok(types), Ok((envelope, contract))) => Ok(Built {
             env,
             types,
             envelope,
             contract,
-            collisions,
         }),
         (reference, compiled) => Err(format!(
             "reference={} compiler={}",
@@ -281,18 +225,26 @@ fn build_from_source(env: types::Env) -> Result<Built, String> {
     }
 }
 
-/// An environment both sides accept; rejected drafts are redrawn from the
-/// same stream (so the result is still a function of the seed) and counted.
+/// An environment both sides accept and that holds no `opt`-only cycle;
+/// rejected drafts are redrawn from the same stream (so the result is still
+/// a function of the seed) and counted.
 fn build_drawn(
     rng: &mut Rng,
     redraws: &mut Redraws,
     mut draw: impl FnMut(&mut Rng) -> types::Env,
 ) -> Built {
     loop {
-        match build_from_source(draw(rng)) {
-            Ok(built) => return built,
-            Err(reason) => *redraws.entry(reason).or_default() += 1,
-        }
+        let reason = match build_from_source(draw(rng)) {
+            Ok(built) => {
+                let names: Vec<String> = (0..built.env.decls).map(types::decl_name).collect();
+                if !wire::opt_cycle(&built.types, &names) {
+                    return built;
+                }
+                "opt_cycle".to_string()
+            }
+            Err(reason) => reason,
+        };
+        *redraws.envs.entry(reason).or_default() += 1;
     }
 }
 
@@ -331,7 +283,15 @@ fn raw_bytes(rng: &mut Rng) -> Vec<u8> {
     bytes
 }
 
-fn decode_case(built: &Built, rng: &mut Rng, id: String, env_id: &str) -> Value {
+/// One drafted decode case, before the generation bounds are checked.
+struct DecodeDraft {
+    wire: Option<Vec<usize>>,
+    expected: Vec<usize>,
+    mutation: Vec<&'static str>,
+    bytes: Vec<u8>,
+}
+
+fn draft_decode(built: &Built, rng: &mut Rng) -> DecodeDraft {
     let decls = built.env.decls;
     let mut wire: Option<Vec<usize>> = None;
     let mut bytes = Vec::new();
@@ -387,47 +347,82 @@ fn decode_case(built: &Built, rng: &mut Rng, id: String, env_id: &str) -> Value 
             mutation.push(wire::mutate_once(rng, &mut bytes));
         }
     }
-    decode_line(built, id, env_id, wire, &expected, &mutation, &bytes)
+    DecodeDraft {
+        wire,
+        expected,
+        mutation,
+        bytes,
+    }
 }
 
-fn decode_line(
+/// A drafted decode case judged by the reference, and why it is outside
+/// the generation bounds (see `wire::Scan::outside_bounds`), or `None`.
+fn judge_decode(
     built: &Built,
-    id: String,
+    draft: DecodeDraft,
     env_id: &str,
-    wire: Option<Vec<usize>>,
-    expected: &[usize],
-    mutation: &[&str],
-    bytes: &[u8],
-) -> Value {
-    let expected = names(expected);
-    let expected_types: Vec<Type> = expected
+    id: &str,
+) -> (Value, Option<&'static str>) {
+    let expected = names(&draft.expected);
+    let types: Vec<Type> = expected
         .iter()
         .map(|name| find(&built.types, name))
         .collect();
-    let mut verdict = wire::reference_verdict(&built.types, bytes, &expected_types);
-    built.flag_collision(&expected, &mut verdict);
-    json!({
+    let (verdict, decoded) = wire::reference_judgement(&built.types, &draft.bytes, &types);
+    let outside = match wire::expansion(&built.types, &types) {
+        None => Some("opt_cycle"),
+        Some(expansion) => wire::scan(&draft.bytes).outside_bounds(expansion, decoded),
+    };
+    let line = json!({
         "kind": "decode",
         "id": id,
         "env": env_id,
-        "wire": wire.map(|decls| names(&decls)),
+        "wire": draft.wire.map(|decls| names(&decls)),
         "expected": expected,
-        "mutation": if mutation.is_empty() { "none".to_string() } else { mutation.join("+") },
-        "hex": wire::hex(bytes),
+        "mutation": if draft.mutation.is_empty() {
+            "none".to_string()
+        } else {
+            draft.mutation.join("+")
+        },
+        "hex": wire::hex(&draft.bytes),
         "ref": verdict,
-    })
+    });
+    (line, outside)
 }
 
-/// The reference verdict for one validate case, with the input flag the
-/// verdict mapping ties `validate:intended:ts-limit` to: `deep_nesting` when
-/// the value nests deeper than `wire::DEEP_LEVELS` composite levels (see
-/// `host_levels`), which the runtime's `maxDepth` always admits.
-fn host_verdict(built: &Built, name: &str, host: &Value) -> Value {
-    let mut verdict = host_verdict_unflagged(built, name, host);
-    if host_levels(host) > wire::DEEP_LEVELS {
-        verdict["flags"] = json!(["deep_nesting"]);
+/// Draft cases with `draft` until one is within the generation bounds,
+/// counting the redrawn ones.
+fn within_bounds<T>(
+    id: &str,
+    target: &str,
+    redraws: &mut Redraws,
+    mut draft: impl FnMut() -> (T, Option<&'static str>),
+) -> T {
+    for _ in 0..MAX_DRAFTS {
+        let (case, outside) = draft();
+        match outside {
+            None => return case,
+            Some(bound) => {
+                *redraws
+                    .cases
+                    .entry(format!("{target}:{bound}"))
+                    .or_default() += 1
+            }
+        }
     }
-    verdict
+    panic!("{id}: no draft within the generation bounds after {MAX_DRAFTS} attempts")
+}
+
+fn decode_case(
+    built: &Built,
+    rng: &mut Rng,
+    id: String,
+    env_id: &str,
+    redraws: &mut Redraws,
+) -> Value {
+    within_bounds(&id, "decode", redraws, || {
+        judge_decode(built, draft_decode(built, rng), env_id, &id)
+    })
 }
 
 /// The composite nesting of a HostValue JSON document: `opt` (absent
@@ -447,7 +442,12 @@ fn host_levels(host: &Value) -> usize {
     1 + children.into_iter().map(host_levels).max().unwrap_or(0)
 }
 
-fn host_verdict_unflagged(built: &Built, name: &str, host: &Value) -> Value {
+/// The reference verdict for one validate case: `validate_host_value` under
+/// `Limits::default()` with `max_value_depth` aligned to the runtime's depth
+/// budget (`VALIDATE_DEPTH`). A depth refusal there is a verdict, compared
+/// exactly with the runtime's; a refusal on any other budget of the
+/// reference (or of the HostValue constructors) is `inconclusive`.
+fn host_verdict(built: &Built, name: &str, host: &Value) -> Value {
     let limits = candid_core::Limits::default();
     let mut built_by = None;
     let value = match candid_core::HostValue::from_json_with_limits(&host.to_string(), &limits) {
@@ -458,10 +458,8 @@ fn host_verdict_unflagged(built: &Built, name: &str, host: &Value) -> Value {
         // A budget of the HostValue JSON decoder (above all its 64-container
         // nesting cap, a guard for serde_json's recursion): a policy of that
         // ABI, not a judgement of the value. The value is rebuilt through the
-        // HostValue constructors, which apply only `max_value_depth` (256,
-        // validate's `maxDepth`) and `max_value_elements`, and judged like any
-        // other (issue #196 review: a JSON limit never stands in for a
-        // verdict).
+        // HostValue constructors, which apply only `max_value_depth` and
+        // `max_value_elements`, and judged like any other.
         Err(_) => match host_from_constructors(host, &limits) {
             Ok(value) => {
                 built_by = Some("constructors");
@@ -470,7 +468,7 @@ fn host_verdict_unflagged(built: &Built, name: &str, host: &Value) -> Value {
             Err(candid_core::HostValueJsonError::Malformed(_)) => {
                 return json!({ "verdict": "reject", "class": "host_value_json" });
             }
-            Err(_) => return json!({ "verdict": "reject", "class": "host_value_limit" }),
+            Err(_) => return json!({ "verdict": "inconclusive", "budget": "host_value_limit" }),
         },
     };
     let Some(declaration) = built
@@ -485,13 +483,21 @@ fn host_verdict_unflagged(built: &Built, name: &str, host: &Value) -> Value {
         contract_id: built.contract.contract_id().to_string(),
         type_ref: declaration.ty,
     };
+    let aligned = limits.with_max_value_depth(VALIDATE_DEPTH);
     let mut verdict =
-        match candid_core::validate_host_value(&built.contract, &selector, &value, &limits) {
+        match candid_core::validate_host_value(&built.contract, &selector, &value, &aligned) {
             Ok(()) => json!({ "verdict": "accept" }),
-            Err(error) => json!({
-                "verdict": "reject",
-                "class": error.violations.first().map_or("unknown".to_string(), |v| v.code.clone()),
-            }),
+            Err(error) => match error.violations.first() {
+                None => json!({ "verdict": "reject", "class": "unknown" }),
+                Some(violation) => match &violation.resource_limit {
+                    Some(info) if info.resource == "value_depth" => json!({
+                        "verdict": "reject",
+                        "class": format!("{}/value_depth", violation.code),
+                    }),
+                    Some(info) => json!({ "verdict": "inconclusive", "budget": info.resource }),
+                    None => json!({ "verdict": "reject", "class": violation.code }),
+                },
+            },
         };
     if let Some(by) = built_by {
         verdict["built"] = json!(by);
@@ -555,24 +561,14 @@ fn host_from_constructors(
     }
 }
 
-fn validate_case(built: &Built, rng: &mut Rng, id: String, env_id: &str) -> Value {
-    let decl = rng.below(built.env.decls);
-    let name = types::decl_name(decl);
-    let ty = find(&built.types, &name);
-    let value = wire::random_value(&built.types, &ty, rng, 0)
-        .and_then(|value| host::descriptor(&built.types, &ty, &value))
-        .unwrap_or_else(|| host::random_scalar(rng));
-    validate_line(built, rng, id, env_id, &name, value)
-}
-
-fn validate_line(
+/// A validate case's value, mutated or pushed to a boundary or not, and its
+/// HostValue; outside the generation bounds when it nests too deep.
+fn draft_validate(
     built: &Built,
     rng: &mut Rng,
-    id: String,
-    env_id: &str,
     name: &str,
     mut value: Value,
-) -> Value {
+) -> ((Value, bool, Value), Option<&'static str>) {
     let ty = find(&built.types, name);
     let mut mutated = false;
     match rng.below(20) {
@@ -589,8 +585,17 @@ fn validate_line(
         }
     }
     let host_json = host::host_value(&built.types, &ty, &value);
-    let mut verdict = host_verdict(built, name, &host_json);
-    built.flag_collision(&[name.to_string()], &mut verdict);
+    let outside = (host_levels(&host_json) + 2 > wire::GEN_LEVELS).then_some("levels");
+    ((value, mutated, host_json), outside)
+}
+
+fn validate_line(
+    built: &Built,
+    id: String,
+    env_id: &str,
+    name: &str,
+    (value, mutated, host_json): (Value, bool, Value),
+) -> Value {
     json!({
         "kind": "validate",
         "id": id,
@@ -598,9 +603,28 @@ fn validate_line(
         "type": name,
         "mutated": mutated,
         "value": value,
+        "ref": host_verdict(built, name, &host_json),
         "host": host_json,
-        "ref": verdict,
     })
+}
+
+fn validate_case(
+    built: &Built,
+    rng: &mut Rng,
+    id: String,
+    env_id: &str,
+    redraws: &mut Redraws,
+) -> Value {
+    let decl = rng.below(built.env.decls);
+    let name = types::decl_name(decl);
+    let ty = find(&built.types, &name);
+    let drafted = within_bounds(&id, "validate", redraws, || {
+        let value = wire::random_value(&built.types, &ty, rng, 0)
+            .and_then(|value| host::descriptor(&built.types, &ty, &value))
+            .unwrap_or_else(|| host::random_scalar(rng));
+        draft_validate(built, rng, &name, value)
+    });
+    validate_line(built, id, env_id, &name, drafted)
 }
 
 fn contract_case(built: &Built, rng: &mut Rng, id: String, env_id: &str) -> Value {
@@ -631,11 +655,11 @@ fn generate_env(seed: u64, seeds: &Seeds, lines: &mut Vec<Value>, redraws: &mut 
     lines.push(env_line(&env_id, &built));
     for index in 0..seeds.decode {
         let id = format!("d/{seed}/{index}");
-        lines.push(decode_case(&built, &mut rng, id, &env_id));
+        lines.push(decode_case(&built, &mut rng, id, &env_id, redraws));
     }
     for index in 0..seeds.validate {
         let id = format!("v/{seed}/{index}");
-        lines.push(validate_case(&built, &mut rng, id, &env_id));
+        lines.push(validate_case(&built, &mut rng, id, &env_id, redraws));
     }
     for index in 0..seeds.contract {
         let id = format!("c/{seed}/{index}");
@@ -643,58 +667,84 @@ fn generate_env(seed: u64, seeds: &Seeds, lines: &mut Vec<Value>, redraws: &mut 
     }
 }
 
-/// One deep decode case: a value of `T0` nested about `levels` deep, half of
-/// the time near the runtime's depth boundary (see `wire::DEEP_LEVELS`),
-/// optionally mutated, read at `T0` or a sibling.
-fn deep_decode_case(built: &Built, rng: &mut Rng, id: String, env_id: &str) -> Value {
-    let wire_ty = find(&built.types, &types::decl_name(0));
-    let levels = if rng.chance(1, 2) {
-        wire::DEEP_LEVELS - 8 + rng.below(16)
+/// How deep a deep case's value nests: half of the time within 8 levels of
+/// the generation bound (`wire::GEN_LEVELS`), otherwise anywhere below it. A
+/// draft whose nesting at the expected types reaches the bound (a sibling
+/// whose coercion inserts an `opt` at every level doubles it) is redrawn.
+fn deep_levels(rng: &mut Rng) -> usize {
+    let most = wire::GEN_LEVELS - 3;
+    if rng.chance(1, 2) {
+        most - rng.below(8)
     } else {
-        rng.below(300)
-    };
-    let value = wire::deep_value(&built.types, &wire_ty, rng, levels)
-        .or_else(|| wire::random_value(&built.types, &wire_ty, rng, 0));
-    let bytes = value
-        .and_then(|value| wire::encode(&built.types, std::slice::from_ref(&wire_ty), vec![value]));
-    let mut mutation = vec!["deep"];
-    let (wire, bytes) = match bytes {
-        Some(bytes) => (Some(vec![0]), bytes),
-        None => {
-            mutation.push("raw");
-            (None, raw_bytes(rng))
-        }
-    };
-    let mut bytes = bytes;
-    if wire.is_some() && rng.chance(1, 4) {
-        mutation.push(wire::mutate_once(rng, &mut bytes));
+        rng.below(most + 1)
     }
-    let expected = if rng.chance(2, 3) {
-        0
-    } else {
-        *rng.pick(family_of(&built.env, 0))
-    };
-    decode_line(built, id, env_id, wire, &[expected], &mutation, &bytes)
 }
 
-/// One deep validate case: a value of `T0` nested about `levels` deep, half
-/// of the time near the runtime's depth boundary (see `wire::DEEP_LEVELS`),
-/// otherwise up to 300 levels: across the HostValue JSON decoder's
-/// 64-container nesting cap (the reference then judges the value rebuilt
-/// through the HostValue constructors, see `host_verdict`) and past
-/// `max_value_depth`.
-fn deep_validate_case(built: &Built, rng: &mut Rng, id: String, env_id: &str) -> Value {
+/// One deep decode case: a value of `T0` nested close to the generation
+/// bound half of the time, optionally mutated, read at `T0` or a sibling.
+fn deep_decode_case(
+    built: &Built,
+    rng: &mut Rng,
+    id: String,
+    env_id: &str,
+    redraws: &mut Redraws,
+) -> Value {
+    within_bounds(&id, "deep_decode", redraws, || {
+        let wire_ty = find(&built.types, &types::decl_name(0));
+        let levels = deep_levels(rng);
+        let value = wire::deep_value(&built.types, &wire_ty, rng, levels)
+            .or_else(|| wire::random_value(&built.types, &wire_ty, rng, 0));
+        let bytes = value.and_then(|value| {
+            wire::encode(&built.types, std::slice::from_ref(&wire_ty), vec![value])
+        });
+        let mut mutation = vec!["deep"];
+        let (wire, mut bytes) = match bytes {
+            Some(bytes) => (Some(vec![0]), bytes),
+            None => {
+                mutation.push("raw");
+                (None, raw_bytes(rng))
+            }
+        };
+        if wire.is_some() && rng.chance(1, 4) {
+            mutation.push(wire::mutate_once(rng, &mut bytes));
+        }
+        let expected = if rng.chance(2, 3) {
+            0
+        } else {
+            *rng.pick(family_of(&built.env, 0))
+        };
+        let draft = DecodeDraft {
+            wire,
+            expected: vec![expected],
+            mutation,
+            bytes,
+        };
+        judge_decode(built, draft, env_id, &id)
+    })
+}
+
+/// One deep validate case: a value of `T0` nested close to the generation
+/// bound half of the time (see `wire::GEN_LEVELS`), which crosses the
+/// HostValue JSON decoder's 64-container nesting cap (the reference then
+/// judges the value rebuilt through the HostValue constructors, see
+/// `host_verdict`).
+fn deep_validate_case(
+    built: &Built,
+    rng: &mut Rng,
+    id: String,
+    env_id: &str,
+    redraws: &mut Redraws,
+) -> Value {
     let name = types::decl_name(0);
     let ty = find(&built.types, &name);
-    let levels = if rng.chance(1, 2) {
-        wire::DEEP_LEVELS - 8 + rng.below(16)
-    } else {
-        rng.below(300)
-    };
-    let value = wire::deep_value(&built.types, &ty, rng, levels)
-        .and_then(|value| host::descriptor(&built.types, &ty, &value))
-        .unwrap_or_else(|| host::random_scalar(rng));
-    validate_line(built, rng, id, env_id, &name, value)
+    let drafted = within_bounds(&id, "deep_validate", redraws, || {
+        let levels = deep_levels(rng);
+        let value = wire::deep_value(&built.types, &ty, rng, levels)
+            .and_then(|value| host::descriptor(&built.types, &ty, &value))
+            .unwrap_or_else(|| host::random_scalar(rng));
+        draft_validate(built, rng, &name, value)
+    });
+    validate_line(built, id, env_id, &name, drafted)
 }
 
 fn generate_deep_env(seed: u64, seeds: &Seeds, lines: &mut Vec<Value>, redraws: &mut Redraws) {
@@ -709,17 +759,17 @@ fn generate_deep_env(seed: u64, seeds: &Seeds, lines: &mut Vec<Value>, redraws: 
     lines.push(env_line(&env_id, &built));
     for index in 0..seeds.deep_decode {
         let id = format!("xd/{seed}/{index}");
-        lines.push(deep_decode_case(&built, &mut rng, id, &env_id));
+        lines.push(deep_decode_case(&built, &mut rng, id, &env_id, redraws));
     }
     for index in 0..seeds.deep_validate {
         let id = format!("xv/{seed}/{index}");
-        lines.push(deep_validate_case(&built, &mut rng, id, &env_id));
+        lines.push(deep_validate_case(&built, &mut rng, id, &env_id, redraws));
     }
 }
 
 /// Every environment and case of `seeds`, in order, and the redraw counts.
 fn generate(seeds: &Seeds, lines: &mut Vec<Value>) -> Redraws {
-    let mut redraws = Redraws::new();
+    let mut redraws = Redraws::default();
     for seed in seeds.start..seeds.start + seeds.envs {
         generate_env(seed, seeds, lines, &mut redraws);
     }
@@ -737,7 +787,14 @@ fn header(about: &str, seeds: &Seeds, redraws: &Redraws) -> Value {
         "per_env": { "decode": seeds.decode, "validate": seeds.validate, "contract": seeds.contract },
         "per_deep_env": { "decode": seeds.deep_decode, "validate": seeds.deep_validate },
         "deep_kinds": if seeds.deep_kinds { "cycled" } else { "drawn" },
-        "redraws": redraws,
+        "bounds": {
+            "levels": wire::GEN_LEVELS,
+            "elements": wire::GEN_ELEMENTS,
+            "table_entries": wire::GEN_TABLE_ENTRIES,
+            "validate_max_value_depth": VALIDATE_DEPTH,
+        },
+        "redraws": redraws.envs,
+        "case_redraws": redraws.cases,
     })
 }
 
@@ -778,8 +835,6 @@ fn generate_regressions(lines: &mut Vec<Value>) {
                     .map(|name| find(&built.types, name))
                     .collect();
                 let hex = vector["hex"].as_str().expect("hex");
-                let mut verdict = wire::reference_verdict(&built.types, &wire::unhex(hex), &types);
-                built.flag_collision(&expected, &mut verdict);
                 json!({
                     "kind": "decode",
                     "id": id,
@@ -788,7 +843,7 @@ fn generate_regressions(lines: &mut Vec<Value>) {
                     "expected": expected,
                     "mutation": "regression",
                     "hex": hex,
-                    "ref": verdict,
+                    "ref": wire::reference_verdict(&built.types, &wire::unhex(hex), &types),
                 })
             }
             Some("validate") => {
@@ -796,18 +851,7 @@ fn generate_regressions(lines: &mut Vec<Value>) {
                 let ty = find(&built.types, name);
                 let value = vector["value"].clone();
                 let host_json = host::host_value(&built.types, &ty, &value);
-                let mut verdict = host_verdict(&built, name, &host_json);
-                built.flag_collision(&[name.to_string()], &mut verdict);
-                json!({
-                    "kind": "validate",
-                    "id": id,
-                    "env": env_id,
-                    "type": name,
-                    "mutated": true,
-                    "value": value,
-                    "host": host_json,
-                    "ref": verdict,
-                })
+                validate_line(&built, id, &env_id, name, (value, true, host_json))
             }
             Some("contract") => {
                 let ops: Vec<Value> = vector["ops"].as_array().expect("ops").clone();
@@ -876,11 +920,21 @@ fn corpus() -> (Value, Vec<Value>) {
     })
 }
 
-/// Regenerate the committed corpus and compare it with the golden. Every
-/// reference verdict in it must be a decision, never a crash of the harness:
-/// no reference panic and no value the domain mapping cannot express (a
-/// reference panic would be a reference bug to report, not a TypeScript
-/// divergence).
+/// The structural type-table edits (`wire::mutate_table`) the committed
+/// corpus must exercise, each at least once in a generated decode case.
+const TABLE_MUTATIONS: &[&str] = &[
+    "duplicate_field_id",
+    "unsorted_field_ids",
+    "duplicate_variant_id",
+    "unsorted_variant_ids",
+    "duplicate_method_name",
+    "unsorted_method_names",
+];
+
+/// Regenerate the committed corpus and compare it with the golden. The
+/// reference must judge every case in it: no reference panic, no value the
+/// domain mapping cannot express, and no refusal on a budget of the
+/// reference's own (`inconclusive`) — the generator is sized so none occurs.
 #[test]
 fn differential_corpus_matches_reference() {
     let (header, lines) = corpus();
@@ -889,12 +943,34 @@ fn differential_corpus_matches_reference() {
         .filter(|line| {
             matches!(
                 line["ref"]["verdict"].as_str(),
-                Some("panic" | "mapping_error")
+                Some("panic" | "mapping_error" | "inconclusive")
             )
         })
         .map(|line| format!("{}: {}", line["id"], line["ref"]))
         .collect();
-    assert!(failures.is_empty(), "harness failures: {failures:#?}");
+    assert!(
+        failures.is_empty(),
+        "cases the reference did not judge: {failures:#?}"
+    );
+    let missing: Vec<&str> = TABLE_MUTATIONS
+        .iter()
+        .copied()
+        .filter(|name| {
+            !lines.iter().any(|line| {
+                line["kind"] == "decode"
+                    && !line["id"].as_str().unwrap_or("").starts_with("r/")
+                    && line["mutation"]
+                        .as_str()
+                        .unwrap_or("")
+                        .split('+')
+                        .any(|applied| applied == *name)
+            })
+        })
+        .collect();
+    assert!(
+        missing.is_empty(),
+        "structural table edits the committed corpus never applies: {missing:?}"
+    );
     let text = render(header, &lines);
     let path = manifest_dir()
         .join("tests")
@@ -1053,9 +1129,8 @@ fn deep_json(line: &str) -> Value {
 /// Rejudge mode: `DIFF_IN` is a corpus or campaign batch (possibly written by
 /// an earlier generator), `DIFF_OUT` receives it with every environment
 /// rebuilt from its `did` and every reference verdict recomputed by this
-/// tree — so an earlier campaign's inputs can be classified again under the
-/// current verdict mapping and flags. A rebuilt envelope that differs from
-/// the recorded one is a harness failure.
+/// tree. A rebuilt envelope that differs from the recorded one is a harness
+/// failure.
 #[test]
 #[ignore = "rejudge mode: run explicitly with DIFF_IN and DIFF_OUT"]
 fn differential_rejudge() {
@@ -1100,19 +1175,15 @@ fn differential_rejudge() {
                         .map(|name| find(&built.types, name))
                         .collect();
                     let bytes = wire::unhex(case["hex"].as_str().expect("hex"));
-                    let mut verdict = wire::reference_verdict(&built.types, &bytes, &types);
-                    built.flag_collision(&expected, &mut verdict);
-                    case["ref"] = verdict;
+                    case["ref"] = wire::reference_verdict(&built.types, &bytes, &types);
                 }
                 Some("validate") => {
                     let built = built.as_ref().expect("an environment first");
                     let name = case["type"].as_str().expect("type").to_string();
                     let ty = find(&built.types, &name);
                     let host_json = host::host_value(&built.types, &ty, &case["value"]);
-                    let mut verdict = host_verdict(built, &name, &host_json);
-                    built.flag_collision(&[name], &mut verdict);
+                    case["ref"] = host_verdict(built, &name, &host_json);
                     case["host"] = host_json;
-                    case["ref"] = verdict;
                 }
                 Some("contract") => {
                     let built = built.as_ref().expect("an environment first");

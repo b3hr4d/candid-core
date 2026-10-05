@@ -226,6 +226,70 @@ fn plausible(rng: &mut Rng, document: &Value, path: &[Value], target: &Value) ->
     }
 }
 
+/// A structurally invalid type node (issue #196 review): two neighbouring
+/// fields, arms or methods of one node get the same key (a duplicate field
+/// id, variant id, or method name and id) or swap places (keys no longer
+/// strictly increasing). Both loaders must refuse every one. `None` when no
+/// node has two keys.
+fn structural(rng: &mut Rng, document: &Value) -> Option<Vec<Value>> {
+    let types = document["types"].as_array()?;
+    let candidates: Vec<(usize, &str)> = types
+        .iter()
+        .enumerate()
+        .flat_map(|(index, node)| {
+            ["fields", "methods"]
+                .into_iter()
+                .filter(move |key| node[*key].as_array().is_some_and(|items| items.len() >= 2))
+                .map(move |key| (index, key))
+        })
+        .collect();
+    if candidates.is_empty() {
+        return None;
+    }
+    // A kind first (record fields, variant arms, service methods), then a
+    // node of it: services are rare in a document, and their edits must not
+    // be.
+    let kind = |(index, key): &(usize, &str)| match (*key, types[*index]["kind"].as_str()) {
+        ("methods", _) => 2u8,
+        (_, Some("variant")) => 1,
+        _ => 0,
+    };
+    let mut kinds: Vec<u8> = candidates.iter().map(kind).collect();
+    kinds.sort_unstable();
+    kinds.dedup();
+    let chosen = *rng.pick(&kinds);
+    let of_kind: Vec<(usize, &str)> = candidates
+        .into_iter()
+        .filter(|candidate| kind(candidate) == chosen)
+        .collect();
+    let (index, key) = *rng.pick(&of_kind);
+    let items = types[index][key].as_array()?;
+    let j = 1 + rng.below(items.len() - 1);
+    let path = |at: usize| json!(["types", index, key, at]);
+    // `edit` names the structural edit for the corpus checks; neither side's
+    // replay reads it.
+    let (duplicate, swap) = match (key, types[index]["kind"].as_str()) {
+        ("methods", _) => ("duplicate_method_name", "unsorted_method_names"),
+        (_, Some("variant")) => ("duplicate_variant_id", "unsorted_variant_ids"),
+        _ => ("duplicate_field_id", "unsorted_field_ids"),
+    };
+    if rng.chance(1, 2) {
+        let mut item = items[j].clone();
+        item["id"] = items[j - 1]["id"].clone();
+        if key == "methods" {
+            item["name"] = items[j - 1]["name"].clone();
+        }
+        Some(vec![
+            json!({ "op": "set", "path": path(j), "value": item, "edit": duplicate }),
+        ])
+    } else {
+        Some(vec![
+            json!({ "op": "set", "path": path(j - 1), "value": items[j].clone(), "edit": swap }),
+            json!({ "op": "set", "path": path(j), "value": items[j - 1].clone() }),
+        ])
+    }
+}
+
 /// One to three random operations on `document`, applied in place.
 pub fn random_ops(rng: &mut Rng, document: &mut Value) -> Vec<Value> {
     let mut ops = Vec::new();
@@ -260,7 +324,16 @@ pub fn random_ops(rng: &mut Rng, document: &mut Value) -> Vec<Value> {
             .filter(|path| matches!(path.last(), Some(Value::Number(_))))
             .cloned()
             .collect();
-        let choice = rng.weighted(&[12, 3, 2, 2, 1, 1, 1]);
+        let choice = rng.weighted(&[12, 3, 2, 2, 1, 1, 1, 4]);
+        if choice == 7 {
+            if let Some(edits) = structural(rng, document) {
+                for op in edits {
+                    apply(document, &op);
+                    ops.push(op);
+                }
+                continue;
+            }
+        }
         let source = match choice {
             0 if !leaves.is_empty() => &leaves,
             1..=3 if !elements.is_empty() => &elements,
@@ -383,35 +456,11 @@ pub fn reference_verdict(edited: &Value, ops: &[Value]) -> Value {
     }
 }
 
-fn touches_metadata(op: &Value) -> bool {
-    matches!(
-        op["path"].get(0).and_then(Value::as_str),
-        Some("producer" | "identities")
-    )
-}
-
-/// The reference verdict for `ops` applied to `base`. When an operation edits
-/// `producer` or `identities` — the two parts the TypeScript loader does not
-/// read, by design — a second verdict, `graph`, judges the document with only
-/// the other operations applied, so the runner can tell a refusal caused by
-/// the metadata edit (an intended difference) from one the graph causes.
+/// The reference verdict for `ops` applied to `base`.
 pub fn judge(base: &Value, ops: &[Value]) -> Value {
     let mut edited = base.clone();
     for op in ops {
         apply(&mut edited, op);
     }
-    let mut verdict = reference_verdict(&edited, ops);
-    if ops.iter().any(touches_metadata) {
-        let graph_ops: Vec<Value> = ops
-            .iter()
-            .filter(|op| !touches_metadata(op))
-            .cloned()
-            .collect();
-        let mut graph = base.clone();
-        for op in &graph_ops {
-            apply(&mut graph, op);
-        }
-        verdict["graph"] = reference_verdict(&graph, &graph_ops);
-    }
-    verdict
+    reference_verdict(&edited, ops)
 }

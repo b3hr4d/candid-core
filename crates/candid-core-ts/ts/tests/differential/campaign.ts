@@ -1,9 +1,13 @@
-// Campaign replay for the differential fuzz (issue #196): classify every case
-// of one corpus batch the Rust driver wrote in campaign mode, and print a
-// JSON summary — counts per target and verdict, and per divergence category
-// the count plus the first few case ids. Not a test: nothing here asserts,
-// and no timing is measured (the #39 decision); the campaign's time box is
-// the operator's loop around it.
+// Campaign replay for the differential fuzz (issue #196): judge every case of
+// one corpus batch the Rust driver wrote in campaign mode, and print a JSON
+// summary: counts per target and status, every divergence grouped by its
+// exact symptom (with the mutations its cases carried and the first few case
+// ids), and every case the reference did not judge, by the budget that
+// stopped it. Not a test: nothing here asserts or accepts anything, and no
+// timing is measured (the #39 decision); the campaign's time box is the
+// operator's loop around it. A campaign's divergences are triaged by hand:
+// none is accepted by a rule, and the expected-divergence list of the CI
+// corpus is keyed by case id, so it says nothing about a campaign case.
 //
 //   DIFF_CORPUS=batch.jsonl DIFF_REPORT=summary.json \
 //     node --import ./tests/register.ts tests/differential/campaign.ts
@@ -26,26 +30,42 @@ const corpus = parseCorpus(readFileSync(corpusPath, "utf8"));
 const outcomes = runCorpus(corpus);
 const byId = new Map(corpus.cases.map((kase) => [kase.id, kase]));
 
+interface Group {
+  count: number;
+  mutations: Record<string, number>;
+  examples: unknown[];
+}
+
 const totals: Record<string, number> = {};
-const categories: Record<string, { count: number; examples: unknown[] }> = {};
+const divergences: Record<string, Group> = {};
+const inconclusive: Record<string, Group> = {};
 for (const outcome of outcomes) {
   const kase = byId.get(outcome.id);
-  const key =
-    outcome.ours.verdict === "skip"
-      ? `${kase?.kind ?? "?"}:skip:${outcome.ours.reason}`
-      : `${kase?.kind ?? "?"}:${outcome.ours.verdict}`;
+  const key = `${outcome.kind}:${outcome.status}`;
   totals[key] = (totals[key] ?? 0) + 1;
-  if (outcome.category === null) {
+  if (outcome.status === "agree" || outcome.status === "skip" || kase === undefined) {
     continue;
   }
-  const entry = (categories[outcome.category] ??= { count: 0, examples: [] });
-  entry.count += 1;
-  if (entry.examples.length < 3) {
-    entry.examples.push({ case: kase, ours: outcome.ours });
+  const name =
+    outcome.status === "diverge"
+      ? `${outcome.kind} ${outcome.symptom ?? "?"}`
+      : `${outcome.kind} ${kase.ref.verdict}:${kase.ref.budget ?? "-"}`;
+  const groups = outcome.status === "diverge" ? divergences : inconclusive;
+  const group = (groups[name] ??= { count: 0, mutations: {}, examples: [] });
+  group.count += 1;
+  const mutation =
+    kase.kind === "decode"
+      ? kase.mutation
+      : kase.kind === "contract"
+        ? kase.ops.map((op) => op.edit ?? op.op).join("+")
+        : "value";
+  group.mutations[mutation] = (group.mutations[mutation] ?? 0) + 1;
+  if (group.examples.length < 3) {
+    group.examples.push({ case: kase, ours: outcome.ours });
   }
 }
 
 writeFileSync(
   reportPath,
-  `${JSON.stringify({ header: corpus.header, cases: outcomes.length, totals, categories }, null, 2)}\n`,
+  `${JSON.stringify({ header: corpus.header, cases: outcomes.length, totals, divergences, inconclusive }, null, 2)}\n`,
 );

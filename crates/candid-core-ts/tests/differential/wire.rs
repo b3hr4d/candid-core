@@ -352,7 +352,7 @@ pub fn mutate_once(rng: &mut Rng, bytes: &mut Vec<u8>) -> &'static str {
         bytes.push(rng.byte());
         return "append";
     }
-    match rng.weighted(&[3, 3, 2, 2, 2, 2, 4, 1]) {
+    match rng.weighted(&[3, 3, 2, 2, 2, 2, 4, 1, 3]) {
         0 => {
             let at = rng.below(bytes.len());
             bytes[at] = rng.byte();
@@ -406,91 +406,309 @@ pub fn mutate_once(rng: &mut Rng, bytes: &mut Vec<u8>) -> &'static str {
             bytes.insert(at + 1, extension);
             "overlong_leb128"
         }
-        _ => {
+        7 => {
             let at = rng.below(bytes.len());
             let byte = bytes[at];
             bytes.insert(at, byte);
             "duplicate_byte"
         }
+        _ => mutate_table(rng, bytes).unwrap_or_else(|| {
+            let at = rng.below(bytes.len());
+            bytes[at] = rng.byte();
+            "set_byte"
+        }),
+    }
+}
+
+/// The byte ranges of one field, arm or method in a type table entry: its
+/// key (a field id's LEB128 group, or a method name's length and bytes)
+/// starts at `start` and ends at `key_end`, and its type index ends at `end`.
+struct Item {
+    start: usize,
+    key_end: usize,
+    end: usize,
+}
+
+/// The entries a structural table edit can target, by opcode.
+enum Keyed {
+    Record(Vec<Item>),
+    Variant(Vec<Item>),
+    Service(Vec<Item>),
+}
+
+/// The keyed entries of a message's type table with their byte ranges, or
+/// `None` when the table does not parse.
+fn keyed_entries(bytes: &[u8]) -> Option<Vec<Keyed>> {
+    let mut cursor = Cursor { bytes, at: 0 };
+    for expected in *b"DIDL" {
+        if cursor.byte()? != expected {
+            return None;
+        }
+    }
+    let count = cursor.leb()?;
+    if count > bytes.len() as u64 {
+        return None;
+    }
+    let mut keyed = Vec::new();
+    for _ in 0..count {
+        let opcode = cursor.sleb()?;
+        match opcode {
+            -18 | -19 => {
+                cursor.sleb()?;
+            }
+            -20 | -21 => {
+                let mut items = Vec::new();
+                for _ in 0..cursor.leb()? {
+                    let start = cursor.at;
+                    cursor.leb()?;
+                    let key_end = cursor.at;
+                    cursor.sleb()?;
+                    items.push(Item {
+                        start,
+                        key_end,
+                        end: cursor.at,
+                    });
+                }
+                keyed.push(if opcode == -20 {
+                    Keyed::Record(items)
+                } else {
+                    Keyed::Variant(items)
+                });
+            }
+            -22 => {
+                for _ in 0..2 {
+                    for _ in 0..cursor.leb()? {
+                        cursor.sleb()?;
+                    }
+                }
+                let annotations = cursor.byte()?;
+                cursor.skip(u64::from(annotations))?;
+            }
+            -23 => {
+                let mut items = Vec::new();
+                for _ in 0..cursor.leb()? {
+                    let start = cursor.at;
+                    let length = cursor.leb()?;
+                    cursor.skip(length)?;
+                    let key_end = cursor.at;
+                    cursor.sleb()?;
+                    items.push(Item {
+                        start,
+                        key_end,
+                        end: cursor.at,
+                    });
+                }
+                keyed.push(Keyed::Service(items));
+            }
+            opcode if opcode < -24 => {
+                let length = cursor.leb()?;
+                cursor.skip(length)?;
+            }
+            _ => return None,
+        }
+    }
+    Some(keyed)
+}
+
+/// A structurally invalid type table (issue #196 review): two neighbouring
+/// fields, arms or methods of one entry get the same key (a duplicate field
+/// id, variant id or method name) or swap places (keys no longer strictly
+/// increasing). Both decoders must refuse every one. `None` when the table
+/// has no entry with two keys.
+pub fn mutate_table(rng: &mut Rng, bytes: &mut Vec<u8>) -> Option<&'static str> {
+    let keyed = keyed_entries(bytes)?;
+    let candidates: Vec<&Keyed> = keyed
+        .iter()
+        .filter(|entry| match entry {
+            Keyed::Record(items) | Keyed::Variant(items) | Keyed::Service(items) => {
+                items.len() >= 2
+            }
+        })
+        .collect();
+    if candidates.is_empty() {
+        return None;
+    }
+    // A kind first, then an entry of it: services are rare in a table, and
+    // their edits must not be.
+    let kind = |entry: &Keyed| match entry {
+        Keyed::Record(_) => 0,
+        Keyed::Variant(_) => 1,
+        Keyed::Service(_) => 2,
+    };
+    let mut kinds: Vec<u8> = candidates.iter().map(|entry| kind(entry)).collect();
+    kinds.sort_unstable();
+    kinds.dedup();
+    let chosen = *rng.pick(&kinds);
+    let of_kind: Vec<&Keyed> = candidates
+        .into_iter()
+        .filter(|entry| kind(entry) == chosen)
+        .collect();
+    let entry = *rng.pick(&of_kind);
+    let (items, duplicate, swap) = match entry {
+        Keyed::Record(items) => (items, "duplicate_field_id", "unsorted_field_ids"),
+        Keyed::Variant(items) => (items, "duplicate_variant_id", "unsorted_variant_ids"),
+        Keyed::Service(items) => (items, "duplicate_method_name", "unsorted_method_names"),
+    };
+    let j = 1 + rng.below(items.len() - 1);
+    let (first, second) = (&items[j - 1], &items[j]);
+    if rng.chance(1, 2) {
+        let key = bytes[first.start..first.key_end].to_vec();
+        bytes.splice(second.start..second.key_end, key);
+        Some(duplicate)
+    } else {
+        let mut swapped = bytes[second.start..second.end].to_vec();
+        swapped.extend_from_slice(&bytes[first.start..first.end]);
+        bytes.splice(first.start..second.end, swapped);
+        Some(swap)
     }
 }
 
 // ---------------------------------------------------------------------------
-// Reference verdict and the domain mapping
+// Generation bounds: a scan of the message at its own wire types
 // ---------------------------------------------------------------------------
 
-// ---------------------------------------------------------------------------
-// Input properties: a scan of the message at its own wire types
-// ---------------------------------------------------------------------------
+/// The deepest nesting, in composite levels at the *expected* types, a
+/// generated decode or validate case may reach. The runtime's default
+/// `maxDepth` (256) charges a Contract-loaded value two steps per level, the
+/// `rec` hop and the constructor (issue #231), and refuses the first node at
+/// level 128 (step 257), while the `candid` crate has no depth budget at all
+/// (its stack is its bound). The two cannot be configured alike, so random
+/// generation stays strictly below the runtime's bound, and the boundary
+/// itself is pinned only by exact regression vectors.
+pub const GEN_LEVELS: usize = 127;
 
-/// The deepest composite nesting the runtime's default `maxDepth` (256 depth
-/// steps) always admits. The runtime charges a value at most two steps per
-/// Candid level — the constructor, and at most one `rec` hop to reach it (a
-/// Contract-loaded schema needs one) — plus one for a leaf, so 127 levels
-/// cost at most 2 × 127 + 1 = 255 steps: a depth refusal of a message that
-/// nests no deeper is a runtime defect, not policy. Deeper, the limit is the
-/// runtime's documented policy (the reference bounds only its stack).
-pub const DEEP_LEVELS: usize = 127;
+/// The most values (as the scan counts them) a generated decode case's
+/// message may hold, before the expansion factor: the runtime's `maxElements`
+/// (1,000,000) charges every value read, decoded or skipped, each `rec` hop
+/// and each `opt` a coercion inserts, while the `candid` crate has no element
+/// budget. Random generation stays far below it (see `within_bounds`); the
+/// boundary is pinned by exact regression vectors.
+pub const GEN_ELEMENTS: usize = 250_000;
 
-/// Half the runtime's default `maxElements` (1,000,000), for the same
-/// reason: every value read (decoded or skipped) and at most one `rec` hop
-/// per value charge that budget.
-pub const MANY_VALUES: usize = 500_000;
+/// The runtime's `maxTypeTableEntries`: it refuses a table *claiming* more
+/// entries before reading one, a budget the `candid` crate does not have.
+/// Generated messages claim no more.
+pub const GEN_TABLE_ENTRIES: u64 = 100_000;
+
+/// The longest length (a `vec` count, a `text`, principal or method name
+/// byte length) a generated message may claim. The `candid` crate charges a
+/// claimed length to its decoding quota before it looks for the bytes (a
+/// primitive `vec` of `n` elements costs about `11 n` at once), so a forged
+/// length would exhaust any fixed quota and leave the message unjudged; the
+/// quota is sized from this bound instead (see `quota`).
+pub const GEN_LENGTH: u64 = 1_000_000;
 
 /// What a message holds, read from its bytes at its own wire types and never
-/// at the expected types: the input properties the verdict mapping ties every
-/// intended or reference-side attribution to (issue #196 review). The scan
-/// mirrors the wire format, not either decoder; it stops at the first byte it
-/// cannot read, so a property later in a malformed message goes unseen.
+/// at the expected types: what the generator bounds (see `within_bounds`).
+/// The scan mirrors the wire format, not either decoder; it stops at the
+/// first byte it cannot read, where both decoders stop too.
 #[derive(Default)]
 pub struct Scan {
-    /// A LEB128 or SLEB128 group longer than the value needs (`80 00`, or a
-    /// signed group whose last byte only repeats the sign).
-    pub non_minimal_leb128: bool,
-    /// A future-type value with a non-zero reference count.
-    pub future_references: bool,
-    /// A func value whose method name is not well-formed UTF-8.
-    pub invalid_method_utf8: bool,
-    /// A func value with an empty method name: the runtime refuses one by
-    /// decision (round-trip symmetry with `validate` and `encode`, see
-    /// `ts/codec.ts`), the reference accepts it — or never reaches it, when
-    /// an `opt` above absorbs a later failure.
-    pub empty_method: bool,
-    /// Bytes where the wire type is `empty`: no value has that type, so the
-    /// scan stops there.
-    pub empty_value: bool,
-    /// A record the reference rewrites to `empty` (see `empty_records`)
-    /// reachable from a func or service type in the table.
-    pub empty_record_in_reference: bool,
+    /// The entry count the type table claims (0 when even that is unreadable).
+    pub claimed_types: u64,
     /// The deepest nesting of composite values (`opt`, `vec`, `record`,
-    /// `variant`, an absent `opt` included) the scan read; `reference_verdict`
-    /// raises it to the nesting of the values the reference decoded at the
-    /// expected types, which a coercion can make deeper.
+    /// `variant`, an absent `opt` included) the scan read.
     pub levels: usize,
     /// How many values the scan read.
     pub values: usize,
+    /// The longest length the scan read (see `GEN_LENGTH`).
+    pub max_length: u64,
+    /// The scan stopped at its own walk bound (`SCAN_LEVELS`, `SCAN_VALUES`):
+    /// the message holds more than any bound here admits (a forged length of
+    /// a zero-sized type, a record that only recurses).
+    pub unbounded: bool,
 }
 
 impl Scan {
-    /// The flags this scan contributes to a reference verdict.
-    fn flags(&self) -> Vec<&'static str> {
-        let mut flags = Vec::new();
-        for (set, name) in [
-            (self.non_minimal_leb128, "non_minimal_leb128"),
-            (self.future_references, "future_references"),
-            (self.invalid_method_utf8, "invalid_method_utf8"),
-            (self.empty_method, "empty_method"),
-            (self.empty_value, "wire_empty_value"),
-            (self.empty_record_in_reference, "wire_empty_record"),
-            (self.levels > DEEP_LEVELS, "deep_nesting"),
-            (self.values > MANY_VALUES, "many_values"),
-        ] {
-            if set {
-                flags.push(name);
-            }
+    /// Why a decode case is outside the generation bounds, or `None` when
+    /// it is within them. A case outside is redrawn, never judged: within
+    /// the bounds the runtime's budgets cannot decide a verdict, and the
+    /// reference's decoding quota (sized from this scan) cannot run out.
+    ///
+    /// The runtime walks the *expected* types, which nest deeper than the
+    /// wire where a coercion inserts an `opt` (an expected `opt` reading a
+    /// non-`opt` wire value). Where the reference decoded the message, its
+    /// values at the expected types (`decoded`, see `reference_judgement`)
+    /// measure that nesting exactly; elsewhere the bound is static: up to
+    /// `expansion` `opt` levels above every wire level (see `expansion`).
+    pub fn outside_bounds(&self, expansion: usize, decoded: Option<usize>) -> Option<&'static str> {
+        let factor = 1 + expansion;
+        let nesting = match decoded {
+            Some(levels) => levels.max(self.levels) + 2,
+            None => (self.levels + 2).saturating_mul(factor),
+        };
+        if self.unbounded {
+            Some("unbounded")
+        } else if self.claimed_types > GEN_TABLE_ENTRIES {
+            Some("table_entries")
+        } else if self.max_length > GEN_LENGTH {
+            Some("length")
+        } else if nesting > GEN_LEVELS {
+            Some("levels")
+        } else if (self.values + 16).saturating_mul(4 * factor) > GEN_ELEMENTS {
+            Some("values")
+        } else {
+            None
         }
-        flags
     }
+}
+
+/// The most `opt` constructors one coercion can stack above a wire value
+/// when reading at `types`: the longest run of `opt` constructors, through
+/// declarations, at any position reachable from them (an expected `opt`
+/// reads a non-`opt` wire value at its inner type). `None` when a run never
+/// ends — an `opt`-only cycle such as `T = opt T`, which the generator never
+/// draws (see `opt_cycle`).
+pub fn expansion(env: &TypeEnv, types: &[Type]) -> Option<usize> {
+    let mut seen = std::collections::BTreeSet::new();
+    let mut stack: Vec<Type> = types.to_vec();
+    let mut most = 0;
+    while let Some(ty) = stack.pop() {
+        most = most.max(opt_run(env, &ty, &mut Vec::new())?);
+        match ty.as_ref() {
+            TypeInner::Var(name) => {
+                if seen.insert(name.clone()) {
+                    stack.push(env.find_type(name).ok()?.clone());
+                }
+            }
+            TypeInner::Opt(inner) | TypeInner::Vec(inner) => stack.push(inner.clone()),
+            TypeInner::Record(fields) | TypeInner::Variant(fields) => {
+                stack.extend(fields.iter().map(|field| field.ty.clone()));
+            }
+            // A func or service value is a reference: nothing is decoded at
+            // its argument or method types.
+            _ => {}
+        }
+    }
+    Some(most)
+}
+
+fn opt_run(env: &TypeEnv, ty: &Type, names: &mut Vec<String>) -> Option<usize> {
+    match ty.as_ref() {
+        TypeInner::Var(name) => {
+            if names.contains(name) {
+                return None;
+            }
+            names.push(name.clone());
+            let body = env.find_type(name).ok()?.clone();
+            let run = opt_run(env, &body, names);
+            names.pop();
+            run
+        }
+        TypeInner::Opt(inner) => Some(1 + opt_run(env, inner, names)?),
+        _ => Some(0),
+    }
+}
+
+/// Whether a declaration of the environment is an `opt`-only cycle
+/// (`T = opt T`, or `T = opt U; U = opt T`). Reading a non-`opt` wire value
+/// there unwraps the expected type without end on both sides: the reference
+/// until its stack guard, the runtime until `maxDepth`. Neither judges it, so
+/// the generator redraws such an environment (counted as `opt_cycle`).
+pub fn opt_cycle(env: &TypeEnv, names: &[String]) -> bool {
+    names
+        .iter()
+        .any(|name| opt_run(env, &TypeInner::Var(name.clone()).into(), &mut Vec::new()).is_none())
 }
 
 enum Entry {
@@ -498,8 +716,8 @@ enum Entry {
     Vec(i64),
     Record(Vec<i64>),
     Variant(Vec<i64>),
-    Func(Vec<i64>),
-    Service(Vec<i64>),
+    Func,
+    Service,
     Future,
 }
 
@@ -507,11 +725,8 @@ impl Entry {
     fn children(&self) -> &[i64] {
         match self {
             Entry::Opt(inner) | Entry::Vec(inner) => std::slice::from_ref(inner),
-            Entry::Record(types)
-            | Entry::Variant(types)
-            | Entry::Func(types)
-            | Entry::Service(types) => types,
-            Entry::Future => &[],
+            Entry::Record(types) | Entry::Variant(types) => types,
+            Entry::Func | Entry::Service | Entry::Future => &[],
         }
     }
 }
@@ -519,7 +734,6 @@ impl Entry {
 struct Cursor<'a> {
     bytes: &'a [u8],
     at: usize,
-    non_minimal: bool,
 }
 
 impl Cursor<'_> {
@@ -541,10 +755,8 @@ impl Cursor<'_> {
     fn leb(&mut self) -> Option<u64> {
         let mut value = 0u64;
         let mut shift = 0u32;
-        let mut count = 0usize;
         loop {
             let byte = self.byte()?;
-            count += 1;
             let low = u64::from(byte & 0x7f);
             if shift < 64 && (low << shift) >> shift == low {
                 value |= low << shift;
@@ -553,9 +765,6 @@ impl Cursor<'_> {
             }
             shift = shift.saturating_add(7);
             if byte & 0x80 == 0 {
-                if count > 1 && byte == 0 {
-                    self.non_minimal = true;
-                }
                 return Some(value);
             }
         }
@@ -565,11 +774,8 @@ impl Cursor<'_> {
     fn sleb(&mut self) -> Option<i64> {
         let mut value = 0i64;
         let mut shift = 0u32;
-        let mut previous = 0u8;
-        let mut count = 0usize;
         loop {
             let byte = self.byte()?;
-            count += 1;
             if shift < 63 {
                 value |= i64::from(byte & 0x7f) << shift;
             }
@@ -578,28 +784,22 @@ impl Cursor<'_> {
                 if shift < 64 && byte & 0x40 != 0 {
                     value |= -1i64 << shift;
                 }
-                if count > 1
-                    && ((byte == 0x00 && previous & 0x40 == 0)
-                        || (byte == 0x7f && previous & 0x40 != 0))
-                {
-                    self.non_minimal = true;
-                }
                 return Some(value);
             }
-            previous = byte;
         }
     }
 }
 
 /// The parsed header: the table entries and the argument types. `None` for a
-/// header that does not parse.
-fn read_header(cursor: &mut Cursor) -> Option<(Vec<Entry>, Vec<i64>)> {
+/// header that does not parse; `claimed` receives the table's claimed size.
+fn read_header(cursor: &mut Cursor, claimed: &mut u64) -> Option<(Vec<Entry>, Vec<i64>)> {
     for expected in *b"DIDL" {
         if cursor.byte()? != expected {
             return None;
         }
     }
     let count = cursor.leb()?;
+    *claimed = count;
     if count > cursor.bytes.len() as u64 {
         return None;
     }
@@ -622,24 +822,22 @@ fn read_header(cursor: &mut Cursor) -> Option<(Vec<Entry>, Vec<i64>)> {
                 }
             }
             -22 => {
-                let mut types = Vec::new();
                 for _ in 0..2 {
                     for _ in 0..cursor.leb()? {
-                        types.push(cursor.sleb()?);
+                        cursor.sleb()?;
                     }
                 }
                 let annotations = cursor.byte()?;
                 cursor.skip(u64::from(annotations))?;
-                Entry::Func(types)
+                Entry::Func
             }
             -23 => {
-                let mut types = Vec::new();
                 for _ in 0..cursor.leb()? {
                     let length = cursor.leb()?;
                     cursor.skip(length)?;
-                    types.push(cursor.sleb()?);
+                    cursor.sleb()?;
                 }
-                Entry::Service(types)
+                Entry::Service
             }
             opcode if opcode < -24 => {
                 let length = cursor.leb()?;
@@ -661,73 +859,6 @@ fn read_header(cursor: &mut Cursor) -> Option<(Vec<Entry>, Vec<i64>)> {
     (refs_valid && args.iter().all(|&ty| valid(ty))).then_some((entries, args))
 }
 
-/// The record entries the reference rewrites to `empty` while parsing the
-/// table (`TypeEnv::replace_empty`): a record some field of which is, through
-/// record fields only, the record itself — uninhabited.
-fn empty_records(entries: &[Entry]) -> Vec<bool> {
-    // 0 = unvisited, 1 = in progress, 2 = empty, 3 = not empty.
-    fn empty(entries: &[Entry], state: &mut [u8], index: usize) -> bool {
-        match state[index] {
-            1 | 2 => {
-                state[index] = 2;
-                return true;
-            }
-            3 => return false,
-            _ => {}
-        }
-        state[index] = 1;
-        let result = match &entries[index] {
-            Entry::Record(fields) => fields.iter().any(|&field| {
-                usize::try_from(field).is_ok_and(|field| empty(entries, state, field))
-            }),
-            _ => false,
-        };
-        state[index] = if result { 2 } else { 3 };
-        result
-    }
-    let mut state = vec![0u8; entries.len()];
-    (0..entries.len())
-        .map(|index| {
-            matches!(entries[index], Entry::Record(_)) && empty(entries, &mut state, index)
-        })
-        .collect()
-}
-
-/// Whether a record the reference rewrites to `empty` is reachable from a
-/// func or service entry: only there does the reference compare types (its
-/// subtype check of reference values), and only there can the rewrite decide
-/// a verdict (`decode:reference:empty-normalization`).
-fn empty_record_in_reference(entries: &[Entry]) -> bool {
-    let empty = empty_records(entries);
-    let mut seen = vec![false; entries.len()];
-    let mut stack: Vec<usize> = Vec::new();
-    for entry in entries {
-        if matches!(entry, Entry::Func(_) | Entry::Service(_)) {
-            stack.extend(
-                entry
-                    .children()
-                    .iter()
-                    .filter_map(|&ty| usize::try_from(ty).ok()),
-            );
-        }
-    }
-    while let Some(index) = stack.pop() {
-        if std::mem::replace(&mut seen[index], true) {
-            continue;
-        }
-        if empty[index] {
-            return true;
-        }
-        stack.extend(
-            entries[index]
-                .children()
-                .iter()
-                .filter_map(|&ty| usize::try_from(ty).ok()),
-        );
-    }
-    false
-}
-
 /// The scan's walk bounds: it runs on the generator's large stack, and a
 /// recursive record that only recurses would otherwise never consume a byte.
 const SCAN_LEVELS: usize = 10_000;
@@ -744,15 +875,23 @@ impl Walker<'_, '_> {
         if self.cursor.byte()? != 1 {
             return None;
         }
-        let length = self.cursor.leb()?;
+        let length = self.length()?;
         self.cursor.skip(length)?;
         Some(())
+    }
+
+    /// A length (a count or a byte length), recorded in `max_length`.
+    fn length(&mut self) -> Option<u64> {
+        let length = self.cursor.leb()?;
+        self.scan.max_length = self.scan.max_length.max(length);
+        Some(length)
     }
 
     /// Read one value of wire type `ty`; `None` where the scan stops.
     fn value(&mut self, ty: i64, level: usize) -> Option<()> {
         self.scan.values += 1;
         if self.scan.values > SCAN_VALUES || level > SCAN_LEVELS {
+            self.scan.unbounded = true;
             return None;
         }
         let Ok(index) = usize::try_from(ty) else {
@@ -765,14 +904,12 @@ impl Walker<'_, '_> {
                 -3 => self.cursor.leb().map(drop),
                 -4 => self.cursor.sleb().map(drop),
                 -15 => {
-                    let length = self.cursor.leb()?;
+                    let length = self.length()?;
                     self.cursor.skip(length).map(drop)
                 }
                 -24 => self.principal(),
-                _ => {
-                    self.scan.empty_value = true;
-                    None
-                }
+                // `empty`: no value has that type.
+                _ => None,
             };
         };
         let entries = self.entries;
@@ -790,7 +927,7 @@ impl Walker<'_, '_> {
                 _ => None,
             },
             Entry::Vec(inner) => {
-                for _ in 0..self.cursor.leb()? {
+                for _ in 0..self.length()? {
                     self.value(*inner, level + 1)?;
                 }
                 Some(())
@@ -805,26 +942,18 @@ impl Walker<'_, '_> {
                 let arm = usize::try_from(self.cursor.leb()?).ok()?;
                 self.value(*arms.get(arm)?, level + 1)
             }
-            Entry::Func(_) => {
+            Entry::Func => {
                 if self.cursor.byte()? != 1 {
                     return None;
                 }
                 self.principal()?;
-                let length = self.cursor.leb()?;
-                if length == 0 {
-                    self.scan.empty_method = true;
-                }
-                if std::str::from_utf8(self.cursor.skip(length)?).is_err() {
-                    self.scan.invalid_method_utf8 = true;
-                }
-                Some(())
+                let length = self.length()?;
+                self.cursor.skip(length).map(drop)
             }
-            Entry::Service(_) => self.principal(),
+            Entry::Service => self.principal(),
             Entry::Future => {
-                let length = self.cursor.leb()?;
-                if self.cursor.leb()? != 0 {
-                    self.scan.future_references = true;
-                }
+                let length = self.length()?;
+                self.cursor.leb()?;
                 self.cursor.skip(length).map(drop)
             }
         }
@@ -833,14 +962,11 @@ impl Walker<'_, '_> {
 
 /// Scan a message at its own wire types (see `Scan`).
 pub fn scan(bytes: &[u8]) -> Scan {
-    let mut cursor = Cursor {
-        bytes,
-        at: 0,
-        non_minimal: false,
-    };
-    let Some((entries, args)) = read_header(&mut cursor) else {
+    let mut cursor = Cursor { bytes, at: 0 };
+    let mut claimed_types = 0;
+    let Some((entries, args)) = read_header(&mut cursor, &mut claimed_types) else {
         return Scan {
-            non_minimal_leb128: cursor.non_minimal,
+            claimed_types,
             ..Scan::default()
         };
     };
@@ -848,7 +974,7 @@ pub fn scan(bytes: &[u8]) -> Scan {
         cursor,
         entries: &entries,
         scan: Scan {
-            empty_record_in_reference: empty_record_in_reference(&entries),
+            claimed_types,
             ..Scan::default()
         },
     };
@@ -857,51 +983,37 @@ pub fn scan(bytes: &[u8]) -> Scan {
             break;
         }
     }
-    let mut scan = walker.scan;
-    scan.non_minimal_leb128 = walker.cursor.non_minimal;
-    scan
+    walker.scan
 }
 
-/// The reference decoder's first quota. Unconfigured, the `candid` crate
-/// bounds no work (its documentation asks canister code to set a quota), and
-/// a vector of a zero-sized type with a forged length of 2^40 then runs for
-/// hours. This quota (which charges skipped values 50x) is far above what any
-/// unmutated generated message needs; a message that exhausts it is decoded
-/// again under `retry_quota` when the scan bounds its work (see
-/// `RETRY_VALUES`).
-pub const DECODING_QUOTA: usize = 2_000_000;
+// ---------------------------------------------------------------------------
+// Reference verdict and the domain mapping
+// ---------------------------------------------------------------------------
 
-/// The most values (as the scan counts them, at the message's own wire
-/// types) a message may hold for a quota retry: twice the runtime's element
-/// budget (`maxElements`, 1,000,000), which charges every value it reads,
-/// decoded or skipped. A message the runtime can accept therefore always
-/// qualifies, while a forged length (the scan stops counting at
-/// `SCAN_VALUES`) never does, so the retry's work stays bounded by the scan.
-pub const RETRY_VALUES: usize = 2_000_000;
+/// The least decoding quota. Unconfigured, the `candid` crate bounds no work
+/// (its documentation asks canister code to set a quota), and a vector of a
+/// zero-sized type with a forged length of 2^40 then runs for hours. The
+/// generator keeps such messages out (`Scan::outside_bounds`); the quota is
+/// the backstop, and a message that exhausts it is `inconclusive`, never a
+/// rejection.
+const QUOTA_FLOOR: usize = 20_000_000;
 
-/// The quota of a retry: at least `RETRY_FLOOR`, and at least 1,000 per
-/// value and 4 per byte, charged 50x as a skipped value would be. The
-/// `candid` crate charges a value a few dozen units beyond its bytes (a
-/// principal 30, a record field 4, an expected field's name its length; the
-/// generator's records have a handful of fields), so within `RETRY_VALUES`
-/// this quota does not run out on a message the runtime accepts; the
-/// reference's `limit` class (and with it `decode:intended:reference-quota`)
-/// is left to a message whose work the scan cannot bound.
-fn retry_quota(values: usize, bytes: usize) -> usize {
-    values
+/// The decoding quota for a message: at least `QUOTA_FLOOR`, and at least
+/// 1,000 per value, 4 per byte and 16 per unit of the longest claimed length,
+/// charged 50x as a skipped value would be. The `candid` crate charges a
+/// value a few dozen units beyond its bytes (a principal 30, a record field
+/// 4, an expected field's name its length) and a claimed length at most
+/// about 11 per unit, so this quota does not run out on a message within the
+/// generation bounds.
+fn quota(scan: &Scan, bytes: usize) -> usize {
+    let length = usize::try_from(scan.max_length).unwrap_or(usize::MAX);
+    scan.values
         .saturating_mul(1_000)
         .saturating_add(bytes.saturating_mul(4))
+        .saturating_add(length.saturating_mul(16))
         .saturating_mul(50)
-        .max(RETRY_FLOOR)
+        .max(QUOTA_FLOOR)
 }
-
-/// The least retry quota. Some exhaustion is not the values' doing: reading
-/// a value at `T = opt T` where the wire has no `opt` makes the reference
-/// unwrap the expected type without end, charging the quota at every level
-/// until its stack guard stops it (on the harness's 256 MiB stack, after more
-/// than the first quota). Such a walk consumes no wire value, so only its
-/// stack bounds it, and the floor lets it reach that bound and answer.
-const RETRY_FLOOR: usize = 400_000_000;
 
 fn config(quota: usize) -> candid::DecoderConfig {
     let mut config = candid::DecoderConfig::new();
@@ -909,12 +1021,26 @@ fn config(quota: usize) -> candid::DecoderConfig {
     config
 }
 
-/// Whether a reference error is its quota running out. The `candid` crate
-/// reports it only as message text (`… cost exceeds the limit`), so this one
-/// class is read from the reference's own wording; it is never compared with
-/// anything the runtime says.
-fn quota_exhausted(error: &candid::Error) -> bool {
-    format!("{error:?}").contains("cost exceeds the limit")
+/// The reference's own budget a refusal came from, if any: its decoding
+/// quota (`… cost exceeds the limit`) or its stack guard (`Recursion limit
+/// exceeded`, `Recursion depth overflow`). The `candid` crate reports both
+/// only as message text, so these classes are read from its wording; they are
+/// never compared with anything the runtime says. A budget refusal means the
+/// reference did not judge the message: the case is `inconclusive`.
+fn budget(error: &candid::Error) -> Option<&'static str> {
+    let text = format!("{error:?}");
+    if text.contains("cost exceeds the limit") {
+        Some("quota")
+    } else if text.contains("Recursion limit exceeded") || text.contains("Recursion depth overflow")
+    {
+        Some("stack")
+    } else {
+        None
+    }
+}
+
+fn inconclusive(budget: &str) -> Value {
+    json!({ "verdict": "inconclusive", "budget": budget })
 }
 
 /// The reference verdict for one decode case, as the golden records it.
@@ -924,34 +1050,50 @@ fn quota_exhausted(error: &candid::Error) -> bool {
 /// header and type table (`IDLDeserialize::new` fails), `malformed` when the
 /// header parses but the message does not decode at its own wire types
 /// (`IDLArgs::from_bytes` fails), and `coercion` when the message is
-/// well-formed and only the expected types refuse it; `limit` when the
-/// decoding quota ran out first, after the retry when the message qualifies
-/// for one (see `DECODING_QUOTA` and `RETRY_VALUES`).
-///
-/// `flags` records input properties the verdict mapping ties attributions
-/// to, never anything the runtime says: the scan's properties of the bytes
-/// themselves (see `Scan::flags`).
+/// well-formed and only the expected types refuse it. A refusal on the
+/// reference's own budget is no verdict at all: `inconclusive`, with the
+/// budget named (see `budget`). The reference has no depth or element budget
+/// that could be configured like the runtime's; the generator keeps cases
+/// below the runtime's (see `GEN_LEVELS`).
 pub fn reference_verdict(env: &TypeEnv, bytes: &[u8], expected: &[Type]) -> Value {
-    let mut scan = scan(bytes);
-    let (mut verdict, mut decoded_levels) =
-        reference_verdict_unflagged(env, bytes, expected, DECODING_QUOTA);
-    if verdict["class"] == "limit" && scan.values <= RETRY_VALUES {
-        (verdict, decoded_levels) = reference_verdict_unflagged(
-            env,
-            bytes,
-            expected,
-            retry_quota(scan.values, bytes.len()),
-        );
+    reference_judgement(env, bytes, expected).0
+}
+
+/// The reference verdict (see `reference_verdict`) and, when the reference
+/// accepted, the composite nesting of the values it decoded at the expected
+/// types (`value_levels`): what the generator bounds a case by where the
+/// reference decodes it (see `Scan::outside_bounds`).
+pub fn reference_judgement(
+    env: &TypeEnv,
+    bytes: &[u8],
+    expected: &[Type],
+) -> (Value, Option<usize>) {
+    let quota = quota(&scan(bytes), bytes.len());
+    let typed = guarded(|| {
+        IDLArgs::from_bytes_with_types_with_config(bytes, env, expected, &config(quota))
+    });
+    let decoded = match typed {
+        Err(()) => return (json!({ "verdict": "panic" }), None),
+        Ok(Err(error)) => return (reference_rejection(bytes, &error, quota), None),
+        Ok(Ok(decoded)) => decoded,
+    };
+    let levels = decoded.args.iter().map(value_levels).max().unwrap_or(0);
+    let mut values = Vec::new();
+    for (value, ty) in decoded.args.iter().zip(expected) {
+        match domain(env, ty, value) {
+            Ok(mapped) => values.push(mapped),
+            Err(message) => {
+                return (
+                    json!({ "verdict": "mapping_error", "detail": message }),
+                    Some(levels),
+                );
+            }
+        }
     }
-    // The runtime walks the expected types, which can nest deeper than the
-    // wire values (an `opt` the coercion inserts at every level), so the
-    // depth flag also reads the values the reference decoded.
-    scan.levels = scan.levels.max(decoded_levels);
-    let flags = scan.flags();
-    if !flags.is_empty() {
-        verdict["flags"] = json!(flags);
-    }
-    verdict
+    (
+        json!({ "verdict": "accept", "values": values }),
+        Some(levels),
+    )
 }
 
 /// The composite nesting of a decoded value, counted as `Scan::levels`
@@ -974,56 +1116,29 @@ fn value_levels(value: &IDLValue) -> usize {
     }
 }
 
-/// The verdict, and the composite nesting of the values the reference
-/// decoded (0 when it decoded none).
-fn reference_verdict_unflagged(
-    env: &TypeEnv,
-    bytes: &[u8],
-    expected: &[Type],
-    quota: usize,
-) -> (Value, usize) {
-    let typed = guarded(|| {
-        IDLArgs::from_bytes_with_types_with_config(bytes, env, expected, &config(quota))
-    });
-    let decoded = match typed {
-        Err(()) => return (json!({ "verdict": "panic" }), 0),
-        Ok(Err(error)) => return (reference_rejection(bytes, &error, quota), 0),
-        Ok(Ok(decoded)) => decoded,
-    };
-    let levels = decoded.args.iter().map(value_levels).max().unwrap_or(0);
-    let mut values = Vec::new();
-    for (value, ty) in decoded.args.iter().zip(expected) {
-        match domain(env, ty, value) {
-            Ok(mapped) => values.push(mapped),
-            Err(message) => {
-                return (
-                    json!({ "verdict": "mapping_error", "detail": message }),
-                    levels,
-                );
-            }
-        }
-    }
-    (json!({ "verdict": "accept", "values": values }), levels)
-}
-
 /// The verdict for a typed decode the reference refused, classified by its
 /// behaviour (see `reference_verdict`).
 fn reference_rejection(bytes: &[u8], error: &candid::Error, quota: usize) -> Value {
-    if quota_exhausted(error) {
-        return json!({ "verdict": "reject", "class": "limit" });
+    if let Some(budget) = budget(error) {
+        return inconclusive(budget);
     }
-    let header =
-        guarded(|| candid::de::IDLDeserialize::new_with_config(bytes, &config(quota)).is_ok())
-            .unwrap_or(false);
-    if !header {
-        return json!({ "verdict": "reject", "class": "header" });
+    match guarded(|| candid::de::IDLDeserialize::new_with_config(bytes, &config(quota)).err()) {
+        Err(()) => return json!({ "verdict": "panic" }),
+        Ok(Some(error)) => {
+            return match budget(&error) {
+                Some(budget) => inconclusive(budget),
+                None => json!({ "verdict": "reject", "class": "header" }),
+            };
+        }
+        Ok(None) => {}
     }
     match guarded(|| IDLArgs::from_bytes_with_config(bytes, &config(quota))) {
+        Err(()) => json!({ "verdict": "panic" }),
         Ok(Ok(_)) => json!({ "verdict": "reject", "class": "coercion" }),
-        Ok(Err(error)) if quota_exhausted(&error) => {
-            json!({ "verdict": "reject", "class": "limit" })
-        }
-        _ => json!({ "verdict": "reject", "class": "malformed" }),
+        Ok(Err(error)) => match budget(&error) {
+            Some(budget) => inconclusive(budget),
+            None => json!({ "verdict": "reject", "class": "malformed" }),
+        },
     }
 }
 

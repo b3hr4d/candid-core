@@ -7,35 +7,32 @@
 // reference's verdict. Nothing here measures time (the #39 decision); the
 // count is the corpus's, fixed.
 //
-// Every case must either agree with the reference under the verdict mapping
-// (`differential/compare.ts`), or show exactly the divergence category the
-// reviewed list `tests/goldens/differential/divergences.json` gives for it.
-// The list fails both ways: a new divergence fails, and so does a listed one
-// that disappears — which is how a fault that removes an intended difference
-// (a decoder that starts accepting overlong LEB128) is caught, and how a bug
-// that gets fixed forces its vectors to be reviewed out of the list. Every
-// category in the list carries its classification and reason: (a) a bug in
-// this runtime, (b) a bug in the reference, (c) an intended difference.
+// The judge (`differential/compare.ts`) gives every case one status: it
+// agrees with the reference, it diverges with an exact symptom (both
+// verdicts and each refusal's class or code), the reference never judged it
+// (`inconclusive`), or the loader omits its declaration (`skip`). Nothing
+// attributes a divergence by rule. A divergence is accepted only when the
+// reviewed list `tests/goldens/differential/divergences.json` names its case
+// id with the issue that explains it and exactly the symptom observed:
 //
-// A category is attributed in one of two ways. An attribution the verdict
-// mapping makes from an input property the reference side flagged
-// (`…:intended:…`, `…:reference:…`, `env:label-collision`) holds for every
-// case it names. A plain symptom (`…:ts-rejects:<code>`, `…:ts-accepts:<class>`,
-// `decode:value-mismatch`, `decode:class:…`) names only what differed; it may
-// be classified (b) or (c) only `per-case` — for the listed cases, each
-// minimized and attributed by hand — since the same symptom on another input
-// may have another cause. (A plain symptom classified (a) says no more than
-// the symptom itself: the runtime answers differently from the reference.)
+// - a divergence whose id is not listed, or listed with another symptom,
+//   fails;
+// - a listed case that no longer diverges (or diverges otherwise) fails, so
+//   a fix, upstream or here, updates the list, and a fault that removes an
+//   intended difference is caught;
+// - an `inconclusive` case fails: the corpus must hold none (the generator
+//   is sized so the reference judges everything).
 //
 // The minimized regression vectors (`r/…`) stay in the corpus for good
-// (#62): each either shows its listed divergence or, when its
-// `tests/fixtures/differential/regressions.json` entry says why (`agrees`),
-// agrees with the reference — a boundary vector, or a fixed bug's vector
-// kept so the bug stays fixed.
+// (#62): each is listed, or its `tests/fixtures/differential/regressions.json`
+// entry says why it agrees (`agrees`) and it must agree — a boundary vector,
+// or a fixed bug's vector kept so the bug stays fixed.
 //
 // `UPDATE_GOLDENS=1 npm test` rewrites the list's `cases` and `skipped` from
-// the current outcomes (categories and their reasons are edited by hand) and
-// stops there; review the diff like any golden, then run the suite again.
+// the current outcomes and stops there: a case whose id and symptom are
+// unchanged keeps its entry, and any other divergence is written
+// `unclassified` (issue 0), which the next run refuses until it is reviewed
+// and given its issue by hand.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -43,22 +40,22 @@ import { readFileSync, writeFileSync } from "node:fs";
 import process from "node:process";
 
 import {
-  decodeCategory,
+  judge,
   parseCorpus,
   runCorpus,
-  verdictCategory,
-  withCollision,
+  symptom,
   type CaseLine,
   type Outcome,
   type Reference,
 } from "./differential/compare.ts";
 
-interface Category {
-  readonly class: "a" | "b" | "c";
-  readonly reason: string;
-  readonly issue?: string;
-  /** Set when the class holds for the listed cases only (see above). */
-  readonly attributed?: "per-case";
+/** Why a listed case diverges: the side that is wrong, or a settled decision. */
+type Side = "reference" | "runtime" | "decision" | "owner-call" | "unclassified";
+
+interface Listed {
+  readonly issue: number;
+  readonly side: Side;
+  readonly symptom: string;
 }
 
 interface Vector {
@@ -68,8 +65,9 @@ interface Vector {
 
 interface DivergenceList {
   readonly about: string;
-  readonly categories: { readonly [name: string]: Category };
-  readonly cases: { readonly [id: string]: string };
+  /** Issue number → what it is and why its cases diverge. */
+  readonly issues: { readonly [issue: string]: string };
+  readonly cases: { readonly [id: string]: Listed };
   readonly skipped: { readonly [id: string]: string };
 }
 
@@ -139,201 +137,236 @@ test("the committed corpus is the fixed seeded count, over every target", () => 
   }
 });
 
-test("every case agrees with the reference or shows exactly its listed divergence", () => {
+test("the reference judges every case of the corpus", () => {
+  const unjudged = outcomes()
+    .filter((outcome) => outcome.status === "inconclusive")
+    .map((outcome) => outcome.id);
+  assert.deepStrictEqual(unjudged, []);
+});
+
+test("every divergence is listed with its issue and its exact symptom, and only those", () => {
   const actual = new Map<string, string>();
   const skipped = new Map<string, string>();
   for (const outcome of outcomes()) {
-    if (outcome.category !== null) {
-      actual.set(outcome.id, outcome.category);
+    if (outcome.status === "diverge" && outcome.symptom !== null) {
+      actual.set(outcome.id, outcome.symptom);
     }
     if (outcome.ours.verdict === "skip") {
       skipped.set(outcome.id, outcome.ours.reason);
     }
   }
   if (updating) {
+    const cases = [...actual].map(([id, observed]): [string, Listed] => {
+      const listed = list.cases[id];
+      return listed !== undefined && listed.symptom === observed
+        ? [id, listed]
+        : [id, { issue: 0, side: "unclassified", symptom: observed }];
+    });
     const updated = {
       about: list.about,
-      categories: list.categories,
-      cases: sorted(actual),
+      issues: list.issues,
+      cases: sorted(cases),
       skipped: sorted(skipped),
     };
     writeFileSync(listUrl, `${JSON.stringify(updated, null, 2)}\n`);
     return;
   }
-  const undescribed = [...new Set(actual.values())].filter(
-    (category) => !Object.prototype.hasOwnProperty.call(list.categories, category),
-  );
-  const appeared: string[] = [];
-  for (const [id, category] of actual) {
-    if (list.cases[id] !== category) {
-      appeared.push(`${id}: ${category} (listed: ${list.cases[id] ?? "none"})`);
+  const unlisted: string[] = [];
+  for (const [id, observed] of actual) {
+    const listed = list.cases[id];
+    if (listed === undefined || listed.symptom !== observed) {
+      unlisted.push(`${id}: ${observed} (listed: ${listed?.symptom ?? "none"})`);
     }
   }
-  const disappeared = Object.keys(list.cases)
-    .filter((id) => !actual.has(id))
-    .map((id) => `${id}: ${list.cases[id]} no longer diverges`);
-  assert.deepStrictEqual(
-    { undescribed, appeared, disappeared },
-    { undescribed: [], appeared: [], disappeared: [] },
-  );
+  const disappeared = Object.entries(list.cases)
+    .filter(([id]) => !actual.has(id))
+    .map(([id, listed]) => `${id}: listed ${listed.symptom}, no longer diverges`);
+  assert.deepStrictEqual({ unlisted, disappeared }, { unlisted: [], disappeared: [] });
   // Skips (a declaration the loader omits) are pinned too, so a change in
   // what the runner can exercise is reviewed rather than silent.
   assert.deepStrictEqual(sorted(skipped), list.skipped);
 });
 
-/** Whether a category name only describes what differed (see above). */
-function plainSymptom(name: string): boolean {
-  return /:(ts-rejects|ts-accepts|class):|:value-mismatch$/.test(name);
-}
-
-test("every listed category is classified, reasoned, and shown by a case", () => {
+test("every listed divergence names its issue, and every issue is described and used", () => {
   if (updating) {
     return;
   }
-  const shown = new Set(Object.values(list.cases));
-  for (const [name, category] of Object.entries(list.categories)) {
-    assert(["a", "b", "c"].includes(category.class), `${name}: class`);
-    assert(category.reason.length > 0, `${name}: reason`);
-    assert(shown.has(name), `${name}: no case shows it any more`);
-    if (plainSymptom(name) && category.class !== "a") {
-      assert.strictEqual(
-        category.attributed,
-        "per-case",
-        `${name} is a plain symptom: class ${category.class} holds per case only`,
-      );
-    }
+  const used = new Set<string>();
+  for (const [id, listed] of Object.entries(list.cases)) {
+    assert(
+      Number.isInteger(listed.issue) && listed.issue > 0,
+      `${id}: no issue number (unclassified: review it and name its issue)`,
+    );
+    assert(
+      ["reference", "runtime", "decision", "owner-call"].includes(listed.side),
+      `${id}: side ${listed.side}`,
+    );
+    assert(
+      Object.prototype.hasOwnProperty.call(list.issues, String(listed.issue)),
+      `${id}: issue ${listed.issue} is not described under \`issues\``,
+    );
+    used.add(String(listed.issue));
+  }
+  for (const [issue, text] of Object.entries(list.issues)) {
+    assert(text.length > 0, `issue ${issue}: no description`);
+    assert(used.has(issue), `issue ${issue}: no listed case cites it`);
   }
 });
 
-test("every minimized regression vector diverges as listed or agrees as its entry says", () => {
+test("every minimized regression vector is listed or agrees as its entry says", () => {
   if (updating) {
     return;
   }
   const regressions = corpus.cases.filter((kase) => kase.id.startsWith("r/"));
   assert.strictEqual(regressions.length, vectors.length);
+  const status = new Map(outcomes().map((outcome) => [outcome.id, outcome.status]));
   for (const vector of vectors) {
     const id = `r/${vector.name}`;
     if (vector.agrees === undefined) {
       assert(id in list.cases, `${id} is not in the divergence list and says no \`agrees\``);
     } else {
-      // Its agreement is held by the main test (an unlisted case must
-      // agree); here: an agreeing vector is never also listed.
       assert(vector.agrees.length > 0, `${id}: agrees needs a reason`);
       assert(!(id in list.cases), `${id} says it agrees but is listed`);
+      assert.strictEqual(status.get(id), "agree", `${id} must agree with the reference`);
     }
   }
 });
 
-// The mapping's own rules, on synthetic verdicts (issue #196 review, round
-// 2): an attribution holds only for the symptom its cause explains, so the
-// same symptom with another cause stays a plain symptom.
-test("an attribution needs the symptom its flag explains, not only the flag", () => {
-  const depth = { verdict: "reject", code: "resource_limit_exceeded", path: "$" } as const;
-  const accepted: Reference = { verdict: "accept", values: [], flags: ["deep_nesting"] };
-  // ts-limit: the budget must be the one the input exceeds.
-  assert.strictEqual(
-    decodeCategory(accepted, { ...depth, resource: "value_depth" }),
-    "decode:intended:ts-limit",
+/** The structural type-table edits the generator applies (`wire::mutate_table`, `contract::structural`). */
+const STRUCTURAL = [
+  "duplicate_field_id",
+  "unsorted_field_ids",
+  "duplicate_variant_id",
+  "unsorted_variant_ids",
+  "duplicate_method_name",
+  "unsorted_method_names",
+];
+
+test("the generated corpus applies every structural type-table edit on both targets", () => {
+  const decode = new Set<string>();
+  const contract = new Set<string>();
+  for (const kase of corpus.cases) {
+    if (kase.id.startsWith("r/")) {
+      continue;
+    }
+    if (kase.kind === "decode") {
+      for (const applied of kase.mutation.split("+")) {
+        decode.add(applied);
+      }
+    } else if (kase.kind === "contract") {
+      for (const op of kase.ops) {
+        if (op.edit !== undefined) {
+          contract.add(op.edit);
+        }
+      }
+    }
+  }
+  assert.deepStrictEqual(
+    STRUCTURAL.filter((edit) => !decode.has(edit)),
+    [],
+    "decode: structural table edits the corpus never applies",
   );
-  assert.strictEqual(
-    decodeCategory(accepted, { ...depth, resource: "value_elements" }),
-    "decode:ts-rejects:resource_limit_exceeded",
+  assert.deepStrictEqual(
+    STRUCTURAL.filter((edit) => !contract.has(edit)),
+    [],
+    "contract: structural node edits the corpus never applies",
   );
-  assert.strictEqual(
-    decodeCategory(
-      { verdict: "accept", values: [], flags: ["many_values"] },
-      { ...depth, resource: "value_depth" },
-    ),
-    "decode:ts-rejects:resource_limit_exceeded",
-  );
-  assert.strictEqual(
-    decodeCategory(
-      { verdict: "accept", values: [], flags: ["many_values"] },
-      { ...depth, resource: "value_elements" },
-    ),
-    "decode:intended:ts-limit",
-  );
-  assert.strictEqual(
-    decodeCategory(accepted, { ...depth, resource: "stack" }),
-    "decode:ts-rejects:resource_limit_exceeded",
-  );
-  // validate's ts-limit: likewise value_depth on a deep value only.
-  assert.strictEqual(
-    verdictCategory("validate", accepted, { ...depth, resource: "value_depth" }),
-    "validate:intended:ts-limit",
-  );
-  assert.strictEqual(
-    verdictCategory("validate", accepted, { ...depth, resource: "value_elements" }),
-    "validate:ts-rejects:resource_limit_exceeded",
-  );
-  assert.strictEqual(
-    verdictCategory("validate", { verdict: "accept" }, { ...depth, resource: "value_depth" }),
-    "validate:ts-rejects:resource_limit_exceeded",
-  );
-  // No limit of the reference stands in for its verdict.
-  assert.strictEqual(
-    verdictCategory(
-      "validate",
-      { verdict: "reject", class: "host_value_limit" },
-      {
-        verdict: "accept",
-      },
-    ),
-    "validate:ts-accepts:host_value_limit",
-  );
-  // empty-normalization: a value mismatch only at an absorbed reference.
-  const func = { principal: "aaaaa-aa", method: "m" };
-  const emptyRecord = (values: unknown[]): Reference => ({
-    verdict: "accept",
-    values,
-    flags: ["wire_empty_record"],
+});
+
+// The judge's own rules, on synthetic answers (issue #196 redesign): no
+// input property makes a divergence agree, and a limit refusal agrees only
+// with the reference's refusal on the same budget.
+test("the judge accepts nothing by rule: a limit refusal agrees only with the same limit", () => {
+  const decode = (ref: Reference): CaseLine => ({
+    kind: "decode",
+    id: "d",
+    env: "e",
+    wire: null,
+    expected: [],
+    mutation: "none",
+    hex: "",
+    ref,
   });
-  assert.strictEqual(
-    decodeCategory(emptyRecord([{ a: null, b: { $int: "1" } }]), {
-      verdict: "accept",
-      values: [{ a: func, b: { $int: "1" } }],
-    }),
-    "decode:reference:empty-normalization",
-  );
-  assert.strictEqual(
-    decodeCategory(emptyRecord([{ a: null }]), { verdict: "accept", values: [{ a: "aaaaa-aa" }] }),
-    "decode:reference:empty-normalization",
-  );
-  assert.strictEqual(
-    decodeCategory(emptyRecord([{ a: null, b: { $int: "1" } }]), {
-      verdict: "accept",
-      values: [{ a: func, b: { $int: "2" } }],
-    }),
-    "decode:value-mismatch",
-  );
-  assert.strictEqual(
-    decodeCategory(emptyRecord([{ a: null }]), { verdict: "accept", values: [{ a: "not text" }] }),
-    "decode:value-mismatch",
-  );
-  // label-collision: a validate acceptance only where the reference refused
-  // the field set or the arm.
-  const collision = (refClass: string): CaseLine => ({
+  const validateCase = (ref: Reference): CaseLine => ({
     kind: "validate",
-    id: "synthetic",
-    env: "synthetic",
+    id: "v",
+    env: "e",
     type: "T",
     value: ["n"],
-    ref: { verdict: "reject", class: refClass, flags: ["label_collision"] },
+    ref,
   });
-  for (const refClass of ["record_field_set_mismatch", "unknown_variant_id"]) {
-    assert.strictEqual(
-      withCollision(`validate:ts-accepts:${refClass}`, collision(refClass), { verdict: "accept" }),
-      "env:label-collision",
-    );
+  const depth = {
+    verdict: "reject",
+    code: "resource_limit_exceeded",
+    path: "$",
+    resource: "value_depth",
+  } as const;
+  // decode: the reference has no budget; any limit refusal diverges, against
+  // an acceptance or against any class of refusal.
+  const refs: readonly Reference[] = [
+    { verdict: "accept", values: [] },
+    { verdict: "reject", class: "malformed" },
+    { verdict: "reject", class: "header" },
+    { verdict: "reject", class: "coercion" },
+  ];
+  for (const ref of refs) {
+    assert.strictEqual(judge(decode(ref), depth).status, "diverge", JSON.stringify(ref));
   }
   assert.strictEqual(
-    withCollision(
-      "validate:ts-accepts:host_value_kind_mismatch",
-      collision("host_value_kind_mismatch"),
-      {
-        verdict: "accept",
-      },
-    ),
-    "validate:ts-accepts:host_value_kind_mismatch",
+    symptom({ verdict: "accept", values: [] }, depth),
+    "ts=reject:resource_limit_exceeded/value_depth ref=accept",
+  );
+  // decode refusals agree by class only.
+  const truncated = { verdict: "reject", code: "truncated", path: "$" } as const;
+  const mismatch = { verdict: "reject", code: "type_mismatch", path: "$" } as const;
+  assert.strictEqual(
+    judge(decode({ verdict: "reject", class: "header" }), truncated).status,
+    "agree",
+  );
+  assert.strictEqual(
+    judge(decode({ verdict: "reject", class: "header" }), mismatch).status,
+    "diverge",
+  );
+  assert.strictEqual(
+    judge(decode({ verdict: "reject", class: "coercion" }), truncated).status,
+    "diverge",
+  );
+  // A value mismatch carries our values' digest.
+  const ours = { verdict: "accept", values: [{ $int: "1" }] } as const;
+  const outcome = judge(decode({ verdict: "accept", values: [{ $int: "2" }] }), ours);
+  assert.strictEqual(outcome.status, "diverge");
+  assert(/^ts=accept#[0-9a-f]{8} ref=accept$/.test(outcome.symptom ?? ""), outcome.symptom ?? "");
+  // validate: refusals agree whatever their codes, except a limit, which
+  // agrees only with the reference's refusal on the same resource.
+  const missing = { verdict: "reject", code: "missing_field", path: "$" } as const;
+  assert.strictEqual(
+    judge(validateCase({ verdict: "reject", class: "record_field_set_mismatch" }), missing).status,
+    "agree",
+  );
+  assert.strictEqual(
+    judge(validateCase({ verdict: "reject", class: "record_field_set_mismatch" }), depth).status,
+    "diverge",
+  );
+  assert.strictEqual(
+    judge(validateCase({ verdict: "reject", class: "resource_limit_exceeded/value_depth" }), depth)
+      .status,
+    "agree",
+  );
+  assert.strictEqual(
+    judge(
+      validateCase({ verdict: "reject", class: "resource_limit_exceeded/value_depth" }),
+      missing,
+    ).status,
+    "diverge",
+  );
+  // A reference that did not judge is never an agreement.
+  assert.strictEqual(
+    judge(validateCase({ verdict: "inconclusive", budget: "host_value_limit" }), depth).status,
+    "inconclusive",
+  );
+  assert.strictEqual(
+    judge(decode({ verdict: "inconclusive", budget: "quota" }), { verdict: "accept", values: [] })
+      .status,
+    "inconclusive",
   );
 });
