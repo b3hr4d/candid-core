@@ -487,12 +487,15 @@ export type ValidateResult =
     <code>value_elements</code> as shared resource names.
   </li>
   <li>
-    Ten codes in the runtime's Contract loader are the Rust ones verbatim:
+    Twelve codes in the runtime's Contract loader are the Rust ones verbatim:
     <code>unsupported_contract_format</code>, <code>unsupported_format_version</code>,
     <code>unsupported_semantics_profile</code>, <code>unsupported_canonicalization_profile</code>,
     <code>dangling_type_ref</code>, <code>duplicate_field_id</code>,
     <code>empty_declaration_name</code>, <code>duplicate_declaration_name</code>,
-    <code>invalid_extension_name</code>, <code>resource_limit_exceeded</code>.
+    <code>orphan_type_node</code>, <code>rootless_type_arena</code>,
+    <code>invalid_extension_name</code>, <code>resource_limit_exceeded</code>. A key the format
+    does not define is <code>unknown_key</code> in the loader; Rust refuses the same document while
+    decoding it, as <code>ContractJsonError::MalformedJson</code>, which carries no code.
   </li>
   <li>Both fail closed and neither repairs input.</li>
 </ul>
@@ -555,7 +558,7 @@ export type ValidateResult =
     </tr>
     <tr>
       <td><code>@candid-core/schema/contract</code></td>
-      <td><code>invalid_contract_document</code>, <code>unsupported_contract_format</code>, <code>unsupported_format_version</code>, <code>unsupported_semantics_profile</code>, <code>unsupported_canonicalization_profile</code>, <code>dangling_type_ref</code>, <code>unsupported_construct</code>, <code>duplicate_field_id</code>, <code>duplicate_field_name</code>, <code>empty_declaration_name</code>, <code>duplicate_declaration_name</code>, <code>invalid_name_table</code>, <code>invalid_extension_name</code>, <code>resource_limit_exceeded</code></td>
+      <td><code>invalid_contract_document</code>, <code>unsupported_contract_format</code>, <code>unsupported_format_version</code>, <code>unsupported_semantics_profile</code>, <code>unsupported_canonicalization_profile</code>, <code>dangling_type_ref</code>, <code>unsupported_construct</code>, <code>duplicate_field_id</code>, <code>duplicate_field_name</code>, <code>empty_declaration_name</code>, <code>duplicate_declaration_name</code>, <code>unknown_key</code>, <code>orphan_type_node</code>, <code>rootless_type_arena</code>, <code>invalid_name_table</code>, <code>invalid_extension_name</code>, <code>resource_limit_exceeded</code></td>
     </tr>
   </tbody>
 </table>

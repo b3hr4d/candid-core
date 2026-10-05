@@ -15,6 +15,49 @@ API, the inferred domain types, the codec's wire behaviour, and the codes and
 
 ## Unreleased
 
+### `schemaFromContract` refuses the Contract documents candid-core refuses
+
+`schemaFromContract` now refuses three kinds of document it used to load,
+because `Contract::from_json` refuses them (issue #228, found by the #196
+differential fuzz). **Who is affected:** only a hand-written or tool-mutated
+document. Every Contract and envelope `candid-core compile` writes still loads
+exactly as before, with the same schemas, `actor` and `omitted` — every golden
+and fixture in the repository is loaded by the suite to show it.
+
+- **BREAKING: unknown keys are refused** (`unknown_key`). The root, a type
+  node, a record field or variant arm, a service method, a declaration and the
+  actor each accept only the keys the format defines for them, as the Rust
+  loader's `deny_unknown_fields` does; any other key is an issue at that key's
+  path, `$.types[0].extra` (a key that is not identifier-shaped is bracketed,
+  `$["x y"]`). A key of another node kind counts as unknown, so an `opt` node
+  carrying `fields` is refused. The insides of `identities` and `producer`
+  are still not read, and so not checked.
+- **BREAKING: unreachable type nodes are refused** (`orphan_type_node`, one
+  issue per node at `$.types[i]`, in arena order): every node must be
+  reachable from a declaration or the actor through any edge, a class actor's
+  `init` arguments included — candid-core's reachability rule, under its code
+  and path. The walk is an explicit stack, linear in nodes plus edges, so a
+  document at the 100,000-node cap whose half is one 50,000-deep chain loads
+  without recursion.
+- **BREAKING: a non-empty arena with no root is refused**
+  (`rootless_type_arena` at `$.types`): no declarations and no actor. An
+  empty arena with neither still loads, as it does in Rust.
+- **BREAKING: an unknown envelope key is now `unknown_key` at the key's path**
+  (`$.format`), not `invalid_contract_document` at `$`. The envelope shell was
+  already closed; it now reports under the one code the rule has. Which
+  envelopes are refused did not change.
+- **`ContractIssueCode` gains three members**, `unknown_key`,
+  `orphan_type_node` and `rootless_type_arena` (17 in all); the union is
+  closed, so an exhaustive `switch` over it stops compiling until it handles
+  them. `orphan_type_node` and `rootless_type_arena` are candid-core's own
+  codes. Rust has no code for an unknown key: it refuses the document while
+  decoding it, as malformed JSON.
+- **Unchanged:** a document without a `declarations` key is still refused
+  (`invalid_contract_document` at `$.declarations`), although
+  `Contract::from_json` defaults the key to empty; whether an absent key is
+  part of the format is the maintainer's open decision on #228. candid-core
+  always writes the key.
+
 ### A thrown value whose prototype cannot be read no longer escapes the codec
 
 No export, type, path or wire byte changed, and `validate`'s verdicts are
