@@ -743,8 +743,13 @@ to 7, with these differences:
   stable CLI, whose peer does not admit it, so a plain install of both fails
   with `ERESOLVE could not resolve` (measured with npm 11.3.0, schema
   `0.3.0-beta.1` beside CLI `0.1.0`). A beta dispatch never opens that
-  window, because `latest` does not move. Dispatch the CLI as soon as the
-  schema is published. If the CLI's verify or publish fails, either fix
+  window, because `latest` does not move. The CLI workflow's verify job
+  builds the schema tarball from the same commit and does not need it on the
+  registry, so dispatch both workflows from the one commit up front and wait
+  until both verify jobs are green; then approve the schema's `npm-publish`,
+  check its dist-tags, and approve the CLI's straight after. A CLI verify
+  failure is then found before `latest` moves, and the window is the CLI's
+  publish job alone. If the CLI's publish fails, either fix
   forward (a commit on `main`, the CLI dispatched from it, and both release
   notes corrected on publish day where they say both packages come from one
   commit), or put `latest` back by hand,
