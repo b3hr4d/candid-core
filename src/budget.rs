@@ -231,8 +231,9 @@ enum Frame {
 /// arbitrary JSON) are skipped. Documents that fail the typed decode keep the
 /// decode's own error, exactly as before.
 ///
-/// One forward pass with an explicit stack (ADR 0005): no recursion, and no
-/// allocation beyond one frame per open object or array.
+/// One forward pass with an explicit stack (ADR 0005): no recursion. It
+/// allocates one frame per open object or array, plus a short-lived string for
+/// each key written with an escape, which it decodes as serde does.
 fn refuse_struct_sequences(input: &[u8], opaque_root_keys: &[&str]) -> Result<(), String> {
     let mut stack: Vec<Frame> = Vec::new();
     // Depth inside an opaque value; zero outside one.

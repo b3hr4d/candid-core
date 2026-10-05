@@ -130,9 +130,11 @@ and therefore the identities computed over them. Pin an exact version.
   error variant, code, or serialized shape changed.
 
   The check is one forward pass over the bytes the typed decode has just
-  accepted, linear in their length, with an explicit stack and no allocation
-  beyond one frame per open object or array. `tests/struct_sequence_form.rs`
-  pins each position and each loader entry point.
+  accepted, linear in their length, with an explicit stack. It allocates one
+  frame per open object or array, plus a short-lived string for each key
+  written with an escape, which it decodes as serde does.
+  `tests/struct_sequence_form.rs` pins each position and each loader entry
+  point.
 
 ## 0.1.0-beta.3 — published 2026-08-24
 
