@@ -147,14 +147,17 @@ const VALIDATE_DEPTH: usize = 256;
 /// `maxTypeTableEntries` (`table_entries_*`, aligned with the reference's
 /// `max_type_len`), `maxNumericBytes` for a skipped `nat` and `int`
 /// (`numeric_*_groups`), `maxDepth` on the decoded
-/// variant, opt, record and vec chains, coercion-inserted `opt`s, the skip of
+/// variant, opt, record and vec chains, coercion-inserted `opt`s, the `null`
+/// supplied for an omitted `opt` field, the skip of
 /// an extra field, an absorbed value, an expected `reserved` argument and
 /// field, an extra argument (vec, opt and variant chains) and a record nested
 /// in a skipped value, and on
-/// validate's vec, variant, record, tuple and opt chains; and `maxElements`
+/// validate's vec, variant, record, tuple and opt chains and an `opt` field's
+/// `null`; and `maxElements`
 /// for a skipped vec (of `null`, of a variant, of a non-empty record), a
-/// decoded vec of `null`, a blob and a decoded vec of mixed elements (record,
-/// variant, `opt`, tuple, text), and validate's vec, record and mixed values.
+/// decoded vec of `null`, a blob, a decoded vec of mixed elements (record,
+/// variant, `opt`, tuple, text) and a decoded vec of records omitting an
+/// `opt` field, and validate's vec, record and mixed values.
 fn runtime_budgets() -> Value {
     json!({
         "decode": {

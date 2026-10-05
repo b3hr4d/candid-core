@@ -144,6 +144,22 @@ schema's longest hop chain (see the last bullet but one).
   as `decode` already refused it. At the default `maxDepth` of 256 no
   compiler-accepted type reaches it: the compiler's `max_type_depth` counts
   that `null` too.
+- **Behaviour change: a field the wire omits is charged at its own level.**
+  When a message omits a record field (or a trailing argument) whose
+  expected type is `opt`, `null` or `reserved`, `decode` supplies `null`;
+  it now charges that `null` one depth check at the field's own level and
+  one element, as it charges the same `null` read from the wire. Before, it
+  charged nothing. **This refuses input `decode` accepted before:** a record
+  at exactly `maxDepth` whose message omits such a field (the field's `null`
+  one level past the bound, now `value_depth` at the field's path), and a
+  message whose omitted fields take it past `maxElements` (now
+  `value_elements`; a `vec record {}` of 500,000 elements read at
+  `vec record { x : opt nat }` costs 1,000,001 elements, where it cost
+  500,001). Such a value was one `validate` refuses under the same
+  `maxDepth`; the refusal now matches `validate`'s, with the same path and
+  `observed` depth, and as candid-core's `validate_host_value` refuses the
+  same value. A missing required field is still charged nothing, so an
+  enclosing `opt` absorbs it as before.
 - **A `rec` chain has a cap of its own.** More than `maxDepth` consecutive
   hops resolving one reference are refused with `value_depth`, `observed`
   being the chain's length — the bound `encode`'s type table already applied

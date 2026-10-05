@@ -28,9 +28,11 @@
 // The asymmetry is the spec's, not ours: an expected `opt` *absorbs* content
 // mismatches to `null` (constituent mismatch, reserved, absurd pairs — never
 // a hard error at the content level), while an unknown variant tag or a
-// missing non-optional record field is a hard error. Extra wire record
-// fields and extra trailing arguments are skipped, charging the same budgets
-// as decoded values; wire `func`/`service`/future types are skippable
+// missing non-optional record field is a hard error. A missing opt-like
+// field (or trailing argument) decodes as `null`, charged at its own level
+// as the same `null` read from the wire is. Extra wire record fields and
+// extra trailing arguments are skipped, charging the same budgets as
+// decoded values; wire `func`/`service`/future types are skippable
 // wherever skipping is legal, and a value of such a type at a position the
 // expected schema actually needs fails closed (`type_mismatch`) — no schema
 // kind maps to them in this slice. A wire `nat` value is accepted at
@@ -250,9 +252,10 @@ export interface CodecOptions {
   readonly maxDepth?: number;
   /**
    * Traversal element budget, mirroring validate's accounting: one per value
-   * decoded, skipped or encoded (a `rec` hop is none), one per examined
-   * record or variant key on encode, and none on encode for a tag-only arm's
-   * `null`, which is spelled by absence.
+   * decoded, skipped or encoded (a `rec` hop is none; the `null` decode
+   * supplies for an opt-like field the wire omits is a decoded value), one
+   * per examined record or variant key on encode, and none on encode for a
+   * tag-only arm's `null`, which is spelled by absence.
    */
   readonly maxElements?: number;
   /** Byte cap for one unbounded `nat`/`int` encoding. */
@@ -2216,7 +2219,7 @@ function decodeWith(
       } else {
         // A missing trailing argument follows the record-field rule: null
         // for opt-like expected types, a hard error otherwise.
-        values.push(decoder.missingValue(schemas[index] as SchemaNode, path));
+        values.push(decoder.missingValue(schemas[index] as SchemaNode, path, 0));
       }
       path.pop();
     }
@@ -2784,14 +2787,21 @@ class Decoder {
   /**
    * The record-field rule for a value the wire does not carry: `null` when
    * the expected type is opt-like (`opt`, `null`, `reserved`), a hard error
-   * otherwise.
+   * otherwise. The `null` is a node of the decoded value at `depth`, the
+   * field's own level, so it is charged there exactly as the same `null`
+   * decoded from the wire would be, and as `validate` charges it: one depth
+   * check and one element, so the supplied `null` never makes a decoded
+   * value one that `validate` refuses on `value_depth` under the same
+   * `maxDepth`. A missing required field is charged nothing: there is no
+   * value, and `validate` reports a missing field without one.
    */
-  missingValue(schema: SchemaNode, path: PathSegment[]): unknown {
+  missingValue(schema: SchemaNode, path: PathSegment[], depth: number): unknown {
     const node = this.resolveSchema(schema, path);
     if (
       node.kind === "opt" ||
       (node.kind === "primitive" && (node.primitive === "null" || node.primitive === "reserved"))
     ) {
+      this.step(path, depth);
       return null;
     }
     // A coercion failure, not a hard one: the spec's opt fallback rule
@@ -3233,7 +3243,7 @@ class Decoder {
       while (frame.cursor < expected.length && expected[frame.cursor].id < entry.ids[w]) {
         const field = expected[frame.cursor];
         path.push(field.key);
-        out[field.key] = this.missingValue(field.schema as SchemaNode, path);
+        out[field.key] = this.missingValue(field.schema as SchemaNode, path, depth + 1);
         path.pop();
         frame.cursor += 1;
       }
@@ -3257,7 +3267,7 @@ class Decoder {
     while (frame.cursor < expected.length) {
       const field = expected[frame.cursor];
       path.push(field.key);
-      out[field.key] = this.missingValue(field.schema as SchemaNode, path);
+      out[field.key] = this.missingValue(field.schema as SchemaNode, path, depth + 1);
       path.pop();
       frame.cursor += 1;
     }

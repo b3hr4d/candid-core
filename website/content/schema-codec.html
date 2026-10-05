@@ -260,7 +260,8 @@ if (encoded.ok) {
   <li>
     <strong>A missing non-optional record field is a hard error</strong>
     (<code>missing_field</code>); a missing field whose expected type is opt-like decodes as
-    <code>null</code>.
+    <code>null</code>, charged against <code>maxDepth</code> and <code>maxElements</code> at the
+    field's own level, as the same <code>null</code> read from the wire is.
   </li>
   <li>
     <strong>Extra wire record fields and extra trailing arguments are skipped</strong> — and
@@ -369,9 +370,10 @@ export interface CodecOptions {
   readonly maxDepth?: number;
   /**
    * Traversal element budget, mirroring validate's accounting: one per value
-   * decoded, skipped or encoded (a `rec` hop is none), one per examined
-   * record or variant key on encode, and none on encode for a tag-only arm's
-   * `null`, which is spelled by absence.
+   * decoded, skipped or encoded (a `rec` hop is none; the `null` decode
+   * supplies for an opt-like field the wire omits is a decoded value), one
+   * per examined record or variant key on encode, and none on encode for a
+   * tag-only arm's `null`, which is spelled by absence.
    */
   readonly maxElements?: number;
   /** Byte cap for one unbounded `nat`/`int` encoding. */
