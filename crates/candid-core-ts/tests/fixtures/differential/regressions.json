@@ -145,6 +145,14 @@
       "agrees": "Both accept: the reference's quota is sized from the message, so it judges it."
     },
     {
+      "name": "contract_field_as_array",
+      "target": "contract",
+      "note": "A record field written as a JSON array, serde's sequence form of the struct. Contract::from_json accepts it; schemaFromContract refuses it (invalid_contract_document) (#235, finding 14).",
+      "origin": "minimized from campaign case c/7011301/19",
+      "did": "type R = record { a : nat; b : nat };\n",
+      "ops": [{"op": "set", "path": ["types", 0, "fields", 0], "value": [97, 1]}]
+    },
+    {
       "name": "contract_declarations_absent",
       "target": "contract",
       "note": "A Contract document with its empty declarations key removed. Contract::from_json accepts it (the key defaults to empty); schemaFromContract refuses invalid_contract_document (declarations must be an array). The owner's call (#228, item 9).",
