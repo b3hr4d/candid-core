@@ -1,5 +1,5 @@
 {
-  "about": "Minimized regression vectors of the issue #196 differential fuzz: each divergence the campaigns found, minimized, and agreement vectors at boundaries the generated corpus does not cross (`agrees`: why both sides answer alike). `origin` says where a vector came from: the campaign case it was minimized from, or that it was written by hand (after a run-3 case of the first campaign, generator e62f427, whose inputs no commit on this branch regenerates). Each runs in its own environment (its `did`); the Rust driver records the reference verdict into tests/goldens/differential/corpus.jsonl, and the TypeScript replay holds each either to agreement (`agrees`) or to the exact symptom listed for its case id, with its issue, in tests/goldens/differential/divergences.json. A vector stays for good (#62): when its divergence is fixed, it becomes an agreement vector. A vector whose source candid-core's compiler refuses (an `opt`-only cycle, refused since #234; the reference still accepts the source) carries `contract`, the graph the compiler wrote for that source before #234 (`types`, `declarations`, an optional `actor`); the Rust driver builds that Contract through the model, as the Contract loaders still accept it, and marks the environment `compile_refused` with the compiler's code.",
+  "about": "Minimized regression vectors of the issue #196 differential fuzz: each divergence the campaigns found, minimized, and agreement vectors at boundaries the generated corpus does not cross (`agrees`: why both sides answer alike). `origin` says where a vector came from: the campaign case it was minimized from, or that it was written by hand (after a run-3 case of the first campaign, generator e62f427, whose inputs no commit on this branch regenerates). Each runs in its own environment (its `did`); the Rust driver records the reference verdict into tests/goldens/differential/corpus.jsonl, and the TypeScript replay holds each either to agreement (`agrees`) or to the exact symptom listed for its case id, with its issue, in tests/goldens/differential/divergences.json. A vector stays for good (#62): when its divergence is fixed, it becomes an agreement vector. A vector whose source candid-core's compiler refuses (an `opt`-only cycle, refused since #234; the reference still accepts the source) carries `contract`, the graph the compiler wrote for that source before #234 (`types`, `declarations`, an optional `actor`); the Rust driver builds that Contract through the model, as the Contract loaders still accept it, and marks the environment `compile_refused` with the compiler's code and the issue that decided the refusal. Such a vector names that issue in its own `compile_refused` (234 for an `opt`-only cycle), and the driver refuses a `contract` without it.",
   "vectors": [
     {
       "name": "leb128_overlong_nat_value",
@@ -205,6 +205,7 @@
       "agrees": "Both accept: within the runtime's maxDepth.",
       "did": "type T0 = opt T0;\n",
       "contract": {"types": [{"kind": "opt", "inner": 0}], "declarations": [{"name": "T0", "type": 0}]},
+      "compile_refused": 234,
       "expected": ["T0"],
       "hex": "4449444c016e00010001010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010100"
     },
@@ -216,6 +217,7 @@
       "agrees": "Both accept: the deepest opt node within the runtime's maxDepth (255 steps).",
       "did": "type T0 = opt T0;\n",
       "contract": {"types": [{"kind": "opt", "inner": 0}], "declarations": [{"name": "T0", "type": 0}]},
+      "compile_refused": 234,
       "expected": ["T0"],
       "hex": "4449444c016e0001000101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010100"
     },
@@ -226,6 +228,7 @@
       "origin": "written for the issue #196 review",
       "did": "type T0 = opt T0;\n",
       "contract": {"types": [{"kind": "opt", "inner": 0}], "declarations": [{"name": "T0", "type": 0}]},
+      "compile_refused": 234,
       "expected": ["T0"],
       "hex": "4449444c016e000100010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010100"
     },
@@ -1034,6 +1037,7 @@
       "agrees": "Both accept: the deepest opt chain both aligned budgets admit.",
       "did": "type T = opt T;\n",
       "contract": {"types": [{"kind": "opt", "inner": 0}], "declarations": [{"name": "T", "type": 0}]},
+      "compile_refused": 234,
       "type": "T",
       "value": ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["n"]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]
     },
@@ -1045,6 +1049,7 @@
       "agrees": "Both refuse on value_depth: one past both aligned budgets.",
       "did": "type T = opt T;\n",
       "contract": {"types": [{"kind": "opt", "inner": 0}], "declarations": [{"name": "T", "type": 0}]},
+      "compile_refused": 234,
       "type": "T",
       "value": ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["n"]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]
     },
@@ -1186,6 +1191,7 @@
       "agrees": "Both accept: exactly at the runtime's maxDepth (256 steps) on the skip path of an opt.",
       "did": "type O = opt O;\n",
       "contract": {"types": [{"kind": "opt", "inner": 0}], "declarations": [{"name": "O", "type": 0}]},
+      "compile_refused": 234,
       "expected": [],
       "hex": "4449444c016e000100(01*256)00"
     },
@@ -1196,6 +1202,7 @@
       "origin": "written for the issue #196 review, fix round 3",
       "did": "type O = opt O;\n",
       "contract": {"types": [{"kind": "opt", "inner": 0}], "declarations": [{"name": "O", "type": 0}]},
+      "compile_refused": 234,
       "expected": [],
       "hex": "4449444c016e000100(01*257)00"
     },

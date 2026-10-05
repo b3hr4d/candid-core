@@ -30,7 +30,8 @@
 //! refusal (`reference=ok compiler=error`); the `opt_cycle` check stays as a
 //! backstop, and a count under it would mean the compiler accepted one. A
 //! regression vector whose source the compiler refuses supplies its Contract
-//! instead (`build_with_contract`).
+//! instead, and names the issue that decided the refusal
+//! (`build_with_contract`).
 //!
 //! # No case is judged outside what both sides judge
 //!
@@ -200,10 +201,18 @@ struct Built {
     types: TypeEnv,
     envelope: Value,
     contract: candid_core::Contract,
-    /// The diagnostic code candid-core's compiler refuses the source with,
-    /// for a regression vector that supplies its Contract instead
-    /// (`build_with_contract`); `None` when the envelope was compiled.
-    compile_refused: Option<String>,
+    /// candid-core's compiler refusal of the source, for a regression vector
+    /// that supplies its Contract instead (`build_with_contract`); `None`
+    /// when the envelope was compiled.
+    compile_refused: Option<CompileRefused>,
+}
+
+/// A deliberate compile-time refusal of a source the reference accepts: the
+/// compiler's diagnostic code and the issue that decided it, recorded per
+/// environment so the corpus lists each such case with its issue.
+struct CompileRefused {
+    code: String,
+    issue: u64,
 }
 
 fn reference_env(source: &str) -> Result<TypeEnv, &'static str> {
@@ -286,9 +295,11 @@ fn build_from_source(env: types::Env) -> Result<Built, String> {
 /// `actor`, as a Contract document writes them): the Contract loaders still
 /// accept such a graph, so the runtime still meets it. The Contract is built
 /// through the model and normalized as `envelope_of` normalizes a compiled
-/// one; it carries no field names. Panics unless the compiler does refuse
-/// the source, so a supplied Contract never stands in for one it compiles.
-fn build_with_contract(source: &str, document: &Value) -> Result<Built, String> {
+/// one; it carries no field names. Fails unless the compiler does refuse
+/// the source, so a supplied Contract never stands in for one it compiles,
+/// and the vector names the issue (`compile_refused`) that decided the
+/// refusal.
+fn build_with_contract(source: &str, document: &Value, issue: u64) -> Result<Built, String> {
     let types = reference_env(source).map_err(|reason| format!("reference={reason}"))?;
     let code = match candid_core::compile_did(source) {
         Ok(_) => return Err("the compiler accepts the source; drop its contract".to_string()),
@@ -323,7 +334,7 @@ fn build_with_contract(source: &str, document: &Value) -> Result<Built, String> 
         types,
         envelope,
         contract,
-        compile_refused: Some(code),
+        compile_refused: Some(CompileRefused { code, issue }),
     })
 }
 
@@ -787,8 +798,8 @@ fn env_line(env_id: &str, built: &Built) -> Value {
         "did": built.env.source,
         "envelope": built.envelope,
     });
-    if let Some(code) = &built.compile_refused {
-        line["compile_refused"] = json!(code);
+    if let Some(refused) = &built.compile_refused {
+        line["compile_refused"] = json!({ "code": refused.code, "issue": refused.issue });
     }
     line
 }
@@ -967,8 +978,19 @@ fn generate_regressions(lines: &mut Vec<Value>) {
             .unwrap_or_else(|reason| {
                 panic!("regression {name}: both sides must accept its source ({reason})")
             }),
-            Some(document) => build_with_contract(&source, document)
-                .unwrap_or_else(|reason| panic!("regression {name}: {reason}")),
+            Some(document) => {
+                let issue = vector["compile_refused"]
+                    .as_u64()
+                    .filter(|issue| *issue > 0)
+                    .unwrap_or_else(|| {
+                        panic!(
+                            "regression {name}: a vector that supplies its contract names the \
+                             issue that decided the compiler's refusal (`compile_refused`)"
+                        )
+                    });
+                build_with_contract(&source, document, issue)
+                    .unwrap_or_else(|reason| panic!("regression {name}: {reason}"))
+            }
         };
         let env_id = format!("r/{name}");
         lines.push(env_line(&env_id, &built));
@@ -1298,8 +1320,10 @@ fn differential_rejudge() {
             match case["kind"].as_str() {
                 Some("env") => {
                     let source = case["did"].as_str().expect("did").to_string();
-                    let rebuilt = if case["compile_refused"].is_string() {
-                        build_with_contract(&source, &case["envelope"]["contract"])
+                    let refused = &case["compile_refused"];
+                    let rebuilt = if refused.is_object() {
+                        let issue = refused["issue"].as_u64().expect("a refusal's issue");
+                        build_with_contract(&source, &case["envelope"]["contract"], issue)
                     } else {
                         build_from_source(types::Env {
                             source,
@@ -1314,7 +1338,11 @@ fn differential_rejudge() {
                         case["env"]
                     );
                     assert!(
-                        rebuilt.compile_refused.as_deref() == case["compile_refused"].as_str(),
+                        rebuilt
+                            .compile_refused
+                            .as_ref()
+                            .map(|refused| refused.code.as_str())
+                            == refused["code"].as_str(),
                         "{}: the compiler's verdict changed",
                         case["env"]
                     );
