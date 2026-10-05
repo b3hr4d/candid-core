@@ -1,5 +1,5 @@
 {
-  "about": "Minimized regression vectors of the issue #196 differential fuzz: each divergence the campaigns found, minimized, and agreement vectors at boundaries the generated corpus does not cross (`agrees`: why both sides answer alike). `origin` says where a vector came from: the campaign case it was minimized from, or that it was written by hand (after a run-3 case of the first campaign, generator e62f427, whose inputs no commit on this branch regenerates). Each runs in its own environment (its `did`); the Rust driver records the reference verdict into tests/goldens/differential/corpus.jsonl, and the TypeScript replay holds each either to agreement (`agrees`) or to the exact symptom listed for its case id, with its issue, in tests/goldens/differential/divergences.json. A vector stays for good (#62): when its divergence is fixed, it becomes an agreement vector.",
+  "about": "Minimized regression vectors of the issue #196 differential fuzz: each divergence the campaigns found, minimized, and agreement vectors at boundaries the generated corpus does not cross (`agrees`: why both sides answer alike). `origin` says where a vector came from: the campaign case it was minimized from, or that it was written by hand (after a run-3 case of the first campaign, generator e62f427, whose inputs no commit on this branch regenerates). Each runs in its own environment (its `did`); the Rust driver records the reference verdict into tests/goldens/differential/corpus.jsonl, and the TypeScript replay holds each either to agreement (`agrees`) or to the exact symptom listed for its case id, with its issue, in tests/goldens/differential/divergences.json. A vector stays for good (#62): when its divergence is fixed, it becomes an agreement vector. A vector whose source candid-core's compiler refuses (an `opt`-only cycle, refused since #234; the reference still accepts the source) carries `contract`, the graph the compiler wrote for that source before #234 (`types`, `declarations`, an optional `actor`); the Rust driver builds that Contract through the model, as the Contract loaders still accept it, and marks the environment `compile_refused` with the compiler's code and the issue that decided the refusal. Such a vector names that issue in its own `compile_refused` (234 for an `opt`-only cycle), and the driver refuses a `contract` without it.",
   "vectors": [
     {
       "name": "leb128_overlong_nat_value",
@@ -147,10 +147,20 @@
     {
       "name": "contract_field_as_array",
       "target": "contract",
-      "note": "A record field written as a JSON array, serde's sequence form of the struct. Contract::from_json accepts it; schemaFromContract refuses it (invalid_contract_document) (#235, finding 14).",
+      "note": "A record field written as a JSON array, serde's sequence form of the struct. Contract::from_json accepted it; schemaFromContract refuses it (invalid_contract_document); Contract::from_json refuses it too since #235 (finding 14).",
       "origin": "minimized from campaign case c/7011301/19",
       "did": "type R = record { a : nat; b : nat };\n",
-      "ops": [{"op": "set", "path": ["types", 0, "fields", 0], "value": [97, 1]}]
+      "ops": [{"op": "set", "path": ["types", 0, "fields", 0], "value": [97, 1]}],
+      "agrees": "Both refuse since #235: the Rust loaders refuse a struct written as a JSON array (invalid type: sequence), as schemaFromContract does."
+    },
+    {
+      "name": "contract_declaration_as_array",
+      "target": "contract",
+      "note": "A declaration written as a JSON array, serde's sequence form of the struct, the issue's second repro. Contract::from_json accepted it; schemaFromContract refuses it (invalid_contract_document); Contract::from_json refuses it too since #235 (finding 14).",
+      "origin": "written by hand from #235's second repro",
+      "did": "type R = record { a : nat; b : nat };\n",
+      "ops": [{"op": "set", "path": ["declarations", 0], "value": ["R", 0]}],
+      "agrees": "Both refuse since #235: the Rust loaders refuse a struct written as a JSON array (invalid type: sequence), as schemaFromContract does."
     },
     {
       "name": "contract_declarations_absent",
@@ -204,6 +214,8 @@
       "origin": "written for the issue #196 review",
       "agrees": "Both accept: within the runtime's maxDepth.",
       "did": "type T0 = opt T0;\n",
+      "contract": {"types": [{"kind": "opt", "inner": 0}], "declarations": [{"name": "T0", "type": 0}]},
+      "compile_refused": 234,
       "expected": ["T0"],
       "hex": "4449444c016e00010001010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010100"
     },
@@ -214,6 +226,8 @@
       "origin": "written for the issue #196 review",
       "agrees": "Both accept: the deepest opt node within the runtime's maxDepth (255 steps).",
       "did": "type T0 = opt T0;\n",
+      "contract": {"types": [{"kind": "opt", "inner": 0}], "declarations": [{"name": "T0", "type": 0}]},
+      "compile_refused": 234,
       "expected": ["T0"],
       "hex": "4449444c016e0001000101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010100"
     },
@@ -223,6 +237,8 @@
       "note": "opt T0 nested 129 levels: 257 depth steps (measured), one past the runtime's maxDepth (256); the reference, which has no depth budget, accepts (#231).",
       "origin": "written for the issue #196 review",
       "did": "type T0 = opt T0;\n",
+      "contract": {"types": [{"kind": "opt", "inner": 0}], "declarations": [{"name": "T0", "type": 0}]},
+      "compile_refused": 234,
       "expected": ["T0"],
       "hex": "4449444c016e000100010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010100"
     },
@@ -1030,6 +1046,8 @@
       "origin": "written for the issue #196 fix round 1",
       "agrees": "Both accept: the deepest opt chain both aligned budgets admit.",
       "did": "type T = opt T;\n",
+      "contract": {"types": [{"kind": "opt", "inner": 0}], "declarations": [{"name": "T", "type": 0}]},
+      "compile_refused": 234,
       "type": "T",
       "value": ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["n"]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]
     },
@@ -1040,6 +1058,8 @@
       "origin": "written for the issue #196 fix round 1",
       "agrees": "Both refuse on value_depth: one past both aligned budgets.",
       "did": "type T = opt T;\n",
+      "contract": {"types": [{"kind": "opt", "inner": 0}], "declarations": [{"name": "T", "type": 0}]},
+      "compile_refused": 234,
       "type": "T",
       "value": ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["o", [["some", ["n"]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]
     },
@@ -1180,6 +1200,8 @@
       "origin": "written for the issue #196 review, fix round 3",
       "agrees": "Both accept: exactly at the runtime's maxDepth (256 steps) on the skip path of an opt.",
       "did": "type O = opt O;\n",
+      "contract": {"types": [{"kind": "opt", "inner": 0}], "declarations": [{"name": "O", "type": 0}]},
+      "compile_refused": 234,
       "expected": [],
       "hex": "4449444c016e000100(01*256)00"
     },
@@ -1189,6 +1211,8 @@
       "note": "skip_extra_arg_opt_257_levels one level deeper: the innermost skipped opt costs 257 steps (measured), one past maxDepth; the runtime refuses (value_depth), the reference, which has no depth budget, accepts (#103, scope item 3: an explicit recursion depth limit; no rec hop on this path).",
       "origin": "written for the issue #196 review, fix round 3",
       "did": "type O = opt O;\n",
+      "contract": {"types": [{"kind": "opt", "inner": 0}], "declarations": [{"name": "O", "type": 0}]},
+      "compile_refused": 234,
       "expected": [],
       "hex": "4449444c016e000100(01*257)00"
     },

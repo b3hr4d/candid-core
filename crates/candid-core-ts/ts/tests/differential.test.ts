@@ -64,6 +64,8 @@ interface Listed {
 interface Vector {
   readonly name: string;
   readonly agrees?: string;
+  /** The issue that decided the compiler's refusal of the vector's source. */
+  readonly compile_refused?: number;
 }
 
 interface DivergenceList {
@@ -256,6 +258,30 @@ test("every minimized regression vector is listed or agrees as its entry says", 
       assert.strictEqual(status.get(id), "agree", `${id} must agree with the reference`);
     }
   }
+});
+
+// A source candid-core's compiler refuses while the reference accepts it is
+// a deliberate refusal, not a divergence of the runtime: such an environment
+// is a regression vector run on the Contract it supplies, and it is listed
+// by its own id with the issue that decided the refusal, never by a rule.
+test("every environment the compiler refuses names its vector, code and issue", () => {
+  const named = new Map(
+    vectors
+      .filter((vector) => vector.compile_refused !== undefined)
+      .map((vector) => [`r/${vector.name}`, vector.compile_refused]),
+  );
+  const refused = new Map<string, number>();
+  for (const [id, env] of corpus.envs) {
+    if (env.compile_refused === undefined) {
+      continue;
+    }
+    assert(id.startsWith("r/"), `${id}: only a regression vector supplies its Contract`);
+    assert(env.compile_refused.code.length > 0, `${id}: no compiler code`);
+    const { issue } = env.compile_refused;
+    assert(Number.isInteger(issue) && issue > 0, `${id}: no issue number`);
+    refused.set(id, issue);
+  }
+  assert.deepStrictEqual(sorted(refused), sorted(named));
 });
 
 /** The structural type-table edits the generator applies (`wire::mutate_table`, `contract::structural`). */

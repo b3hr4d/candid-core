@@ -387,6 +387,36 @@ fn duplicate_declarations_across_sources_are_rejected_the_same_way() {
 }
 
 #[test]
+fn an_imported_opt_only_cycle_is_rejected_the_same_way() {
+    // Issue #234: candid-core's own refusal, after the upstream checker has
+    // accepted the bundle, scoped to the source that declares the type.
+    let diagnostic = assert_backends_reject(
+        "opt-only cycle through an alias",
+        "memory:/entry.did",
+        &[
+            (
+                "memory:/entry.did",
+                "import \"types.did\";\nservice : { read: () -> (A) query };",
+            ),
+            ("memory:/types.did", "type A = B;\ntype B = opt A;"),
+        ],
+    );
+    assert_eq!(diagnostic.code, "did_type_check_error");
+    assert_eq!(diagnostic.phase, Some(DiagnosticPhase::TypeCheck));
+    assert_eq!(
+        diagnostic.span,
+        Some(SourceSpan::source_only("memory:/types.did"))
+    );
+    assert!(
+        diagnostic
+            .message
+            .starts_with("type A lies on a cycle that passes only through opt"),
+        "{}",
+        diagnostic.message
+    );
+}
+
+#[test]
 fn a_non_service_actor_is_rejected_the_same_way() {
     let diagnostic = assert_backends_reject(
         "actor is not a service",

@@ -196,7 +196,9 @@ type Plain = OptDomain<bigint>; // bigint | null, unboxed
 
 <p>
   The decision is made on the resolved inner node, so a declared alias and a recursive type
-  (<code>type Chain = opt Chain</code>) box the same way, and <code>opt empty</code> stays
+  box the same way (an <code>opt</code> node that is its own inner, the graph of
+  <code>type Chain = opt Chain</code>, boxes too, though the compiler now refuses that source),
+  and <code>opt empty</code> stays
   <code>null</code>. Validation and encoding require <code>{ some: v }</code> for a present value (a
   bare <code>v</code> is <code>invalid_type</code>, and under <code>opt reserved</code>
   <code>undefined</code> is no longer read as present), and issues inside a box carry the

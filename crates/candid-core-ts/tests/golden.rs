@@ -194,8 +194,8 @@ fn golden_arms() {
 }
 
 /// Collapsing options — `opt opt`, `opt null`, `opt reserved`, through
-/// declared aliases, recursion (`type Chain = opt Chain`), mutual recursion,
-/// variant arms, and an actor — box as `{ some: T } | null`, while
+/// declared aliases, recursion through opt (`Pong = opt Ping`, `Ping = opt
+/// record { pong : Pong }`), variant arms, and an actor — box as `{ some: T } | null`, while
 /// `opt empty` stays the plain `null`. The tsc equality gate proves every
 /// boxed alias equals what `c.opt` infers through `OptDomain`.
 #[test]
@@ -420,7 +420,6 @@ fn collapsing_options_box() {
             "type Inner = opt nat;\ntype Outer = opt Inner;",
             "type $Outer = { some: $Inner } | null;",
         ),
-        ("type L = opt L;", "type $L = { some: $L } | null;"),
         ("type E = opt empty;", "type $E = never | null;"),
         ("type N = opt nat;", "type $N = bigint | null;"),
     ] {
@@ -437,6 +436,29 @@ fn collapsing_options_box() {
         // runtime's `OptDomain` and walkers derive from the same node rule.
         assert!(output.contains("$.c.opt("), "{source}: {output}");
     }
+
+    // An opt whose inner is its own node boxes too. The compiler refuses
+    // `type L = opt L;` since issue #234 (a cycle through opt alone), but a
+    // Contract document holding that graph still loads, so the generator
+    // still meets it: the same graph, built through the model.
+    let contract = candid_core::ContractDraft::new(
+        vec![candid_core::TypeNode::Opt { inner: 0 }],
+        vec![candid_core::Declaration {
+            name: "L".to_string(),
+            ty: 0,
+        }],
+        None,
+    )
+    .build()
+    .expect("the model accepts a cycle through opt alone");
+    let output = generate_module(&contract, &TsNames::new(), &TsOptions::default())
+        .expect("a self-cycle through opt generates")
+        .module;
+    assert!(
+        output.contains("type $L = { some: $L } | null;"),
+        "{output}"
+    );
+    assert!(output.contains("$.c.opt("), "{output}");
 }
 
 /// The caller-supplied module specifier is escaped, never interpolated: a

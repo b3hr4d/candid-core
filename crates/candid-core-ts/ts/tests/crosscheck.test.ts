@@ -357,7 +357,6 @@ const FIXTURES: readonly Fixture[] = [
       MaybeText: [null, "x", { some: "x" }],
       AliasedOuter: [null, { some: null }, { some: "x" }, "x", { some: 5 }],
       Nothing: [null, 0],
-      Chain: [null, { some: null }, { some: { some: { some: null } } }, { some: {} }, { some: 1 }],
       Ping: [
         null,
         { pong: null },

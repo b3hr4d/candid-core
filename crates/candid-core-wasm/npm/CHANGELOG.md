@@ -96,6 +96,26 @@ with the toolchain and the engine.
   writes is byte-identical to what 0.2.0-beta.1 writes for the same input, and
   `didToModule`, which takes `.did` sources, returns the same result.
 
+### A type on a cycle through `opt` alone is refused
+
+The embedded compiler now refuses a type that lies on a cycle passing only
+through `opt`: `type T = opt T;`, `type T = opt opt T;`,
+`type A = opt B; type B = opt A;`, or the same through an alias. Decoding a
+value that is not an `opt` at such a type unwraps `opt` without end, so no
+decoder can answer for it; a generated schema for it ended in a depth refusal.
+
+- **This refuses files that `gen` accepted before**: `gen`, `didToContract`
+  and `didToModule` report `did_type_check_error`, naming the type ("type T
+  lies on a cycle that passes only through opt; …"), through the existing
+  diagnostic path (the `{ ok: false, diagnostics }` document, or `--json`)
+  with exit status 1, and write nothing for that entry. The upstream Candid
+  checker accepts these files; the refusal is candid-core's own.
+- **A cycle with any other constructor on it still compiles**: `type L = opt
+  record { head : nat; tail : L }`, `type T = opt vec T`, `type T = record {
+  a : opt T }`, `type T = opt variant { a : T }`.
+- **Nothing else moves.** Every other file generates the same module and the
+  same envelope, with the same identities and documentation, as before.
+
 ## 0.2.0-beta.1 — 2026-10-02
 
 Embeds `candid-core` 0.1.0-beta.3 and the `candid-core-ts` generator from the

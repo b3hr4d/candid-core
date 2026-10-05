@@ -353,11 +353,6 @@ const VECTORS: &[(&str, &[Case])] = &[
                 textual: "(opt opt \"x\")",
             },
             Case {
-                name: "chain_three",
-                declaration: "Chain",
-                textual: "(opt opt opt null)",
-            },
-            Case {
                 name: "pong_some_record",
                 declaration: "Pong",
                 textual: "(opt opt record { pong = opt null })",

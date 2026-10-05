@@ -91,9 +91,10 @@ impl Compilation {
         context: &crate::RuntimeContext,
     ) -> Result<Self, crate::ContractJsonError> {
         let mut budget = context.budget();
-        let raw: RawCompilation = crate::budget::decode_bounded(&mut budget, input.len(), || {
-            serde_json::from_str(input)
-        })?;
+        let raw: RawCompilation =
+            crate::budget::decode_bounded(&mut budget, input.as_bytes(), &[], || {
+                serde_json::from_str(input)
+            })?;
         Self::try_from_raw_with_budget(raw.contract, raw.source_info, &mut budget)
             .map_err(crate::ContractJsonError::InvalidContract)
     }
@@ -111,7 +112,7 @@ impl Compilation {
         context: &crate::RuntimeContext,
     ) -> Result<Self, crate::ContractJsonError> {
         let mut budget = context.budget();
-        let raw: RawCompilation = crate::budget::decode_bounded(&mut budget, input.len(), || {
+        let raw: RawCompilation = crate::budget::decode_bounded(&mut budget, input, &[], || {
             serde_json::from_slice(input)
         })?;
         Self::try_from_raw_with_budget(raw.contract, raw.source_info, &mut budget)

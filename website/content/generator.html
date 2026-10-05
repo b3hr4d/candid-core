@@ -497,6 +497,20 @@ bridges straight from a compilation's provenance sidecar — the normal route wh
 <code>.did</code> yourself. Only labels whose provenance kind is <code>Named</code> are recorded: a
 numeric Candid label carries no name and must keep its <code>_N_</code> rendering.</p>
 
+<p><strong>Known limitation (issue #229).</strong> The table is keyed by <code>(container, id)</code>,
+and a container is a node of the canonical graph, not a declaration. Declarations whose records
+canonicalize to one node therefore share their field names, and <code>from_source_info</code> gives
+that node one name per label id. With
+<code>type A = record { c : record { d : text } }; type B = record { x : record { 100 : text } };</code>
+the label hash of <code>d</code> is 100, so both inner records are one node, and the generated
+<code>B</code> names that field <code>d</code> rather than <code>_100_</code>. The wire bytes are the
+same either way. A named spelling beats a numeric one, in any declaration and in any order. Two
+different names for one id need a 32-bit hash collision; then the name the sidecar lists last wins
+(it sorts by source file, then declaration name, then path, with the service's inline types after
+every declaration), not the first one written. Keeping names per declaration would change the
+Contract format, so it is deferred. <a href="schema-from-contract.html#a-shared-node-has-one-name-per-label-id">The
+same rule</a> applies to <code>schemaFromContract</code>.</p>
+
 <h2>Calling the generator</h2>
 
 <p>The complete path, lifted from the golden test harness. Compile <code>.did</code> text to a

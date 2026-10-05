@@ -261,8 +261,21 @@ required-features = ["compiler"]
 name = "source_bom"
 required-features = ["compiler"]
 
+# Issue #234: the compiler refuses an opt-only cycle; the native-file case
+# inside is gated on `filesystem-compiler`.
+[[test]]
+name = "opt_only_cycle"
+required-features = ["compiler"]
+
 [[test]]
 name = "source_identity_bounds"
+required-features = ["compiler"]
+
+# Every struct position of the documents the bounded loaders read, written in
+# serde's sequence form (#235); the `validate` command case inside is gated on
+# `filesystem-compiler`.
+[[test]]
+name = "struct_sequence_form"
 required-features = ["compiler"]
 
 # Installs its own counting global allocator to measure what the type-depth

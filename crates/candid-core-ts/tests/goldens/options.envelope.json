@@ -11,10 +11,6 @@
         "type": 2
       },
       {
-        "name": "Chain",
-        "type": 23
-      },
-      {
         "name": "Change",
         "type": 10
       },
@@ -52,11 +48,11 @@
       },
       {
         "name": "Ping",
-        "type": 25
+        "type": 24
       },
       {
         "name": "Pong",
-        "type": 24
+        "type": 23
       },
       {
         "name": "Settings",
@@ -70,7 +66,7 @@
     "format": "candid-core",
     "format_version": 1,
     "identities": {
-      "contract": "candid-core:contract:v1:sha256:99694ec98ad30c78f577e70bc45708bc429dda19dcacc41d8bf690cbaa3c183a",
+      "contract": "candid-core:contract:v1:sha256:38d897cd8d858d7220d06a0889c49427d165023f93b8bfc793ea7be82693799e",
       "interface": "candid-core:interface:v1:sha256:3491628e027bb20ab1c4a13bbe25ff9828c2109f64d0388755e149c93b34480d"
     },
     "producer": {
@@ -232,7 +228,7 @@
         "kind": "opt"
       },
       {
-        "inner": 23,
+        "inner": 24,
         "kind": "opt"
       },
       {
@@ -240,14 +236,10 @@
         "kind": "opt"
       },
       {
-        "inner": 26,
-        "kind": "opt"
-      },
-      {
         "fields": [
           {
             "id": 1247576056,
-            "type": 24
+            "type": 23
           }
         ],
         "kind": "record"
@@ -287,7 +279,7 @@
         "clear"
       ],
       [
-        26,
+        25,
         1247576056,
         "pong"
       ]
