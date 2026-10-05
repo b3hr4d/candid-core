@@ -520,6 +520,17 @@
       "hex": "4449444c016b026100627f01000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001"
     },
     {
+      "name": "depth_coercion_inserted_opts",
+      "target": "decode",
+      "note": "vec T0 nested 90 levels, read at T2 = vec opt T2: the coercion inserts an opt at every level, so the expected-side value nests about 180 levels although the wire nests 90. The runtime refuses past its maxDepth; the reference accepts. Intended (decode:intended:ts-limit), flagged deep_nesting from the decoded value, not the wire.",
+      "origin": "xd/5000009/2 (fix-round campaign, new generator)",
+      "did": "type T0 = vec T0;\ntype T2 = vec opt T2;\n",
+      "expected": [
+        "T2"
+      ],
+      "hex": "4449444c016d000100010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010100"
+    },
+    {
       "name": "nat_minimal_two_bytes",
       "target": "decode",
       "note": "nat 128 as its minimal two-byte group 80 01: a minimality check that also refused a minimal group would turn this into a divergence.",

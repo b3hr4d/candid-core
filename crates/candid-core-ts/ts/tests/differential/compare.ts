@@ -373,8 +373,10 @@ function flagged(ref: Reference, flag: string): boolean {
  *   external reference sequences are refused"); the reference ignores the
  *   count. Flag `future_references`.
  * - `ts-limit` (intended): `resource_limit_exceeded` where the message's
- *   values nest deeper than the default `maxDepth` always admits (127
- *   composite levels: two steps per level and one for the leaf) or number
+ *   values, or the values the reference decoded from it at the expected
+ *   types (a coercion can insert an `opt` at every level), nest deeper than
+ *   the default `maxDepth` always admits (127 composite levels: two steps
+ *   per level and one for the leaf) or number
  *   more than half `maxElements` (flags `deep_nesting`, `many_values`; see
  *   `wire::DEEP_LEVELS`): within those bounds a limit refusal is a defect.
  * - `skipped-method-utf8` (reference): a func reference's method name that is

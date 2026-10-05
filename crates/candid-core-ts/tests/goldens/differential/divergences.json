@@ -47,7 +47,7 @@
     },
     "decode:intended:ts-limit": {
       "class": "c",
-      "reason": "The runtime refuses a value nested past its maxDepth (256 depth steps by default: two per Candid level, a constructor and one rec hop, and one for a leaf) with resource_limit_exceeded; the candid crate is bounded only by its stack (the harness gives it 256 MiB). A documented policy of the runtime (ADR 0005, issue #192). Attributed only where the message's values nest deeper than 127 composite levels, which maxDepth always admits (flag deep_nesting), or number more than half maxElements (flag many_values): a limit refusal within those bounds is a plain symptom."
+      "reason": "The runtime refuses a value nested past its maxDepth (256 depth steps by default: two per Candid level, a constructor and one rec hop, and one for a leaf) with resource_limit_exceeded; the candid crate is bounded only by its stack (the harness gives it 256 MiB). A documented policy of the runtime (ADR 0005, issue #192). Attributed only where the message's values, or the values the reference decoded from it at the expected types, nest deeper than 127 composite levels, which maxDepth always admits (flag deep_nesting), or number more than half maxElements (flag many_values): a limit refusal within those bounds is a plain symptom."
     },
     "decode:reference:empty-normalization": {
       "class": "b",
@@ -158,6 +158,7 @@
     "r/contract_producer_edit": "contract:intended:producer-unchecked",
     "r/contract_rootless_arena": "contract:ts-accepts:rootless_type_arena",
     "r/contract_unknown_key": "contract:ts-accepts:json_unknown_field",
+    "r/depth_coercion_inserted_opts": "decode:intended:ts-limit",
     "r/depth_opt_129_levels": "decode:intended:ts-limit",
     "r/depth_variant_128_levels": "decode:intended:ts-limit",
     "r/empty_method_name": "decode:intended:empty-method-name",

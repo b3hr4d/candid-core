@@ -463,7 +463,9 @@ pub struct Scan {
     /// reachable from a func or service type in the table.
     pub empty_record_in_reference: bool,
     /// The deepest nesting of composite values (`opt`, `vec`, `record`,
-    /// `variant`, an absent `opt` included) the scan read.
+    /// `variant`, an absent `opt` included) the scan read; `reference_verdict`
+    /// raises it to the nesting of the values the reference decoded at the
+    /// expected types, which a coercion can make deeper.
     pub levels: usize,
     /// How many values the scan read.
     pub values: usize,
@@ -899,49 +901,82 @@ fn quota_exhausted(error: &candid::Error) -> bool {
 /// to, never anything the runtime says: the scan's properties of the bytes
 /// themselves (see `Scan::flags`).
 pub fn reference_verdict(env: &TypeEnv, bytes: &[u8], expected: &[Type]) -> Value {
-    let mut verdict = reference_verdict_unflagged(env, bytes, expected);
-    let flags = scan(bytes).flags();
+    let (mut verdict, decoded_levels) = reference_verdict_unflagged(env, bytes, expected);
+    let mut scan = scan(bytes);
+    // The runtime walks the expected types, which can nest deeper than the
+    // wire values (an `opt` the coercion inserts at every level), so the
+    // depth flag also reads the values the reference decoded.
+    scan.levels = scan.levels.max(decoded_levels);
+    let flags = scan.flags();
     if !flags.is_empty() {
         verdict["flags"] = json!(flags);
     }
     verdict
 }
 
-fn reference_verdict_unflagged(env: &TypeEnv, bytes: &[u8], expected: &[Type]) -> Value {
+/// The composite nesting of a decoded value, counted as `Scan::levels`
+/// counts it on the wire (an absent `opt` included).
+fn value_levels(value: &IDLValue) -> usize {
+    match value {
+        IDLValue::None => 1,
+        IDLValue::Opt(inner) => 1 + value_levels(inner),
+        IDLValue::Vec(items) => 1 + items.iter().map(value_levels).max().unwrap_or(0),
+        IDLValue::Blob(_) => 1,
+        IDLValue::Record(fields) => {
+            1 + fields
+                .iter()
+                .map(|field| value_levels(&field.val))
+                .max()
+                .unwrap_or(0)
+        }
+        IDLValue::Variant(variant) => 1 + value_levels(&variant.0.val),
+        _ => 0,
+    }
+}
+
+/// The verdict, and the composite nesting of the values the reference
+/// decoded (0 when it decoded none).
+fn reference_verdict_unflagged(env: &TypeEnv, bytes: &[u8], expected: &[Type]) -> (Value, usize) {
     let typed =
         guarded(|| IDLArgs::from_bytes_with_types_with_config(bytes, env, expected, &config()));
-    match typed {
-        Err(()) => json!({ "verdict": "panic" }),
-        Ok(Ok(decoded)) => {
-            let mut values = Vec::new();
-            for (value, ty) in decoded.args.iter().zip(expected) {
-                match domain(env, ty, value) {
-                    Ok(mapped) => values.push(mapped),
-                    Err(message) => {
-                        return json!({ "verdict": "mapping_error", "detail": message });
-                    }
-                }
-            }
-            json!({ "verdict": "accept", "values": values })
-        }
-        Ok(Err(error)) => {
-            if quota_exhausted(&error) {
-                return json!({ "verdict": "reject", "class": "limit" });
-            }
-            let header =
-                guarded(|| candid::de::IDLDeserialize::new_with_config(bytes, &config()).is_ok())
-                    .unwrap_or(false);
-            if !header {
-                return json!({ "verdict": "reject", "class": "header" });
-            }
-            match guarded(|| IDLArgs::from_bytes_with_config(bytes, &config())) {
-                Ok(Ok(_)) => json!({ "verdict": "reject", "class": "coercion" }),
-                Ok(Err(error)) if quota_exhausted(&error) => {
-                    json!({ "verdict": "reject", "class": "limit" })
-                }
-                _ => json!({ "verdict": "reject", "class": "malformed" }),
+    let decoded = match typed {
+        Err(()) => return (json!({ "verdict": "panic" }), 0),
+        Ok(Err(error)) => return (reference_rejection(bytes, &error), 0),
+        Ok(Ok(decoded)) => decoded,
+    };
+    let levels = decoded.args.iter().map(value_levels).max().unwrap_or(0);
+    let mut values = Vec::new();
+    for (value, ty) in decoded.args.iter().zip(expected) {
+        match domain(env, ty, value) {
+            Ok(mapped) => values.push(mapped),
+            Err(message) => {
+                return (
+                    json!({ "verdict": "mapping_error", "detail": message }),
+                    levels,
+                );
             }
         }
+    }
+    (json!({ "verdict": "accept", "values": values }), levels)
+}
+
+/// The verdict for a typed decode the reference refused, classified by its
+/// behaviour (see `reference_verdict`).
+fn reference_rejection(bytes: &[u8], error: &candid::Error) -> Value {
+    if quota_exhausted(error) {
+        return json!({ "verdict": "reject", "class": "limit" });
+    }
+    let header = guarded(|| candid::de::IDLDeserialize::new_with_config(bytes, &config()).is_ok())
+        .unwrap_or(false);
+    if !header {
+        return json!({ "verdict": "reject", "class": "header" });
+    }
+    match guarded(|| IDLArgs::from_bytes_with_config(bytes, &config())) {
+        Ok(Ok(_)) => json!({ "verdict": "reject", "class": "coercion" }),
+        Ok(Err(error)) if quota_exhausted(&error) => {
+            json!({ "verdict": "reject", "class": "limit" })
+        }
+        _ => json!({ "verdict": "reject", "class": "malformed" }),
     }
 }
 
