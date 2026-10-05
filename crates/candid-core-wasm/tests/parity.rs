@@ -197,6 +197,31 @@ fn responses_are_deterministic() {
     assert_eq!(did_to_module(&request), did_to_module(&request));
 }
 
+/// Issue #234: the embedded compiler refuses a type on a cycle through `opt`
+/// alone, which it compiled before, on both entry points, naming the type.
+#[test]
+fn an_opt_only_cycle_is_refused() {
+    let request = single("type T = opt T;\nservice : { m : (T) -> () };");
+    for response in [did_to_contract(&request), did_to_module(&request)] {
+        let response: Value = serde_json::from_str(&response).unwrap();
+        assert_eq!(response["ok"], Value::Bool(false), "{response}");
+        let diagnostic = &response["diagnostics"][0];
+        assert_eq!(diagnostic["code"], "did_type_check_error", "{response}");
+        assert_eq!(diagnostic["phase"], "type_check", "{response}");
+        assert!(
+            diagnostic["message"]
+                .as_str()
+                .unwrap()
+                .starts_with("type T lies on a cycle that passes only through opt"),
+            "{response}"
+        );
+    }
+    // A productive cycle through opt still compiles.
+    let request = single("type L = opt record { head : nat; tail : L };");
+    let response: Value = serde_json::from_str(&did_to_contract(&request)).unwrap();
+    assert!(response["contract"].is_object(), "{response}");
+}
+
 /// Compiler diagnostics pass through verbatim, in the native CLI's failure
 /// shape, and fail closed.
 #[test]

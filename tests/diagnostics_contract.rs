@@ -70,11 +70,32 @@ fn contract_violations_keep_the_legacy_serialized_shape_exactly() {
     );
 }
 
+/// The Contract of `type Deep = opt Deep; service : {};`, built through the
+/// model: the compiler refuses that source since issue #234 (a cycle through
+/// `opt` alone), and Contract validation still accepts the graph.
+#[cfg(all(feature = "compiler", feature = "host-value"))]
+fn deep_opt_contract() -> Contract {
+    candid_core::ContractDraft::new(
+        vec![
+            candid_core::TypeNode::Opt { inner: 0 },
+            candid_core::TypeNode::Service {
+                methods: Vec::new(),
+            },
+        ],
+        vec![candid_core::Declaration {
+            name: "Deep".to_string(),
+            ty: 0,
+        }],
+        Some(candid_core::Actor::Service { service: 1 }),
+    )
+    .build()
+    .unwrap()
+}
+
 #[cfg(all(feature = "compiler", feature = "host-value"))]
 #[test]
 fn host_value_violations_keep_the_legacy_serialized_shape_exactly() {
-    let compilation = compile_did("type Deep = opt Deep; service : {};").unwrap();
-    let contract = compilation.contract();
+    let contract = &deep_opt_contract();
     let deep = contract
         .declarations()
         .iter()
@@ -98,8 +119,7 @@ fn host_value_violations_keep_the_legacy_serialized_shape_exactly() {
 #[cfg(all(feature = "compiler", feature = "host-value"))]
 #[test]
 fn host_value_resource_chain_preserves_the_exact_triple_and_path() {
-    let compilation = compile_did("type Deep = opt Deep; service : {};").unwrap();
-    let contract = compilation.contract();
+    let contract = &deep_opt_contract();
     let deep = contract
         .declarations()
         .iter()

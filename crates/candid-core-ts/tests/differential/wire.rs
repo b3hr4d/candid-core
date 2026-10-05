@@ -746,7 +746,9 @@ fn opt_run(env: &TypeEnv, ty: &Type, names: &mut Vec<String>) -> Option<usize> {
 /// (`T = opt T`, or `T = opt U; U = opt T`). Reading a non-`opt` wire value
 /// there unwraps the expected type without end on both sides: the reference
 /// until its stack guard, the runtime until `maxDepth`. Neither judges it, so
-/// the generator redraws such an environment (counted as `opt_cycle`).
+/// the generator redraws such an environment. candid-core's compiler refuses
+/// it first since #234 (counted as `reference=ok compiler=error`); this check
+/// is the backstop, counted as `opt_cycle`, for one the compiler accepted.
 pub fn opt_cycle(env: &TypeEnv, names: &[String]) -> bool {
     names
         .iter()

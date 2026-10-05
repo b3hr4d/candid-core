@@ -146,10 +146,11 @@ fn shared_subtree_fanout_exceeding_the_work_budget_fails_closed() {
 
 /// Recursive types keep compiling unchanged next to shared fan-out: only
 /// names on a reference cycle are tracked per path, and the walk still stops
-/// exactly where the un-deduplicated walk stopped.
+/// exactly where the un-deduplicated walk stopped. (`L` goes through `vec`:
+/// a cycle through `opt` alone is refused since issue #234.)
 #[test]
 fn recursive_types_still_compile_beside_shared_fanout() {
-    let source = "type L = opt L;\n\
+    let source = "type L = opt vec L;\n\
                   type Tree = variant { leaf: nat; node: record { left: Tree; right: Tree } };\n\
                   type T = record { a: L; b: L; t: Tree };\n\
                   service : { f: (T) -> (L) };";

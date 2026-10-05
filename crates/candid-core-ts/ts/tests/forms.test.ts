@@ -458,8 +458,11 @@ test("validation paths through a boxed opt resolve to form nodes", () => {
   assert.strictEqual(formNodeAt(settings, "$.label")?.control, "optional");
   // A boxed opt has no payload segment other than `.some`.
   assert.strictEqual(formNodeAt(settings, "$.label.value"), undefined);
-  // Recursion stays lazy and addressable level by level.
-  const chain = formModel(options.Chain as AnySchema);
+  // Recursion stays lazy and addressable level by level. (`type Chain = opt
+  // Chain` no longer compiles, issue #234, so the schema is built here.)
+  type Chain = { some: Chain } | null;
+  const Chain: Schema<Chain> = c.rec(() => c.opt(Chain));
+  const chain = formModel(Chain as AnySchema);
   const deep = formNodeAt(chain, "$.some.some.some");
   assert.strictEqual(deep?.control, "optional");
   assert.strictEqual(deep?.path, "$.some.some.some");

@@ -55,9 +55,11 @@ can itself be `null` in TypeScript — `opt opt`, `opt null`, `opt reserved` —
 boxes its present value as `{ some: T } | null`, because `T | null` cannot
 distinguish `None` from `Some(None)` there. Only those opts box (`opt opt nat`
 is `{ some: bigint | null } | null`; `opt nat` stays `bigint | null`), the
-test is on the inner node so aliases and recursion (`type L = opt L`) box
-alike, and the runtime's `OptDomain` type and its walkers apply the same
-rule.
+test is on the inner node so aliases and recursion box alike, and the
+runtime's `OptDomain` type and its walkers apply the same rule. A Contract
+whose opt node is its own inner (the graph of `type L = opt L`) boxes too;
+since issue #234 the compiler refuses that source, so only a loaded or
+model-built Contract holds it.
 
 **A declared primitive names only itself (issue #191).** The arena shares one
 node per structure, so every `nat64` in an interface is one node whichever

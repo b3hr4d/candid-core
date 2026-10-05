@@ -568,8 +568,8 @@ pub fn random_env(rng: &mut Rng) -> Env {
 /// depth regime of the iterative walkers). `T0` is the shape; the siblings
 /// are a structural copy (`T1`) and a variation at the base (`T2`), so
 /// decode cases also coerce across deep values. No shape is an `opt`-only
-/// cycle (`T = opt T`; see `wire::opt_cycle`): the `opt` chain is pinned by
-/// exact regression vectors instead.
+/// cycle (`T = opt T`; see `wire::opt_cycle`, and the compiler refuses one
+/// since #234): the `opt` chain is pinned by exact regression vectors instead.
 const DEEP_SHAPES: &[[&str; 3]] = &[
     ["opt vec T0", "opt vec T1", "opt opt vec T2"],
     ["vec T0", "vec T1", "vec opt T2"],

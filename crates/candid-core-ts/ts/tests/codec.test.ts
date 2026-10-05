@@ -206,7 +206,6 @@ const EXPECTED: Record<string, Record<string, unknown>> = {
     described_none: null,
     described_some_none: { some: null },
     described_some_some: { some: "x" },
-    chain_three: { some: { some: { some: null } } },
     pong_some_record: { some: { pong: { some: null } } },
     settings_mixed: { label: { some: null }, limit: { some: 5n }, flag: null },
     change_clear: { tag: "clear", value: { some: null } },

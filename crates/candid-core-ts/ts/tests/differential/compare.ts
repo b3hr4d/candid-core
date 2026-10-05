@@ -85,6 +85,13 @@ export interface EnvLine {
   readonly env: string;
   readonly did: string;
   readonly envelope: { readonly contract: unknown };
+  /**
+   * Set on a regression environment whose source candid-core's compiler
+   * refuses while the reference accepts it: the compiler's code and the
+   * issue that decided the refusal. Its envelope holds the Contract the
+   * vector supplies, which the loaders still accept.
+   */
+  readonly compile_refused?: { readonly code: string; readonly issue: number };
 }
 
 export interface Reference {

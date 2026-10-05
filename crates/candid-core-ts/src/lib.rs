@@ -44,8 +44,11 @@
 //! carry `None` versus `Some(None)` there. Only those opts box; `opt opt nat`
 //! is `{ some: bigint | null } | null` while `opt nat` stays
 //! `bigint | null`. The test is on the inner *node*, so an opt reached
-//! through a declared alias — or through recursion, as in `type L = opt L` —
-//! boxes exactly as the schema runtime's walkers and its `OptDomain` type do.
+//! through a declared alias — or through recursion, as in an opt node that is
+//! its own inner — boxes exactly as the schema runtime's walkers and its
+//! `OptDomain` type do. (That graph is `type L = opt L`; since issue #234 the
+//! compiler refuses the source, so only a loaded or model-built Contract
+//! holds it.)
 //! And consuming these types against a live agent needs a boundary
 //! conversion, which is future work recorded on the issue — the types
 //! describe the domain, not the transport.
@@ -220,7 +223,8 @@
 //!
 //! That walk ends only because of the cycle rule: **every cycle the module
 //! renders passes through a declared node.** A declared node renders as its
-//! declaration's name, which is how `type L = opt L` is written at all; an
+//! declaration's name, which is how `type L = record { next : opt L }` is
+//! written at all; an
 //! undeclared node renders its structure in place, so a cycle through no
 //! declaration would never end, and a TypeScript type alias has no spelling
 //! for an anonymous cycle. Every Contract compiled from Candid source keeps
@@ -1119,8 +1123,10 @@ impl Generator<'_> {
                 // box the present value as `{ some: T }`; nothing else does.
                 // The test is on the inner *node*, not its spelling: the arena
                 // shares one node per declaration, so an alias of an opt — or
-                // a recursive `type L = opt L`, whose inner is the opt node
-                // itself — boxes just the same, with no reference to chase.
+                // an opt node that is its own inner (the graph of
+                // `type L = opt L`, which the compiler refuses since issue
+                // #234 but a loaded or model-built Contract can hold) —
+                // boxes just the same, with no reference to chase.
                 // The builder is `c.opt(…)` either way: the runtime's
                 // `OptDomain` type and its walkers apply the identical rule,
                 // and the invariant annotation makes `tsc` prove agreement.

@@ -66,12 +66,6 @@
     "textual": "(opt opt \"x\")"
   },
   {
-    "declaration": "Chain",
-    "hex": "4449444c026e016e01010001010100",
-    "name": "chain_three",
-    "textual": "(opt opt opt null)"
-  },
-  {
     "declaration": "Pong",
     "hex": "4449444c046e016e026c01f8fff1d204036e01010001010100",
     "name": "pong_some_record",
