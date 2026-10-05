@@ -107,6 +107,50 @@ bullet).
   untouched. A consumer that matched on the old paths of such issues sees the
   corrected ones.
 
+### A `rec` hop no longer counts against `maxDepth` or `maxElements`
+
+`validate`, `encode` and `decode` used to charge every `rec` hop one depth
+step and one element (issue #231, found by the #196 differential fuzz).
+`schemaFromContract` makes every type reference a hop, and a generated module
+every reference to a declaration, so a recursive value reached the default
+`maxDepth` at about 128 levels and `maxElements` at about 500,000 elements —
+half of candid-core's `max_value_depth` (256) and `max_value_elements`
+(1,000,000), which the defaults are documented to mirror. A hop is an
+indirection, not a level of the value: it now charges neither, and a value is
+charged for its constructors alone, whether its schema is generated, loaded
+from a Contract or built with no `c.rec` at all — the same verdict and the
+same `observed` figures each way.
+
+- **Behaviour change: deeper and wider recursive values are accepted.** At
+  the default limits, `vec T` with `T = vec T` is accepted 257 levels deep
+  (the root at depth 0, the innermost at 256) and refused at 258, where
+  `validate_host_value` under `Limits::default()` draws the line; before, a
+  generated or Contract-loaded schema refused it at 129. A `vec null` of
+  999,999 elements now costs 1,000,000 elements, as candid-core counts it,
+  instead of about twice that. For a generated module or a Contract-loaded
+  schema, nothing that was accepted is now refused.
+- **A tag-only arm's `null` is a level.** The payload of `{ tag }` for an arm
+  whose type is `null` is checked against `maxDepth` one level below its
+  variant, as candid-core checks a variant's payload node and as `decode`
+  already did; `validate` and `encode` charge it no element (it is spelled by
+  absence, and the examined `tag` key is charged as before). Before, the
+  arm's `rec` hop stood in for it, and an arm built with no `rec` was not
+  checked. **This refuses one input that was accepted before:** a value of a
+  schema built with no `rec` on the path to a tag-only variant sitting at
+  exactly `maxDepth`. No compiler-accepted type has such a variant (its
+  `null` would sit past the compiler's `max_type_depth`).
+- **A `rec` chain has a cap of its own.** More than `maxDepth` consecutive
+  hops resolving one reference are refused with `value_depth`, `observed`
+  being the chain's length — the bound `encode`'s type table already applied
+  — so a mis-built `c.rec(() => self)` still terminates. A generated module
+  needs one or two hops, a Contract-loaded schema one.
+- **Unchanged:** every issue code, the `stack` refusal for user code that
+  overflows the host stack, the examined-record-key element charge,
+  `encode`'s type-table depth charge (#192), and the work bound: a hostile
+  nesting is still refused after work proportional to `maxDepth`. An
+  `opt`-only cycle (`type T = opt T`) read from a non-`opt` wire value still
+  terminates, now through each `opt`'s own depth step.
+
 ## 0.3.0-beta.1 — 2026-10-02
 
 Pairs with `candid-core` 0.1.0-beta.3.

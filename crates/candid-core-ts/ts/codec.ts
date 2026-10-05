@@ -78,10 +78,11 @@
 // and malformed or adversarial bytes produce issues with explicit budgets in
 // candid-core's `Limits` spirit: `maxBytes` caps input size up front,
 // `maxTypeTableEntries` mirrors `max_type_nodes`, `maxDepth`/`maxElements`
-// mirror the validate walk (every decoded element, skipped value, and rec hop
-// charges the same
+// mirror the validate walk (every decoded or skipped value charges the same
 // budget — a zero-byte-per-element wire vector cannot decode more than
-// `maxElements` values), and `maxNumericBytes` caps a single unbounded
+// `maxElements` values; a `rec` hop charges neither, issue #231, so a value
+// is charged alike through a generated module, a Contract-loaded schema or
+// a schema built with no `rec`), and `maxNumericBytes` caps a single unbounded
 // `nat`/`int` encoding. Decode stops at the first hard error: the wire
 // format cannot be resynchronized after one, so the issue list is short by
 // design. Every walk — the encoder's type table and value walk, the decoder's
@@ -230,13 +231,20 @@ export interface CodecOptions {
    */
   readonly maxTypeTableEntries?: number;
   /**
-   * Traversal depth cap, mirroring `Limits::max_value_depth`. Encode's
+   * Value depth cap, mirroring `Limits::max_value_depth`: the root is at 0,
+   * each constructor's children one below it, and a value deeper than this
+   * is refused. A `rec` hop is not a level (issue #231); more than this many
+   * consecutive hops resolving one reference are refused instead. Encode's
    * type-table walk charges it too, for Candid nesting depth: once per
    * combinator level at which the table gains an entry, never for a `rec`
    * hop, so a static schema nested deeper than this is refused.
    */
   readonly maxDepth?: number;
-  /** Traversal element budget, mirroring validate's accounting. */
+  /**
+   * Traversal element budget, mirroring validate's accounting: one per value
+   * decoded, skipped or encoded (a `rec` hop is none), and one per examined
+   * record key on encode.
+   */
   readonly maxElements?: number;
   /** Byte cap for one unbounded `nat`/`int` encoding. */
   readonly maxNumericBytes?: number;
@@ -440,6 +448,58 @@ function isStackExhaustion(error: unknown): boolean {
 }
 
 /** The issue both walkers record when the engine reports its stack exhausted. */
+/** The walker a halting failure is reported through: the encoder or the decoder. */
+interface Failing {
+  fail(
+    code: CodecCode,
+    path: readonly PathSegment[],
+    message: string,
+    resource_limit?: CodecResourceLimitInfo,
+  ): never;
+}
+
+/**
+ * Resolve a `rec` chain to the structural node beneath it, for the value
+ * walks of encode and decode (issue #231). A hop is an alias, a declaration
+ * reference or a lazy edge, not a level of the value, so it charges neither
+ * `maxDepth` nor `maxElements`: a value is charged for its constructors
+ * alone, as `validate` charges it and as candid-core counts a HostValue,
+ * whether its schema was generated, loaded from a Contract or built with no
+ * `rec` at all. What bounds a chain of thunks is the cap the type-table walk
+ * applies (`resolveType`): more than `maxDepth` consecutive hops resolving one
+ * reference fail closed with `value_depth`, `observed` being the chain's
+ * length, so a mis-built `c.rec(() => self)` terminates.
+ */
+function resolveHops(
+  walker: Failing,
+  schema: SchemaNode,
+  path: readonly PathSegment[],
+  maxDepth: number,
+): Exclude<SchemaNode, RecNode> {
+  let node = schema;
+  let hops = 0;
+  while (node.kind === "rec") {
+    hops += 1;
+    if (hops > maxDepth) {
+      walker.fail("resource_limit_exceeded", path, `value_depth limit ${maxDepth} exceeded`, {
+        resource: "value_depth",
+        limit: maxDepth,
+        observed: hops,
+      });
+    }
+    const body: unknown = node.body();
+    if (
+      typeof body !== "object" ||
+      body === null ||
+      typeof (body as { kind?: unknown }).kind !== "string"
+    ) {
+      walker.fail("unsupported_schema", path, "a rec thunk did not produce a schema");
+    }
+    node = body as SchemaNode;
+  }
+  return node as Exclude<SchemaNode, RecNode>;
+}
+
 function stackIssue(path: readonly PathSegment[], limit: number, reached: number): CodecIssue {
   return {
     code: "resource_limit_exceeded",
@@ -977,21 +1037,7 @@ class Encoder {
   }
 
   step(path: readonly PathSegment[], depth: number): void {
-    if (depth > this.reached) {
-      this.reached = depth;
-    }
-    if (depth > this.limits.maxDepth) {
-      this.fail(
-        "resource_limit_exceeded",
-        path,
-        `value_depth limit ${this.limits.maxDepth} exceeded`,
-        {
-          resource: "value_depth",
-          limit: this.limits.maxDepth,
-          observed: depth,
-        },
-      );
-    }
+    this.reach(path, depth);
     this.elements += 1;
     if (this.elements > this.limits.maxElements) {
       this.fail(
@@ -1007,28 +1053,34 @@ class Encoder {
     }
   }
 
-  /** Resolve rec chains to a structural node, charging depth per hop. */
-  resolve(
-    schema: SchemaNode,
-    path: readonly PathSegment[],
-    depth: number,
-  ): { node: Exclude<SchemaNode, RecNode>; depth: number } {
-    let node = schema;
-    let hops = depth;
-    while (node.kind === "rec") {
-      hops += 1;
-      this.step(path, hops);
-      const body: unknown = node.body();
-      if (
-        typeof body !== "object" ||
-        body === null ||
-        typeof (body as { kind?: unknown }).kind !== "string"
-      ) {
-        this.fail("unsupported_schema", path, "a rec thunk did not produce a schema");
-      }
-      node = body as SchemaNode;
+  /** Check a node's depth against `maxDepth`, charging no element. */
+  private reach(path: readonly PathSegment[], depth: number): void {
+    if (depth > this.reached) {
+      this.reached = depth;
     }
-    return { node: node as Exclude<SchemaNode, RecNode>, depth: hops };
+    if (depth > this.limits.maxDepth) {
+      this.fail(
+        "resource_limit_exceeded",
+        path,
+        `value_depth limit ${this.limits.maxDepth} exceeded`,
+        {
+          resource: "value_depth",
+          limit: this.limits.maxDepth,
+          observed: depth,
+        },
+      );
+    }
+  }
+
+  /**
+   * Resolve rec chains to a structural node for the value walk. A hop is an
+   * indirection, not a level of the value, so it charges neither `maxDepth`
+   * nor `maxElements` (issue #231), exactly as `validate` resolves it; a
+   * chain of more than `maxDepth` consecutive hops is refused with
+   * `value_depth` (`resolveHops`).
+   */
+  resolve(schema: SchemaNode, path: readonly PathSegment[]): Exclude<SchemaNode, RecNode> {
+    return resolveHops(this, schema, path, this.limits.maxDepth);
   }
 
   /**
@@ -1549,7 +1601,8 @@ class Encoder {
     depth: number,
   ): void {
     for (;;) {
-      const { node, depth: at } = this.resolve(schema, path, depth);
+      const node = this.resolve(schema, path);
+      const at = depth;
       this.step(path, at);
       switch (node.kind) {
         case "primitive":
@@ -1561,13 +1614,12 @@ class Encoder {
             return;
           }
           // Boxed or not is decided on the resolved inner node, exactly as
-          // validate decides it; resolving here charges each rec hop once,
-          // as the recursive call would have, so accounting is unchanged.
-          const inner = this.resolve(node.inner as SchemaNode, path, at + 1);
-          if (!admitsNull(inner.node)) {
+          // validate decides it; its rec hops are uncharged (issue #231).
+          const inner = this.resolve(node.inner as SchemaNode, path);
+          if (!admitsNull(inner)) {
             out.push(1);
-            schema = inner.node;
-            depth = inner.depth;
+            schema = inner;
+            depth = at + 1;
             continue;
           }
           if (!this.isPlainCandidate(value)) {
@@ -1583,9 +1635,9 @@ class Encoder {
           }
           out.push(1);
           this.valueStack.push({ kind: "boxed", value, depth: at });
-          schema = inner.node;
+          schema = inner;
           value = (value as { some?: unknown }).some;
-          depth = inner.depth;
+          depth = at + 1;
           continue;
         }
         case "vec": {
@@ -1680,11 +1732,14 @@ class Encoder {
           const arms = this.sortedFields(node.arms, path);
           const index = arms.findIndex((arm) => arm.key === tag);
           writeLebNumber(out, index);
-          const resolved = this.resolve(arms[index].schema as SchemaNode, path, at);
-          const tagOnly = resolved.node.kind === "primitive" && resolved.node.primitive === "null";
+          const resolved = this.resolve(arms[index].schema as SchemaNode, path);
+          const tagOnly = resolved.kind === "primitive" && resolved.primitive === "null";
           if (tagOnly) {
-            // Mirror validate's walk exactly: the first non-tag key in
-            // enumeration order is the issue, whatever its name.
+            // The `null` payload's depth is checked one level down, with no
+            // element charged, as validate checks it. Then mirror validate's
+            // walk exactly: the first non-tag key in enumeration order is the
+            // issue, whatever its name.
+            this.reach(path, at + 1);
             for (const key of Object.keys(value)) {
               this.step(path, at);
               if (key !== "tag") {
@@ -1699,9 +1754,9 @@ class Encoder {
             this.fail("missing_field", path, "this arm carries a payload");
           }
           this.valueStack.push({ kind: "variant", value, depth: at });
-          schema = resolved.node;
+          schema = resolved;
           value = (value as { value?: unknown }).value;
-          depth = resolved.depth + 1;
+          depth = at + 1;
           continue;
         }
         case "func": {
@@ -2252,7 +2307,6 @@ interface OptFrame {
   readonly wire: number;
   readonly node: Exclude<SchemaNode, RecNode>;
   readonly depth: number;
-  readonly skipDepth: number;
   readonly rewind: number;
   readonly pathLength: number;
   phase: "start" | "decoding" | "absorbed" | "skipping";
@@ -2724,7 +2778,7 @@ class Decoder {
    * otherwise.
    */
   missingValue(schema: SchemaNode, path: PathSegment[], depth: number): unknown {
-    const { node } = this.resolveSchema(schema, path, depth);
+    const node = this.resolveSchema(schema, path);
     if (
       node.kind === "opt" ||
       (node.kind === "primitive" && (node.primitive === "null" || node.primitive === "reserved"))
@@ -2738,27 +2792,19 @@ class Decoder {
     this.mismatch("missing_field", path, "the wire carries no value for this field");
   }
 
+  /**
+   * Resolve rec chains to the expected structural node. Uncharged, as in
+   * `validate` and the encoder (issue #231): a decoded value is charged for
+   * its constructors alone, and a chain of more than `maxDepth` consecutive
+   * hops is refused with `value_depth` (`resolveHops`). An `opt`-only cycle
+   * (`type T = opt T`, issue #234) still terminates: each auto-wrapping
+   * `opt` level is a constructor charged one depth step below the last.
+   */
   private resolveSchema(
     schema: SchemaNode,
     path: readonly PathSegment[],
-    depth: number,
-  ): { node: Exclude<SchemaNode, RecNode>; depth: number } {
-    let node = schema;
-    let hops = depth;
-    while (node.kind === "rec") {
-      hops += 1;
-      this.step(path, hops);
-      const body: unknown = node.body();
-      if (
-        typeof body !== "object" ||
-        body === null ||
-        typeof (body as { kind?: unknown }).kind !== "string"
-      ) {
-        this.fail("unsupported_schema", path, "a rec thunk did not produce a schema");
-      }
-      node = body as SchemaNode;
-    }
-    return { node: node as Exclude<SchemaNode, RecNode>, depth: hops };
+  ): Exclude<SchemaNode, RecNode> {
+    return resolveHops(this, schema, path, this.limits.maxDepth);
   }
 
   /**
@@ -2832,7 +2878,8 @@ class Decoder {
     path: PathSegment[],
     depth: number,
   ): unknown {
-    const { node, depth: at } = this.resolveSchema(schema, path, depth);
+    const node = this.resolveSchema(schema, path);
+    const at = depth;
     this.step(path, at);
 
     // Expected reserved absorbs any wire value, consuming it.
@@ -2995,16 +3042,15 @@ class Decoder {
       constituent = entry.inner;
     }
     // Otherwise a non-nullable wire type auto-wraps: opt v when coercible,
-    // else null. Either way the inner schema is resolved once here —
-    // charging each rec hop as the constituent walk would have — so the
-    // boxing decision reads the node the value is then decoded against.
-    const inner = this.resolveSchema(node.inner as SchemaNode, path, depth + 1);
+    // else null. Either way the inner schema is resolved once here (its rec
+    // hops uncharged, issue #231), so the boxing decision reads the node the
+    // value is then decoded against, one level down.
+    const inner = this.resolveSchema(node.inner as SchemaNode, path);
     this.stack.push({
       kind: "opt",
       wire: constituent,
-      node: inner.node,
-      depth: inner.depth,
-      skipDepth: depth + 1,
+      node: inner,
+      depth: depth + 1,
       rewind: this.offset,
       pathLength: path.length,
       phase: "start",
@@ -3018,8 +3064,7 @@ class Decoder {
    * then skip), and the opt is `None` (`null`) — kept apart from a
    * constituent that legitimately decoded to `null`. Malformed input and
    * resource failures stay hard — absorption never hides a broken message.
-   * `skipDepth` is the depth the constituent walk began at before its rec
-   * hops were resolved, where a skip of the rewound bytes starts.
+   * A skip of the rewound bytes starts at the constituent's own depth.
    */
   private resumeOpt(frame: OptFrame, path: PathSegment[]): void {
     switch (frame.phase) {
@@ -3046,7 +3091,7 @@ class Decoder {
         // stale segments. The skip reports at the opt's own path.
         path.length = frame.pathLength;
         frame.phase = "skipping";
-        if (!this.enterSkip(frame.wire, path, frame.skipDepth)) {
+        if (!this.enterSkip(frame.wire, path, frame.depth)) {
           return;
         }
         this.deliver(null);
@@ -3278,18 +3323,18 @@ class Decoder {
         `wire tag id ${wireId} is not an arm of the expected variant`,
       );
     }
-    const resolved = this.resolveSchema(match.schema as SchemaNode, path, depth);
+    const resolved = this.resolveSchema(match.schema as SchemaNode, path);
     // A tag-only arm's payload still coerces at expected null — a wire arm
     // carrying a non-null payload there is a mismatch, not something to skip
     // over — and the value is the bare `{ tag }`.
-    const tagOnly = resolved.node.kind === "primitive" && resolved.node.primitive === "null";
+    const tagOnly = resolved.kind === "primitive" && resolved.primitive === "null";
     this.stack.push({
       kind: "variant",
       tag: match.key,
       tagOnly,
       wire: entry.types[index],
-      node: resolved.node,
-      depth: resolved.depth + 1,
+      node: resolved,
+      depth: depth + 1,
       started: false,
     });
     return PENDING;

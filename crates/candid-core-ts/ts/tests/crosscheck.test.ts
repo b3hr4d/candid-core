@@ -7,10 +7,10 @@
 // The Contract JSON and name-table documents are goldens emitted by the Rust
 // side (`tests/golden.rs`, `UPDATE_GOLDENS=1`) from the same fixtures the
 // generated modules come from, so the two schemas under comparison share one
-// source of truth. Samples deliberately stay far from the depth limit: the
-// dynamic schema carries one extra `rec` hop per edge, so near-limit values
-// would diverge on the resource issue alone — the depth behavior itself is
-// pinned in validate.test.ts.
+// source of truth. The dynamic schema carries one extra `rec` hop per edge,
+// which charges neither depth nor elements (issue #231), so near-limit values
+// get the same resource issue under both; that is pinned in
+// rec-hops.test.ts, and the depth behavior itself in validate.test.ts.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";

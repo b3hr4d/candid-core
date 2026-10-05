@@ -2477,9 +2477,10 @@ test("hostile deep replies are refused with work bounded by maxDepth, not by inp
   // A 1,000,000-level `vec` nesting — a million bytes of `01` — at the
   // default maxDepth and at a raised one. The refusal is `value_depth` at
   // maxDepth + 1, and the element budget it needed is pinned exactly: the
-  // walk charged maxDepth elements (one per rec hop and one per vec, two
-  // depth units per level) and stopped, whatever lies beyond. Work, not time,
-  // is what is asserted; wall time is printed for information only (#39).
+  // walk charged maxDepth + 1 elements (one per vec, at depths 0 to maxDepth;
+  // the rec hop above each charges nothing, issue #231) and stopped, whatever
+  // lies beyond. Work, not time, is what is asserted; wall time is printed
+  // for information only (#39).
   const hostile = nestedWire(1_000_000);
   for (const maxDepth of [256, 10_000]) {
     const attempt = (maxElements: number): ReturnType<typeof decode> =>
@@ -2496,14 +2497,14 @@ test("hostile deep replies are refused with work bounded by maxDepth, not by inp
         observed: maxDepth + 1,
       });
     }
-    assert.strictEqual(chargedBefore(attempt), maxDepth);
-    const short = attempt(maxDepth - 1);
+    assert.strictEqual(chargedBefore(attempt), maxDepth + 1);
+    const short = attempt(maxDepth);
     assert(!short.ok);
     if (!short.ok) {
       assert.deepStrictEqual(short.issues[0].resource_limit, {
         resource: "value_elements",
-        limit: maxDepth - 1,
-        observed: maxDepth,
+        limit: maxDepth,
+        observed: maxDepth + 1,
       });
     }
     // An expected `reserved` or an absorbing `opt` skips the same bytes and
@@ -2548,7 +2549,7 @@ test("a hostile deep value is refused by encode with work bounded by maxDepth", 
       const result = encode(Nested, hostile, { maxDepth, maxElements });
       return result.ok ? { ok: true, value: undefined } : result;
     });
-    assert.strictEqual(charged, maxDepth);
+    assert.strictEqual(charged, maxDepth + 1);
     t.diagnostic(`maxDepth ${maxDepth}: refused in ${elapsed.toFixed(2)} ms (informational)`);
   }
 });

@@ -22,10 +22,15 @@
 // (`maxDepth` 256 like `max_value_depth`, `maxElements` 1_000_000). A limit
 // failure is itself an issue (`resource_limit_exceeded`, resource
 // `value_depth` or `value_elements`) and terminates the walk, so a truncated
-// validation can never report `ok`. Depth counts schema traversal steps —
-// `rec` unwrapping included, which is what makes a mis-built self-referential
-// `rec` chain terminate — so linked-list-shaped data consumes depth per
-// element, exactly as it does in candid-core's value domain. The walk keeps
+// validation can never report `ok`. Depth counts the value's constructors,
+// the root at 0 and each child one below its parent — a variant's `null`
+// payload included, as `{ tag }` — so linked-list-shaped data consumes depth
+// per element, exactly as it does in candid-core's value domain. A `rec` hop
+// charges nothing (issue #231): it is an indirection, so a value is judged
+// alike whether its schema was built with `c.rec`, generated, or loaded from
+// a Contract. A chain of more than `maxDepth` consecutive hops resolving one
+// reference is refused with `value_depth`, which is what makes a mis-built
+// self-referential `rec` chain terminate. The walk keeps
 // its work on an explicit stack rather than the host's (issue #192), so
 // `maxDepth` is the only depth bound: raised, it admits a 100,000-level
 // linked list, and the answer never depends on the engine or its JIT state.
@@ -39,8 +44,10 @@
 // own accessors that throw, Proxies with hostile traps, revoked Proxies: the
 // entire walk runs behind one fail-closed choke point that converts any
 // exception a value raises into a terminal `unreadable_value` issue at the
-// path being examined. `maxElements` charges every traversal step, examined
-// record keys included; it bounds the work this walker performs, not the
+// path being examined. `maxElements` charges every constructor the walk
+// reads (a tag-only arm's `null`, spelled by absence, is read from nothing
+// and charged nothing) and every examined record key; it bounds the work
+// this walker performs, not the
 // engine's own key-list materialization, which JavaScript enumeration
 // (`Object.keys` and `for..in` alike) pays in one linear step at loop entry.
 //
@@ -173,11 +180,18 @@ export interface ValidationIssue {
  */
 export interface ValidateOptions {
   /**
-   * Maximum schema traversal depth, mirroring `Limits::max_value_depth`.
-   * Every step — combinator descent and `rec` unwrap alike — consumes one.
+   * Maximum value depth, mirroring `Limits::max_value_depth`: the root is at
+   * 0, each constructor's children one below it (a variant's `null` payload
+   * included), and a node deeper than this is refused. A `rec` hop is not a
+   * level (issue #231); more than this many consecutive hops resolving one
+   * reference are refused instead.
    */
   readonly maxDepth?: number;
-  /** Total traversal budget across the whole value, all branches included. */
+  /**
+   * Total traversal budget across the whole value, all branches included:
+   * one per constructor (a `rec` hop is none) and one per examined record
+   * key, against `Limits::max_value_elements`, which counts the nodes alone.
+   */
   readonly maxElements?: number;
   /** Stop collecting after this many issues; the result is still not-ok. */
   readonly maxIssues?: number;
@@ -494,7 +508,19 @@ class Walk {
     let node = schema as SchemaNode;
     let at = depth;
     for (;;) {
-      if (this.halted || !this.step(path, at)) {
+      if (this.halted) {
+        return;
+      }
+      // A `rec` hop is an indirection, not a level of the value: resolve the
+      // chain first, uncharged, and charge the constructor beneath it.
+      if (node.kind === "rec") {
+        const resolved = this.resolve(node, path);
+        if (resolved === undefined) {
+          return;
+        }
+        node = resolved;
+      }
+      if (!this.step(path, at)) {
         return;
       }
       switch (node.kind) {
@@ -545,20 +571,6 @@ class Walk {
           // #104) — the same check the principal primitive uses.
           this.principalText(value, path);
           return;
-        case "rec": {
-          const body: unknown = node.body();
-          if (
-            typeof body !== "object" ||
-            body === null ||
-            typeof (body as { kind?: unknown }).kind !== "string"
-          ) {
-            this.issue("unsupported_schema", path, "a rec thunk did not produce a schema");
-            return;
-          }
-          node = body as SchemaNode;
-          at += 1;
-          continue;
-        }
         default:
           this.issue(
             "unsupported_schema",
@@ -663,16 +675,24 @@ class Walk {
 
   /** Charge one traversal step; false means the walk is over. */
   private step(path: PathSegment[], depth: number): boolean {
-    if (depth > this.reached) {
-      this.reached = depth;
-    }
-    if (depth > this.maxDepth) {
-      this.resource("value_depth", this.maxDepth, depth, path);
+    if (!this.reach(path, depth)) {
       return false;
     }
     this.elements += 1;
     if (this.elements > this.maxElements) {
       this.resource("value_elements", this.maxElements, this.elements, path);
+      return false;
+    }
+    return true;
+  }
+
+  /** Check a node's depth against `maxDepth`; false means the walk is over. */
+  private reach(path: PathSegment[], depth: number): boolean {
+    if (depth > this.reached) {
+      this.reached = depth;
+    }
+    if (depth > this.maxDepth) {
+      this.resource("value_depth", this.maxDepth, depth, path);
       return false;
     }
     return true;
@@ -806,10 +826,10 @@ class Walk {
   /**
    * A present `opt` value. Whether it is boxed is decided here, on the
    * resolved inner node (the `isBoxedOpt` rule), never on the schema object: the
-   * inner is resolved once, charging each rec hop exactly as visiting it
-   * would, and the resolved node is what validates the payload — so an
-   * unboxed opt's accounting is unchanged. A boxed value is strict like a
-   * record: a plain object whose only own enumerable key is `some`.
+   * inner is resolved once (its rec hops are uncharged, issue #231), and the
+   * resolved node is what validates the payload, one level down. A boxed
+   * value is strict like a record: a plain object whose only own enumerable
+   * key is `some`.
    *
    * Returns what the caller's loop visits next: the value itself at the
    * resolved inner node, or — for a boxed value, after pushing the frame that
@@ -822,12 +842,12 @@ class Walk {
     path: PathSegment[],
     depth: number,
   ): Next {
-    const inner = this.resolve(node.inner, path, depth + 1);
+    const inner = this.resolve(node.inner, path);
     if (inner === undefined) {
       return undefined;
     }
-    if (!admitsNull(inner.node)) {
-      return { node: inner.node, value, depth: inner.depth };
+    if (!admitsNull(inner)) {
+      return { node: inner, value, depth: depth + 1 };
     }
     if (!isPlainCandidate(value)) {
       this.issue(
@@ -845,7 +865,7 @@ class Walk {
       return undefined;
     }
     this.stack.push({ kind: "boxed", value, depth });
-    return { node: inner.node, value: value.some, depth: inner.depth };
+    return { node: inner, value: value.some, depth: depth + 1 };
   }
 
   /** A boxed opt's keys, after `some`: anything but `some` is unexpected. */
@@ -981,14 +1001,21 @@ class Walk {
     // wraps its payload schema in a lazy thunk, and `{ tag }` versus
     // `{ tag, value }` is decided by the resolved payload, exactly as the
     // generator decides it by the payload *node*. The resolved node is then
-    // what validates the payload, so each rec hop is charged exactly once —
-    // the documented one-extra-element-per-hop model.
-    const arm = this.resolve(node.arms[tag], path, depth);
+    // what validates the payload, one level down; its rec hops are uncharged
+    // (issue #231).
+    const arm = this.resolve(node.arms[tag], path);
     if (arm === undefined) {
       return;
     }
-    const tagOnly = arm.node.kind === "primitive" && arm.node.primitive === "null";
+    const tagOnly = arm.kind === "primitive" && arm.primitive === "null";
     if (tagOnly) {
+      // The `null` payload is a value one level down, though `{ tag }`
+      // spells it by absence, so its depth is checked as candid-core checks
+      // a HostValue variant's payload node. It is charged no element: there
+      // is nothing to read, and the examined `tag` key below is charged.
+      if (!this.reach(path, depth + 1)) {
+        return;
+      }
       for (const key of Object.keys(value)) {
         if (this.halted || !this.step(path, depth)) {
           return;
@@ -1009,7 +1036,7 @@ class Walk {
       return undefined;
     }
     this.stack.push({ kind: "variant", value, depth });
-    return { node: arm.node, value: value.value, depth: arm.depth + 1 };
+    return { node: arm, value: value.value, depth: depth + 1 };
   }
 
   /** A variant's keys, after its payload: anything but `tag`/`value` is unexpected. */
@@ -1087,21 +1114,25 @@ class Walk {
   }
 
   /**
-   * Unwrap `rec` chains to the structural node beneath, charging depth once
-   * per hop; the returned depth is where the unwrapping ended, so the caller
-   * continues from it instead of re-walking the chain. `undefined` means the
-   * walk halted or the schema is unusable.
+   * Unwrap `rec` chains to the structural node beneath (issue #231). A hop
+   * is an indirection — an alias, a declaration reference, a lazy edge —
+   * not a level of the value, so it charges neither `maxDepth` nor
+   * `maxElements`: a value is charged for its constructors alone, whether
+   * its schema was built with `c.rec` or without. What bounds a chain of
+   * thunks is its own cap, the one the encoder's type table applies: more
+   * than `maxDepth` consecutive hops resolving one reference (a generated
+   * module needs one or two, a Contract-loaded schema one) fail closed with
+   * `value_depth`, `observed` being the chain's length, so a mis-built
+   * `c.rec(() => self)` terminates. `undefined` means the walk halted or the
+   * schema is unusable.
    */
-  private resolve(
-    schema: AnyFieldSchema,
-    path: PathSegment[],
-    depth: number,
-  ): { node: SchemaNode; depth: number } | undefined {
+  private resolve(schema: AnyFieldSchema, path: PathSegment[]): SchemaNode | undefined {
     let node = schema as SchemaNode;
-    let hops = depth;
+    let hops = 0;
     while (node.kind === "rec") {
       hops += 1;
-      if (!this.step(path, hops)) {
+      if (hops > this.maxDepth) {
+        this.resource("value_depth", this.maxDepth, hops, path);
         return undefined;
       }
       const body: unknown = node.body();
@@ -1115,7 +1146,7 @@ class Walk {
       }
       node = body as SchemaNode;
     }
-    return { node, depth: hops };
+    return node;
   }
 }
 

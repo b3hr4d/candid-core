@@ -249,13 +249,12 @@ for (const sample of samples) {
   generator's own output, value by value.
 </p>
 
-<callout type="note" title="One place the two deliberately differ">
+<callout type="note" title="Extra rec hops cost nothing">
   <p>
-    A dynamically built schema carries one extra <code>rec</code> hop at every edge, and each hop
-    costs a traversal step against the validator's depth budget. Values near the depth limit can
-    therefore reach the budget on one schema and not the other. The cross-check samples stay far
-    from that limit on purpose; the depth behaviour itself is pinned separately in the validation
-    tests.
+    A dynamically built schema carries one extra <code>rec</code> hop at every edge. A hop is an
+    indirection, not a level of the value, so it costs nothing against the depth and element
+    budgets: values near the limits get the same verdict on either schema, and on a schema built
+    with no <code>rec</code> at all.
   </p>
 </callout>
 

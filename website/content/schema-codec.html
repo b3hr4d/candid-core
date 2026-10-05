@@ -355,13 +355,20 @@ export interface CodecOptions {
    */
   readonly maxTypeTableEntries?: number;
   /**
-   * Traversal depth cap, mirroring `Limits::max_value_depth`. Encode's
+   * Value depth cap, mirroring `Limits::max_value_depth`: the root is at 0,
+   * each constructor's children one below it, and a value deeper than this
+   * is refused. A `rec` hop is not a level (issue #231); more than this many
+   * consecutive hops resolving one reference are refused instead. Encode's
    * type-table walk charges it too, for Candid nesting depth: once per
    * combinator level at which the table gains an entry, never for a `rec`
    * hop, so a static schema nested deeper than this is refused.
    */
   readonly maxDepth?: number;
-  /** Traversal element budget, mirroring validate's accounting. */
+  /**
+   * Traversal element budget, mirroring validate's accounting: one per value
+   * decoded, skipped or encoded (a `rec` hop is none), and one per examined
+   * record key on encode.
+   */
   readonly maxElements?: number;
   /** Byte cap for one unbounded `nat`/`int` encoding. */
   readonly maxNumericBytes?: number;
@@ -389,7 +396,7 @@ export interface CodecOptions {
       <td><code>maxDepth</code></td>
       <td><code>256</code></td>
       <td><code>value_depth</code></td>
-      <td>Traversal depth. Every descent, every <code>rec</code> hop, and every skipped nesting level counts; so does every combinator level at which <code>encode</code>'s type table gains an entry (Candid nesting depth, not <code>rec</code> hops).</td>
+      <td>Value depth, as <code>max_value_depth</code> counts it: every decoded, encoded or skipped nesting level counts, the root at 0, and a <code>rec</code> hop does not (more than 256 consecutive hops resolving one reference are refused instead); so does every combinator level at which <code>encode</code>'s type table gains an entry (Candid nesting depth, not <code>rec</code> hops).</td>
     </tr>
     <tr>
       <td><code>maxElements</code></td>
