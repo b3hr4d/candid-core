@@ -586,11 +586,14 @@ exact peer, even when the generator did not change. The schema package stays
 One pull request carries both packages, because the CLI's packaging gate
 installs the local schema tarball beside the CLI tarball and compiles against
 it. A schema version the CLI's exact peer does not name fails that gate
-either way, at one of two steps (both measured with npm 11.3.0). When the peer
-names a version the registry does not hold, the install itself succeeds — the
-peer is optional, so npm only warns `ERESOLVE overriding peer dependency` and
-leaves the schema package out of the tree — and the gate fails compiling the
-consumer (`TS2307` for `@candid-core/schema/contract`). When the peer names a
+either way, at one of two steps (both measured with npm 11.3.0, installing the
+local schema tarball as the gate does). When the peer names a version the
+registry does not hold, the install itself succeeds — the peer is optional, so
+npm only warns `ERESOLVE overriding peer dependency` and leaves the schema
+package out of the tree — and the gate fails compiling the consumer (`TS2307`
+for `@candid-core/schema/contract`). A consumer cannot reach that case: beside
+a schema version from the registry, npm warns the same way and then fails with
+`ETARGET` for the missing peer version. When the peer names a
 published version, such as the last beta, npm refuses the install with
 `ERESOLVE could not resolve`. It contains, and contains only:
 
@@ -729,6 +732,24 @@ to 7, with these differences:
 - Both workflows are dispatched with `--field dist-tag=latest`, schema first,
   `stable-off-latest` unset. Afterwards `latest` names the stable pair and
   `beta` still names the last betas; nothing moves `beta`.
+- The read-only checks after each publish are those of "Checking the install
+  from the tag", with the stable versions: `npm view <package> dist-tags`
+  shows `latest` at the stable pair and `beta` unmoved on the last betas, and
+  the clean consumer installs with a plain
+  `npm install --save-exact @candid-core/schema @candid-core/cli` (no
+  `@beta`), which must resolve without `ERESOLVE`, then runs `gen` and
+  `gen --check`.
+- Between the two publishes, `latest` pairs the new schema with the previous
+  stable CLI, whose peer does not admit it, so a plain install of both fails
+  with `ERESOLVE could not resolve` (measured with npm 11.3.0, schema
+  `0.3.0-beta.1` beside CLI `0.1.0`). A beta dispatch never opens that
+  window, because `latest` does not move. Dispatch the CLI as soon as the
+  schema is published. If the CLI's verify or publish fails, either fix
+  forward (a commit on `main`, the CLI dispatched from it, and both release
+  notes corrected on publish day where they say both packages come from one
+  commit), or put `latest` back by hand,
+  `npm dist-tag add @candid-core/schema@<previous stable> latest`, with the
+  interactive login of "Promoting to `latest`", until the CLI is out.
 - On publish day the follow-up pull request empties `UNPUBLISHED_NPM_SPECS`,
   turns the prose install lines into blocks, and rewrites the release note on
   each TypeScript page (`NOTE_TITLE`), which until then says which beta the
@@ -757,8 +778,8 @@ npm logout
 
 Both packages move in the one login, schema first. Moving only the schema
 leaves `latest` on a CLI whose peer range does not admit it: a plain install
-of both then pairs the new schema with the old CLI, npm warns and leaves the
-optional peer unmet, and the generated module fails to compile. `<cli-version>`
+of both then pairs the new schema with the old CLI, and npm refuses it with
+`ERESOLVE could not resolve` (measured with npm 11.3.0). `<cli-version>`
 is the CLI release whose exact peer is `<schema-version>`.
 
 No guard checks this path: `npm dist-tag add` will point `latest` at a
