@@ -288,22 +288,33 @@ test("an empty arena needs no root and still loads, as candid-core loads it", ()
 
 test("every golden and fixture Contract the compiler wrote still loads", () => {
   const repository = new URL("../../../../", import.meta.url);
-  // Each directory with the names in it that are Contract or envelope
-  // documents (the rest are name tables, sources, and other artifacts).
-  const sources: readonly (readonly [string, RegExp])[] = [
-    ["crates/candid-core-ts/tests/goldens/", /\.(contract|envelope)\.json$/],
-    ["crates/candid-core-ts/tests/goldens/depth/", /\.envelope\.json$/],
-    ["fuzz/seeds/contract_json/", /\.json$/],
-    ["fuzz/seeds/envelope_json/", /\.json$/],
-    ["tests/fixtures/artifact-identity/artifacts/", /^contract.*\.json$/],
-    ["tests/fixtures/conformance/", /\.contract\.json$/],
-    ["tests/fixtures/envelope/", /\.envelope\.json$/],
+  // Each directory with the names in it that hold a compiler-written Contract
+  // (the rest are name tables, sources, and other artifacts), and where in
+  // each document the Contract or its envelope sits.
+  const whole = (parsed: Json): Json => parsed;
+  const member =
+    (key: string) =>
+    (parsed: Json): Json =>
+      parsed[key];
+  const sources: readonly (readonly [string, RegExp, (parsed: Json) => Json])[] = [
+    ["crates/candid-core-ts/tests/goldens/", /\.(contract|envelope)\.json$/, whole],
+    ["crates/candid-core-ts/tests/goldens/depth/", /\.envelope\.json$/, whole],
+    ["crates/candid-core-ts/tests/goldens/wire/", /^coercion\.json$/, member("envelope")],
+    ["fuzz/seeds/canonicalization/", /\.json$/, whole],
+    ["fuzz/seeds/contract_json/", /\.json$/, whole],
+    ["fuzz/seeds/envelope_json/", /\.json$/, whole],
+    ["fuzz/seeds/provenance/", /\.json$/, member("contract")],
+    ["tests/fixtures/artifact-identity/artifacts/", /^contract.*\.json$/, whole],
+    ["tests/fixtures/artifact-identity/artifacts/", /^compilation.*\.json$/, member("contract")],
+    ["tests/fixtures/conformance/", /\.contract\.json$/, whole],
+    ["tests/fixtures/envelope/", /\.envelope\.json$/, whole],
   ];
   let loaded = 0;
-  for (const [directory, pattern] of sources) {
+  for (const [directory, pattern, contract] of sources) {
     const base = new URL(directory, repository);
     for (const name of readdirSync(base).filter((entry) => pattern.test(entry))) {
-      const result = schemaFromContract(JSON.parse(readFileSync(new URL(name, base), "utf8")));
+      const parsed: Json = JSON.parse(readFileSync(new URL(name, base), "utf8"));
+      const result = schemaFromContract(contract(parsed));
       assert(
         result.ok,
         `${directory}${name}: ${JSON.stringify(result.ok ? [] : result.issues.slice(0, 3))}`,
@@ -311,9 +322,9 @@ test("every golden and fixture Contract the compiler wrote still loads", () => {
       loaded += 1;
     }
   }
-  // 29 goldens, 11 fuzz seeds, 12 fixtures today: a vanished directory or
-  // a pattern that stopped matching must not pass this test vacuously.
-  assert(loaded >= 52, `only ${loaded} documents loaded`);
+  // 30 goldens, 21 fuzz seeds, 15 fixtures today: a vanished directory or a
+  // pattern that stopped matching must not pass this test vacuously.
+  assert(loaded >= 66, `only ${loaded} documents loaded`);
 });
 
 // The walk is iterative and linear: a document at the arena cap loads.
