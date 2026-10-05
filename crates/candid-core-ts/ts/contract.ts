@@ -449,6 +449,15 @@ interface NameTableSource {
 }
 
 /**
+ * The issues raised about a name table rather than the Contract. An envelope
+ * re-roots Contract issues under `$.contract`; these keep the path of the
+ * table they came from. Provenance is recorded where each issue is made, not
+ * read back from its path: a Contract's own unknown root key `names` is
+ * reported at `$.names` too, and it still belongs under `$.contract`.
+ */
+const nameTableIssues = new WeakSet<ContractIssue>();
+
+/**
  * Mirrors the Rust loader's `valid_extension_name`: a reverse-domain
  * namespace (dot-separated segments of lowercase letters, digits, and
  * hyphens) followed by `/v<integer>` with no leading zero. The two loaders
@@ -543,12 +552,12 @@ function buildFromDocument(
     return result;
   }
   // Contract-side paths are re-rooted under `$.contract`, where the data
-  // actually sits in the supplied document; name-table paths already carry
-  // their own base and pass through untouched.
+  // actually sits in the supplied document; name-table issues already carry
+  // their table's base and pass through untouched (`nameTableIssues`).
   return {
     ok: false,
     issues: result.issues.map((issue) =>
-      issue.path === names.base || issue.path.startsWith(`${names.base}[`)
+      nameTableIssues.has(issue)
         ? issue
         : {
             ...issue,
@@ -566,6 +575,12 @@ function buildFromContract(
   const issues: ContractIssue[] = [];
   const push = (code: ContractIssueCode, path: string, message: string) => {
     issues.push({ code, path, message });
+  };
+  /** `push`, for an issue about the name table (see `nameTableIssues`). */
+  const pushNameTable = (code: ContractIssueCode, path: string, message: string) => {
+    const issue: ContractIssue = { code, path, message };
+    nameTableIssues.add(issue);
+    issues.push(issue);
   };
   /** Refuse every key of `object` the format does not define for it. */
   const closed = (object: Record<string, unknown>, allowed: ReadonlySet<string>, base: string) => {
@@ -1024,7 +1039,7 @@ function buildFromContract(
   const nameTable = new Map<string, string>();
   const reservedKeys = new Set<string>();
   if (!Array.isArray(namesSource.entries)) {
-    push(
+    pushNameTable(
       "invalid_name_table",
       namesSource.base,
       "a name table is an array of [container, id, name] entries",
@@ -1033,7 +1048,7 @@ function buildFromContract(
   }
   const rawNames: readonly unknown[] = namesSource.entries;
   if (rawNames.length > DEFAULT_MAX_NAME_TABLE_ENTRIES) {
-    issues.push({
+    const issue: ContractIssue = {
       code: "resource_limit_exceeded",
       path: namesSource.base,
       message: `name_table_entries limit ${DEFAULT_MAX_NAME_TABLE_ENTRIES} exceeded (observed ${rawNames.length})`,
@@ -1042,7 +1057,9 @@ function buildFromContract(
         limit: DEFAULT_MAX_NAME_TABLE_ENTRIES,
         observed: rawNames.length,
       },
-    });
+    };
+    nameTableIssues.add(issue);
+    issues.push(issue);
     return { ok: false, issues };
   }
   for (let index = 0; index < rawNames.length; index += 1) {
@@ -1058,7 +1075,7 @@ function buildFromContract(
       entry[1] < 0 ||
       typeof entry[2] !== "string"
     ) {
-      push(
+      pushNameTable(
         "invalid_name_table",
         `${namesSource.base}[${index}]`,
         "a name table entry is [container, id, name]",
@@ -1071,7 +1088,7 @@ function buildFromContract(
     // wrong id, and the table is refused at the entry.
     const name = entry[2];
     if (candidLabelHash(name) !== entry[1]) {
-      push(
+      pushNameTable(
         "invalid_name_table",
         `${namesSource.base}[${index}]`,
         `${JSON.stringify(name)} hashes to ${candidLabelHash(name)}, not ${entry[1]}`,

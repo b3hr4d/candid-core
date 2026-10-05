@@ -193,6 +193,22 @@ test("unknown keys inside an envelope's contract are rooted at $.contract", () =
   assert.deepStrictEqual(refusal(schemaFromContract({ contract: { ...t0(), "x y": 0 } })), [
     ["unknown_key", '$.contract["x y"]'],
   ]);
+  // A Contract's own unknown root key `names` sits where a name table's
+  // issues are reported (`$.names`), and is still the Contract's: rooted at
+  // `$.contract.names`, while the name table's own issues keep their base.
+  assert.deepStrictEqual(refusal(schemaFromContract({ contract: { ...t0(), names: [] } })), [
+    ["unknown_key", "$.contract.names"],
+  ]);
+  assert.deepStrictEqual(
+    refusal(
+      schemaFromContract({ contract: { ...t0(), names: [] } }, { names: "not a table" as never }),
+    ),
+    [["unknown_key", "$.contract.names"]],
+  );
+  assert.deepStrictEqual(
+    refusal(schemaFromContract({ contract: t0() }, { names: "not a table" as never })),
+    [["invalid_name_table", "$.names"]],
+  );
 });
 
 // Case 7: orphan type nodes.
