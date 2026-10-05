@@ -265,6 +265,73 @@ fn value_within(
     })
 }
 
+/// Whether a resolved type is a composite the deep walk can descend into.
+fn composite(env: &TypeEnv, ty: &Type) -> bool {
+    matches!(
+        trace(env, ty).as_deref(),
+        Some(TypeInner::Opt(_) | TypeInner::Vec(_) | TypeInner::Record(_) | TypeInner::Variant(_))
+    )
+}
+
+/// A value of `ty` whose composites nest `levels` deep along one path where
+/// the type allows it (a deep environment's recursive shape or chain), every
+/// other position shallow: an absent `opt`, an empty `vec`, a variant's
+/// non-composite arm. Each `opt`, `vec`, `record` or `variant` on the path is
+/// one level (a shallow composite at the bottom may add one more), as
+/// `Scan::levels` reads them back from the bytes.
+pub fn deep_value(env: &TypeEnv, ty: &Type, rng: &mut Rng, levels: usize) -> Option<IDLValue> {
+    let mut budget = 4096usize;
+    let ty = trace(env, ty)?;
+    Some(match ty.as_ref() {
+        TypeInner::Opt(inner) if levels > 1 => {
+            IDLValue::Opt(Box::new(deep_value(env, inner, rng, levels - 1)?))
+        }
+        TypeInner::Opt(_) => IDLValue::None,
+        TypeInner::Vec(inner) if levels > 1 => {
+            IDLValue::Vec(vec![deep_value(env, inner, rng, levels - 1)?])
+        }
+        TypeInner::Vec(_) => IDLValue::Vec(Vec::new()),
+        TypeInner::Record(fields) => {
+            // The first composite field carries the depth.
+            let deep = fields.iter().position(|field| composite(env, &field.ty));
+            let mut values = Vec::new();
+            for (index, field) in fields.iter().enumerate() {
+                let val = if Some(index) == deep && levels > 1 {
+                    deep_value(env, &field.ty, rng, levels - 1)?
+                } else {
+                    value_within(env, &field.ty, rng, 7, &mut budget)?
+                };
+                values.push(IDLField {
+                    id: (*field.id).clone(),
+                    val,
+                });
+            }
+            IDLValue::Record(values)
+        }
+        TypeInner::Variant(fields) => {
+            let wanted = levels > 1;
+            let index = fields
+                .iter()
+                .position(|field| composite(env, &field.ty) == wanted)
+                .unwrap_or(0);
+            let field = fields.get(index)?;
+            let val = if wanted {
+                deep_value(env, &field.ty, rng, levels - 1)?
+            } else {
+                value_within(env, &field.ty, rng, 7, &mut budget)?
+            };
+            IDLValue::Variant(VariantValue(
+                Box::new(IDLField {
+                    id: (*field.id).clone(),
+                    val,
+                }),
+                index as u64,
+            ))
+        }
+        _ => value_within(env, &ty, rng, 7, &mut budget)?,
+    })
+}
+
 /// Reference encoding of `values` at `types`; `None` if the reference
 /// refuses its own value (it should not, but the case is then skipped).
 pub fn encode(env: &TypeEnv, types: &[Type], values: Vec<IDLValue>) -> Option<Vec<u8>> {
@@ -352,23 +419,105 @@ pub fn mutate_once(rng: &mut Rng, bytes: &mut Vec<u8>) -> &'static str {
 // Reference verdict and the domain mapping
 // ---------------------------------------------------------------------------
 
-/// Whether any value in the tree is a func reference with an empty method
-/// name: the runtime refuses one by decision (round-trip symmetry with
-/// `validate` and `encode`, see `ts/codec.ts`), the reference accepts it.
-fn has_empty_method(value: &IDLValue) -> bool {
-    match value {
-        IDLValue::Func(_, method) => method.is_empty(),
-        IDLValue::Opt(inner) => has_empty_method(inner),
-        IDLValue::Vec(items) => items.iter().any(has_empty_method),
-        IDLValue::Record(fields) => fields.iter().any(|field| has_empty_method(&field.val)),
-        IDLValue::Variant(variant) => has_empty_method(&variant.0.val),
-        _ => false,
+// ---------------------------------------------------------------------------
+// Input properties: a scan of the message at its own wire types
+// ---------------------------------------------------------------------------
+
+/// The deepest composite nesting the runtime's default `maxDepth` (256 depth
+/// steps) always admits. The runtime charges a value at most two steps per
+/// Candid level — the constructor, and at most one `rec` hop to reach it (a
+/// Contract-loaded schema needs one) — plus one for a leaf, so 127 levels
+/// cost at most 2 × 127 + 1 = 255 steps: a depth refusal of a message that
+/// nests no deeper is a runtime defect, not policy. Deeper, the limit is the
+/// runtime's documented policy (the reference bounds only its stack).
+pub const DEEP_LEVELS: usize = 127;
+
+/// Half the runtime's default `maxElements` (1,000,000), for the same
+/// reason: every value read (decoded or skipped) and at most one `rec` hop
+/// per value charge that budget.
+pub const MANY_VALUES: usize = 500_000;
+
+/// What a message holds, read from its bytes at its own wire types and never
+/// at the expected types: the input properties the verdict mapping ties every
+/// intended or reference-side attribution to (issue #196 review). The scan
+/// mirrors the wire format, not either decoder; it stops at the first byte it
+/// cannot read, so a property later in a malformed message goes unseen.
+#[derive(Default)]
+pub struct Scan {
+    /// A LEB128 or SLEB128 group longer than the value needs (`80 00`, or a
+    /// signed group whose last byte only repeats the sign).
+    pub non_minimal_leb128: bool,
+    /// A future-type value with a non-zero reference count.
+    pub future_references: bool,
+    /// A func value whose method name is not well-formed UTF-8.
+    pub invalid_method_utf8: bool,
+    /// A func value with an empty method name: the runtime refuses one by
+    /// decision (round-trip symmetry with `validate` and `encode`, see
+    /// `ts/codec.ts`), the reference accepts it — or never reaches it, when
+    /// an `opt` above absorbs a later failure.
+    pub empty_method: bool,
+    /// Bytes where the wire type is `empty`: no value has that type, so the
+    /// scan stops there.
+    pub empty_value: bool,
+    /// A record the reference rewrites to `empty` (see `empty_records`)
+    /// reachable from a func or service type in the table.
+    pub empty_record_in_reference: bool,
+    /// The deepest nesting of composite values (`opt`, `vec`, `record`,
+    /// `variant`, an absent `opt` included) the scan read.
+    pub levels: usize,
+    /// How many values the scan read.
+    pub values: usize,
+}
+
+impl Scan {
+    /// The flags this scan contributes to a reference verdict.
+    fn flags(&self) -> Vec<&'static str> {
+        let mut flags = Vec::new();
+        for (set, name) in [
+            (self.non_minimal_leb128, "non_minimal_leb128"),
+            (self.future_references, "future_references"),
+            (self.invalid_method_utf8, "invalid_method_utf8"),
+            (self.empty_method, "empty_method"),
+            (self.empty_value, "wire_empty_value"),
+            (self.empty_record_in_reference, "wire_empty_record"),
+            (self.levels > DEEP_LEVELS, "deep_nesting"),
+            (self.values > MANY_VALUES, "many_values"),
+        ] {
+            if set {
+                flags.push(name);
+            }
+        }
+        flags
+    }
+}
+
+enum Entry {
+    Opt(i64),
+    Vec(i64),
+    Record(Vec<i64>),
+    Variant(Vec<i64>),
+    Func(Vec<i64>),
+    Service(Vec<i64>),
+    Future,
+}
+
+impl Entry {
+    fn children(&self) -> &[i64] {
+        match self {
+            Entry::Opt(inner) | Entry::Vec(inner) => std::slice::from_ref(inner),
+            Entry::Record(types)
+            | Entry::Variant(types)
+            | Entry::Func(types)
+            | Entry::Service(types) => types,
+            Entry::Future => &[],
+        }
     }
 }
 
 struct Cursor<'a> {
     bytes: &'a [u8],
     at: usize,
+    non_minimal: bool,
 }
 
 impl Cursor<'_> {
@@ -378,163 +527,337 @@ impl Cursor<'_> {
         Some(byte)
     }
 
+    fn skip(&mut self, count: u64) -> Option<&[u8]> {
+        let count = usize::try_from(count).ok()?;
+        let end = self.at.checked_add(count)?;
+        let slice = self.bytes.get(self.at..end)?;
+        self.at = end;
+        Some(slice)
+    }
+
+    /// One LEB128 group of any length; its value saturates at `u64::MAX`.
     fn leb(&mut self) -> Option<u64> {
         let mut value = 0u64;
-        for shift in (0..64).step_by(7) {
+        let mut shift = 0u32;
+        let mut count = 0usize;
+        loop {
             let byte = self.byte()?;
-            value |= u64::from(byte & 0x7f) << shift;
+            count += 1;
+            let low = u64::from(byte & 0x7f);
+            if shift < 64 && (low << shift) >> shift == low {
+                value |= low << shift;
+            } else if low != 0 {
+                value = u64::MAX;
+            }
+            shift = shift.saturating_add(7);
             if byte & 0x80 == 0 {
+                if count > 1 && byte == 0 {
+                    self.non_minimal = true;
+                }
                 return Some(value);
             }
         }
-        None
     }
 
+    /// One SLEB128 group of any length; its value saturates.
     fn sleb(&mut self) -> Option<i64> {
         let mut value = 0i64;
-        let mut shift = 0;
+        let mut shift = 0u32;
+        let mut previous = 0u8;
+        let mut count = 0usize;
         loop {
             let byte = self.byte()?;
-            value |= i64::from(byte & 0x7f) << shift;
-            shift += 7;
+            count += 1;
+            if shift < 63 {
+                value |= i64::from(byte & 0x7f) << shift;
+            }
+            shift = shift.saturating_add(7);
             if byte & 0x80 == 0 {
                 if shift < 64 && byte & 0x40 != 0 {
                     value |= -1i64 << shift;
                 }
+                if count > 1
+                    && ((byte == 0x00 && previous & 0x40 == 0)
+                        || (byte == 0x7f && previous & 0x40 != 0))
+                {
+                    self.non_minimal = true;
+                }
                 return Some(value);
             }
-            if shift >= 63 {
-                return None;
-            }
+            previous = byte;
         }
     }
 }
 
-/// A parsed type table: the record entries (as table indices of their fields'
-/// types, primitive field types omitted) and whether any type reference in
-/// the table or the argument list is the primitive `empty`.
-struct Table {
-    records: Vec<Option<Vec<usize>>>,
-    mentions_empty: bool,
-}
-
-/// `None` for a table that does not parse.
-fn table_records(bytes: &[u8]) -> Option<Table> {
-    let mut cursor = Cursor { bytes, at: 0 };
+/// The parsed header: the table entries and the argument types. `None` for a
+/// header that does not parse.
+fn read_header(cursor: &mut Cursor) -> Option<(Vec<Entry>, Vec<i64>)> {
     for expected in *b"DIDL" {
         if cursor.byte()? != expected {
             return None;
         }
     }
-    let count = usize::try_from(cursor.leb()?).ok()?;
-    if count > bytes.len() {
+    let count = cursor.leb()?;
+    if count > cursor.bytes.len() as u64 {
         return None;
     }
     let mut entries = Vec::new();
-    let mut mentions_empty = false;
-    let mut note = |ty: i64| {
-        if ty == -17 {
-            mentions_empty = true;
-        }
-        ty
-    };
     for _ in 0..count {
         let opcode = cursor.sleb()?;
         entries.push(match opcode {
-            -18 | -19 => {
-                note(cursor.sleb()?);
-                None
-            }
+            -18 => Entry::Opt(cursor.sleb()?),
+            -19 => Entry::Vec(cursor.sleb()?),
             -20 | -21 => {
-                let fields = cursor.leb()?;
-                let mut refs = Vec::new();
-                for _ in 0..fields {
+                let mut types = Vec::new();
+                for _ in 0..cursor.leb()? {
                     cursor.leb()?;
-                    let ty = note(cursor.sleb()?);
-                    if ty >= 0 {
-                        refs.push(usize::try_from(ty).ok()?);
-                    }
+                    types.push(cursor.sleb()?);
                 }
-                (opcode == -20).then_some(refs)
+                if opcode == -20 {
+                    Entry::Record(types)
+                } else {
+                    Entry::Variant(types)
+                }
             }
             -22 => {
+                let mut types = Vec::new();
                 for _ in 0..2 {
                     for _ in 0..cursor.leb()? {
-                        note(cursor.sleb()?);
+                        types.push(cursor.sleb()?);
                     }
                 }
-                for _ in 0..cursor.leb()? {
-                    cursor.byte()?;
-                }
-                None
+                let annotations = cursor.byte()?;
+                cursor.skip(u64::from(annotations))?;
+                Entry::Func(types)
             }
             -23 => {
+                let mut types = Vec::new();
                 for _ in 0..cursor.leb()? {
-                    let length = usize::try_from(cursor.leb()?).ok()?;
-                    cursor.at = cursor.at.checked_add(length)?;
-                    note(cursor.sleb()?);
+                    let length = cursor.leb()?;
+                    cursor.skip(length)?;
+                    types.push(cursor.sleb()?);
                 }
-                None
+                Entry::Service(types)
+            }
+            opcode if opcode < -24 => {
+                let length = cursor.leb()?;
+                cursor.skip(length)?;
+                Entry::Future
             }
             _ => return None,
         });
     }
+    let mut args = Vec::new();
     for _ in 0..cursor.leb()? {
-        note(cursor.sleb()?);
+        args.push(cursor.sleb()?);
     }
-    Some(Table {
-        records: entries,
-        mentions_empty,
-    })
+    let valid =
+        |ty: i64| (0..entries.len() as i64).contains(&ty) || (-17..=-1).contains(&ty) || ty == -24;
+    let refs_valid = entries
+        .iter()
+        .all(|entry| entry.children().iter().all(|&ty| valid(ty)));
+    (refs_valid && args.iter().all(|&ty| valid(ty))).then_some((entries, args))
 }
 
-/// Whether the message's type table or argument list mentions `empty`. The
-/// reference's subtype relation has `empty <: t` for every `t`, and it reads
-/// a func or service value through that relation alone, so where the wire
-/// says `empty` and the expected type is a reference it decodes a value no
-/// wire type can carry; the runtime refuses (`type_mismatch`: no value
-/// inhabits `empty`). The verdict mapping attributes that symptom to the
-/// reference on flagged messages (`decode:reference:empty-wire-value`).
-pub fn wire_mentions_empty(bytes: &[u8]) -> bool {
-    table_records(bytes).is_some_and(|table| table.mentions_empty)
-}
-
-/// Whether the message's type table holds a record type the reference
-/// rewrites to `empty` while parsing it (`TypeEnv::replace_empty`: a record
-/// some field of which is, through record fields only, the record itself —
-/// uninhabited). The reference applies that rewrite to the wire table only,
-/// never to the expected types, so in a func or service signature it turns
-/// `W <: E` into `empty <: E` (always true: it accepts a reference type that is
-/// not a subtype) and `E <: W` into `E <: empty` (false: it refuses even
-/// identical types). The runtime compares the types as written. This mirrors
-/// the reference's rule exactly so the verdict mapping can attribute those
-/// divergences (`decode:reference:empty-normalization`).
-pub fn wire_has_empty_record(bytes: &[u8]) -> bool {
-    let Some(table) = table_records(bytes) else {
-        return false;
-    };
-    let entries = table.records;
+/// The record entries the reference rewrites to `empty` while parsing the
+/// table (`TypeEnv::replace_empty`): a record some field of which is, through
+/// record fields only, the record itself — uninhabited.
+fn empty_records(entries: &[Entry]) -> Vec<bool> {
     // 0 = unvisited, 1 = in progress, 2 = empty, 3 = not empty.
-    fn empty(entries: &[Option<Vec<usize>>], state: &mut [u8], index: usize) -> bool {
-        match state.get(index).copied() {
-            None => return false,
-            Some(1 | 2) => {
+    fn empty(entries: &[Entry], state: &mut [u8], index: usize) -> bool {
+        match state[index] {
+            1 | 2 => {
                 state[index] = 2;
                 return true;
             }
-            Some(3) => return false,
+            3 => return false,
             _ => {}
         }
         state[index] = 1;
         let result = match &entries[index] {
-            Some(fields) => fields.iter().any(|&field| empty(entries, state, field)),
-            None => false,
+            Entry::Record(fields) => fields.iter().any(|&field| {
+                usize::try_from(field).is_ok_and(|field| empty(entries, state, field))
+            }),
+            _ => false,
         };
         state[index] = if result { 2 } else { 3 };
         result
     }
     let mut state = vec![0u8; entries.len()];
-    (0..entries.len()).any(|index| entries[index].is_some() && empty(&entries, &mut state, index))
+    (0..entries.len())
+        .map(|index| {
+            matches!(entries[index], Entry::Record(_)) && empty(entries, &mut state, index)
+        })
+        .collect()
+}
+
+/// Whether a record the reference rewrites to `empty` is reachable from a
+/// func or service entry: only there does the reference compare types (its
+/// subtype check of reference values), and only there can the rewrite decide
+/// a verdict (`decode:reference:empty-normalization`).
+fn empty_record_in_reference(entries: &[Entry]) -> bool {
+    let empty = empty_records(entries);
+    let mut seen = vec![false; entries.len()];
+    let mut stack: Vec<usize> = Vec::new();
+    for entry in entries {
+        if matches!(entry, Entry::Func(_) | Entry::Service(_)) {
+            stack.extend(
+                entry
+                    .children()
+                    .iter()
+                    .filter_map(|&ty| usize::try_from(ty).ok()),
+            );
+        }
+    }
+    while let Some(index) = stack.pop() {
+        if std::mem::replace(&mut seen[index], true) {
+            continue;
+        }
+        if empty[index] {
+            return true;
+        }
+        stack.extend(
+            entries[index]
+                .children()
+                .iter()
+                .filter_map(|&ty| usize::try_from(ty).ok()),
+        );
+    }
+    false
+}
+
+/// The scan's walk bounds: it runs on the generator's large stack, and a
+/// recursive record that only recurses would otherwise never consume a byte.
+const SCAN_LEVELS: usize = 10_000;
+const SCAN_VALUES: usize = 4_000_000;
+
+struct Walker<'a, 'b> {
+    cursor: Cursor<'a>,
+    entries: &'b [Entry],
+    scan: Scan,
+}
+
+impl Walker<'_, '_> {
+    fn principal(&mut self) -> Option<()> {
+        if self.cursor.byte()? != 1 {
+            return None;
+        }
+        let length = self.cursor.leb()?;
+        self.cursor.skip(length)?;
+        Some(())
+    }
+
+    /// Read one value of wire type `ty`; `None` where the scan stops.
+    fn value(&mut self, ty: i64, level: usize) -> Option<()> {
+        self.scan.values += 1;
+        if self.scan.values > SCAN_VALUES || level > SCAN_LEVELS {
+            return None;
+        }
+        let Ok(index) = usize::try_from(ty) else {
+            return match ty {
+                -1 | -16 => Some(()),
+                -2 | -5 | -9 => self.cursor.skip(1).map(drop),
+                -6 | -10 => self.cursor.skip(2).map(drop),
+                -7 | -11 | -13 => self.cursor.skip(4).map(drop),
+                -8 | -12 | -14 => self.cursor.skip(8).map(drop),
+                -3 => self.cursor.leb().map(drop),
+                -4 => self.cursor.sleb().map(drop),
+                -15 => {
+                    let length = self.cursor.leb()?;
+                    self.cursor.skip(length).map(drop)
+                }
+                -24 => self.principal(),
+                _ => {
+                    self.scan.empty_value = true;
+                    None
+                }
+            };
+        };
+        let entries = self.entries;
+        let entry = &entries[index];
+        if matches!(
+            entry,
+            Entry::Opt(_) | Entry::Vec(_) | Entry::Record(_) | Entry::Variant(_)
+        ) {
+            self.scan.levels = self.scan.levels.max(level + 1);
+        }
+        match entry {
+            Entry::Opt(inner) => match self.cursor.byte()? {
+                0 => Some(()),
+                1 => self.value(*inner, level + 1),
+                _ => None,
+            },
+            Entry::Vec(inner) => {
+                for _ in 0..self.cursor.leb()? {
+                    self.value(*inner, level + 1)?;
+                }
+                Some(())
+            }
+            Entry::Record(fields) => {
+                for &field in fields {
+                    self.value(field, level + 1)?;
+                }
+                Some(())
+            }
+            Entry::Variant(arms) => {
+                let arm = usize::try_from(self.cursor.leb()?).ok()?;
+                self.value(*arms.get(arm)?, level + 1)
+            }
+            Entry::Func(_) => {
+                if self.cursor.byte()? != 1 {
+                    return None;
+                }
+                self.principal()?;
+                let length = self.cursor.leb()?;
+                if length == 0 {
+                    self.scan.empty_method = true;
+                }
+                if std::str::from_utf8(self.cursor.skip(length)?).is_err() {
+                    self.scan.invalid_method_utf8 = true;
+                }
+                Some(())
+            }
+            Entry::Service(_) => self.principal(),
+            Entry::Future => {
+                let length = self.cursor.leb()?;
+                if self.cursor.leb()? != 0 {
+                    self.scan.future_references = true;
+                }
+                self.cursor.skip(length).map(drop)
+            }
+        }
+    }
+}
+
+/// Scan a message at its own wire types (see `Scan`).
+pub fn scan(bytes: &[u8]) -> Scan {
+    let mut cursor = Cursor {
+        bytes,
+        at: 0,
+        non_minimal: false,
+    };
+    let Some((entries, args)) = read_header(&mut cursor) else {
+        return Scan {
+            non_minimal_leb128: cursor.non_minimal,
+            ..Scan::default()
+        };
+    };
+    let mut walker = Walker {
+        cursor,
+        entries: &entries,
+        scan: Scan {
+            empty_record_in_reference: empty_record_in_reference(&entries),
+            ..Scan::default()
+        },
+    };
+    for ty in args {
+        if walker.value(ty, 0).is_none() {
+            break;
+        }
+    }
+    let mut scan = walker.scan;
+    scan.non_minimal_leb128 = walker.cursor.non_minimal;
+    scan
 }
 
 /// The reference decoder's configuration. Unconfigured, the `candid` crate
@@ -572,24 +895,14 @@ fn quota_exhausted(error: &candid::Error) -> bool {
 /// well-formed and only the expected types refuse it; `limit` when the
 /// decoding quota ran out first (see `DECODING_QUOTA`).
 ///
-/// `flags` records input properties the verdict mapping needs and only the
-/// reference can see: `empty_method` when a value the reference decoded (at
-/// the expected types, or at the wire types for a `coercion` rejection) is a
-/// func reference with an empty method name; `wire_empty_record` when the
-/// wire type table holds a record the reference rewrites to `empty` (see
-/// `wire_has_empty_record`); `wire_empty` when the table or the argument
-/// list mentions `empty` (see `wire_mentions_empty`).
+/// `flags` records input properties the verdict mapping ties attributions
+/// to, never anything the runtime says: the scan's properties of the bytes
+/// themselves (see `Scan::flags`).
 pub fn reference_verdict(env: &TypeEnv, bytes: &[u8], expected: &[Type]) -> Value {
     let mut verdict = reference_verdict_unflagged(env, bytes, expected);
-    let mut flags = verdict["flags"].as_array().cloned().unwrap_or_default();
-    if wire_has_empty_record(bytes) {
-        flags.push(json!("wire_empty_record"));
-    }
-    if wire_mentions_empty(bytes) {
-        flags.push(json!("wire_empty"));
-    }
+    let flags = scan(bytes).flags();
     if !flags.is_empty() {
-        verdict["flags"] = Value::Array(flags);
+        verdict["flags"] = json!(flags);
     }
     verdict
 }
@@ -609,11 +922,7 @@ fn reference_verdict_unflagged(env: &TypeEnv, bytes: &[u8], expected: &[Type]) -
                     }
                 }
             }
-            let mut verdict = json!({ "verdict": "accept", "values": values });
-            if decoded.args.iter().any(has_empty_method) {
-                verdict["flags"] = json!(["empty_method"]);
-            }
-            verdict
+            json!({ "verdict": "accept", "values": values })
         }
         Ok(Err(error)) => {
             if quota_exhausted(&error) {
@@ -626,13 +935,7 @@ fn reference_verdict_unflagged(env: &TypeEnv, bytes: &[u8], expected: &[Type]) -
                 return json!({ "verdict": "reject", "class": "header" });
             }
             match guarded(|| IDLArgs::from_bytes_with_config(bytes, &config())) {
-                Ok(Ok(untyped)) => {
-                    let mut verdict = json!({ "verdict": "reject", "class": "coercion" });
-                    if untyped.args.iter().any(has_empty_method) {
-                        verdict["flags"] = json!(["empty_method"]);
-                    }
-                    verdict
-                }
+                Ok(Ok(_)) => json!({ "verdict": "reject", "class": "coercion" }),
                 Ok(Err(error)) if quota_exhausted(&error) => {
                     json!({ "verdict": "reject", "class": "limit" })
                 }

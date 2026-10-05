@@ -27,10 +27,86 @@ impl Lab {
 
     fn render(&self) -> String {
         match self {
-            Lab::Name(name) => (*name).to_string(),
+            Lab::Name(name) if is_identifier(name) => (*name).to_string(),
+            Lab::Name(name) => quoted(name),
             Lab::Id(id) => id.to_string(),
         }
     }
+
+    /// Another spelling of the same field id: the number, a name that
+    /// hashes to it, or a name's hash twin (see `TWINS`). The field-name
+    /// table attaches names to canonical nodes, so a declaration that respells
+    /// a sibling's field is where `env:label-collision` lives.
+    fn respell(&self) -> Option<Lab> {
+        match self {
+            Lab::Name(name) => Some(
+                TWINS
+                    .iter()
+                    .find(|(one, _)| one == name)
+                    .map_or(Lab::Id(candid::idl_hash(name)), |(_, twin)| Lab::Name(twin)),
+            ),
+            Lab::Id(id) => NAMES
+                .iter()
+                .find(|name| candid::idl_hash(name) == *id)
+                .map(|name| Lab::Name(name)),
+        }
+    }
+}
+
+/// Candid's reserved words: a field so named must be quoted.
+const KEYWORDS: &[&str] = &[
+    "blob",
+    "bool",
+    "composite_query",
+    "empty",
+    "float32",
+    "float64",
+    "func",
+    "import",
+    "int",
+    "int8",
+    "int16",
+    "int32",
+    "int64",
+    "nat",
+    "nat8",
+    "nat16",
+    "nat32",
+    "nat64",
+    "null",
+    "oneway",
+    "opt",
+    "principal",
+    "query",
+    "record",
+    "reserved",
+    "service",
+    "text",
+    "type",
+    "variant",
+    "vec",
+];
+
+fn is_identifier(name: &str) -> bool {
+    let mut chars = name.chars();
+    chars
+        .next()
+        .is_some_and(|first| first.is_ascii_alphabetic() || first == '_')
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+        && !KEYWORDS.contains(&name)
+}
+
+/// A Candid text literal: `"` and `\` escaped, everything else as is.
+fn quoted(name: &str) -> String {
+    let mut text = String::from("\"");
+    for c in name.chars() {
+        if c == '"' || c == '\\' {
+            text.push('\\');
+        }
+        text.push(c);
+    }
+    text.push('"');
+    text
 }
 
 #[derive(Clone, Debug)]
@@ -75,9 +151,35 @@ const PRIMS: &[&str] = &[
 ];
 const PRIM_WEIGHTS: &[u32] = &[4, 4, 8, 8, 4, 3, 3, 4, 3, 3, 3, 4, 3, 3, 8, 3, 4, 4, 1];
 
+/// Field and arm names. Besides plain identifiers: names that must be quoted
+/// (non-ASCII, a space, a quote, a keyword, the empty name), and pairs whose
+/// label ids coincide with each other or with a number in `IDS` (`""` hashes
+/// to 0, `d` to 100, and `aaazaa`/`cctakw` to 3807829753; see `TWINS`).
 const NAMES: &[&str] = &[
-    "a", "b", "c", "d", "ok", "err", "head", "tail", "value", "x", "y", "Nat", "Text", "foo",
+    "a",
+    "b",
+    "c",
+    "d",
+    "ok",
+    "err",
+    "head",
+    "tail",
+    "value",
+    "x",
+    "y",
+    "Nat",
+    "Text",
+    "foo",
+    "名前",
+    "with space",
+    "",
+    "say \"hi\"",
+    "nat",
+    "aaazaa",
+    "cctakw",
 ];
+/// Distinct names with one label id (`idl_hash`), each to its twin.
+const TWINS: &[(&str, &str)] = &[("aaazaa", "cctakw"), ("cctakw", "aaazaa")];
 // Not 4_294_967_295: `candid_parser` 0.4.0 computes the next positional id
 // as `id + 1` while parsing a record, which overflows (a panic under debug
 // assertions) for a field labelled `u32::MAX` — upstream, outside both sides
@@ -176,6 +278,15 @@ fn random_func(rng: &mut Rng, depth: usize, decls: usize) -> Ty {
     Ty::Func { args, rets, mode }
 }
 
+/// Respell one field's label (see `Lab::respell`); the id stays the same, so
+/// the fields stay distinct.
+fn respell_one(rng: &mut Rng, fields: &mut [(Lab, Ty)]) {
+    let index = rng.below(fields.len());
+    if let Some(label) = fields[index].0.respell() {
+        fields[index].0 = label;
+    }
+}
+
 /// A neighbouring type: the edits the subtyping and coercion rules care
 /// about, applied at one random position.
 pub fn perturb(rng: &mut Rng, ty: &Ty, decls: usize) -> Ty {
@@ -219,11 +330,12 @@ pub fn perturb(rng: &mut Rng, ty: &Ty, decls: usize) -> Ty {
         },
         Ty::Record(fields) => {
             let mut fields = fields.clone();
-            match rng.weighted(&[3, 3, 4, 1, 1]) {
+            match rng.weighted(&[3, 3, 4, 1, 1, 2]) {
                 0 if !fields.is_empty() => {
                     let index = rng.below(fields.len());
                     fields.remove(index);
                 }
+                5 if !fields.is_empty() => respell_one(rng, &mut fields),
                 1 => {
                     let label = random_label(rng);
                     if fields.iter().all(|(other, _)| other.id() != label.id()) {
@@ -240,9 +352,10 @@ pub fn perturb(rng: &mut Rng, ty: &Ty, decls: usize) -> Ty {
                     fields[index].1 = perturb(rng, &fields[index].1, decls);
                 }
                 3 => return Ty::Opt(Box::new(Ty::Record(fields))),
-                _ => {
+                4 => {
                     return Ty::Tuple(fields.into_iter().map(|(_, ty)| ty).collect());
                 }
+                _ => {}
             }
             Ty::Record(fields)
         }
@@ -271,7 +384,8 @@ pub fn perturb(rng: &mut Rng, ty: &Ty, decls: usize) -> Ty {
         }
         Ty::Variant(arms) => {
             let mut arms = arms.clone();
-            match rng.weighted(&[3, 3, 4, 1]) {
+            match rng.weighted(&[3, 3, 4, 1, 2]) {
+                4 if !arms.is_empty() => respell_one(rng, &mut arms),
                 0 if arms.len() > 1 => {
                     let index = rng.below(arms.len());
                     arms.remove(index);
@@ -447,5 +561,69 @@ pub fn random_env(rng: &mut Rng) -> Env {
         source,
         families,
         decls,
+    }
+}
+
+/// The recursive shapes of the deep environments (issue #196 review: the
+/// depth regime of the iterative walkers). `T0` is the shape; the siblings
+/// are a structural copy (`T1`) and a variation at the base (`T2`), so
+/// decode cases also coerce across deep values.
+const DEEP_SHAPES: &[[&str; 3]] = &[
+    ["opt T0", "opt T1", "opt opt T2"],
+    ["vec T0", "vec T1", "vec opt T2"],
+    [
+        "record { opt T0 }",
+        "record { opt T1 }",
+        "record { opt T2; opt nat }",
+    ],
+    [
+        "variant { a : T0; b }",
+        "variant { a : T1; b }",
+        "variant { a : T2; b : nat }",
+    ],
+    [
+        "record { head : nat8; tail : opt T0 }",
+        "record { head : nat8; tail : opt T1 }",
+        "record { head : nat; tail : opt T2 }",
+    ],
+];
+
+/// A deep environment: a recursive shape and its siblings, or a chain of
+/// declarations `T0 = c(T1)`, `T1 = c(T2)`, … nested `chain` constructors
+/// deep, whose values nest as deep as the chain (a deep type table). The
+/// chain stays within the compiler's `max_type_depth` (256), so both sides
+/// accept the environment; values of the recursive shapes nest as deep as
+/// the case asks.
+pub fn deep_env(rng: &mut Rng) -> Env {
+    if rng.chance(2, 3) {
+        let shape = rng.pick(DEEP_SHAPES);
+        let source = shape
+            .iter()
+            .enumerate()
+            .map(|(index, body)| format!("type {} = {body};\n", decl_name(index)))
+            .collect();
+        return Env {
+            source,
+            families: vec![vec![0, 1, 2]],
+            decls: 3,
+        };
+    }
+    let chain = 16 + rng.below(240);
+    let mut source = String::new();
+    for index in 0..chain {
+        let next = decl_name(index + 1);
+        let body = match rng.below(4) {
+            0 => format!("opt {next}"),
+            1 => format!("vec {next}"),
+            2 => format!("record {{ {next} }}"),
+            _ => format!("variant {{ a : {next}; b }}"),
+        };
+        source.push_str(&format!("type {} = {body};\n", decl_name(index)));
+    }
+    source.push_str(&format!("type {} = nat;\n", decl_name(chain)));
+    Env {
+        source,
+        families: vec![(0..=chain).collect()],
+        decls: chain + 1,
     }
 }

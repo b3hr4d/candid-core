@@ -19,6 +19,15 @@
 //! Each random environment is a `.did` source (see `types.rs`); the reference
 //! types come from `candid_parser` over that source, and the Contract the
 //! TypeScript side loads comes from candid-core's compiler over the same text.
+//! Deep environments (`types::deep_env`: recursive shapes and declaration
+//! chains) add decode and validate cases whose values nest up to 300 levels,
+//! across the runtime's `maxDepth`. A drafted environment either side refuses
+//! is redrawn, and the corpus header counts redraws by reason.
+//!
+//! Every decode verdict carries `flags`: input properties the Rust side reads
+//! from the bytes at their own wire types (`wire::Scan`) or from the types,
+//! which the TypeScript runner requires before it attributes a symptom to an
+//! intended difference or to the reference — never anything the runtime says.
 //!
 //! # The committed corpus (CI)
 //!
@@ -47,6 +56,7 @@ mod rng;
 mod types;
 mod wire;
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
 use candid::types::Type;
@@ -56,14 +66,19 @@ use serde_json::{json, Value};
 
 use rng::Rng;
 
-/// The committed corpus: environments `start..start + envs`, each with a
-/// fixed number of cases per target.
+/// The committed corpus: random environments `start..start + envs`, each
+/// with a fixed number of cases per target, and deep environments
+/// `start..start + deep_envs` (see `types::deep_env`), each with a fixed
+/// number of decode and validate cases.
 struct Seeds {
     start: u64,
     envs: u64,
     decode: usize,
     validate: usize,
     contract: usize,
+    deep_envs: u64,
+    deep_decode: usize,
+    deep_validate: usize,
 }
 
 const CORPUS_SEEDS: Seeds = Seeds {
@@ -72,7 +87,20 @@ const CORPUS_SEEDS: Seeds = Seeds {
     decode: 40,
     validate: 12,
     contract: 8,
+    deep_envs: 6,
+    deep_decode: 4,
+    deep_validate: 2,
 };
+
+/// Deep environments draw from their own stream: seed `s` of a deep
+/// environment is not the random environment of seed `s`.
+const DEEP_SALT: u64 = 0xdee9_0000_0000_0000;
+
+/// Environments drafted and redrawn because one side or both refused the
+/// source, keyed `reference=<outcome> compiler=<outcome>`: the corpus header
+/// carries the counts, so a shape the compiler (or the reference) refuses
+/// systematically shows up as a count instead of silently leaving coverage.
+type Redraws = BTreeMap<String, u64>;
 
 fn manifest_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -85,31 +113,86 @@ struct Built {
     types: TypeEnv,
     envelope: Value,
     contract: candid_core::Contract,
-    label_collision: bool,
+    /// Contract nodes holding a field spelled two ways (see
+    /// `label_collisions`).
+    collisions: BTreeSet<u64>,
 }
 
-fn reference_env(source: &str) -> Option<TypeEnv> {
-    let prog: IDLProg = source.parse().ok()?;
+impl Built {
+    /// Whether any of the named declarations reaches a node in
+    /// `collisions` through the Contract graph: only there does
+    /// `env:label-collision` apply to a case.
+    fn reaches_collision(&self, names: &[String]) -> bool {
+        if self.collisions.is_empty() {
+            return false;
+        }
+        let contract = &self.envelope["contract"];
+        let types = contract["types"].as_array().map_or(&[][..], Vec::as_slice);
+        let mut stack: Vec<u64> = contract["declarations"]
+            .as_array()
+            .map_or(&[][..], Vec::as_slice)
+            .iter()
+            .filter(|declaration| {
+                names
+                    .iter()
+                    .any(|name| declaration["name"].as_str() == Some(name))
+            })
+            .filter_map(|declaration| declaration["type"].as_u64())
+            .collect();
+        let mut seen = BTreeSet::new();
+        while let Some(index) = stack.pop() {
+            if !seen.insert(index) {
+                continue;
+            }
+            if self.collisions.contains(&index) {
+                return true;
+            }
+            let Some(node) = types.get(index as usize) else {
+                continue;
+            };
+            stack.extend(node["inner"].as_u64());
+            for key in ["fields", "methods"] {
+                for child in node[key].as_array().map_or(&[][..], Vec::as_slice) {
+                    stack.extend(child["type"].as_u64());
+                }
+            }
+            for key in ["args", "results"] {
+                for child in node[key].as_array().map_or(&[][..], Vec::as_slice) {
+                    stack.extend(child.as_u64());
+                }
+            }
+        }
+        false
+    }
+
+    /// Add the case-level `label_collision` flag to a reference verdict.
+    fn flag_collision(&self, names: &[String], verdict: &mut Value) {
+        if self.reaches_collision(names) {
+            let mut flags = verdict["flags"].as_array().cloned().unwrap_or_default();
+            flags.push(json!("label_collision"));
+            verdict["flags"] = Value::Array(flags);
+        }
+    }
+}
+
+fn reference_env(source: &str) -> Result<TypeEnv, &'static str> {
+    let prog: IDLProg = source.parse().map_err(|_| "parse")?;
     let mut env = TypeEnv::new();
-    check_prog(&mut env, &prog).ok()?;
-    Some(env)
+    check_prog(&mut env, &prog).map_err(|_| "check")?;
+    Ok(env)
 }
 
-/// The Contract of `source` as the one-document envelope the TypeScript
-/// loader reads, normalized as `wire_vectors.rs` normalizes the coercion
-/// golden's (a fixed producer block, a canonical reparse, field names in the
-/// `org.candid-core.field-names/v1` extension).
-/// Whether two source spellings of one field share a canonical container:
-/// the same `(container, id)` written with a name in one declaration and
-/// numbered (or under another name) in another. The field-name table attaches
-/// names to canonical nodes, so the runtime keys every occurrence by the one
-/// name, while the reference reads each declaration's own labels.
-fn label_collision(compilation: &candid_core::Compilation) -> bool {
+/// The canonical containers that hold one field under two source
+/// spellings: the same `(container, id)` written with a name in one
+/// declaration and numbered (or under another name) in another. The
+/// field-name table attaches names to canonical nodes, so the runtime keys
+/// every occurrence by the one name, while the reference reads each
+/// declaration's own labels.
+fn label_collisions(compilation: &candid_core::Compilation) -> BTreeSet<u64> {
     let Some(info) = compilation.source_info() else {
-        return false;
+        return BTreeSet::new();
     };
-    let mut spellings: std::collections::BTreeMap<(u32, u32), std::collections::BTreeSet<String>> =
-        std::collections::BTreeMap::new();
+    let mut spellings: BTreeMap<(u32, u32), BTreeSet<String>> = BTreeMap::new();
     for provenance in info.field_labels() {
         let spelling = match &provenance.label {
             candid_core::SourceLabel::Named { name } => format!("name:{name}"),
@@ -120,22 +203,34 @@ fn label_collision(compilation: &candid_core::Compilation) -> bool {
             .or_default()
             .insert(spelling);
     }
-    spellings.values().any(|set| set.len() > 1)
+    spellings
+        .into_iter()
+        .filter(|(_, set)| set.len() > 1)
+        .map(|((container, _), _)| u64::from(container))
+        .collect()
 }
 
-fn envelope_of(source: &str) -> Option<(Value, candid_core::Contract, bool)> {
-    let compilation = candid_core::compile_did(source).ok()?;
-    let collision = label_collision(&compilation);
-    let mut document = serde_json::to_value(compilation.contract()).ok()?;
+type Envelope = (Value, candid_core::Contract, BTreeSet<u64>);
+
+/// The Contract of `source` as the one-document envelope the TypeScript
+/// loader reads, normalized as `wire_vectors.rs` normalizes the coercion
+/// golden's (a fixed producer block, a canonical reparse, field names in the
+/// `org.candid-core.field-names/v1` extension).
+fn envelope_of(source: &str) -> Result<Envelope, &'static str> {
+    let compilation = candid_core::compile_did(source).map_err(|_| "error")?;
+    let collisions = label_collisions(&compilation);
+    let mut document = serde_json::to_value(compilation.contract()).map_err(|_| "serialize")?;
     document["producer"] = json!({
         "name": "candid-core",
         "version": "0.0.0-golden",
         "candid_version": "0.0.0-golden",
         "candid_parser_version": "0.0.0-golden",
     });
-    let contract = candid_core::Contract::from_json(&document.to_string()).ok()?;
-    let mut names = std::collections::BTreeMap::new();
-    for provenance in compilation.source_info()?.field_labels() {
+    let contract =
+        candid_core::Contract::from_json(&document.to_string()).map_err(|_| "contract")?;
+    let mut names = BTreeMap::new();
+    let info = compilation.source_info().ok_or("source_info")?;
+    for provenance in info.field_labels() {
         if let candid_core::SourceLabel::Named { name } = &provenance.label {
             names.insert((provenance.container, provenance.id), name.clone());
         }
@@ -151,29 +246,39 @@ fn envelope_of(source: &str) -> Option<(Value, candid_core::Contract, bool)> {
             Value::Array(triples),
             &candid_core::Limits::default(),
         )
-        .ok()?;
-    Some((serde_json::to_value(&envelope).ok()?, contract, collision))
+        .map_err(|_| "extension")?;
+    let envelope = serde_json::to_value(&envelope).map_err(|_| "serialize")?;
+    Ok((envelope, contract, collisions))
 }
 
-fn build_from_source(env: types::Env) -> Option<Built> {
-    let types = wire::guarded(|| reference_env(&env.source)).ok()??;
-    let (envelope, contract, label_collision) =
-        wire::guarded(|| envelope_of(&env.source)).ok()??;
-    Some(Built {
-        env,
-        types,
-        envelope,
-        contract,
-        label_collision,
-    })
+/// Both sides over one source: the environment, or why it is redrawn
+/// (`reference=<ok|parse|check|panic> compiler=<ok|error|contract|…|panic>`).
+fn build_from_source(env: types::Env) -> Result<Built, String> {
+    let reference = wire::guarded(|| reference_env(&env.source)).unwrap_or(Err("panic"));
+    let compiled = wire::guarded(|| envelope_of(&env.source)).unwrap_or(Err("panic"));
+    match (reference, compiled) {
+        (Ok(types), Ok((envelope, contract, collisions))) => Ok(Built {
+            env,
+            types,
+            envelope,
+            contract,
+            collisions,
+        }),
+        (reference, compiled) => Err(format!(
+            "reference={} compiler={}",
+            reference.err().unwrap_or("ok"),
+            compiled.err().unwrap_or("ok")
+        )),
+    }
 }
 
-/// A random environment both sides accept; rejected drafts are redrawn from
-/// the same stream, so the result is still a function of the seed.
-fn build_random(rng: &mut Rng) -> Built {
+/// An environment both sides accept; rejected drafts are redrawn from the
+/// same stream (so the result is still a function of the seed) and counted.
+fn build_drawn(rng: &mut Rng, redraws: &mut Redraws, draw: fn(&mut Rng) -> types::Env) -> Built {
     loop {
-        if let Some(built) = build_from_source(types::random_env(rng)) {
-            return built;
+        match build_from_source(draw(rng)) {
+            Ok(built) => return built,
+            Err(reason) => *redraws.entry(reason).or_default() += 1,
         }
     }
 }
@@ -269,19 +374,34 @@ fn decode_case(built: &Built, rng: &mut Rng, id: String, env_id: &str) -> Value 
             mutation.push(wire::mutate_once(rng, &mut bytes));
         }
     }
-    let expected_types: Vec<Type> = names(&expected)
+    decode_line(built, id, env_id, wire, &expected, &mutation, &bytes)
+}
+
+fn decode_line(
+    built: &Built,
+    id: String,
+    env_id: &str,
+    wire: Option<Vec<usize>>,
+    expected: &[usize],
+    mutation: &[&str],
+    bytes: &[u8],
+) -> Value {
+    let expected = names(expected);
+    let expected_types: Vec<Type> = expected
         .iter()
         .map(|name| find(&built.types, name))
         .collect();
+    let mut verdict = wire::reference_verdict(&built.types, bytes, &expected_types);
+    built.flag_collision(&expected, &mut verdict);
     json!({
         "kind": "decode",
         "id": id,
         "env": env_id,
         "wire": wire.map(|decls| names(&decls)),
-        "expected": names(&expected),
+        "expected": expected,
         "mutation": if mutation.is_empty() { "none".to_string() } else { mutation.join("+") },
-        "hex": wire::hex(&bytes),
-        "ref": wire::reference_verdict(&built.types, &bytes, &expected_types),
+        "hex": wire::hex(bytes),
+        "ref": verdict,
     })
 }
 
@@ -321,9 +441,21 @@ fn validate_case(built: &Built, rng: &mut Rng, id: String, env_id: &str) -> Valu
     let decl = rng.below(built.env.decls);
     let name = types::decl_name(decl);
     let ty = find(&built.types, &name);
-    let mut value = wire::random_value(&built.types, &ty, rng, 0)
+    let value = wire::random_value(&built.types, &ty, rng, 0)
         .and_then(|value| host::descriptor(&built.types, &ty, &value))
         .unwrap_or_else(|| host::random_scalar(rng));
+    validate_line(built, rng, id, env_id, &name, value)
+}
+
+fn validate_line(
+    built: &Built,
+    rng: &mut Rng,
+    id: String,
+    env_id: &str,
+    name: &str,
+    mut value: Value,
+) -> Value {
+    let ty = find(&built.types, name);
     let mut mutated = false;
     match rng.below(20) {
         0..=6 => {}
@@ -339,6 +471,8 @@ fn validate_case(built: &Built, rng: &mut Rng, id: String, env_id: &str) -> Valu
         }
     }
     let host_json = host::host_value(&built.types, &ty, &value);
+    let mut verdict = host_verdict(built, name, &host_json);
+    built.flag_collision(&[name.to_string()], &mut verdict);
     json!({
         "kind": "validate",
         "id": id,
@@ -347,7 +481,7 @@ fn validate_case(built: &Built, rng: &mut Rng, id: String, env_id: &str) -> Valu
         "mutated": mutated,
         "value": value,
         "host": host_json,
-        "ref": host_verdict(built, &name, &host_json),
+        "ref": verdict,
     })
 }
 
@@ -364,21 +498,17 @@ fn contract_case(built: &Built, rng: &mut Rng, id: String, env_id: &str) -> Valu
 }
 
 fn env_line(env_id: &str, built: &Built) -> Value {
-    let mut line = json!({
+    json!({
         "kind": "env",
         "env": env_id,
         "did": built.env.source,
         "envelope": built.envelope,
-    });
-    if built.label_collision {
-        line["label_collision"] = json!(true);
-    }
-    line
+    })
 }
 
-fn generate_env(seed: u64, seeds: &Seeds, lines: &mut Vec<Value>) {
+fn generate_env(seed: u64, seeds: &Seeds, lines: &mut Vec<Value>, redraws: &mut Redraws) {
     let mut rng = Rng::new(seed);
-    let built = build_random(&mut rng);
+    let built = build_drawn(&mut rng, redraws, types::random_env);
     let env_id = format!("e{seed}");
     lines.push(env_line(&env_id, &built));
     for index in 0..seeds.decode {
@@ -393,6 +523,90 @@ fn generate_env(seed: u64, seeds: &Seeds, lines: &mut Vec<Value>) {
         let id = format!("c/{seed}/{index}");
         lines.push(contract_case(&built, &mut rng, id, &env_id));
     }
+}
+
+/// One deep decode case: a value of `T0` nested about `levels` deep, half of
+/// the time near the runtime's depth boundary (see `wire::DEEP_LEVELS`),
+/// optionally mutated, read at `T0` or a sibling.
+fn deep_decode_case(built: &Built, rng: &mut Rng, id: String, env_id: &str) -> Value {
+    let wire_ty = find(&built.types, &types::decl_name(0));
+    let levels = if rng.chance(1, 2) {
+        wire::DEEP_LEVELS - 8 + rng.below(16)
+    } else {
+        rng.below(300)
+    };
+    let value = wire::deep_value(&built.types, &wire_ty, rng, levels)
+        .or_else(|| wire::random_value(&built.types, &wire_ty, rng, 0));
+    let bytes = value
+        .and_then(|value| wire::encode(&built.types, std::slice::from_ref(&wire_ty), vec![value]));
+    let mut mutation = vec!["deep"];
+    let (wire, bytes) = match bytes {
+        Some(bytes) => (Some(vec![0]), bytes),
+        None => {
+            mutation.push("raw");
+            (None, raw_bytes(rng))
+        }
+    };
+    let mut bytes = bytes;
+    if wire.is_some() && rng.chance(1, 4) {
+        mutation.push(wire::mutate_once(rng, &mut bytes));
+    }
+    let expected = if rng.chance(2, 3) {
+        0
+    } else {
+        *rng.pick(family_of(&built.env, 0))
+    };
+    decode_line(built, id, env_id, wire, &[expected], &mutation, &bytes)
+}
+
+/// One deep validate case: a value of `T0` nested up to 80 levels, across
+/// the HostValue JSON decoder's 64-container nesting cap.
+fn deep_validate_case(built: &Built, rng: &mut Rng, id: String, env_id: &str) -> Value {
+    let name = types::decl_name(0);
+    let ty = find(&built.types, &name);
+    let levels = rng.below(80);
+    let value = wire::deep_value(&built.types, &ty, rng, levels)
+        .and_then(|value| host::descriptor(&built.types, &ty, &value))
+        .unwrap_or_else(|| host::random_scalar(rng));
+    validate_line(built, rng, id, env_id, &name, value)
+}
+
+fn generate_deep_env(seed: u64, seeds: &Seeds, lines: &mut Vec<Value>, redraws: &mut Redraws) {
+    let mut rng = Rng::new(seed ^ DEEP_SALT);
+    let built = build_drawn(&mut rng, redraws, types::deep_env);
+    let env_id = format!("x{seed}");
+    lines.push(env_line(&env_id, &built));
+    for index in 0..seeds.deep_decode {
+        let id = format!("xd/{seed}/{index}");
+        lines.push(deep_decode_case(&built, &mut rng, id, &env_id));
+    }
+    for index in 0..seeds.deep_validate {
+        let id = format!("xv/{seed}/{index}");
+        lines.push(deep_validate_case(&built, &mut rng, id, &env_id));
+    }
+}
+
+/// Every environment and case of `seeds`, in order, and the redraw counts.
+fn generate(seeds: &Seeds, lines: &mut Vec<Value>) -> Redraws {
+    let mut redraws = Redraws::new();
+    for seed in seeds.start..seeds.start + seeds.envs {
+        generate_env(seed, seeds, lines, &mut redraws);
+    }
+    for seed in seeds.start..seeds.start + seeds.deep_envs {
+        generate_deep_env(seed, seeds, lines, &mut redraws);
+    }
+    redraws
+}
+
+fn header(about: &str, seeds: &Seeds, redraws: &Redraws) -> Value {
+    json!({
+        "kind": "header",
+        "about": about,
+        "seeds": { "start": seeds.start, "envs": seeds.envs, "deep_envs": seeds.deep_envs },
+        "per_env": { "decode": seeds.decode, "validate": seeds.validate, "contract": seeds.contract },
+        "per_deep_env": { "decode": seeds.deep_decode, "validate": seeds.deep_validate },
+        "redraws": redraws,
+    })
 }
 
 /// The minimized regression vectors, each in its own environment.
@@ -412,7 +626,9 @@ fn generate_regressions(lines: &mut Vec<Value>) {
             families: Vec::new(),
             decls: 0,
         })
-        .unwrap_or_else(|| panic!("regression {name}: both sides must accept its source"));
+        .unwrap_or_else(|reason| {
+            panic!("regression {name}: both sides must accept its source ({reason})")
+        });
         let env_id = format!("r/{name}");
         lines.push(env_line(&env_id, &built));
         let id = format!("r/{name}");
@@ -429,6 +645,8 @@ fn generate_regressions(lines: &mut Vec<Value>) {
                     .map(|name| find(&built.types, name))
                     .collect();
                 let hex = vector["hex"].as_str().expect("hex");
+                let mut verdict = wire::reference_verdict(&built.types, &wire::unhex(hex), &types);
+                built.flag_collision(&expected, &mut verdict);
                 json!({
                     "kind": "decode",
                     "id": id,
@@ -437,7 +655,7 @@ fn generate_regressions(lines: &mut Vec<Value>) {
                     "expected": expected,
                     "mutation": "regression",
                     "hex": hex,
-                    "ref": wire::reference_verdict(&built.types, &wire::unhex(hex), &types),
+                    "ref": verdict,
                 })
             }
             Some("validate") => {
@@ -445,6 +663,8 @@ fn generate_regressions(lines: &mut Vec<Value>) {
                 let ty = find(&built.types, name);
                 let value = vector["value"].clone();
                 let host_json = host::host_value(&built.types, &ty, &value);
+                let mut verdict = host_verdict(&built, name, &host_json);
+                built.flag_collision(&[name.to_string()], &mut verdict);
                 json!({
                     "kind": "validate",
                     "id": id,
@@ -453,7 +673,7 @@ fn generate_regressions(lines: &mut Vec<Value>) {
                     "mutated": true,
                     "value": value,
                     "host": host_json,
-                    "ref": host_verdict(&built, name, &host_json),
+                    "ref": verdict,
                 })
             }
             Some("contract") => {
@@ -502,25 +722,24 @@ fn render(header: Value, lines: &[Value]) -> String {
     text
 }
 
-fn corpus_text() -> String {
+/// The committed corpus, its lines kept as values: a deep case nests past
+/// `serde_json`'s 128-level parse limit, so nothing re-reads the rendered text.
+fn corpus() -> (Value, Vec<Value>) {
     on_big_stack(|| {
         let seeds = CORPUS_SEEDS;
         let mut lines = Vec::new();
-        for seed in seeds.start..seeds.start + seeds.envs {
-            generate_env(seed, &seeds, &mut lines);
-        }
+        let redraws = generate(&seeds, &mut lines);
         generate_regressions(&mut lines);
-        let header = json!({
-            "kind": "header",
-            "about": "Differential corpus of issue #196. Generated by \
-                      crates/candid-core-ts/tests/differential/main.rs from the committed \
-                      seeds and tests/fixtures/differential/regressions.json; regenerate with \
-                      UPDATE_GOLDENS=1 cargo test -p candid-core-ts --features compiler \
-                      --test differential.",
-            "seeds": { "start": seeds.start, "envs": seeds.envs },
-            "per_env": { "decode": seeds.decode, "validate": seeds.validate, "contract": seeds.contract },
-        });
-        render(header, &lines)
+        let header = header(
+            "Differential corpus of issue #196. Generated by \
+             crates/candid-core-ts/tests/differential/main.rs from the committed \
+             seeds and tests/fixtures/differential/regressions.json; regenerate with \
+             UPDATE_GOLDENS=1 cargo test -p candid-core-ts --features compiler \
+             --test differential.",
+            &seeds,
+            &redraws,
+        );
+        (header, lines)
     })
 }
 
@@ -531,16 +750,19 @@ fn corpus_text() -> String {
 /// divergence).
 #[test]
 fn differential_corpus_matches_reference() {
-    let text = corpus_text();
-    let mut failures = Vec::new();
-    for line in text.lines().skip(1) {
-        let case: Value = serde_json::from_str(line).expect("a JSON line");
-        let verdict = case["ref"]["verdict"].as_str().unwrap_or("");
-        if verdict == "panic" || verdict == "mapping_error" {
-            failures.push(format!("{}: {}", case["id"], case["ref"]));
-        }
-    }
+    let (header, lines) = corpus();
+    let failures: Vec<String> = lines
+        .iter()
+        .filter(|line| {
+            matches!(
+                line["ref"]["verdict"].as_str(),
+                Some("panic" | "mapping_error")
+            )
+        })
+        .map(|line| format!("{}: {}", line["id"], line["ref"]))
+        .collect();
     assert!(failures.is_empty(), "harness failures: {failures:#?}");
+    let text = render(header, &lines);
     let path = manifest_dir()
         .join("tests")
         .join("goldens")
@@ -554,8 +776,15 @@ fn differential_corpus_matches_reference() {
     // docs/verification.md states the committed count; keep the two equal.
     let seeds = CORPUS_SEEDS;
     let stated = format!(
-        "{} environments × {} decode, {} validate and {} contract cases",
-        seeds.envs, seeds.decode, seeds.validate, seeds.contract
+        "{} environments × {} decode, {} validate and {} contract cases, and {} deep \
+         environments × {} decode and {} validate cases",
+        seeds.envs,
+        seeds.decode,
+        seeds.validate,
+        seeds.contract,
+        seeds.deep_envs,
+        seeds.deep_decode,
+        seeds.deep_validate
     );
     let verification = std::fs::read_to_string(manifest_dir().join("../../docs/verification.md"))
         .expect("docs/verification.md must be readable");
@@ -581,7 +810,9 @@ fn env_u64(name: &str, default: u64) -> u64 {
 
 /// Campaign mode: `DIFF_SEED` (first environment seed), `DIFF_ENVS` (how many
 /// environments), `DIFF_OUT` (the JSONL file to write), and optionally
-/// `DIFF_DECODE`/`DIFF_VALIDATE`/`DIFF_CONTRACT` (cases per environment).
+/// `DIFF_DECODE`/`DIFF_VALIDATE`/`DIFF_CONTRACT` (cases per environment),
+/// `DIFF_DEEP_ENVS` (deep environments) and `DIFF_DEEP_DECODE`/
+/// `DIFF_DEEP_VALIDATE` (cases per deep environment).
 #[test]
 #[ignore = "campaign mode: run explicitly with DIFF_SEED, DIFF_ENVS and DIFF_OUT"]
 fn differential_campaign() {
@@ -592,18 +823,18 @@ fn differential_campaign() {
         decode: env_u64("DIFF_DECODE", 200) as usize,
         validate: env_u64("DIFF_VALIDATE", 60) as usize,
         contract: env_u64("DIFF_CONTRACT", 30) as usize,
+        deep_envs: env_u64("DIFF_DEEP_ENVS", 10),
+        deep_decode: env_u64("DIFF_DEEP_DECODE", 20) as usize,
+        deep_validate: env_u64("DIFF_DEEP_VALIDATE", 5) as usize,
     };
     let text = on_big_stack(move || {
         let mut lines = Vec::new();
-        for seed in seeds.start..seeds.start + seeds.envs {
-            generate_env(seed, &seeds, &mut lines);
-        }
-        let header = json!({
-            "kind": "header",
-            "about": "Differential campaign batch (issue #196).",
-            "seeds": { "start": seeds.start, "envs": seeds.envs },
-            "per_env": { "decode": seeds.decode, "validate": seeds.validate, "contract": seeds.contract },
-        });
+        let redraws = generate(&seeds, &mut lines);
+        let header = header(
+            "Differential campaign batch (issue #196).",
+            &seeds,
+            &redraws,
+        );
         render(header, &lines)
     });
     std::fs::write(out, text).expect("DIFF_OUT must be writable");
@@ -626,8 +857,8 @@ fn differential_verdicts() {
             let request: Value = serde_json::from_str(line).expect("a JSON request");
             let source = request["did"].as_str().expect("did");
             let verdict = match reference_env(source) {
-                None => json!({ "verdict": "invalid_env" }),
-                Some(types) => {
+                Err(_) => json!({ "verdict": "invalid_env" }),
+                Ok(types) => {
                     let expected: Option<Vec<Type>> = request["expected"]
                         .as_array()
                         .expect("expected")
@@ -667,6 +898,84 @@ fn differential_verdicts() {
             output.push('\n');
         }
         output
+    });
+    std::fs::write(out, result).expect("DIFF_OUT must be writable");
+}
+
+/// Rejudge mode: `DIFF_IN` is a corpus or campaign batch (possibly written by
+/// an earlier generator), `DIFF_OUT` receives it with every environment
+/// rebuilt from its `did` and every reference verdict recomputed by this
+/// tree — so an earlier campaign's inputs can be classified again under the
+/// current verdict mapping and flags. A rebuilt envelope that differs from
+/// the recorded one is a harness failure.
+#[test]
+#[ignore = "rejudge mode: run explicitly with DIFF_IN and DIFF_OUT"]
+fn differential_rejudge() {
+    let input = std::env::var("DIFF_IN").expect("DIFF_IN names the batch to rejudge");
+    let out = std::env::var("DIFF_OUT").expect("DIFF_OUT names the output file");
+    let text = std::fs::read_to_string(input).expect("DIFF_IN must be readable");
+    let result = on_big_stack(move || {
+        let mut lines = text.lines().filter(|line| !line.trim().is_empty());
+        let header: Value = serde_json::from_str(lines.next().expect("a header")).expect("JSON");
+        let mut output = Vec::new();
+        let mut built: Option<Built> = None;
+        for line in lines {
+            let mut case: Value = serde_json::from_str(line).expect("a JSON line");
+            match case["kind"].as_str() {
+                Some("env") => {
+                    let rebuilt = build_from_source(types::Env {
+                        source: case["did"].as_str().expect("did").to_string(),
+                        families: Vec::new(),
+                        decls: 0,
+                    })
+                    .unwrap_or_else(|reason| panic!("{}: {reason}", case["env"]));
+                    assert!(
+                        rebuilt.envelope == case["envelope"],
+                        "{}: the envelope rebuilt differently",
+                        case["env"]
+                    );
+                    let id = case["env"].as_str().expect("env").to_string();
+                    output.push(env_line(&id, &rebuilt));
+                    built = Some(rebuilt);
+                    continue;
+                }
+                Some("decode") => {
+                    let built = built.as_ref().expect("an environment first");
+                    let expected: Vec<String> = case["expected"]
+                        .as_array()
+                        .expect("expected")
+                        .iter()
+                        .map(|name| name.as_str().expect("a name").to_string())
+                        .collect();
+                    let types: Vec<Type> = expected
+                        .iter()
+                        .map(|name| find(&built.types, name))
+                        .collect();
+                    let bytes = wire::unhex(case["hex"].as_str().expect("hex"));
+                    let mut verdict = wire::reference_verdict(&built.types, &bytes, &types);
+                    built.flag_collision(&expected, &mut verdict);
+                    case["ref"] = verdict;
+                }
+                Some("validate") => {
+                    let built = built.as_ref().expect("an environment first");
+                    let name = case["type"].as_str().expect("type").to_string();
+                    let ty = find(&built.types, &name);
+                    let host_json = host::host_value(&built.types, &ty, &case["value"]);
+                    let mut verdict = host_verdict(built, &name, &host_json);
+                    built.flag_collision(&[name], &mut verdict);
+                    case["host"] = host_json;
+                    case["ref"] = verdict;
+                }
+                Some("contract") => {
+                    let built = built.as_ref().expect("an environment first");
+                    let ops = case["ops"].as_array().expect("ops").clone();
+                    case["ref"] = contract::judge(&built.envelope["contract"], &ops);
+                }
+                other => panic!("unknown line kind {other:?}"),
+            }
+            output.push(case);
+        }
+        render(header, &output)
     });
     std::fs::write(out, result).expect("DIFF_OUT must be writable");
 }

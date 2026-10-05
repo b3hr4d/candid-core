@@ -1,10 +1,11 @@
 {
-  "about": "Minimized regression vectors of the issue #196 differential fuzz: one per divergence category the campaign found. Each runs in its own environment (its `did`); the Rust driver records the reference verdict into tests/goldens/differential/corpus.jsonl, and the TypeScript replay holds each to the category listed for it in tests/goldens/differential/divergences.json.",
+  "about": "Minimized regression vectors of the issue #196 differential fuzz: one or more per divergence category the campaign found (`origin`: the first run-3 campaign case that showed the category; the vector itself is minimized or written by hand), and agreement vectors at boundaries the generated corpus reaches rarely (`agrees`: why both sides answer alike). Each runs in its own environment (its `did`); the Rust driver records the reference verdict into tests/goldens/differential/corpus.jsonl, and the TypeScript replay holds each to the category listed for it in tests/goldens/differential/divergences.json.",
   "vectors": [
     {
       "name": "leb128_overlong_nat_value",
       "target": "decode",
       "note": "nat 5 as the two-byte group 85 00. Reference accepts 5; the runtime refuses overlong_leb128 (intended, #103 decision 4).",
+      "origin": "d/1000000/7",
       "did": "type T0 = nat;\n",
       "expected": [
         "T0"
@@ -15,6 +16,7 @@
       "name": "leb128_overlong_type_count",
       "target": "decode",
       "note": "An empty type table whose count is the two-byte group 80 00. Reference accepts; the runtime refuses in the header (intended, #103 decision 4).",
+      "origin": "d/1000000/7",
       "did": "type T0 = nat;\n",
       "expected": [
         "T0"
@@ -25,6 +27,7 @@
       "name": "leb128_wide_field_id",
       "target": "decode",
       "note": "Field id 97 (\"a\") as a six-byte group e1 80 80 80 80 00: longer than a u32 field's five bytes, so the runtime reports invalid_length; the reference accepts. Same rule, non-minimal LEB128 (intended).",
+      "origin": "d/1000000/7",
       "did": "type T0 = record { a : nat };\n",
       "expected": [
         "T0"
@@ -35,6 +38,7 @@
       "name": "empty_method_name",
       "target": "decode",
       "note": "A func reference to aaaaa-aa with an empty method name. Reference accepts; the runtime refuses invalid_length by decision (round-trip symmetry with validate and encode; candid-core's HostValue validator refuses it too).",
+      "origin": "d/1000005/5",
       "did": "type T0 = func () -> ();\n",
       "expected": [
         "T0"
@@ -42,9 +46,21 @@
       "hex": "4449444c016a000000010001010000"
     },
     {
+      "name": "empty_method_under_absorbed_opt",
+      "target": "decode",
+      "note": "A func reference with an empty method name inside an opt record whose other field (text) the expected type (nat) refuses. The reference absorbs the opt to null and never decodes the func; the runtime refuses the empty method name first (invalid_length, a hard error). The empty-method decision, flagged from the bytes (empty_method).",
+      "origin": "d/1026525/78 (the fix-round re-classification of run 3)",
+      "did": "type W = opt record { func () -> (); text };\ntype E = opt record { func () -> (); nat };\n",
+      "expected": [
+        "E"
+      ],
+      "hex": "4449444c036e016c02000201716a000000010001010100000161"
+    },
+    {
       "name": "contract_unknown_key",
       "target": "contract",
       "note": "An unknown key on a type node. Contract::from_json refuses it (unknown field); schemaFromContract accepts it.",
+      "origin": "c/1000002/11",
       "did": "type T0 = nat;\n",
       "ops": [
         {
@@ -62,6 +78,7 @@
       "name": "contract_orphan_type_node",
       "target": "contract",
       "note": "A type node no declaration reaches. Contract::from_json refuses it (orphan_type_node); schemaFromContract accepts it.",
+      "origin": "c/1000000/8",
       "did": "type T0 = nat;\n",
       "ops": [
         {
@@ -81,6 +98,7 @@
       "name": "contract_rootless_arena",
       "target": "contract",
       "note": "A non-empty arena with no declaration and no actor. Contract::from_json refuses it (rootless_type_arena); schemaFromContract accepts it.",
+      "origin": "c/1001109/14",
       "did": "type T0 = nat;\n",
       "ops": [
         {
@@ -96,6 +114,7 @@
       "name": "contract_identities_edit",
       "target": "contract",
       "note": "A contract id that is not a contract id. Contract::from_json refuses it; schemaFromContract does not read identities, by design (contract.ts).",
+      "origin": "c/1000014/5",
       "did": "type T0 = nat;\n",
       "ops": [
         {
@@ -112,6 +131,7 @@
       "name": "contract_producer_edit",
       "target": "contract",
       "note": "A producer field of the wrong JSON type. Contract::from_json refuses it; schemaFromContract does not read producer, by design (contract.ts).",
+      "origin": "c/1000120/12",
       "did": "type T0 = nat;\n",
       "ops": [
         {
@@ -128,6 +148,7 @@
       "name": "reference_refuses_identical_func",
       "target": "decode",
       "note": "A func reference written and read at the same type func (L) -> () with L = record { a : L }. The candid crate rewrites the uninhabited record L in the wire table to empty (TypeEnv::replace_empty) but not in the expected type, so its subtype check becomes L <: empty and fails: it refuses identical types. The runtime accepts. Reference bug.",
+      "origin": "d/1000188/10",
       "did": "type L = record { a : L };\ntype F = func (L) -> ();\n",
       "expected": [
         "F"
@@ -138,6 +159,7 @@
       "name": "reference_absorbs_identical_func_in_opt",
       "target": "decode",
       "note": "The same func reference under opt, read at its own type: the reference's failed subtype check is absorbed by the opt, so it decodes null; the runtime decodes the reference. Reference bug (same cause).",
+      "origin": "d/1000981/148",
       "did": "type L = record { a : L };\ntype F = func (L) -> ();\ntype O = opt F;\n",
       "expected": [
         "O"
@@ -148,6 +170,7 @@
       "name": "reference_accepts_non_subtype_func",
       "target": "decode",
       "note": "A func () -> (W) read at func () -> (E) with W = record { x : W } and E = record { y : E }: W lacks E's required field y, so the wire type is not a subtype. The reference rewrites W to empty and accepts (empty <: E); the runtime refuses type_mismatch. Reference bug (same cause, the other direction).",
+      "origin": "d/1000795/9",
       "did": "type W = record { x : W };\ntype FW = func () -> (W);\ntype E = record { y : E };\ntype FE = func () -> (E);\n",
       "expected": [
         "FE"
@@ -158,6 +181,7 @@
       "name": "reference_skips_invalid_utf8_method",
       "target": "decode",
       "note": "An extra func argument whose method name is the single byte ff (not UTF-8), skipped because no argument is expected. The reference skips it without checking (it does check a skipped text, and refuses this name when it decodes the func); the runtime refuses invalid_utf8. Reference bug.",
+      "origin": "d/1000123/179",
       "did": "type F = func () -> ();\n",
       "expected": [],
       "hex": "4449444c016a000000010001010001ff"
@@ -166,6 +190,7 @@
       "name": "future_type_reference_count",
       "target": "decode",
       "note": "A value of a future type (opcode -2462, no data bytes) that declares one reference, read at reserved. The reference skips it; the runtime refuses invalid_principal: reference sequences are unsupported by this codec, as documented (intended).",
+      "origin": "d/1003813/35",
       "did": "type R = reserved;\n",
       "expected": [
         "R"
@@ -176,6 +201,7 @@
       "name": "reference_quota_skipped_vec",
       "target": "decode",
       "note": "An extra argument of type vec null with 10,114 elements, skipped. Skipping charges the reference's decoding quota 50x, which the harness sets at 2,000,000, so the reference refuses; the runtime's element budget (1,000,000) admits it. A harness policy, not a rule of either decoder (intended).",
+      "origin": "d/1004979/18",
       "did": "type T = nat;\n",
       "expected": [],
       "hex": "4449444c016d7f0100824f"
@@ -184,6 +210,7 @@
       "name": "contract_declarations_absent",
       "target": "contract",
       "note": "A Contract document with its empty declarations key removed. Contract::from_json accepts it (the key defaults to empty); schemaFromContract refuses invalid_contract_document (declarations must be an array).",
+      "origin": "c/1006849/5",
       "did": "service : { m : () -> () }\n",
       "ops": [
         {
@@ -198,6 +225,7 @@
       "name": "reference_reads_func_from_empty_wire",
       "target": "decode",
       "note": "One argument whose wire type is empty, followed by the bytes of a func reference, read at a func type. No value has type empty, yet the reference decodes aaaaa-aa.f: it reads a reference value through its subtype relation alone, where empty <: t holds. The runtime refuses type_mismatch. Reference bug.",
+      "origin": "d/1012392/198",
       "did": "type F = func () -> ();\n",
       "expected": [
         "F"
@@ -208,6 +236,7 @@
       "name": "reference_unsound_subtype_memo",
       "target": "decode",
       "note": "func () -> (W3) read at func () -> (E3). W7 <: E7 is false (W5 has an arm x that V lacks), and the reference refuses W7 at E7 on its own; but checking W3 <: E3 visits c : opt W5 first, assumes (W5, V), proves (W7, E7) under that assumption, retracts (W5, V) when x fails (the opt rule then accepts c), and keeps (W7, E7) in its memo, so v : W7 <: E7 is answered true. The runtime refuses type_mismatch. Reference bug (unsound coinductive memo).",
+      "origin": "d/1041528/158",
       "did": "type W5 = variant { a : W7; x : text };\ntype W7 = variant { c : W5 };\ntype W3 = variant { c : opt W5; v : W7 };\ntype FW = func () -> (W3);\ntype V = variant { a : E7 };\ntype E7 = variant { c : V };\ntype E3 = variant { c : opt V; v : E7 };\ntype FE = func () -> (E3);\n",
       "expected": [
         "FE"
@@ -218,6 +247,7 @@
       "name": "label_collision_numbered_field",
       "target": "decode",
       "note": "record { x : record { 100 : text } } where another declaration writes the same canonical record as record { d : text } (the label hash of d is 100). The field-name table attaches names to canonical nodes, so the runtime keys B's field as d; the reference (and the source) say 100. Same bytes, same id, different domain key.",
+      "origin": "d/1039000/84",
       "did": "type A = record { c : record { d : text } };\ntype B = record { x : record { 100 : text } };\n",
       "expected": [
         "B"
@@ -228,6 +258,7 @@
       "name": "validate_hostvalue_nesting_limit",
       "target": "validate",
       "note": "A vec nested 40 levels deep at type T = vec T. Its HostValue JSON nests 80 containers, past the HostValue decoder's max_value_nesting (64), so the reference refuses it as a limit; the runtime's maxDepth (256 schema steps) admits it. A policy difference of the HostValue ABI (intended).",
+      "origin": "v/1026571/5",
       "did": "type T = vec T;\n",
       "type": "T",
       "value": [
@@ -425,6 +456,133 @@
                   ]
                 ]
               ]
+            ]
+          ]
+        ]
+      ]
+    },
+    {
+      "name": "depth_opt_127_levels",
+      "target": "decode",
+      "note": "opt T0 nested 127 levels (126 present, the innermost absent): 254 depth steps, within the runtime's maxDepth of 256.",
+      "origin": "written for the issue #196 review",
+      "agrees": "Both accept: inside the runtime's maxDepth.",
+      "did": "type T0 = opt T0;\n",
+      "expected": [
+        "T0"
+      ],
+      "hex": "4449444c016e00010001010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010100"
+    },
+    {
+      "name": "depth_opt_128_levels",
+      "target": "decode",
+      "note": "opt T0 nested 128 levels: 256 depth steps, exactly the runtime's maxDepth.",
+      "origin": "written for the issue #196 review",
+      "agrees": "Both accept: exactly at the runtime's maxDepth.",
+      "did": "type T0 = opt T0;\n",
+      "expected": [
+        "T0"
+      ],
+      "hex": "4449444c016e0001000101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010100"
+    },
+    {
+      "name": "depth_opt_129_levels",
+      "target": "decode",
+      "note": "opt T0 nested 129 levels: 258 depth steps, past the runtime's maxDepth; the reference (bounded only by its stack) accepts. Intended (decode:intended:ts-limit), flagged deep_nesting.",
+      "origin": "written for the issue #196 review",
+      "did": "type T0 = opt T0;\n",
+      "expected": [
+        "T0"
+      ],
+      "hex": "4449444c016e000100010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010100"
+    },
+    {
+      "name": "depth_variant_127_levels",
+      "target": "decode",
+      "note": "variant { a : T0; b } nested 127 levels, the innermost arm b: 2 x 127 + 1 = 255 depth steps, within maxDepth.",
+      "origin": "written for the issue #196 review",
+      "agrees": "Both accept: inside the runtime's maxDepth.",
+      "did": "type T0 = variant { a : T0; b };\n",
+      "expected": [
+        "T0"
+      ],
+      "hex": "4449444c016b026100627f010000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001"
+    },
+    {
+      "name": "depth_variant_128_levels",
+      "target": "decode",
+      "note": "variant { a : T0; b } nested 128 levels: 257 depth steps, one past maxDepth. Intended (decode:intended:ts-limit), flagged deep_nesting.",
+      "origin": "written for the issue #196 review",
+      "did": "type T0 = variant { a : T0; b };\n",
+      "expected": [
+        "T0"
+      ],
+      "hex": "4449444c016b026100627f01000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001"
+    },
+    {
+      "name": "nat_minimal_two_bytes",
+      "target": "decode",
+      "note": "nat 128 as its minimal two-byte group 80 01: a minimality check that also refused a minimal group would turn this into a divergence.",
+      "origin": "written for the issue #196 review",
+      "agrees": "Both accept 128.",
+      "did": "type T0 = nat;\n",
+      "expected": [
+        "T0"
+      ],
+      "hex": "4449444c00017d8001"
+    },
+    {
+      "name": "principal_29_bytes",
+      "target": "decode",
+      "note": "A principal of 29 bytes, the longest id: a length cap below 29 would turn this into a divergence.",
+      "origin": "written for the issue #196 review",
+      "agrees": "Both accept.",
+      "did": "type T0 = principal;\n",
+      "expected": [
+        "T0"
+      ],
+      "hex": "4449444c000168011d0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d"
+    },
+    {
+      "name": "bool_byte_two",
+      "target": "decode",
+      "note": "A bool encoded as 02. Both refuse: a bool is 00 or 01.",
+      "origin": "written for the issue #196 review",
+      "agrees": "Both refuse.",
+      "did": "type T0 = bool;\n",
+      "expected": [
+        "T0"
+      ],
+      "hex": "4449444c00017e02"
+    },
+    {
+      "name": "text_invalid_utf8",
+      "target": "decode",
+      "note": "A text of the single byte ff (not UTF-8). Both refuse.",
+      "origin": "written for the issue #196 review",
+      "agrees": "Both refuse.",
+      "did": "type T0 = text;\n",
+      "expected": [
+        "T0"
+      ],
+      "hex": "4449444c00017101ff"
+    },
+    {
+      "name": "validate_missing_required_field",
+      "target": "validate",
+      "note": "A record value without its required field b. Both refuse.",
+      "origin": "written for the issue #196 review",
+      "agrees": "Both refuse.",
+      "did": "type T0 = record { a : nat; b : text };\n",
+      "type": "T0",
+      "value": [
+        "o",
+        [
+          [
+            "a",
+            [
+              "i",
+              "1"
             ]
           ]
         ]

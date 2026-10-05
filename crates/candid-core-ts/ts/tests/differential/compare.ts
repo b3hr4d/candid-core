@@ -21,13 +21,13 @@
 // `"nan"`), `Uint8Array` as `{ $blob: hex }`, strings, booleans and `null` as
 // themselves, arrays and plain objects structurally.
 //
-// Reject against reject compares error *classes*, never messages or paths.
-// The reference's class comes from its behaviour (see `wire.rs`): `header`
-// (the header or type table does not parse), `malformed` (the message does
-// not decode at its own wire types), `coercion` (well-formed; only the
-// expected types refuse it). This runtime's class comes from its first
-// issue's code: WIRE codes (malformed bytes), COERCION codes (a type-level
-// refusal), or `resource_limit_exceeded`. They must agree:
+// Reject against reject, for decode, compares error *classes*, never messages
+// or paths. The reference's class comes from its behaviour (see `wire.rs`):
+// `header` (the header or type table does not parse), `malformed` (the
+// message does not decode at its own wire types), `coercion` (well-formed;
+// only the expected types refuse it). This runtime's class comes from its
+// first issue's code: WIRE codes (malformed bytes), COERCION codes (a
+// type-level refusal), or `resource_limit_exceeded`. They must agree:
 //
 // - reference `header` → a WIRE code (both read the header first);
 // - reference `coercion` → a COERCION code (the bytes are well-formed);
@@ -37,6 +37,11 @@
 //   reference's `limit` (its decoding quota ran out): the two sides' budgets
 //   are different policies (see "intended differences").
 //
+// For validate and contract, reject against reject is agreement whatever the
+// two sides' reasons: only verdicts are compared there (the HostValue
+// validator's and `Contract::from_json`'s refusal codes are a different
+// vocabulary from this runtime's, with no class map between them).
+//
 // # Intended differences (encoded in the mapping, never silently agreed)
 //
 // A divergence the runtime makes on purpose still gets its own category
@@ -45,6 +50,18 @@
 // decoder that starts accepting overlong LEB128) makes those cases agree,
 // which the list reports as a disappeared divergence. The categories and
 // their reasons live in `tests/goldens/differential/divergences.json`.
+//
+// # Attribution is tied to the input (issue #196 review)
+//
+// A symptom (`decode:ts-rejects:<code>`, `decode:value-mismatch`, …) is
+// attributed to an intended difference or to the reference only when the
+// reference side found the property that explains it in the input itself
+// (`ref.flags`, computed by the Rust driver from the bytes or the types,
+// never from anything this runtime says): `overlong_leb128` is the LEB128
+// rule only on a message that holds a non-minimal group, `invalid_principal`
+// the reference-sequence limit only on one whose future value carries
+// references, and so on (see `attributeRefusal`). The same code on an input
+// without the property stays a plain symptom, which the list reports as new.
 
 import { decodeArgs, type CodecIssue } from "../../codec.ts";
 import { schemaFromContract } from "../../contract.ts";
@@ -58,8 +75,6 @@ export interface EnvLine {
   readonly env: string;
   readonly did: string;
   readonly envelope: { readonly contract: unknown };
-  /** One canonical field written with two spellings (see `main.rs`). */
-  readonly label_collision?: boolean;
 }
 
 interface Reference {
@@ -332,39 +347,69 @@ function runDecode(kase: DecodeLine, env: Loaded): Outcome {
   return { id: kase.id, category: decodeCategory(kase.ref, ours), ours };
 }
 
+function flagged(ref: Reference, flag: string): boolean {
+  return ref.flags?.includes(flag) === true;
+}
+
 /**
- * The two decode differences this runtime makes on purpose, recognised where
- * the reference saw well-formed bytes (it accepted, or refused only at the
- * expected types) and this runtime refused them as malformed:
+ * The cause of a refusal the reference did not make (it accepted, or refused
+ * only at the expected types), when the input carries the property that
+ * explains it; `null` otherwise. Every attribution names its flag:
  *
- * - `leb128-minimality`: a non-minimal LEB128/SLEB128 group is refused here
- *   (`overlong_leb128`; or `invalid_length` when the group is longer than a
- *   u32 field's five bytes although its value fits, which the reference's
- *   acceptance proves), and accepted by the reference. Settled on #103
- *   (decision 4): the spec's strict-inverse reading.
- * - `empty-method-name`: a func reference with an empty method name is
- *   refused here (`invalid_length`) for round-trip symmetry with `validate`
- *   and `encode`, which refuse it too (as does candid-core's HostValue
- *   validator); the reference accepts it. The reference flags these inputs
- *   (`flags: ["empty_method"]`).
- * - `reference-sequences-unsupported`: a value carrying references (a future
- *   type's value with a non-zero reference count; an opaque func or service
- *   reference) is refused here (`invalid_principal`), a documented limit of
- *   this codec (README: "opaque reference values … and external reference
- *   sequences are refused"); the reference skips the count. A principal
- *   longer than 29 bytes, the code's other source, the reference refuses too.
+ * - `leb128-minimality` (intended): a non-minimal LEB128/SLEB128 group is
+ *   refused here (`overlong_leb128`; or `invalid_length` when the group is
+ *   longer than a u32 field's five bytes although its value fits), accepted
+ *   by the reference. Settled on #103 (decision 4): the spec's strict-inverse
+ *   reading. Flag `non_minimal_leb128`: the scan met such a group.
+ * - `empty-method-name` (intended): a func reference with an empty method
+ *   name is refused here (`invalid_length`) for round-trip symmetry with
+ *   `validate` and `encode`, which refuse it too (as does candid-core's
+ *   HostValue validator). Flag `empty_method`: the scan met one (the
+ *   reference may never decode it, when an `opt` above absorbs a later
+ *   failure).
+ * - `reference-sequences-unsupported` (intended): a future type's value with
+ *   a non-zero reference count is refused here (`invalid_principal`), a
+ *   documented limit of this codec (README: "opaque reference values … and
+ *   external reference sequences are refused"); the reference ignores the
+ *   count. Flag `future_references`.
+ * - `ts-limit` (intended): `resource_limit_exceeded` where the message's
+ *   values nest deeper than the default `maxDepth` always admits (127
+ *   composite levels: two steps per level and one for the leaf) or number
+ *   more than half `maxElements` (flags `deep_nesting`, `many_values`; see
+ *   `wire::DEEP_LEVELS`): within those bounds a limit refusal is a defect.
+ * - `skipped-method-utf8` (reference): a func reference's method name that is
+ *   not UTF-8 is refused here (`invalid_utf8`); the reference does not check
+ *   it when it skips the value. Flag `invalid_method_utf8`.
+ * - `empty-wire-value` (reference): the reference reads a func or service
+ *   value where the wire type is `empty` (its subtype relation has
+ *   `empty <: t`, and is all it checks for references); this runtime refuses
+ *   (`type_mismatch`: no value inhabits `empty`). Flag `wire_empty_value`:
+ *   the message carries bytes at an `empty` wire type.
  */
-function intendedWire(code: string, ref: Reference): string | null {
-  if (code === "overlong_leb128") {
+function attributeRefusal(code: string, ref: Reference): string | null {
+  if (code === "invalid_length" && flagged(ref, "empty_method")) {
+    return "decode:intended:empty-method-name";
+  }
+  if (
+    (code === "overlong_leb128" || code === "invalid_length") &&
+    flagged(ref, "non_minimal_leb128")
+  ) {
     return "decode:intended:leb128-minimality";
   }
-  if (code === "invalid_principal") {
+  if (code === "invalid_principal" && flagged(ref, "future_references")) {
     return "decode:intended:reference-sequences-unsupported";
   }
-  if (code === "invalid_length") {
-    return ref.flags?.includes("empty_method") === true
-      ? "decode:intended:empty-method-name"
-      : "decode:intended:leb128-minimality";
+  if (
+    code === "resource_limit_exceeded" &&
+    (flagged(ref, "deep_nesting") || flagged(ref, "many_values"))
+  ) {
+    return "decode:intended:ts-limit";
+  }
+  if (code === "invalid_utf8" && flagged(ref, "invalid_method_utf8")) {
+    return "decode:reference:skipped-method-utf8";
+  }
+  if (code === "type_mismatch" && flagged(ref, "wire_empty_value")) {
+    return "decode:reference:empty-wire-value";
   }
   return null;
 }
@@ -376,7 +421,8 @@ function intendedWire(code: string, ref: Reference): string | null {
  * reference type that is not a subtype (`empty <: E`) and refuse identical
  * types (`E <: empty`), and an `opt` around such a reference then absorbs to
  * `null`. The reference flags messages whose table holds such a record
- * (`wire_empty_record`); on those, these three symptoms are its doing.
+ * reachable from a func or service type (`wire_empty_record`) — the only
+ * place its subtype check runs; on those, these three symptoms are its doing.
  */
 const EMPTY_NORMALIZATION_SYMPTOMS = new Set([
   "decode:ts-accepts:coercion",
@@ -385,46 +431,84 @@ const EMPTY_NORMALIZATION_SYMPTOMS = new Set([
 ]);
 
 export function decodeCategory(ref: Reference, ours: Ours): string | null {
-  const category = decodeSymptom(ref, ours);
-  if (category === null) {
+  const symptom = decodeSymptom(ref, ours);
+  if (symptom === null) {
     return null;
   }
-  if (
-    EMPTY_NORMALIZATION_SYMPTOMS.has(category) &&
-    ref.flags?.includes("wire_empty_record") === true
-  ) {
+  if (EMPTY_NORMALIZATION_SYMPTOMS.has(symptom) && flagged(ref, "wire_empty_record")) {
     return "decode:reference:empty-normalization";
   }
-  // The reference reads a func or service value where the wire type is
-  // `empty` (its subtype relation has `empty <: t` and is all it checks for
-  // references); this runtime refuses, no value inhabiting `empty`.
-  if (
-    category === "decode:ts-rejects:type_mismatch" &&
-    ref.flags?.includes("wire_empty") === true
-  ) {
-    return "decode:reference:empty-wire-value";
+  if (ours.verdict === "reject") {
+    const refused =
+      symptom === `decode:ts-rejects:${ours.code}` ||
+      symptom === `decode:class:coercion-vs-${ours.code}`;
+    if (refused) {
+      return attributeRefusal(ours.code, ref) ?? symptom;
+    }
   }
-  return category;
+  return symptom;
+}
+
+/** A Candid label id: `_N_` read back, else the hash of the name. */
+function labelId(key: string): string {
+  const numbered = /^_(0|[1-9][0-9]*)_$/.exec(key);
+  if (numbered !== null && Number(numbered[1]) < 4_294_967_296) {
+    return numbered[1];
+  }
+  let hash = 0;
+  for (const byte of new TextEncoder().encode(key)) {
+    hash = (hash * 223 + byte) >>> 0;
+  }
+  return String(hash);
+}
+
+/** A domain value with every record key and variant tag replaced by its id. */
+function byLabelId(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map(byLabelId);
+  }
+  if (value === null || typeof value !== "object") {
+    return value;
+  }
+  const out: Record<string, unknown> = {};
+  for (const [key, inner] of Object.entries(value)) {
+    out[key.startsWith("$") ? key : labelId(key)] =
+      key === "tag" && typeof inner === "string" ? labelId(inner) : byLabelId(inner);
+  }
+  return out;
 }
 
 /**
- * Symptoms of one canonical field written with two spellings (`d` in one
- * declaration, `100` in another): the field-name table attaches names to
+ * Symptoms of one canonical field (or arm) written with two spellings (`d`
+ * in one declaration, `100` in another): the field-name table attaches names to
  * canonical nodes, so this runtime keys both occurrences by the name while
- * the reference, and the mapping, read each declaration's own labels.
+ * the reference, and the mapping, read each declaration's own labels. The
+ * reference flags a case whose types reach such a node (`label_collision`);
+ * a decoded value must moreover equal the reference's once every label is
+ * read as its id, so only a spelling difference is attributed.
  */
 const LABEL_COLLISION_SYMPTOMS = new Set([
   "decode:value-mismatch",
   "validate:ts-rejects:missing_field",
   "validate:ts-rejects:unexpected_field",
+  "validate:ts-rejects:unknown_tag",
 ]);
 
-function withEnv(category: string | null, envLine: EnvLine): string | null {
-  return category !== null &&
-    envLine.label_collision === true &&
-    (LABEL_COLLISION_SYMPTOMS.has(category) || category.startsWith("validate:ts-accepts:"))
-    ? "env:label-collision"
-    : category;
+function withCollision(category: string | null, kase: CaseLine, ours: Ours): string | null {
+  if (
+    category === null ||
+    !flagged(kase.ref, "label_collision") ||
+    !(LABEL_COLLISION_SYMPTOMS.has(category) || category.startsWith("validate:ts-accepts:"))
+  ) {
+    return category;
+  }
+  if (
+    category === "decode:value-mismatch" &&
+    (ours.verdict !== "accept" || !deepEqual(byLabelId(ours.values), byLabelId(kase.ref.values)))
+  ) {
+    return category;
+  }
+  return "env:label-collision";
 }
 
 function decodeSymptom(ref: Reference, ours: Ours): string | null {
@@ -441,10 +525,7 @@ function decodeSymptom(ref: Reference, ours: Ours): string | null {
     if (ours.verdict === "accept") {
       return deepEqual(ours.values, ref.values) ? null : "decode:value-mismatch";
     }
-    if (ours.code === "resource_limit_exceeded") {
-      return "decode:intended:ts-limit";
-    }
-    return intendedWire(ours.code, ref) ?? `decode:ts-rejects:${ours.code}`;
+    return `decode:ts-rejects:${ours.code}`;
   }
   if (ours.verdict === "accept") {
     // The reference's decoding quota is the harness's policy, not a rule of
@@ -466,7 +547,7 @@ function decodeSymptom(ref: Reference, ours: Ours): string | null {
     case "header":
       return wire ? null : `decode:class:header-vs-${code}`;
     case "coercion":
-      return coercion ? null : (intendedWire(code, ref) ?? `decode:class:coercion-vs-${code}`);
+      return coercion ? null : `decode:class:coercion-vs-${code}`;
     case "malformed":
       return null;
     default:
@@ -497,13 +578,10 @@ function verdictCategory(target: string, ref: Reference, ours: Ours): string | n
     return null;
   }
   if (ref.verdict === "accept") {
-    if (ours.verdict === "accept") {
-      return null;
-    }
-    if (ours.code === "resource_limit_exceeded") {
-      return `${target}:intended:ts-limit`;
-    }
-    return `${target}:ts-rejects:${ours.code}`;
+    // No limit difference is intended here: the reference's budgets (the
+    // HostValue JSON decoder's 64-container nesting, `Limits`) are the
+    // tighter ones, so a limit refusal of what it accepts is a symptom.
+    return ours.verdict === "accept" ? null : `${target}:ts-rejects:${ours.code}`;
   }
   if (ours.verdict !== "accept") {
     return null;
@@ -633,7 +711,7 @@ export function runCorpus(corpus: Corpus): Outcome[] {
         outcome = runContract(kase, envLine);
         break;
     }
-    outcomes.push({ ...outcome, category: withEnv(outcome.category, envLine) });
+    outcomes.push({ ...outcome, category: withCollision(outcome.category, kase, outcome.ours) });
   }
   return outcomes;
 }
