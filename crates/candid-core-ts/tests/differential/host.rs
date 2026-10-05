@@ -9,8 +9,10 @@
 //! `["n"]` null · `["b", bool]` · `["i", decimal]` bigint ·
 //! `["f", 16 hex digits of the binary64 bits]` number · `["s", text]` string ·
 //! `["y", hex]` Uint8Array · `["a", [items]]` array ·
-//! `["o", [[key, value], …]]` plain object (own enumerable data properties, in
-//! that order).
+//! `["r", count, item]` an array of `count` values `item` denotes (a run, so a
+//! boundary vector of a million elements stays a short line; generated values
+//! never use it) · `["o", [[key, value], …]]` plain object (own enumerable
+//! data properties, in that order).
 //!
 //! # The mapping (descriptor → HostValue), directed by the expected type
 //!
@@ -467,7 +469,22 @@ fn canonical_decimal(desc: &Value) -> Value {
     }
 }
 
+/// A run descriptor (`["r", count, item]`) written out as the array it
+/// denotes; any other descriptor as it is.
+fn expanded(desc: &Value) -> std::borrow::Cow<'_, Value> {
+    if desc.get(0).and_then(Value::as_str) == Some("r") {
+        let count = desc[1]
+            .as_u64()
+            .and_then(|n| usize::try_from(n).ok())
+            .unwrap_or(0);
+        std::borrow::Cow::Owned(json!(["a", vec![desc[2].clone(); count]]))
+    } else {
+        std::borrow::Cow::Borrowed(desc)
+    }
+}
+
 fn host_blind(desc: &Value) -> Value {
+    let desc = &*expanded(desc);
     match desc.get(0).and_then(Value::as_str) {
         Some("b") => json!({ "kind": "bool", "value": desc[1] }),
         Some("i") => json!({ "kind": "int", "value": canonical_decimal(desc) }),
@@ -575,6 +592,7 @@ impl FreshIds {
 
 /// HostValue JSON for `desc` at `ty`, under the mapping in the module docs.
 pub fn host_value(env: &TypeEnv, ty: &Type, desc: &Value) -> Value {
+    let desc = &*expanded(desc);
     let Some(resolved) = trace(env, ty) else {
         return host_blind(desc);
     };

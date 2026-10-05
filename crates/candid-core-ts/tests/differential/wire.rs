@@ -18,11 +18,36 @@ pub fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
+/// The bytes of a hex string. A regression vector may also write a run as
+/// `(<hex>*<count>)` (`4449444c(6e7f*3)…` is the hex with `6e7f` written out
+/// three times), so a boundary vector of a million bytes stays a short line;
+/// `compare.ts`'s `fromHex` reads the same notation. Generated cases are plain
+/// hex.
 pub fn unhex(text: &str) -> Vec<u8> {
-    (0..text.len())
-        .step_by(2)
-        .map(|i| u8::from_str_radix(&text[i..i + 2], 16).expect("valid hex"))
-        .collect()
+    fn pairs(text: &str, out: &mut Vec<u8>) {
+        assert!(text.len() % 2 == 0, "an even number of hex digits");
+        for i in (0..text.len()).step_by(2) {
+            out.push(u8::from_str_radix(&text[i..i + 2], 16).expect("valid hex"));
+        }
+    }
+    let mut out = Vec::new();
+    let mut rest = text;
+    while let Some(open) = rest.find('(') {
+        pairs(&rest[..open], &mut out);
+        let close = open + rest[open..].find(')').expect("a run closes with `)`");
+        let (unit, count) = rest[open + 1..close]
+            .split_once('*')
+            .expect("a run is `(<hex>*<count>)`");
+        let count: usize = count.parse().expect("a run count");
+        let mut bytes = Vec::new();
+        pairs(unit, &mut bytes);
+        for _ in 0..count {
+            out.extend_from_slice(&bytes);
+        }
+        rest = &rest[close + 1..];
+    }
+    pairs(rest, &mut out);
+    out
 }
 
 thread_local! {
@@ -586,9 +611,19 @@ pub const GEN_LEVELS: usize = 127;
 pub const GEN_ELEMENTS: usize = 250_000;
 
 /// The runtime's `maxTypeTableEntries`: it refuses a table *claiming* more
-/// entries before reading one, a budget the `candid` crate does not have.
-/// Generated messages claim no more.
+/// entries before reading one. The `candid` crate has the same budget
+/// (`DecoderConfig::set_max_type_len`, checked on the claimed count before any
+/// entry is read; 10,000 unless configured), and `config` sets it to this
+/// value, so the two refuse exactly the same claims and a refusal on it is a
+/// verdict compared like any other (`TABLE_LIMIT_CLASS`). Generated messages
+/// claim no more; exact vectors pin the boundary (`table_entries_100000`,
+/// `table_entries_100001`).
 pub const GEN_TABLE_ENTRIES: u64 = 100_000;
+
+/// The class of the reference's refusal on its type-table budget, aligned
+/// with the runtime's (see `GEN_TABLE_ENTRIES`): the judge agrees it only
+/// with the runtime's `resource_limit_exceeded` on `type_table_entries`.
+const TABLE_LIMIT_CLASS: &str = "resource_limit_exceeded/type_table_entries";
 
 /// The longest length (a `vec` count, a `text`, principal or method name
 /// byte length) a generated message may claim. The `candid` crate charges a
@@ -1023,7 +1058,15 @@ fn quota(scan: &Scan, bytes: usize) -> usize {
 fn config(quota: usize) -> candid::DecoderConfig {
     let mut config = candid::DecoderConfig::new();
     config.set_decoding_quota(quota);
+    config.set_max_type_len(usize::try_from(GEN_TABLE_ENTRIES).expect("fits"));
     config
+}
+
+/// Whether a refusal is the reference's type-table budget (see
+/// `GEN_TABLE_ENTRIES`), which the `candid` crate reports only as message
+/// text (`type table size exceeded`).
+fn table_limit(error: &candid::Error) -> bool {
+    format!("{error:?}").contains("type table size exceeded")
 }
 
 /// The reference's own budget a refusal came from, if any: its decoding
@@ -1057,9 +1100,11 @@ fn inconclusive(budget: &str) -> Value {
 /// (`IDLArgs::from_bytes` fails), and `coercion` when the message is
 /// well-formed and only the expected types refuse it. A refusal on the
 /// reference's own budget is no verdict at all: `inconclusive`, with the
-/// budget named (see `budget`). The reference has no depth or element budget
-/// that could be configured like the runtime's; the generator keeps cases
-/// below the runtime's (see `GEN_LEVELS`).
+/// budget named (see `budget`). The one reference budget configured like the
+/// runtime's is the type table's claimed size (`GEN_TABLE_ENTRIES`): a refusal
+/// there is a verdict, `TABLE_LIMIT_CLASS`. The reference has no depth or
+/// element budget that could be configured like the runtime's; the generator
+/// keeps cases below the runtime's (see `GEN_LEVELS`).
 pub fn reference_verdict(env: &TypeEnv, bytes: &[u8], expected: &[Type]) -> Value {
     reference_judgement(env, bytes, expected).0
 }
@@ -1095,10 +1140,63 @@ pub fn reference_judgement(
             }
         }
     }
-    (
-        json!({ "verdict": "accept", "values": values }),
-        Some(levels),
-    )
+    let values = Value::Array(values);
+    let canonical = canonical_json(&values);
+    let verdict = if canonical.len() > VALUES_RECORDED_BYTES {
+        json!({ "verdict": "accept", "values_digest": values_digest(&canonical) })
+    } else {
+        json!({ "verdict": "accept", "values": values })
+    };
+    (verdict, Some(levels))
+}
+
+/// The longest decoded-values JSON a corpus line records in full: a width
+/// vector decodes a million values, megabytes the golden need not hold, so
+/// past this the line records `values_digest` instead and the judge compares
+/// the digest of the runtime's values (`compare.ts`'s `valuesDigest`).
+/// Generated cases stay far below it.
+const VALUES_RECORDED_BYTES: usize = 65_536;
+
+/// JSON with every object's keys in UTF-16 code-unit order (JavaScript's
+/// default sort), so this text and `compare.ts`'s `canonicalJson` are equal
+/// for equal values: the domain mapping holds no numbers, only strings,
+/// booleans, `null`, arrays and objects.
+fn canonical_json(value: &Value) -> String {
+    match value {
+        Value::Array(items) => {
+            let inner: Vec<String> = items.iter().map(canonical_json).collect();
+            format!("[{}]", inner.join(","))
+        }
+        Value::Object(map) => {
+            let mut keys: Vec<&String> = map.keys().collect();
+            keys.sort_by(|a, b| a.encode_utf16().cmp(b.encode_utf16()));
+            let inner: Vec<String> = keys
+                .into_iter()
+                .map(|key| {
+                    format!(
+                        "{}:{}",
+                        Value::String(key.clone()),
+                        canonical_json(&map[key])
+                    )
+                })
+                .collect();
+            format!("{{{}}}", inner.join(","))
+        }
+        other => other.to_string(),
+    }
+}
+
+/// `fnv1a32:<8 hex digits>/<length>` of canonical JSON, hashed over its
+/// UTF-16 code units as `compare.ts`'s `digest` hashes a string.
+fn values_digest(canonical: &str) -> String {
+    let mut hash: u32 = 0x811c_9dc5;
+    let mut length = 0usize;
+    for unit in canonical.encode_utf16() {
+        hash ^= u32::from(unit);
+        hash = hash.wrapping_mul(0x0100_0193);
+        length += 1;
+    }
+    format!("fnv1a32:{hash:08x}/{length}")
 }
 
 /// The composite nesting of a decoded value, counted as `Scan::levels`
@@ -1126,6 +1224,9 @@ fn value_levels(value: &IDLValue) -> usize {
 fn reference_rejection(bytes: &[u8], error: &candid::Error, quota: usize) -> Value {
     if let Some(budget) = budget(error) {
         return inconclusive(budget);
+    }
+    if table_limit(error) {
+        return json!({ "verdict": "reject", "class": TABLE_LIMIT_CLASS });
     }
     match guarded(|| candid::de::IDLDeserialize::new_with_config(bytes, &config(quota)).err()) {
         Err(()) => return json!({ "verdict": "panic" }),

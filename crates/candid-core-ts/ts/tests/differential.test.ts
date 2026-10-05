@@ -44,6 +44,7 @@ import {
   parseCorpus,
   runCorpus,
   symptom,
+  valuesDigest,
   type CaseLine,
   type Outcome,
   type Reference,
@@ -273,6 +274,53 @@ test("the generated corpus applies every structural type-table edit on both targ
   );
 });
 
+/** The structural edits that are a swap of two neighbours: two ops, the first tagged. */
+const SWAPS = new Set(["unsorted_field_ids", "unsorted_variant_ids", "unsorted_method_names"]);
+
+/**
+ * The structural edit a case applies alone, or null: a generated decode
+ * case whose only mutation is the edit, a decode vector `r/table_<edit>`, or
+ * a contract case (generated or the vector `r/contract_<edit>`) whose ops
+ * are exactly the edit's (one op, or a swap's two).
+ */
+function editAlone(kase: CaseLine): string | null {
+  if (kase.kind === "decode") {
+    if (kase.id.startsWith("r/table_")) {
+      return kase.id.slice("r/table_".length);
+    }
+    return STRUCTURAL.includes(kase.mutation) ? kase.mutation : null;
+  }
+  if (kase.kind === "contract") {
+    const edit = kase.ops[0]?.edit;
+    if (edit === undefined || kase.ops.slice(1).some((op) => op.edit !== undefined)) {
+      return null;
+    }
+    return kase.ops.length === (SWAPS.has(edit) ? 2 : 1) ? edit : null;
+  }
+  return null;
+}
+
+// A structural edit that only ever occurs beside another edit can be
+// decided by that other edit (the review found the corpus's one generated
+// duplicate method name refused for another op's sake), so each kind must
+// also occur alone on each target, where its own check decides the verdict.
+test("every structural edit occurs alone in some case of each target", () => {
+  const alone = { decode: new Set<string>(), contract: new Set<string>() };
+  for (const kase of corpus.cases) {
+    const edit = editAlone(kase);
+    if (edit !== null && (kase.kind === "decode" || kase.kind === "contract")) {
+      alone[kase.kind].add(edit);
+    }
+  }
+  for (const target of ["decode", "contract"] as const) {
+    assert.deepStrictEqual(
+      STRUCTURAL.filter((edit) => !alone[target].has(edit)),
+      [],
+      `${target}: structural edits that never occur alone`,
+    );
+  }
+});
+
 // The judge's own rules, on synthetic answers (issue #196 redesign): no
 // input property makes a divergence agree, and a limit refusal agrees only
 // with the reference's refusal on the same budget.
@@ -368,5 +416,55 @@ test("the judge accepts nothing by rule: a limit refusal agrees only with the sa
     judge(decode({ verdict: "inconclusive", budget: "quota" }), { verdict: "accept", values: [] })
       .status,
     "inconclusive",
+  );
+  // ... even where this runtime skips the case: a campaign counts it.
+  assert.strictEqual(
+    judge(decode({ verdict: "inconclusive", budget: "quota" }), {
+      verdict: "skip",
+      reason: "omitted",
+    }).status,
+    "inconclusive",
+  );
+  // decode: the type-table budget is configured alike on both sides, so its
+  // refusal agrees with the runtime's refusal on that resource and nothing else.
+  const table = { verdict: "reject", class: "resource_limit_exceeded/type_table_entries" } as const;
+  const ourTable = {
+    verdict: "reject",
+    code: "resource_limit_exceeded",
+    path: "$",
+    resource: "type_table_entries",
+  } as const;
+  assert.strictEqual(judge(decode(table), ourTable).status, "agree");
+  assert.strictEqual(judge(decode(table), truncated).status, "diverge");
+  assert.strictEqual(judge(decode(table), depth).status, "diverge");
+  assert.strictEqual(
+    judge(decode({ verdict: "reject", class: "header" }), ourTable).status,
+    "diverge",
+  );
+  // Values recorded as a digest compare by our values' canonical digest.
+  const digested = {
+    verdict: "accept",
+    values_digest: valuesDigest([{ $int: "1" }]),
+  } as const;
+  assert.strictEqual(judge(decode(digested), ours).status, "agree");
+  assert.strictEqual(
+    judge(decode(digested), { verdict: "accept", values: [{ $int: "2" }] }).status,
+    "diverge",
+  );
+  // validate: the reference's element budget is a verdict like its depth one.
+  const elements = { ...depth, resource: "value_elements" } as const;
+  assert.strictEqual(
+    judge(
+      validateCase({ verdict: "reject", class: "resource_limit_exceeded/value_elements" }),
+      elements,
+    ).status,
+    "agree",
+  );
+  assert.strictEqual(
+    judge(
+      validateCase({ verdict: "reject", class: "resource_limit_exceeded/value_elements" }),
+      depth,
+    ).status,
+    "diverge",
   );
 });

@@ -31,13 +31,17 @@
 //!
 //! The reference records a verdict for every case, or `inconclusive` when it
 //! refused on a budget of its own (its decoding quota, its stack guard, a
-//! HostValue construction budget) and so never judged the input. Generation
-//! is sized so that never happens: a decode case whose message is outside the
-//! bounds of `wire::Scan::outside_bounds` (nesting, values, a claimed table
-//! size: the runtime budgets the `candid` crate has no counterpart for) is
-//! redrawn before it is judged, and counted in the header's `case_redraws`.
-//! The committed corpus must hold no `inconclusive` case; a campaign counts
-//! them.
+//! HostValue JSON budget past which the constructors could not rebuild the
+//! value) and so never judged the input. Its budgets that are configured like
+//! the runtime's are verdicts, not budgets of its own: decode's type-table
+//! size (`wire::GEN_TABLE_ENTRIES`) and validate's value depth and elements
+//! (`host_verdict`). Generation is sized so that no other budget is hit: a
+//! decode case whose message is outside the bounds of
+//! `wire::Scan::outside_bounds` (nesting and values, the runtime budgets the
+//! `candid` crate has no counterpart for, and a claimed table size) is redrawn
+//! before it is judged, and counted in the header's `case_redraws`. The
+//! committed corpus must hold no `inconclusive` case; a campaign counts them.
+//! Exact regression vectors pin each boundary (`regressions.json`).
 //!
 //! # The committed corpus (CI)
 //!
@@ -452,8 +456,12 @@ fn host_levels(host: &Value) -> usize {
 
 /// The reference verdict for one validate case: `validate_host_value` under
 /// `Limits::default()` with `max_value_depth` aligned to the runtime's depth
-/// budget (`VALIDATE_DEPTH`). A depth refusal there is a verdict, compared
-/// exactly with the runtime's; a refusal on any other budget of the
+/// budget (`VALIDATE_DEPTH`). Its two value budgets are verdicts, compared
+/// exactly with the runtime's refusals on the same resource: `value_depth`
+/// (aligned) and `value_elements` (`max_value_elements`, 1,000,000, the
+/// runtime's documented `maxElements`; the runtime also charges each `rec` hop
+/// and examined record key, so the two counts differ, and exact vectors pin
+/// where: `validate_elements_*`). A refusal on any other budget of the
 /// reference (or of the HostValue constructors) is `inconclusive`.
 fn host_verdict(built: &Built, name: &str, host: &Value) -> Value {
     let limits = candid_core::Limits::default();
@@ -464,11 +472,13 @@ fn host_verdict(built: &Built, name: &str, host: &Value) -> Value {
             return json!({ "verdict": "reject", "class": "host_value_json" });
         }
         // A budget of the HostValue JSON decoder (above all its 64-container
-        // nesting cap, a guard for serde_json's recursion): a policy of that
-        // ABI, not a judgement of the value. The value is rebuilt through the
-        // HostValue constructors, which apply only `max_value_depth` and
-        // `max_value_elements`, and judged like any other.
-        Err(_) => match host_from_constructors(host, &limits) {
+        // nesting cap, a guard for serde_json's recursion, and its value
+        // budgets): a policy of that ABI, not a judgement of the value. The
+        // value is rebuilt through the HostValue constructors with their own
+        // depth and element budgets raised (building a value is not judging
+        // it), and `validate_host_value` judges it like any other, charging
+        // its budgets in walk order.
+        Err(_) => match host_from_constructors(host, &construction_limits()) {
             Ok(value) => {
                 built_by = Some("constructors");
                 value
@@ -498,10 +508,14 @@ fn host_verdict(built: &Built, name: &str, host: &Value) -> Value {
             Err(error) => match error.violations.first() {
                 None => json!({ "verdict": "reject", "class": "unknown" }),
                 Some(violation) => match &violation.resource_limit {
-                    Some(info) if info.resource == "value_depth" => json!({
-                        "verdict": "reject",
-                        "class": format!("{}/value_depth", violation.code),
-                    }),
+                    Some(info)
+                        if info.resource == "value_depth" || info.resource == "value_elements" =>
+                    {
+                        json!({
+                            "verdict": "reject",
+                            "class": format!("{}/{}", violation.code, info.resource),
+                        })
+                    }
                     Some(info) => json!({ "verdict": "inconclusive", "budget": info.resource }),
                     None => json!({ "verdict": "reject", "class": violation.code }),
                 },
@@ -511,6 +525,15 @@ fn host_verdict(built: &Built, name: &str, host: &Value) -> Value {
         verdict["built"] = json!(by);
     }
     verdict
+}
+
+/// The limits the HostValue constructors build a value under in
+/// `host_verdict`: the defaults with the value depth and element budgets out
+/// of the way, so `validate_host_value` alone applies them.
+fn construction_limits() -> candid_core::Limits {
+    candid_core::Limits::default()
+        .with_max_value_depth(usize::MAX / 2)
+        .with_max_value_elements(usize::MAX / 2)
 }
 
 /// The HostValue a HostValue JSON document denotes, built through the
@@ -597,6 +620,11 @@ fn draft_validate(
     ((value, mutated, host_json), outside)
 }
 
+/// The longest HostValue JSON a validate line records (for review only;
+/// nothing reads it back): a boundary vector's million elements would put
+/// megabytes in the golden, so past this its byte length stands in for it.
+const HOST_RECORDED_BYTES: usize = 65_536;
+
 fn validate_line(
     built: &Built,
     id: String,
@@ -604,6 +632,13 @@ fn validate_line(
     name: &str,
     (value, mutated, host_json): (Value, bool, Value),
 ) -> Value {
+    let verdict = host_verdict(built, name, &host_json);
+    let text = host_json.to_string();
+    let host = if text.len() > HOST_RECORDED_BYTES {
+        json!({ "elided_bytes": text.len() })
+    } else {
+        host_json
+    };
     json!({
         "kind": "validate",
         "id": id,
@@ -611,8 +646,8 @@ fn validate_line(
         "type": name,
         "mutated": mutated,
         "value": value,
-        "ref": host_verdict(built, name, &host_json),
-        "host": host_json,
+        "ref": verdict,
+        "host": host,
     })
 }
 

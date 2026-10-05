@@ -2,12 +2,12 @@
   "about": "Reviewed expected-divergence list of the issue #196 differential fuzz, keyed by case id. ts/tests/differential.test.ts accepts a divergence only when its case id is listed here with its issue and exactly the symptom observed (`ts=<this runtime's answer> ref=<the reference's>`, each refusal with its class or code, a value mismatch with a digest of this runtime's values); it fails on any other divergence, on a listed case that no longer diverges so, and on any case the reference did not judge. No rule attributes a divergence: each entry was triaged by hand. `side` says which side is wrong (reference, runtime), or that the runtime differs by a decision settled on the issue (decision), or that the issue awaits the owner's call (owner-call). `cases` and `skipped` are rewritten by UPDATE_GOLDENS=1 npm test, which keeps an entry only while its id and symptom are unchanged and writes any other divergence unclassified (issue 0) for review.",
   "issues": {
     "102": "Settled decisions 7 and 8 of #102: schemaFromContract does not verify the identities hashes (canonicalization is candid-core's job) and does not read producer metadata (untrusted provenance); Contract::from_json refuses a document whose identities or producer block is wrong. The driver restamps identities after any graph edit, so only an edit of identities or producer itself diverges.",
-    "103": "Settled decision 4 of #103: the runtime refuses a non-minimal LEB128/SLEB128 group (overlong_leb128, or invalid_length when a u32 field's group is longer than five bytes although its value fits), the candid crate accepts it. Triage: each generated case agrees with the reference once the runtime's minimality checks are reversed (and nothing else).",
+    "103": "Settled decisions of #103. Decision 4: the runtime refuses a non-minimal LEB128/SLEB128 group (overlong_leb128, or invalid_length when a u32 field's group is longer than five bytes although its value fits), the candid crate accepts it; triage: each generated case agrees with the reference once the runtime's minimality checks are reversed (and nothing else). Scope item 3 (\"Bounded\"): the decoder has explicit, fail-closed recursion depth and element-count limits (maxDepth 256, maxElements 1,000,000), which the candid crate does not have, so a message past them is refused here and accepted there: the boundary vectors past maxDepth on the skip paths (skip_field_vec_256_levels, absorbed_vec_256_levels: no rec hop involved) and past maxElements (elements_skipped_vec_1000000, elements_decoded_vec_null_500000, elements_blob_999999). Random generation stays far below both.",
     "104": "Settled decision 1 of #104: a func value's method name is non-empty (the runtime's decode refuses an empty one with invalid_length, for round-trip symmetry with validate and encode; the candid crate accepts it), and opaque references and external reference sequences stay refused (a future value with a non-zero reference count: invalid_principal). Triage: each generated case agrees once the runtime's empty-name check is reversed (and nothing else).",
     "227": "Upstream defects of the candid crate 0.10.30, found by this fuzz; the reference is wrong in each listed case and the runtime is right: wire-side-only empty normalization (item 1), values read from an empty wire type (item 2), the unsound coinductive subtype memo (item 3), a skipped func reference's method name not checked for UTF-8 (item 4). Each case is a hand-minimized vector with its analysis in regressions.json.",
     "228": "schemaFromContract accepts Contract documents Contract::from_json refuses: orphan type nodes (item 7), unknown keys (item 6), a rootless arena (item 8); the runtime's loader is the wrong side. Item 9 (a document without declarations, which the runtime refuses and the reference accepts) awaits the owner's call. Triage: the reference's first violation names the rule, and the runtime's loader has no such check.",
     "229": "Field names attach to the shared canonical node, so a declaration that spells a field by number (or another name) is decoded and validated under another declaration's spelling (d for 100, y for 121); the owner's question on #229. Triage: each decode case's values equal the reference's once every key and tag is read as its label id; each validate case's value uses the declaration's own spelling.",
-    "231": "The runtime's budgets are not the reference's: decode and validate charge a rec hop a depth step, so the runtime refuses the first node at Candid level 128 where the candid crate (no depth budget) accepts; validate's tag-only arm is charged its rec hop but not its null, one level unlike candid-core's max_value_depth; and the decoder's element budget (maxElements, which charges rec hops too) has no candid-crate counterpart. Random generation stays strictly below these bounds; only these exact boundary vectors cross them. Owner's call on #231 (the element budget may deserve its own issue)."
+    "231": "The runtime charges a rec hop a step (#231): decode and validate refuse the first decoded node at Candid level 128 (257 steps) where the candid crate (no depth budget) accepts, and validate's tag-only arm is charged its rec hop but not its null, one level unlike candid-core's max_value_depth (the boundary vectors past maxDepth on the decoded paths). The same step charges an element too, so validate reaches maxElements on a vec of declared elements at about half of candid-core's max_value_elements (validate_elements_record_vec_null_499998: 1,000,001 runtime steps, 500,000 HostValue nodes); #231 states the depth half, and the element half is reported to the lead to add there. Random generation stays strictly below these bounds; only these exact boundary vectors cross them. Owner's call on #231."
   },
   "cases": {
     "c/15/0": {
@@ -245,7 +245,17 @@
       "side": "decision",
       "symptom": "ts=reject:overlong_leb128 ref=accept"
     },
+    "r/absorbed_vec_256_levels": {
+      "issue": 103,
+      "side": "decision",
+      "symptom": "ts=reject:resource_limit_exceeded/value_depth ref=accept"
+    },
     "r/chain_opt_128_levels": {
+      "issue": 231,
+      "side": "owner-call",
+      "symptom": "ts=reject:resource_limit_exceeded/value_depth ref=accept"
+    },
+    "r/chain_record_128_levels": {
       "issue": 231,
       "side": "owner-call",
       "symptom": "ts=reject:resource_limit_exceeded/value_depth ref=accept"
@@ -295,9 +305,19 @@
       "side": "owner-call",
       "symptom": "ts=reject:resource_limit_exceeded/value_depth ref=accept"
     },
+    "r/elements_blob_999999": {
+      "issue": 103,
+      "side": "decision",
+      "symptom": "ts=reject:resource_limit_exceeded/value_elements ref=accept"
+    },
+    "r/elements_decoded_vec_null_500000": {
+      "issue": 103,
+      "side": "decision",
+      "symptom": "ts=reject:resource_limit_exceeded/value_elements ref=accept"
+    },
     "r/elements_skipped_vec_1000000": {
-      "issue": 231,
-      "side": "owner-call",
+      "issue": 103,
+      "side": "decision",
       "symptom": "ts=reject:resource_limit_exceeded/value_elements ref=accept"
     },
     "r/empty_method_name": {
@@ -365,10 +385,20 @@
       "side": "reference",
       "symptom": "ts=reject:type_mismatch ref=accept"
     },
+    "r/skip_field_vec_256_levels": {
+      "issue": 103,
+      "side": "decision",
+      "symptom": "ts=reject:resource_limit_exceeded/value_depth ref=accept"
+    },
     "r/validate_depth_variant_null_128_levels": {
       "issue": 231,
       "side": "owner-call",
       "symptom": "ts=accept ref=reject:resource_limit_exceeded/value_depth"
+    },
+    "r/validate_elements_record_vec_null_499998": {
+      "issue": 231,
+      "side": "owner-call",
+      "symptom": "ts=reject:resource_limit_exceeded/value_elements ref=accept"
     },
     "v/18/0": {
       "issue": 229,
