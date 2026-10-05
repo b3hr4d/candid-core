@@ -49,5 +49,7 @@ candid_parser = "=0.4.0"
 # `value` gates `IDLArgs`. Dev-only: it never reaches a downstream consumer.
 candid = { version = "=0.10.30", features = ["value"] }
 # Exact-pinned to match the crate under test: the determinism test round-trips
-# a Contract through its serialized form.
-serde_json = "=1.0.150"
+# a Contract through its serialized form. `unbounded_depth` (no new crate)
+# lets the differential fuzz's rejudge mode re-read corpus lines whose deep
+# values nest past serde_json's 128-level parse limit, on its large stack.
+serde_json = { version = "=1.0.150", features = ["unbounded_depth"] }

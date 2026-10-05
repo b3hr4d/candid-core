@@ -21,8 +21,10 @@
 //! TypeScript side loads comes from candid-core's compiler over the same text.
 //! Deep environments (`types::deep_env`: recursive shapes and declaration
 //! chains) add decode and validate cases whose values nest up to 300 levels,
-//! across the runtime's `maxDepth`. A drafted environment either side refuses
-//! is redrawn, and the corpus header counts redraws by reason.
+//! across the runtime's `maxDepth` and candid-core's `max_value_depth`; the
+//! committed corpus cycles through every kind (`types::deep_env_of_kind`). A
+//! drafted environment either side refuses is redrawn, and the corpus header
+//! counts redraws by reason.
 //!
 //! Every decode verdict carries `flags`: input properties the Rust side reads
 //! from the bytes at their own wire types (`wire::Scan`) or from the types,
@@ -44,9 +46,11 @@
 //! # Campaign mode
 //!
 //! `differential_campaign` (ignored) writes a corpus for other seeds to a file
-//! of your choosing; `ts/tests/differential/campaign.ts` replays it, and
-//! `differential_verdicts` (ignored) answers the reference's verdict for
-//! hand-minimized inputs. The procedure is in `docs/verification.md` (the
+//! of your choosing; `ts/tests/differential/campaign.ts` replays it;
+//! `differential_rejudge` (ignored) rebuilds each environment of an existing
+//! batch from its `did` and recomputes every reference verdict and flag with
+//! the current tree; and `differential_verdicts` (ignored) answers the
+//! reference's verdict for hand-minimized inputs. The procedure is in `docs/verification.md` (the
 //! differential-fuzz entry under "Enforced in this repository").
 #![cfg(feature = "compiler")]
 
@@ -69,7 +73,10 @@ use rng::Rng;
 /// The committed corpus: random environments `start..start + envs`, each
 /// with a fixed number of cases per target, and deep environments
 /// `start..start + deep_envs` (see `types::deep_env`), each with a fixed
-/// number of decode and validate cases.
+/// number of decode and validate cases. With `deep_kinds`, deep environment
+/// `start + i` takes kind `i % types::DEEP_KINDS` (every recursive shape and
+/// a chain past 128 constructors, whatever the seeds draw) instead of drawing
+/// one.
 struct Seeds {
     start: u64,
     envs: u64,
@@ -79,6 +86,7 @@ struct Seeds {
     deep_envs: u64,
     deep_decode: usize,
     deep_validate: usize,
+    deep_kinds: bool,
 }
 
 const CORPUS_SEEDS: Seeds = Seeds {
@@ -90,6 +98,7 @@ const CORPUS_SEEDS: Seeds = Seeds {
     deep_envs: 6,
     deep_decode: 4,
     deep_validate: 2,
+    deep_kinds: true,
 };
 
 /// Deep environments draw from their own stream: seed `s` of a deep
@@ -274,7 +283,11 @@ fn build_from_source(env: types::Env) -> Result<Built, String> {
 
 /// An environment both sides accept; rejected drafts are redrawn from the
 /// same stream (so the result is still a function of the seed) and counted.
-fn build_drawn(rng: &mut Rng, redraws: &mut Redraws, draw: fn(&mut Rng) -> types::Env) -> Built {
+fn build_drawn(
+    rng: &mut Rng,
+    redraws: &mut Redraws,
+    mut draw: impl FnMut(&mut Rng) -> types::Env,
+) -> Built {
     loop {
         match build_from_source(draw(rng)) {
             Ok(built) => return built,
@@ -405,16 +418,60 @@ fn decode_line(
     })
 }
 
+/// The reference verdict for one validate case, with the input flag the
+/// verdict mapping ties `validate:intended:ts-limit` to: `deep_nesting` when
+/// the value nests deeper than `wire::DEEP_LEVELS` composite levels (see
+/// `host_levels`), which the runtime's `maxDepth` always admits.
 fn host_verdict(built: &Built, name: &str, host: &Value) -> Value {
+    let mut verdict = host_verdict_unflagged(built, name, host);
+    if host_levels(host) > wire::DEEP_LEVELS {
+        verdict["flags"] = json!(["deep_nesting"]);
+    }
+    verdict
+}
+
+/// The composite nesting of a HostValue JSON document: `opt` (absent
+/// included), `vec`, `record` and `variant` each count a level, as
+/// `wire::Scan::levels` counts them on the wire.
+fn host_levels(host: &Value) -> usize {
+    let children: Vec<&Value> = match host["kind"].as_str() {
+        Some("opt" | "variant") => vec![&host["value"]],
+        Some("vec") => host["values"]
+            .as_array()
+            .map_or(Vec::new(), |v| v.iter().collect()),
+        Some("record") => host["fields"].as_array().map_or(Vec::new(), |fields| {
+            fields.iter().map(|f| &f["value"]).collect()
+        }),
+        _ => return 0,
+    };
+    1 + children.into_iter().map(host_levels).max().unwrap_or(0)
+}
+
+fn host_verdict_unflagged(built: &Built, name: &str, host: &Value) -> Value {
     let limits = candid_core::Limits::default();
+    let mut built_by = None;
     let value = match candid_core::HostValue::from_json_with_limits(&host.to_string(), &limits) {
         Ok(value) => value,
         Err(candid_core::HostValueJsonError::Malformed(_)) => {
             return json!({ "verdict": "reject", "class": "host_value_json" });
         }
-        // Size, nesting, depth and element budgets of the HostValue JSON
-        // decoder: a policy, distinct from a malformed value.
-        Err(_) => return json!({ "verdict": "reject", "class": "host_value_limit" }),
+        // A budget of the HostValue JSON decoder (above all its 64-container
+        // nesting cap, a guard for serde_json's recursion): a policy of that
+        // ABI, not a judgement of the value. The value is rebuilt through the
+        // HostValue constructors, which apply only `max_value_depth` (256,
+        // validate's `maxDepth`) and `max_value_elements`, and judged like any
+        // other (issue #196 review: a JSON limit never stands in for a
+        // verdict).
+        Err(_) => match host_from_constructors(host, &limits) {
+            Ok(value) => {
+                built_by = Some("constructors");
+                value
+            }
+            Err(candid_core::HostValueJsonError::Malformed(_)) => {
+                return json!({ "verdict": "reject", "class": "host_value_json" });
+            }
+            Err(_) => return json!({ "verdict": "reject", "class": "host_value_limit" }),
+        },
     };
     let Some(declaration) = built
         .contract
@@ -428,12 +485,73 @@ fn host_verdict(built: &Built, name: &str, host: &Value) -> Value {
         contract_id: built.contract.contract_id().to_string(),
         type_ref: declaration.ty,
     };
-    match candid_core::validate_host_value(&built.contract, &selector, &value, &limits) {
-        Ok(()) => json!({ "verdict": "accept" }),
-        Err(error) => json!({
-            "verdict": "reject",
-            "class": error.violations.first().map_or("unknown".to_string(), |v| v.code.clone()),
-        }),
+    let mut verdict =
+        match candid_core::validate_host_value(&built.contract, &selector, &value, &limits) {
+            Ok(()) => json!({ "verdict": "accept" }),
+            Err(error) => json!({
+                "verdict": "reject",
+                "class": error.violations.first().map_or("unknown".to_string(), |v| v.code.clone()),
+            }),
+        };
+    if let Some(by) = built_by {
+        verdict["built"] = json!(by);
+    }
+    verdict
+}
+
+/// The HostValue a HostValue JSON document denotes, built through the
+/// public constructors (containers) and the JSON decoder (scalars, one level
+/// each), so no JSON nesting budget applies; the constructors still refuse a
+/// value past `limits.max_value_depth` or `limits.max_value_elements`.
+fn host_from_constructors(
+    json: &Value,
+    limits: &candid_core::Limits,
+) -> Result<candid_core::HostValue, candid_core::HostValueJsonError> {
+    use candid_core::{HostFieldValue, HostValue, HostValueJsonError};
+    let malformed = |what: &str| HostValueJsonError::Malformed(format!("$: {what}"));
+    match json["kind"].as_str() {
+        Some("opt") => {
+            let inner = match &json["value"] {
+                Value::Null => None,
+                inner => Some(host_from_constructors(inner, limits)?),
+            };
+            HostValue::opt(inner, limits)
+        }
+        Some("vec") => {
+            let mut values = Vec::new();
+            for item in json["values"]
+                .as_array()
+                .ok_or_else(|| malformed("values"))?
+            {
+                values.push(host_from_constructors(item, limits)?);
+            }
+            HostValue::vector(values, limits)
+        }
+        Some("record") => {
+            let mut fields = Vec::new();
+            for field in json["fields"]
+                .as_array()
+                .ok_or_else(|| malformed("fields"))?
+            {
+                let id = field["id"]
+                    .as_u64()
+                    .and_then(|id| u32::try_from(id).ok())
+                    .ok_or_else(|| malformed("field id"))?;
+                fields.push(HostFieldValue::new(
+                    id,
+                    host_from_constructors(&field["value"], limits)?,
+                ));
+            }
+            HostValue::record(fields, limits)
+        }
+        Some("variant") => {
+            let id = json["id"]
+                .as_u64()
+                .and_then(|id| u32::try_from(id).ok())
+                .ok_or_else(|| malformed("variant id"))?;
+            HostValue::variant(id, host_from_constructors(&json["value"], limits)?, limits)
+        }
+        _ => HostValue::from_json_with_limits(&json.to_string(), limits),
     }
 }
 
@@ -559,12 +677,20 @@ fn deep_decode_case(built: &Built, rng: &mut Rng, id: String, env_id: &str) -> V
     decode_line(built, id, env_id, wire, &[expected], &mutation, &bytes)
 }
 
-/// One deep validate case: a value of `T0` nested up to 80 levels, across
-/// the HostValue JSON decoder's 64-container nesting cap.
+/// One deep validate case: a value of `T0` nested about `levels` deep, half
+/// of the time near the runtime's depth boundary (see `wire::DEEP_LEVELS`),
+/// otherwise up to 300 levels: across the HostValue JSON decoder's
+/// 64-container nesting cap (the reference then judges the value rebuilt
+/// through the HostValue constructors, see `host_verdict`) and past
+/// `max_value_depth`.
 fn deep_validate_case(built: &Built, rng: &mut Rng, id: String, env_id: &str) -> Value {
     let name = types::decl_name(0);
     let ty = find(&built.types, &name);
-    let levels = rng.below(80);
+    let levels = if rng.chance(1, 2) {
+        wire::DEEP_LEVELS - 8 + rng.below(16)
+    } else {
+        rng.below(300)
+    };
     let value = wire::deep_value(&built.types, &ty, rng, levels)
         .and_then(|value| host::descriptor(&built.types, &ty, &value))
         .unwrap_or_else(|| host::random_scalar(rng));
@@ -573,7 +699,12 @@ fn deep_validate_case(built: &Built, rng: &mut Rng, id: String, env_id: &str) ->
 
 fn generate_deep_env(seed: u64, seeds: &Seeds, lines: &mut Vec<Value>, redraws: &mut Redraws) {
     let mut rng = Rng::new(seed ^ DEEP_SALT);
-    let built = build_drawn(&mut rng, redraws, types::deep_env);
+    let built = if seeds.deep_kinds {
+        let kind = usize::try_from(seed - seeds.start).unwrap_or(0) % types::DEEP_KINDS;
+        build_drawn(&mut rng, redraws, |rng| types::deep_env_of_kind(rng, kind))
+    } else {
+        build_drawn(&mut rng, redraws, types::deep_env)
+    };
     let env_id = format!("x{seed}");
     lines.push(env_line(&env_id, &built));
     for index in 0..seeds.deep_decode {
@@ -605,6 +736,7 @@ fn header(about: &str, seeds: &Seeds, redraws: &Redraws) -> Value {
         "seeds": { "start": seeds.start, "envs": seeds.envs, "deep_envs": seeds.deep_envs },
         "per_env": { "decode": seeds.decode, "validate": seeds.validate, "contract": seeds.contract },
         "per_deep_env": { "decode": seeds.deep_decode, "validate": seeds.deep_validate },
+        "deep_kinds": if seeds.deep_kinds { "cycled" } else { "drawn" },
         "redraws": redraws,
     })
 }
@@ -617,7 +749,8 @@ fn generate_regressions(lines: &mut Vec<Value>) {
         .join("differential")
         .join("regressions.json");
     let text = std::fs::read_to_string(&path).expect("the regression vectors must be readable");
-    let document: Value = serde_json::from_str(&text).expect("the regression vectors are JSON");
+    // Deep validate vectors nest past serde_json's 128-level parse limit.
+    let document = deep_json(&text);
     for vector in document["vectors"].as_array().expect("a vectors array") {
         let name = vector["name"].as_str().expect("a name");
         let source = vector["did"].as_str().expect("a did source").to_string();
@@ -812,7 +945,9 @@ fn env_u64(name: &str, default: u64) -> u64 {
 /// environments), `DIFF_OUT` (the JSONL file to write), and optionally
 /// `DIFF_DECODE`/`DIFF_VALIDATE`/`DIFF_CONTRACT` (cases per environment),
 /// `DIFF_DEEP_ENVS` (deep environments) and `DIFF_DEEP_DECODE`/
-/// `DIFF_DEEP_VALIDATE` (cases per deep environment).
+/// `DIFF_DEEP_VALIDATE` (cases per deep environment), and `DIFF_DEEP_KINDS`
+/// (set: deep environments cycle through the kinds, as in the committed
+/// corpus, instead of drawing one).
 #[test]
 #[ignore = "campaign mode: run explicitly with DIFF_SEED, DIFF_ENVS and DIFF_OUT"]
 fn differential_campaign() {
@@ -826,6 +961,7 @@ fn differential_campaign() {
         deep_envs: env_u64("DIFF_DEEP_ENVS", 10),
         deep_decode: env_u64("DIFF_DEEP_DECODE", 20) as usize,
         deep_validate: env_u64("DIFF_DEEP_VALIDATE", 5) as usize,
+        deep_kinds: std::env::var_os("DIFF_DEEP_KINDS").is_some(),
     };
     let text = on_big_stack(move || {
         let mut lines = Vec::new();
@@ -902,6 +1038,18 @@ fn differential_verdicts() {
     std::fs::write(out, result).expect("DIFF_OUT must be writable");
 }
 
+/// One JSON document (a corpus line, or the regression vectors), read without
+/// serde_json's 128-level recursion limit: a deep case nests past it. Only
+/// ever called on `on_big_stack`.
+fn deep_json(line: &str) -> Value {
+    let mut deserializer = serde_json::Deserializer::from_str(line);
+    deserializer.disable_recursion_limit();
+    let mut values = deserializer.into_iter::<Value>();
+    let value = values.next().expect("a JSON document").expect("JSON");
+    assert!(values.next().is_none(), "one JSON value per document");
+    value
+}
+
 /// Rejudge mode: `DIFF_IN` is a corpus or campaign batch (possibly written by
 /// an earlier generator), `DIFF_OUT` receives it with every environment
 /// rebuilt from its `did` and every reference verdict recomputed by this
@@ -916,11 +1064,11 @@ fn differential_rejudge() {
     let text = std::fs::read_to_string(input).expect("DIFF_IN must be readable");
     let result = on_big_stack(move || {
         let mut lines = text.lines().filter(|line| !line.trim().is_empty());
-        let header: Value = serde_json::from_str(lines.next().expect("a header")).expect("JSON");
+        let header: Value = deep_json(lines.next().expect("a header"));
         let mut output = Vec::new();
         let mut built: Option<Built> = None;
         for line in lines {
-            let mut case: Value = serde_json::from_str(line).expect("a JSON line");
+            let mut case: Value = deep_json(line);
             match case["kind"].as_str() {
                 Some("env") => {
                     let rebuilt = build_from_source(types::Env {

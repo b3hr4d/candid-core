@@ -37,21 +37,17 @@
       "class": "c",
       "reason": "The runtime refuses a non-minimal LEB128/SLEB128 group (overlong_leb128, or invalid_length when a u32 field's group is longer than five bytes although its value fits); the candid crate accepts it. Settled on #103 (decision 4): the spec's strict-inverse reading. Attributed only where the scan of the message at its own wire types meets a non-minimal group (flag non_minimal_leb128); the same codes on a message without one are plain symptoms."
     },
-    "decode:intended:reference-quota": {
-      "class": "c",
-      "reason": "The harness runs the candid crate with a decoding quota of 2,000,000 (wire::DECODING_QUOTA; unconfigured it bounds no work at all), which a forged vector length can exhaust while the runtime's own element budget (maxElements, 1,000,000 elements) still admits the message. A policy of the harness, not a semantic difference between the decoders."
-    },
     "decode:intended:reference-sequences-unsupported": {
       "class": "c",
       "reason": "The runtime refuses a future type's value with a non-zero reference count (invalid_principal): reference sequences are outside this codec, documented in crates/candid-core-ts/README.md (\"opaque reference values … and external reference sequences are refused\"). The candid crate ignores the count. Attributed only where the scan finds such a value (flag future_references); an opaque reference (tag 0) the reference refuses too, and a principal longer than 29 bytes both refuse, so invalid_principal elsewhere is a plain symptom."
     },
     "decode:intended:ts-limit": {
       "class": "c",
-      "reason": "The runtime refuses a value nested past its maxDepth (256 depth steps by default: two per Candid level, a constructor and one rec hop, and one for a leaf) with resource_limit_exceeded; the candid crate is bounded only by its stack (the harness gives it 256 MiB). A documented policy of the runtime (ADR 0005, issue #192). Attributed only where the message's values, or the values the reference decoded from it at the expected types, nest deeper than 127 composite levels, which maxDepth always admits (flag deep_nesting), or number more than half maxElements (flag many_values): a limit refusal within those bounds is a plain symptom."
+      "reason": "The runtime refuses a message past its own budgets with resource_limit_exceeded: a value nested past maxDepth (256 depth steps by default: two per Candid level, a constructor and one rec hop or declaration reference, and one for a leaf; resource value_depth), or more values than maxElements (1,000,000, every value read, decoded or skipped, charged; resource value_elements). The candid crate is bounded only by its stack (the harness gives it 256 MiB) and the harness's decoding quota (retried under a quota sized to the message). A documented policy of the runtime (ADR 0005, issue #192). Attributed only on the budget the input exceeds: value_depth where the message's values, or the values the reference decoded from it at the expected types, nest deeper than 127 composite levels, which maxDepth always admits (flag deep_nesting); value_elements where the message holds more than half maxElements values (flag many_values). Any other refusal of that code is a plain symptom."
     },
     "decode:reference:empty-normalization": {
       "class": "b",
-      "reason": "The candid crate rewrites an uninhabited recursive record (a record that reaches itself through record fields only) to empty in the wire type table, and never in the expected types (TypeEnv::replace_empty, called from binary_parser::Header::to_types). Inside a func or service signature that makes its reference subtype check accept a type that is not a subtype (empty <: E) and refuse identical types (E <: empty); under an opt the refusal is absorbed to null. The runtime compares the types as written, as the spec's subtyping does. Attributed only where the wire table holds such a record reachable from a func or service type, the only place the reference's subtype check runs (flag wire_empty_record).",
+      "reason": "The candid crate rewrites an uninhabited recursive record (a record that reaches itself through record fields only) to empty in the wire type table, and never in the expected types (TypeEnv::replace_empty, called from binary_parser::Header::to_types). Inside a func or service signature that makes its reference subtype check accept a type that is not a subtype (empty <: E) and refuse identical types (E <: empty); under an opt the refusal is absorbed to null. The runtime compares the types as written, as the spec's subtyping does. Attributed only where the wire table holds such a record reachable from a func or service type, the only place the reference's subtype check runs (flag wire_empty_record), and for a value mismatch only where the two values differ nowhere but where one holds null and the other a func or service reference (the absorbed opt).",
       "issue": "to be reported upstream (dfinity/candid); see the #196 campaign report"
     },
     "decode:reference:empty-wire-value": {
@@ -72,12 +68,12 @@
     },
     "env:label-collision": {
       "class": "a",
-      "reason": "Field names attach to canonical Contract nodes (the org.candid-core.field-names/v1 table is keyed by container and id). When two declarations spell one canonical record differently — record { d : text } and record { 100 : text } — the runtime keys every occurrence by the name, so a value written at the numbered declaration decodes (and must validate) with key d instead of _100_. Wire bytes are unaffected; the domain key is not what the declaration says. Attributed per case: only where the case's declarations reach a Contract node holding a field or arm spelled two ways (flag label_collision), and for a decoded value only when it equals the reference's once every label is read as its id.",
+      "reason": "Field names attach to canonical Contract nodes (the org.candid-core.field-names/v1 table is keyed by container and id). When two declarations spell one canonical record differently — record { d : text } and record { 100 : text } — the runtime keys every occurrence by the name, so a value written at the numbered declaration decodes (and must validate) with key d instead of _100_. Wire bytes are unaffected; the domain key is not what the declaration says. Attributed per case: only where the case's declarations reach a Contract node holding a field or arm spelled two ways (flag label_collision), for a decoded value only when it equals the reference's once every label is read as its id, and for a validate acceptance only where the reference refused the field set or the arm (record_field_set_mismatch, unknown_variant_id).",
       "issue": "to be filed (see the #196 campaign report)"
     },
-    "validate:intended:limit-policy": {
+    "validate:intended:ts-limit": {
       "class": "c",
-      "reason": "candid-core's HostValue JSON decoder caps lexical nesting at max_value_nesting = 64 containers (a guard for serde_json's recursion, ADR 0005), about 32 vec or 21 record levels, while validate's maxDepth admits 256 schema steps. The reference refuses such a value as a limit before judging it; a policy of the HostValue ABI, not of the value domain."
+      "reason": "validate refuses a value nested past its maxDepth (256 depth steps by default) with resource_limit_exceeded (resource value_depth). It charges a step for every rec hop as well as every constructor (ts/validate.ts: rec unwrapping included, so a mis-built self-referential rec chain terminates), so a value of a recursive type reaches maxDepth at 128 levels, while candid-core's validate_host_value, under max_value_depth = 256, counts one per container and accepts up to 257. A documented policy of the runtime (the decoder's decode:intended:ts-limit, ADR 0005, issue #192). Attributed only on that budget and where the HostValue the reference judged nests deeper than 127 composite levels (flag deep_nesting); any other limit refusal is a plain symptom."
     }
   },
   "cases": {
@@ -152,6 +148,7 @@
     "d/8/17": "decode:intended:leb128-minimality",
     "d/8/22": "decode:intended:leb128-minimality",
     "d/8/5": "decode:intended:leb128-minimality",
+    "r/chain_opt_128_levels": "decode:intended:ts-limit",
     "r/contract_declarations_absent": "contract:ts-rejects:invalid_contract_document",
     "r/contract_identities_edit": "contract:intended:identities-unchecked",
     "r/contract_orphan_type_node": "contract:ts-accepts:orphan_type_node",
@@ -161,6 +158,7 @@
     "r/depth_coercion_inserted_opts": "decode:intended:ts-limit",
     "r/depth_opt_129_levels": "decode:intended:ts-limit",
     "r/depth_variant_128_levels": "decode:intended:ts-limit",
+    "r/elements_skipped_vec_1000000": "decode:intended:ts-limit",
     "r/empty_method_name": "decode:intended:empty-method-name",
     "r/empty_method_under_absorbed_opt": "decode:intended:empty-method-name",
     "r/future_type_reference_count": "decode:intended:reference-sequences-unsupported",
@@ -170,26 +168,28 @@
     "r/leb128_wide_field_id": "decode:intended:leb128-minimality",
     "r/reference_absorbs_identical_func_in_opt": "decode:reference:empty-normalization",
     "r/reference_accepts_non_subtype_func": "decode:reference:empty-normalization",
-    "r/reference_quota_skipped_vec": "decode:intended:reference-quota",
     "r/reference_reads_func_from_empty_wire": "decode:reference:empty-wire-value",
     "r/reference_refuses_identical_func": "decode:reference:empty-normalization",
     "r/reference_skips_invalid_utf8_method": "decode:reference:skipped-method-utf8",
     "r/reference_unsound_subtype_memo": "decode:ts-rejects:type_mismatch",
-    "r/validate_hostvalue_nesting_limit": "validate:intended:limit-policy",
+    "r/validate_depth_vec_129_levels": "validate:intended:ts-limit",
+    "r/validate_depth_vec_257_levels": "validate:intended:ts-limit",
     "v/18/3": "env:label-collision",
     "v/24/2": "env:label-collision",
     "v/24/9": "env:label-collision",
     "xd/1/1": "decode:intended:ts-limit",
     "xd/2/0": "decode:intended:ts-limit",
     "xd/2/2": "decode:intended:ts-limit",
-    "xd/4/0": "decode:intended:ts-limit",
-    "xd/4/2": "decode:intended:ts-limit",
-    "xv/1/0": "validate:intended:limit-policy",
-    "xv/1/1": "validate:intended:limit-policy",
-    "xv/2/1": "validate:intended:limit-policy",
-    "xv/4/0": "validate:intended:limit-policy",
-    "xv/6/0": "validate:intended:limit-policy",
-    "xv/6/1": "validate:intended:limit-policy"
+    "xd/2/3": "decode:intended:ts-limit",
+    "xd/3/2": "decode:intended:ts-limit",
+    "xd/4/1": "decode:intended:ts-limit",
+    "xd/6/1": "decode:intended:ts-limit",
+    "xd/6/2": "decode:intended:ts-limit",
+    "xv/1/0": "validate:intended:ts-limit",
+    "xv/3/0": "validate:intended:ts-limit",
+    "xv/3/1": "validate:intended:ts-limit",
+    "xv/4/1": "validate:intended:ts-limit",
+    "xv/6/0": "validate:intended:ts-limit"
   },
   "skipped": {}
 }

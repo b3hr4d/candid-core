@@ -42,7 +42,16 @@ import assert from "node:assert/strict";
 import { readFileSync, writeFileSync } from "node:fs";
 import process from "node:process";
 
-import { parseCorpus, runCorpus, type Outcome } from "./differential/compare.ts";
+import {
+  decodeCategory,
+  parseCorpus,
+  runCorpus,
+  verdictCategory,
+  withCollision,
+  type CaseLine,
+  type Outcome,
+  type Reference,
+} from "./differential/compare.ts";
 
 interface Category {
   readonly class: "a" | "b" | "c";
@@ -213,4 +222,118 @@ test("every minimized regression vector diverges as listed or agrees as its entr
       assert(!(id in list.cases), `${id} says it agrees but is listed`);
     }
   }
+});
+
+// The mapping's own rules, on synthetic verdicts (issue #196 review, round
+// 2): an attribution holds only for the symptom its cause explains, so the
+// same symptom with another cause stays a plain symptom.
+test("an attribution needs the symptom its flag explains, not only the flag", () => {
+  const depth = { verdict: "reject", code: "resource_limit_exceeded", path: "$" } as const;
+  const accepted: Reference = { verdict: "accept", values: [], flags: ["deep_nesting"] };
+  // ts-limit: the budget must be the one the input exceeds.
+  assert.strictEqual(
+    decodeCategory(accepted, { ...depth, resource: "value_depth" }),
+    "decode:intended:ts-limit",
+  );
+  assert.strictEqual(
+    decodeCategory(accepted, { ...depth, resource: "value_elements" }),
+    "decode:ts-rejects:resource_limit_exceeded",
+  );
+  assert.strictEqual(
+    decodeCategory(
+      { verdict: "accept", values: [], flags: ["many_values"] },
+      { ...depth, resource: "value_depth" },
+    ),
+    "decode:ts-rejects:resource_limit_exceeded",
+  );
+  assert.strictEqual(
+    decodeCategory(
+      { verdict: "accept", values: [], flags: ["many_values"] },
+      { ...depth, resource: "value_elements" },
+    ),
+    "decode:intended:ts-limit",
+  );
+  assert.strictEqual(
+    decodeCategory(accepted, { ...depth, resource: "stack" }),
+    "decode:ts-rejects:resource_limit_exceeded",
+  );
+  // validate's ts-limit: likewise value_depth on a deep value only.
+  assert.strictEqual(
+    verdictCategory("validate", accepted, { ...depth, resource: "value_depth" }),
+    "validate:intended:ts-limit",
+  );
+  assert.strictEqual(
+    verdictCategory("validate", accepted, { ...depth, resource: "value_elements" }),
+    "validate:ts-rejects:resource_limit_exceeded",
+  );
+  assert.strictEqual(
+    verdictCategory("validate", { verdict: "accept" }, { ...depth, resource: "value_depth" }),
+    "validate:ts-rejects:resource_limit_exceeded",
+  );
+  // No limit of the reference stands in for its verdict.
+  assert.strictEqual(
+    verdictCategory(
+      "validate",
+      { verdict: "reject", class: "host_value_limit" },
+      {
+        verdict: "accept",
+      },
+    ),
+    "validate:ts-accepts:host_value_limit",
+  );
+  // empty-normalization: a value mismatch only at an absorbed reference.
+  const func = { principal: "aaaaa-aa", method: "m" };
+  const emptyRecord = (values: unknown[]): Reference => ({
+    verdict: "accept",
+    values,
+    flags: ["wire_empty_record"],
+  });
+  assert.strictEqual(
+    decodeCategory(emptyRecord([{ a: null, b: { $int: "1" } }]), {
+      verdict: "accept",
+      values: [{ a: func, b: { $int: "1" } }],
+    }),
+    "decode:reference:empty-normalization",
+  );
+  assert.strictEqual(
+    decodeCategory(emptyRecord([{ a: null }]), { verdict: "accept", values: [{ a: "aaaaa-aa" }] }),
+    "decode:reference:empty-normalization",
+  );
+  assert.strictEqual(
+    decodeCategory(emptyRecord([{ a: null, b: { $int: "1" } }]), {
+      verdict: "accept",
+      values: [{ a: func, b: { $int: "2" } }],
+    }),
+    "decode:value-mismatch",
+  );
+  assert.strictEqual(
+    decodeCategory(emptyRecord([{ a: null }]), { verdict: "accept", values: [{ a: "not text" }] }),
+    "decode:value-mismatch",
+  );
+  // label-collision: a validate acceptance only where the reference refused
+  // the field set or the arm.
+  const collision = (refClass: string): CaseLine => ({
+    kind: "validate",
+    id: "synthetic",
+    env: "synthetic",
+    type: "T",
+    value: ["n"],
+    ref: { verdict: "reject", class: refClass, flags: ["label_collision"] },
+  });
+  for (const refClass of ["record_field_set_mismatch", "unknown_variant_id"]) {
+    assert.strictEqual(
+      withCollision(`validate:ts-accepts:${refClass}`, collision(refClass), { verdict: "accept" }),
+      "env:label-collision",
+    );
+  }
+  assert.strictEqual(
+    withCollision(
+      "validate:ts-accepts:host_value_kind_mismatch",
+      collision("host_value_kind_mismatch"),
+      {
+        verdict: "accept",
+      },
+    ),
+    "validate:ts-accepts:host_value_kind_mismatch",
+  );
 });

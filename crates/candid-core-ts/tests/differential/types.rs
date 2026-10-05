@@ -596,19 +596,44 @@ const DEEP_SHAPES: &[[&str; 3]] = &[
 /// the case asks.
 pub fn deep_env(rng: &mut Rng) -> Env {
     if rng.chance(2, 3) {
-        let shape = rng.pick(DEEP_SHAPES);
-        let source = shape
-            .iter()
-            .enumerate()
-            .map(|(index, body)| format!("type {} = {body};\n", decl_name(index)))
-            .collect();
-        return Env {
-            source,
-            families: vec![vec![0, 1, 2]],
-            decls: 3,
-        };
+        return shape_env(rng.pick(DEEP_SHAPES));
     }
     let chain = 16 + rng.below(240);
+    chain_env(rng, chain)
+}
+
+/// How many deep kinds `deep_env_of_kind` takes: each shape of
+/// `DEEP_SHAPES`, then a chain.
+pub const DEEP_KINDS: usize = DEEP_SHAPES.len() + 1;
+
+/// A deep environment of a chosen kind (the committed corpus cycles through
+/// them, so every shape and a chain appear whatever the seeds draw): shape
+/// `kind` of `DEEP_SHAPES`, or for `kind == DEEP_SHAPES.len()` a chain of
+/// 129 to 255 constructors, past the 127 levels `maxDepth` always admits.
+pub fn deep_env_of_kind(rng: &mut Rng, kind: usize) -> Env {
+    match DEEP_SHAPES.get(kind) {
+        Some(shape) => shape_env(shape),
+        None => {
+            let chain = 129 + rng.below(127);
+            chain_env(rng, chain)
+        }
+    }
+}
+
+fn shape_env(shape: &[&str; 3]) -> Env {
+    let source = shape
+        .iter()
+        .enumerate()
+        .map(|(index, body)| format!("type {} = {body};\n", decl_name(index)))
+        .collect();
+    Env {
+        source,
+        families: vec![vec![0, 1, 2]],
+        decls: 3,
+    }
+}
+
+fn chain_env(rng: &mut Rng, chain: usize) -> Env {
     let mut source = String::new();
     for index in 0..chain {
         let next = decl_name(index + 1);

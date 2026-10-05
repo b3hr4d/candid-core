@@ -862,20 +862,50 @@ pub fn scan(bytes: &[u8]) -> Scan {
     scan
 }
 
-/// The reference decoder's configuration. Unconfigured, the `candid` crate
+/// The reference decoder's first quota. Unconfigured, the `candid` crate
 /// bounds no work (its documentation asks canister code to set a quota), and
 /// a vector of a zero-sized type with a forged length of 2^40 then runs for
-/// hours. The decoding quota (which charges skipped values 50x) is far above
-/// what any unmutated generated message needs; a forged length can still
-/// exhaust it below the runtime's own element budget (`maxElements`,
-/// 1,000,000) — about ten thousand skipped `null`s do — and the verdict
-/// mapping reports that as the harness policy it is
-/// (`decode:intended:reference-quota`).
+/// hours. This quota (which charges skipped values 50x) is far above what any
+/// unmutated generated message needs; a message that exhausts it is decoded
+/// again under `retry_quota` when the scan bounds its work (see
+/// `RETRY_VALUES`).
 pub const DECODING_QUOTA: usize = 2_000_000;
 
-fn config() -> candid::DecoderConfig {
+/// The most values (as the scan counts them, at the message's own wire
+/// types) a message may hold for a quota retry: twice the runtime's element
+/// budget (`maxElements`, 1,000,000), which charges every value it reads,
+/// decoded or skipped. A message the runtime can accept therefore always
+/// qualifies, while a forged length (the scan stops counting at
+/// `SCAN_VALUES`) never does, so the retry's work stays bounded by the scan.
+pub const RETRY_VALUES: usize = 2_000_000;
+
+/// The quota of a retry: at least `RETRY_FLOOR`, and at least 1,000 per
+/// value and 4 per byte, charged 50x as a skipped value would be. The
+/// `candid` crate charges a value a few dozen units beyond its bytes (a
+/// principal 30, a record field 4, an expected field's name its length; the
+/// generator's records have a handful of fields), so within `RETRY_VALUES`
+/// this quota does not run out on a message the runtime accepts; the
+/// reference's `limit` class (and with it `decode:intended:reference-quota`)
+/// is left to a message whose work the scan cannot bound.
+fn retry_quota(values: usize, bytes: usize) -> usize {
+    values
+        .saturating_mul(1_000)
+        .saturating_add(bytes.saturating_mul(4))
+        .saturating_mul(50)
+        .max(RETRY_FLOOR)
+}
+
+/// The least retry quota. Some exhaustion is not the values' doing: reading
+/// a value at `T = opt T` where the wire has no `opt` makes the reference
+/// unwrap the expected type without end, charging the quota at every level
+/// until its stack guard stops it (on the harness's 256 MiB stack, after more
+/// than the first quota). Such a walk consumes no wire value, so only its
+/// stack bounds it, and the floor lets it reach that bound and answer.
+const RETRY_FLOOR: usize = 400_000_000;
+
+fn config(quota: usize) -> candid::DecoderConfig {
     let mut config = candid::DecoderConfig::new();
-    config.set_decoding_quota(DECODING_QUOTA);
+    config.set_decoding_quota(quota);
     config
 }
 
@@ -895,14 +925,24 @@ fn quota_exhausted(error: &candid::Error) -> bool {
 /// header parses but the message does not decode at its own wire types
 /// (`IDLArgs::from_bytes` fails), and `coercion` when the message is
 /// well-formed and only the expected types refuse it; `limit` when the
-/// decoding quota ran out first (see `DECODING_QUOTA`).
+/// decoding quota ran out first, after the retry when the message qualifies
+/// for one (see `DECODING_QUOTA` and `RETRY_VALUES`).
 ///
 /// `flags` records input properties the verdict mapping ties attributions
 /// to, never anything the runtime says: the scan's properties of the bytes
 /// themselves (see `Scan::flags`).
 pub fn reference_verdict(env: &TypeEnv, bytes: &[u8], expected: &[Type]) -> Value {
-    let (mut verdict, decoded_levels) = reference_verdict_unflagged(env, bytes, expected);
     let mut scan = scan(bytes);
+    let (mut verdict, mut decoded_levels) =
+        reference_verdict_unflagged(env, bytes, expected, DECODING_QUOTA);
+    if verdict["class"] == "limit" && scan.values <= RETRY_VALUES {
+        (verdict, decoded_levels) = reference_verdict_unflagged(
+            env,
+            bytes,
+            expected,
+            retry_quota(scan.values, bytes.len()),
+        );
+    }
     // The runtime walks the expected types, which can nest deeper than the
     // wire values (an `opt` the coercion inserts at every level), so the
     // depth flag also reads the values the reference decoded.
@@ -936,12 +976,18 @@ fn value_levels(value: &IDLValue) -> usize {
 
 /// The verdict, and the composite nesting of the values the reference
 /// decoded (0 when it decoded none).
-fn reference_verdict_unflagged(env: &TypeEnv, bytes: &[u8], expected: &[Type]) -> (Value, usize) {
-    let typed =
-        guarded(|| IDLArgs::from_bytes_with_types_with_config(bytes, env, expected, &config()));
+fn reference_verdict_unflagged(
+    env: &TypeEnv,
+    bytes: &[u8],
+    expected: &[Type],
+    quota: usize,
+) -> (Value, usize) {
+    let typed = guarded(|| {
+        IDLArgs::from_bytes_with_types_with_config(bytes, env, expected, &config(quota))
+    });
     let decoded = match typed {
         Err(()) => return (json!({ "verdict": "panic" }), 0),
-        Ok(Err(error)) => return (reference_rejection(bytes, &error), 0),
+        Ok(Err(error)) => return (reference_rejection(bytes, &error, quota), 0),
         Ok(Ok(decoded)) => decoded,
     };
     let levels = decoded.args.iter().map(value_levels).max().unwrap_or(0);
@@ -962,16 +1008,17 @@ fn reference_verdict_unflagged(env: &TypeEnv, bytes: &[u8], expected: &[Type]) -
 
 /// The verdict for a typed decode the reference refused, classified by its
 /// behaviour (see `reference_verdict`).
-fn reference_rejection(bytes: &[u8], error: &candid::Error) -> Value {
+fn reference_rejection(bytes: &[u8], error: &candid::Error, quota: usize) -> Value {
     if quota_exhausted(error) {
         return json!({ "verdict": "reject", "class": "limit" });
     }
-    let header = guarded(|| candid::de::IDLDeserialize::new_with_config(bytes, &config()).is_ok())
-        .unwrap_or(false);
+    let header =
+        guarded(|| candid::de::IDLDeserialize::new_with_config(bytes, &config(quota)).is_ok())
+            .unwrap_or(false);
     if !header {
         return json!({ "verdict": "reject", "class": "header" });
     }
-    match guarded(|| IDLArgs::from_bytes_with_config(bytes, &config())) {
+    match guarded(|| IDLArgs::from_bytes_with_config(bytes, &config(quota))) {
         Ok(Ok(_)) => json!({ "verdict": "reject", "class": "coercion" }),
         Ok(Err(error)) if quota_exhausted(&error) => {
             json!({ "verdict": "reject", "class": "limit" })

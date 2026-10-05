@@ -34,8 +34,9 @@
 // - reference `malformed` → a WIRE or a COERCION code (whichever problem the
 //   walk meets first, which depends on byte order, not on a rule);
 // - `resource_limit_exceeded` agrees with any rejection, and so does the
-//   reference's `limit` (its decoding quota ran out): the two sides' budgets
-//   are different policies (see "intended differences").
+//   reference's `limit` (its decoding quota ran out even on the retry the
+//   driver gives a message whose work its scan bounds; see
+//   `wire::RETRY_VALUES`): the two sides' budgets are different policies.
 //
 // For validate and contract, reject against reject is agreement whatever the
 // two sides' reasons: only verdicts are compared there (the HostValue
@@ -62,6 +63,15 @@
 // the reference-sequence limit only on one whose future value carries
 // references, and so on (see `attributeRefusal`). The same code on an input
 // without the property stays a plain symptom, which the list reports as new.
+// The property must also explain the symptom itself: a limit refusal is
+// attributed only on the budget the flag names (`value_depth` for
+// `deep_nesting`, `value_elements` for `many_values`), a value mismatch on a
+// `wire_empty_record` message only where the values differ at an absorbed
+// reference, and a validate acceptance on a `label_collision` case only where
+// the reference refused the field set or the arm. No reference budget stands
+// in for a reference verdict: the driver retries an exhausted decoding quota
+// and rebuilds a validate value the HostValue JSON decoder's nesting cap
+// refuses (see `wire::RETRY_VALUES` and `host_verdict` in Rust).
 
 import { decodeArgs, type CodecIssue } from "../../codec.ts";
 import { schemaFromContract } from "../../contract.ts";
@@ -77,7 +87,7 @@ export interface EnvLine {
   readonly envelope: { readonly contract: unknown };
 }
 
-interface Reference {
+export interface Reference {
   readonly verdict: "accept" | "reject" | "panic" | "mapping_error";
   readonly values?: readonly unknown[];
   readonly class?: string;
@@ -310,7 +320,13 @@ function envRefused(kase: CaseLine, env: Loaded): Outcome {
 /** What this runtime answered, in a form small enough to report. */
 export type Ours =
   | { readonly verdict: "accept"; readonly values?: readonly unknown[] }
-  | { readonly verdict: "reject"; readonly code: string; readonly path: string }
+  | {
+      readonly verdict: "reject";
+      readonly code: string;
+      readonly path: string;
+      /** The budget a `resource_limit_exceeded` refusal ran out of. */
+      readonly resource?: string;
+    }
   | { readonly verdict: "skip"; readonly reason: string };
 
 /** The outcome of one case: its category (`null` = agreement) and our answer. */
@@ -318,6 +334,28 @@ export interface Outcome {
   readonly id: string;
   readonly category: string | null;
   readonly ours: Ours;
+}
+
+interface AnyIssue {
+  readonly code: string;
+  readonly path: string;
+  readonly resource_limit?: { readonly resource: string };
+}
+
+/** Our rejection: the first issue's code and path, and its budget if any. */
+function rejection(issues: readonly AnyIssue[]): Ours {
+  const first = issues[0];
+  if (first === undefined) {
+    return { verdict: "reject", code: "none", path: "$" };
+  }
+  return first.resource_limit === undefined
+    ? { verdict: "reject", code: first.code, path: first.path }
+    : {
+        verdict: "reject",
+        code: first.code,
+        path: first.path,
+        resource: first.resource_limit.resource,
+      };
 }
 
 function firstIssue(issues: readonly { code: string; path: string }[]): {
@@ -343,7 +381,7 @@ function runDecode(kase: DecodeLine, env: Loaded): Outcome {
   const result = decodeArgs(schemas, fromHex(kase.hex));
   const ours: Ours = result.ok
     ? { verdict: "accept", values: result.values.map(domain) }
-    : { verdict: "reject", ...firstIssue(result.issues as readonly CodecIssue[]) };
+    : rejection(result.issues as readonly CodecIssue[]);
   return { id: kase.id, category: decodeCategory(kase.ref, ours), ours };
 }
 
@@ -372,13 +410,15 @@ function flagged(ref: Reference, flag: string): boolean {
  *   documented limit of this codec (README: "opaque reference values … and
  *   external reference sequences are refused"); the reference ignores the
  *   count. Flag `future_references`.
- * - `ts-limit` (intended): `resource_limit_exceeded` where the message's
- *   values, or the values the reference decoded from it at the expected
- *   types (a coercion can insert an `opt` at every level), nest deeper than
- *   the default `maxDepth` always admits (127 composite levels: two steps
- *   per level and one for the leaf) or number
- *   more than half `maxElements` (flags `deep_nesting`, `many_values`; see
- *   `wire::DEEP_LEVELS`): within those bounds a limit refusal is a defect.
+ * - `ts-limit` (intended): `resource_limit_exceeded` on the budget the
+ *   input exceeds: `value_depth` where the message's values, or the values
+ *   the reference decoded from it at the expected types (a coercion can
+ *   insert an `opt` at every level), nest deeper than the default `maxDepth`
+ *   always admits (127 composite levels: two steps per level and one for the
+ *   leaf; flag `deep_nesting`, see `wire::DEEP_LEVELS`), `value_elements`
+ *   where the message holds more values than half `maxElements` (flag
+ *   `many_values`). Any other budget, or the other one of the two, is a
+ *   plain symptom: within those bounds a limit refusal is a defect.
  * - `skipped-method-utf8` (reference): a func reference's method name that is
  *   not UTF-8 is refused here (`invalid_utf8`); the reference does not check
  *   it when it skips the value. Flag `invalid_method_utf8`.
@@ -388,7 +428,11 @@ function flagged(ref: Reference, flag: string): boolean {
  *   (`type_mismatch`: no value inhabits `empty`). Flag `wire_empty_value`:
  *   the message carries bytes at an `empty` wire type.
  */
-function attributeRefusal(code: string, ref: Reference): string | null {
+function attributeRefusal(
+  code: string,
+  resource: string | undefined,
+  ref: Reference,
+): string | null {
   if (code === "invalid_length" && flagged(ref, "empty_method")) {
     return "decode:intended:empty-method-name";
   }
@@ -403,7 +447,8 @@ function attributeRefusal(code: string, ref: Reference): string | null {
   }
   if (
     code === "resource_limit_exceeded" &&
-    (flagged(ref, "deep_nesting") || flagged(ref, "many_values"))
+    ((resource === "value_depth" && flagged(ref, "deep_nesting")) ||
+      (resource === "value_elements" && flagged(ref, "many_values")))
   ) {
     return "decode:intended:ts-limit";
   }
@@ -425,6 +470,8 @@ function attributeRefusal(code: string, ref: Reference): string | null {
  * `null`. The reference flags messages whose table holds such a record
  * reachable from a func or service type (`wire_empty_record`) — the only
  * place its subtype check runs; on those, these three symptoms are its doing.
+ * A value mismatch is attributed only when the values differ nowhere but at
+ * an absorbed reference (`absorbedReferencesOnly`).
  */
 const EMPTY_NORMALIZATION_SYMPTOMS = new Set([
   "decode:ts-accepts:coercion",
@@ -437,7 +484,12 @@ export function decodeCategory(ref: Reference, ours: Ours): string | null {
   if (symptom === null) {
     return null;
   }
-  if (EMPTY_NORMALIZATION_SYMPTOMS.has(symptom) && flagged(ref, "wire_empty_record")) {
+  if (
+    EMPTY_NORMALIZATION_SYMPTOMS.has(symptom) &&
+    flagged(ref, "wire_empty_record") &&
+    (symptom !== "decode:value-mismatch" ||
+      (ours.verdict === "accept" && absorbedReferencesOnly(ours.values, ref.values)))
+  ) {
     return "decode:reference:empty-normalization";
   }
   if (ours.verdict === "reject") {
@@ -445,10 +497,63 @@ export function decodeCategory(ref: Reference, ours: Ours): string | null {
       symptom === `decode:ts-rejects:${ours.code}` ||
       symptom === `decode:class:coercion-vs-${ours.code}`;
     if (refused) {
-      return attributeRefusal(ours.code, ref) ?? symptom;
+      return attributeRefusal(ours.code, ours.resource, ref) ?? symptom;
     }
   }
   return symptom;
+}
+
+const PRINCIPAL_TEXT = /^([a-z2-7]{5}-)*[a-z2-7]{1,5}$/;
+
+/** A func or service reference under the domain mapping, boxed or not. */
+function isReference(value: unknown): boolean {
+  if (typeof value === "string") {
+    // A service is its principal's canonical text: dash-separated groups of
+    // five base32 characters (a text value of that form is not told apart,
+    // but the flag already ties the case to a func or service type).
+    return PRINCIPAL_TEXT.test(value);
+  }
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  const keys = Object.keys(value).sort();
+  if (keys.length === 1 && keys[0] === "some") {
+    return isReference((value as { some: unknown }).some);
+  }
+  return keys.length === 2 && keys[0] === "method" && keys[1] === "principal";
+}
+
+/**
+ * Whether two decoded values differ only where one holds `null` and the
+ * other a func or service reference: the reference's failed subtype check
+ * absorbed by an `opt` (`decode:reference:empty-normalization`), and nothing
+ * else.
+ */
+function absorbedReferencesOnly(ours: unknown, theirs: unknown): boolean {
+  if (deepEqual(ours, theirs)) {
+    return true;
+  }
+  if (ours === null || theirs === null) {
+    return isReference(ours === null ? theirs : ours);
+  }
+  if (typeof ours !== "object" || typeof theirs !== "object") {
+    return false;
+  }
+  if (Array.isArray(ours) !== Array.isArray(theirs)) {
+    return false;
+  }
+  const keys = Object.keys(ours);
+  if (keys.length !== Object.keys(theirs).length) {
+    return false;
+  }
+  return keys.every(
+    (key) =>
+      Object.prototype.hasOwnProperty.call(theirs, key) &&
+      absorbedReferencesOnly(
+        (ours as Record<string, unknown>)[key],
+        (theirs as Record<string, unknown>)[key],
+      ),
+  );
 }
 
 /** A Candid label id: `_N_` read back, else the hash of the name. */
@@ -487,8 +592,13 @@ function byLabelId(value: unknown): unknown {
  * the reference, and the mapping, read each declaration's own labels. The
  * reference flags a case whose types reach such a node (`label_collision`);
  * a decoded value must moreover equal the reference's once every label is
- * read as its id, so only a spelling difference is attributed.
+ * read as its id, so only a spelling difference is attributed. A validate
+ * acceptance is attributed only where the reference refused the field set or
+ * the arm (`record_field_set_mismatch`, `unknown_variant_id`): a key the
+ * runtime reads by the other spelling.
  */
+const COLLISION_REFUSALS = new Set(["record_field_set_mismatch", "unknown_variant_id"]);
+
 const LABEL_COLLISION_SYMPTOMS = new Set([
   "decode:value-mismatch",
   "validate:ts-rejects:missing_field",
@@ -496,7 +606,7 @@ const LABEL_COLLISION_SYMPTOMS = new Set([
   "validate:ts-rejects:unknown_tag",
 ]);
 
-function withCollision(category: string | null, kase: CaseLine, ours: Ours): string | null {
+export function withCollision(category: string | null, kase: CaseLine, ours: Ours): string | null {
   if (
     category === null ||
     !flagged(kase.ref, "label_collision") ||
@@ -507,6 +617,12 @@ function withCollision(category: string | null, kase: CaseLine, ours: Ours): str
   if (
     category === "decode:value-mismatch" &&
     (ours.verdict !== "accept" || !deepEqual(byLabelId(ours.values), byLabelId(kase.ref.values)))
+  ) {
+    return category;
+  }
+  if (
+    category.startsWith("validate:ts-accepts:") &&
+    !COLLISION_REFUSALS.has(kase.ref.class ?? "")
   ) {
     return category;
   }
@@ -531,7 +647,11 @@ function decodeSymptom(ref: Reference, ours: Ours): string | null {
   }
   if (ours.verdict === "accept") {
     // The reference's decoding quota is the harness's policy, not a rule of
-    // either decoder (see `wire::DECODING_QUOTA`).
+    // either decoder. The driver retries every message whose work its scan
+    // bounds (within twice `maxElements` values, so every message this
+    // runtime can accept) under a quota that does not run out on it (see
+    // `wire::RETRY_VALUES`); `limit` survives that only where the scan could
+    // not bound the work.
     return ref.class === "limit"
       ? "decode:intended:reference-quota"
       : `decode:ts-accepts:${ref.class ?? "?"}`;
@@ -566,13 +686,11 @@ function runValidate(kase: ValidateLine, env: Loaded): Outcome {
     return { id: kase.id, category: null, ours: { verdict: "skip", reason: "omitted" } };
   }
   const result = validate(schema, fromDescriptor(kase.value));
-  const ours: Ours = result.ok
-    ? { verdict: "accept" }
-    : { verdict: "reject", ...firstIssue(result.issues) };
+  const ours: Ours = result.ok ? { verdict: "accept" } : rejection(result.issues);
   return { id: kase.id, category: verdictCategory("validate", kase.ref, ours), ours };
 }
 
-function verdictCategory(target: string, ref: Reference, ours: Ours): string | null {
+export function verdictCategory(target: string, ref: Reference, ours: Ours): string | null {
   if (ref.verdict === "panic") {
     return `${target}:reference-panic`;
   }
@@ -580,20 +698,34 @@ function verdictCategory(target: string, ref: Reference, ours: Ours): string | n
     return null;
   }
   if (ref.verdict === "accept") {
-    // No limit difference is intended here: the reference's budgets (the
-    // HostValue JSON decoder's 64-container nesting, `Limits`) are the
-    // tighter ones, so a limit refusal of what it accepts is a symptom.
-    return ours.verdict === "accept" ? null : `${target}:ts-rejects:${ours.code}`;
+    if (ours.verdict === "accept") {
+      return null;
+    }
+    // `validate` charges a `rec` hop a depth step as the decoder does (two
+    // per level of a recursive type), while `max_value_depth` counts one per
+    // container: past 127 levels the runtime's documented depth policy
+    // refuses what the reference accepts. Attributed only on that budget and
+    // on a value the reference side found nested that deep (`deep_nesting`,
+    // from the HostValue it judged); any other limit refusal is a symptom.
+    if (
+      target === "validate" &&
+      ours.code === "resource_limit_exceeded" &&
+      ours.resource === "value_depth" &&
+      flagged(ref, "deep_nesting")
+    ) {
+      return "validate:intended:ts-limit";
+    }
+    return `${target}:ts-rejects:${ours.code}`;
   }
   if (ours.verdict !== "accept") {
     return null;
   }
-  // The HostValue JSON decoder's budgets (64 levels of JSON nesting, …) are a
-  // policy of that ABI, not of the domain: this runtime's own `maxDepth`
-  // (256 schema steps) admits deeper values.
-  return ref.class === "host_value_limit"
-    ? `${target}:intended:limit-policy`
-    : `${target}:ts-accepts:${ref.class ?? "?"}`;
+  // No refusal of the reference is intended either. Where the HostValue JSON
+  // decoder's own budgets (its 64-container nesting cap) refuse a validate
+  // value, the driver rebuilds it through the HostValue constructors, under
+  // `max_value_depth` (256, this runtime's `maxDepth`), and records that
+  // judgement; `host_value_limit` remains only for a value past those.
+  return `${target}:ts-accepts:${ref.class ?? "?"}`;
 }
 
 /** Replay one JSON edit, exactly as `contract::apply` does in Rust. */
@@ -685,9 +817,7 @@ function runContract(kase: ContractLine, envLine: EnvLine): Outcome {
     applyOp(document, op);
   }
   const result = schemaFromContract(document);
-  const ours: Ours = result.ok
-    ? { verdict: "accept" }
-    : { verdict: "reject", ...firstIssue(result.issues) };
+  const ours: Ours = result.ok ? { verdict: "accept" } : rejection(result.issues);
   return { id: kase.id, category: contractCategory(kase, ours), ours };
 }
 
