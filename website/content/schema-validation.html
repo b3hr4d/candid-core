@@ -72,7 +72,7 @@ export type ValidateResult =
     <tr>
       <td><code>maxDepth</code></td>
       <td><code>DEFAULT_MAX_DEPTH</code> = 256</td>
-      <td>Value depth: the root is at 0 and each constructor's children one below it, a variant's <code>null</code> payload included. A <code>rec</code> hop is not a level. It mirrors the Rust crate's <code>max_value_depth</code>: a value <code>validate_host_value</code> accepts at the same limit is accepted here.</td>
+      <td>Value depth: the root is at 0 and each constructor's children one below it, a variant's <code>null</code> payload included. A <code>rec</code> hop is not a level. It mirrors the Rust crate's <code>max_value_depth</code>: a value <code>validate_host_value</code> accepts at the same limit is accepted here, as long as the limit is at least the schema's longest chain of consecutive <code>rec</code> hops (one for a Contract-loaded schema, two for a generated module), since more hops than <code>maxDepth</code> in one chain are refused.</td>
     </tr>
     <tr>
       <td><code>maxElements</code></td>
@@ -279,8 +279,8 @@ const limited = validate(c.vec(c.nat8), big, { maxElements: 10 });
   constructors, not the schema's <code>rec</code> hops: a linked-list-shaped value consumes depth
   per element, so a hundred-thousand-node list stops at the default 256 rather than overflowing the
   JavaScript stack, and a value is judged alike through a generated module, a Contract-loaded schema
-  or a schema built without <code>rec</code>. A value that points at itself terminates by the same
-  route. A hand-built <code>rec</code> chain that never resolves — a schema no validated Contract
+  or a schema built without <code>rec</code>, at any <code>maxDepth</code> of two or more. A value
+  that points at itself terminates by the same route. A hand-built <code>rec</code> chain that never resolves — a schema no validated Contract
   produces, because the compiler refuses a degenerate cycle such as <code>type A = A</code> — ends
   at its own bound: more than <code>maxDepth</code> consecutive hops resolving one reference are
   refused with <code>value_depth</code>.

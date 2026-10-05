@@ -23,9 +23,10 @@
 //! TypeScript side loads comes from candid-core's compiler over the same text.
 //! Deep environments (`types::deep_env`: recursive shapes and declaration
 //! chains) add decode and validate cases whose values nest close to the
-//! generation bound (`wire::GEN_LEVELS`), half the runtime's depth bound. A drafted environment either side refuses, or one
-//! holding an `opt`-only cycle (`wire::opt_cycle`), is redrawn, and the corpus
-//! header counts redraws by reason.
+//! generation bound (`wire::GEN_LEVELS`), half the runtime's depth bound. A
+//! drafted environment either side refuses, or one holding an `opt`-only
+//! cycle (`wire::opt_cycle`), is redrawn, and the corpus header counts
+//! redraws by reason.
 //!
 //! # No case is judged outside what both sides judge
 //!

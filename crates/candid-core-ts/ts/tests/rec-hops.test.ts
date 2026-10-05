@@ -147,6 +147,146 @@ test("vec T nested 257 levels is accepted and 258 refused, with rec, from a Cont
   }
 });
 
+type OptNest = OptNest[] | null;
+type Boxed = { some: Boxed } | null;
+
+/**
+ * `T = opt vec T` (the opt unboxed: its inner `vec` admits no null):
+ * `arrays` nested arrays, the opts and vecs alternating from the root opt at
+ * depth 0, so array k sits at depth 2k - 1. With `innerNull` the innermost
+ * array holds one absent opt, one level below it; otherwise it is empty.
+ */
+function optVecLevels(arrays: number, innerNull: boolean): OptNest {
+  let value: OptNest = innerNull ? [null] : [];
+  for (let level = 1; level < arrays; level += 1) {
+    value = [value];
+  }
+  return value;
+}
+
+/** `opts` boxed opts, the innermost absent: `T = opt T` nested `opts` deep. */
+function boxedLevels(opts: number): Boxed {
+  let value: Boxed = null;
+  for (let level = 1; level < opts; level += 1) {
+    value = { some: value };
+  }
+  return value;
+}
+
+/** `opt vec opt vec …`, `levels` constructors deep, built with no `rec`. */
+function staticOptVec(levels: number): AnySchema {
+  let schema: AnySchema = c.opt(c.vec(c.null));
+  for (let level = 2; level < levels; level += 2) {
+    schema = c.opt(c.vec(schema));
+  }
+  return schema;
+}
+
+/** `opt opt … opt null`, `opts` opts deep, built with no `rec`. */
+function staticBoxed(opts: number): AnySchema {
+  let schema: AnySchema = c.opt(c.null);
+  for (let level = 1; level < opts; level += 1) {
+    schema = c.opt(schema);
+  }
+  return schema;
+}
+
+test("an opt is a level, boxed or not: accepted with its innermost node at 256, refused at 257", () => {
+  // Each opt's payload sits one level below it whether the payload is the
+  // value itself (unboxed) or its `some` (boxed). This pins the depth step
+  // of each opt site — validate's two, encode's two and decode's — and
+  // compares the whole issue across c.rec, Contract-loaded and rec-free
+  // schemas (encode's type table refuses the rec-free ones outright, D1).
+  const RecOptVec: AnySchema = c.rec(() => c.opt(c.vec(RecOptVec)));
+  const RecBoxed: AnySchema = c.rec(() => c.opt(RecBoxed));
+  const cases: readonly {
+    readonly name: string;
+    readonly schemas: readonly [string, AnySchema][];
+    readonly accepted: unknown;
+    readonly refused: unknown;
+    readonly refusedAt: string;
+    readonly decodeRefusedAt: string;
+  }[] = [
+    {
+      name: "unboxed opt vec T",
+      schemas: [
+        ["c.rec", RecOptVec],
+        [
+          "Contract",
+          loaded([
+            { kind: "opt", inner: 1 },
+            { kind: "vec", inner: 0 },
+          ]),
+        ],
+        ["no rec", staticOptVec(260)],
+      ],
+      // 128 arrays: the innermost array at 255, its absent opt at 256.
+      accepted: optVecLevels(128, true),
+      // 129 arrays: the innermost, empty, at 257.
+      refused: optVecLevels(129, false),
+      refusedAt: `$${"[0]".repeat(128)}`,
+      decodeRefusedAt: `$${"[0]".repeat(128)}`,
+    },
+    {
+      name: "boxed opt T",
+      schemas: [
+        ["c.rec", RecBoxed],
+        ["Contract", loaded([{ kind: "opt", inner: 0 }])],
+        ["no rec", staticBoxed(260)],
+      ],
+      // 257 opts: the innermost, absent, at 256.
+      accepted: boxedLevels(257),
+      refused: boxedLevels(258),
+      refusedAt: `$${".some".repeat(257)}`,
+      // The decoder's paths carry no `.some` step for an opt.
+      decodeRefusedAt: "$",
+    },
+  ];
+  for (const { name, schemas, accepted, refused, refusedAt, decodeRefusedAt } of cases) {
+    // The wire bytes, written once through the c.rec schema; the refused
+    // value needs a raised maxDepth to be written at all.
+    const acceptedWire = bytesOf(encode(schemas[0][1], accepted));
+    const refusedWire = bytesOf(encode(schemas[0][1], refused, { maxDepth: 300 }));
+    for (const [form, schema] of schemas) {
+      const at = `${name} (${form})`;
+      assert.deepStrictEqual(validate(schema, accepted), { ok: true }, `validate ${at}`);
+      assert.deepStrictEqual(
+        validate(schema, refused),
+        { ok: false, issues: [{ ...DEPTH_257, path: refusedAt }] },
+        `validate ${at}`,
+      );
+      assert.deepStrictEqual(
+        decode(schema, acceptedWire),
+        { ok: true, value: accepted },
+        `decode ${at}`,
+      );
+      assert.deepStrictEqual(
+        verdict(decode(schema, refusedWire)),
+        {
+          code: "resource_limit_exceeded",
+          path: decodeRefusedAt,
+          message: "value_depth limit 256 exceeded",
+          resource_limit: DEPTH_257.resource_limit,
+        },
+        `decode ${at}`,
+      );
+      if (form !== "no rec") {
+        assert.deepStrictEqual(bytesOf(encode(schema, accepted)), acceptedWire, `encode ${at}`);
+        assert.deepStrictEqual(
+          verdict(encode(schema, refused)),
+          {
+            code: "resource_limit_exceeded",
+            path: refusedAt,
+            message: "value_depth limit 256 exceeded",
+            resource_limit: DEPTH_257.resource_limit,
+          },
+          `encode ${at}`,
+        );
+      }
+    }
+  }
+});
+
 test("a value is charged the same elements with rec and without, one per constructor", () => {
   const nullVec = c.rec(() => c.vec(c.rec(() => c.null)));
   const nulls = new Array<null>(100).fill(null);
@@ -308,6 +448,38 @@ test("a rec chain longer than maxDepth is refused, a self-referential one includ
       { resource: "value_depth", limit: 4, observed: 5 },
       walk,
     );
+  }
+});
+
+test("the chain cap is maxDepth itself: below a schema's hop chain, rec refuses what no rec accepts", () => {
+  // A design call (the cap reuses maxDepth rather than a floor of its own),
+  // pinned so a change to it is deliberate. At maxDepth 0 a root scalar is
+  // accepted, but one hop is already a chain longer than maxDepth; at
+  // maxDepth 1 a generated module's two-hop chain is refused the same way.
+  // The runtime refused both before issue #231 too.
+  const natBytes = bytesOf(encode(c.nat, 5n));
+  for (const [maxDepth, hops] of [
+    [0, 1],
+    [1, 2],
+  ] as const) {
+    const options = { maxDepth };
+    assert.deepStrictEqual(validate(c.nat, 5n, options), { ok: true });
+    assert.deepStrictEqual(bytesOf(encode(c.nat, 5n, options)), natBytes);
+    assert.deepStrictEqual(decode(c.nat, natBytes, options), { ok: true, value: 5n });
+    const chain = hopChain(hops, c.nat);
+    for (const [walk, result] of [
+      ["validate", validate(chain, 5n, options)],
+      ["encode", encode(chain, 5n, options)],
+      ["decode", decode(chain, natBytes, options)],
+    ] as const) {
+      assert.deepStrictEqual(
+        result.ok ? undefined : result.issues[0].resource_limit,
+        { resource: "value_depth", limit: maxDepth, observed: hops },
+        `${walk} at maxDepth ${maxDepth}`,
+      );
+    }
+    // One hop fewer resolves, and the value is judged as without rec.
+    assert.deepStrictEqual(validate(hopChain(hops - 1, c.nat), 5n, options), { ok: true });
   }
 });
 

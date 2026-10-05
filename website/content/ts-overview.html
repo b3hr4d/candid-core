@@ -254,7 +254,9 @@ for (const sample of samples) {
     A dynamically built schema carries one extra <code>rec</code> hop at every edge. A hop is an
     indirection, not a level of the value, so it costs nothing against the depth and element
     budgets: values near the limits get the same verdict on either schema, and on a schema built
-    with no <code>rec</code> at all.
+    with no <code>rec</code> at all, at any <code>maxDepth</code> of two or more. (A chain of more
+    consecutive hops than <code>maxDepth</code> is refused, which is what stops a
+    self-referential one.)
   </p>
 </callout>
 

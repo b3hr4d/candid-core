@@ -1211,7 +1211,7 @@
     {
       "name": "validate_depth_tuple_rec_258_levels",
       "target": "validate",
-      "note": "A value of T = record { T } nested 258 levels on validate's tuple path: the tuple at level 257 is refused on depth before its elements are read, one past both default budgets (the step past a declaration chain cannot reach).",
+      "note": "A value of T = record { T } nested 258 levels on validate's tuple path: the tuple at level 257 is refused on depth before its elements are read, one past both default budgets (the step past a declaration chain cannot reach). The type is uninhabited (every record needs another), so the value is refused at any budget; what the vector pins is that value_depth is reported first, at level 257.",
       "origin": "written for issue #231",
       "agrees": "Both refuse on value_depth: one past both default budgets.",
       "did": "type T = record { T };\n",
@@ -1241,7 +1241,7 @@
     {
       "name": "validate_depth_record_rec_258_levels",
       "target": "validate",
-      "note": "A value of T = record { next : T } nested 258 levels: the record at level 257 is refused on depth before its fields are read, one past both default budgets. A declaration chain cannot nest a record past level 256 (the compiler's max_type_depth bounds its type), so the step past is pinned on the recursive shape.",
+      "note": "A value of T = record { next : T } nested 258 levels: the record at level 257 is refused on depth before its fields are read, one past both default budgets. A declaration chain cannot nest a record past level 256 (the compiler's max_type_depth bounds its type), so the step past is pinned on the recursive shape. The type is uninhabited (every record needs another), so the value is refused at any budget; what the vector pins is that value_depth is reported first, at level 257.",
       "origin": "written for issue #231",
       "agrees": "Both refuse on value_depth: one past both default budgets.",
       "did": "type T = record { next : T };\n",

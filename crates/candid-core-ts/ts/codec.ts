@@ -82,7 +82,9 @@
 // budget — a zero-byte-per-element wire vector cannot decode more than
 // `maxElements` values; a `rec` hop charges neither, issue #231, so a value
 // is charged alike through a generated module, a Contract-loaded schema or
-// a schema built with no `rec`), and `maxNumericBytes` caps a single unbounded
+// a schema built with no `rec`; the hop chain's own cap is `maxDepth`, so
+// with a `maxDepth` below a schema's longest chain a value is refused where
+// it reaches that chain), and `maxNumericBytes` caps a single unbounded
 // `nat`/`int` encoding. Decode stops at the first hard error: the wire
 // format cannot be resynchronized after one, so the issue list is short by
 // design. Every walk — the encoder's type table and value walk, the decoder's
@@ -234,16 +236,20 @@ export interface CodecOptions {
    * Value depth cap, mirroring `Limits::max_value_depth`: the root is at 0,
    * each constructor's children one below it, and a value deeper than this
    * is refused. A `rec` hop is not a level (issue #231); more than this many
-   * consecutive hops resolving one reference are refused instead. Encode's
-   * type-table walk charges it too, for Candid nesting depth: once per
-   * combinator level at which the table gains an entry, never for a `rec`
-   * hop, so a static schema nested deeper than this is refused.
+   * consecutive hops resolving one reference are refused instead, so a
+   * value gets the same verdict with or without `rec` whenever this is at
+   * least the schema's longest hop chain (one for a Contract-loaded schema,
+   * two for a generated module). Encode's type-table walk charges it too,
+   * for Candid nesting depth: once per combinator level at which the table
+   * gains an entry, never for a `rec` hop, so a static schema nested deeper
+   * than this is refused.
    */
   readonly maxDepth?: number;
   /**
    * Traversal element budget, mirroring validate's accounting: one per value
-   * decoded, skipped or encoded (a `rec` hop is none), and one per examined
-   * record key on encode.
+   * decoded, skipped or encoded (a `rec` hop is none), one per examined
+   * record or variant key on encode, and none on encode for a tag-only arm's
+   * `null`, which is spelled by absence.
    */
   readonly maxElements?: number;
   /** Byte cap for one unbounded `nat`/`int` encoding. */
@@ -447,7 +453,6 @@ function isStackExhaustion(error: unknown): boolean {
   }
 }
 
-/** The issue both walkers record when the engine reports its stack exhausted. */
 /** The walker a halting failure is reported through: the encoder or the decoder. */
 interface Failing {
   fail(
@@ -500,6 +505,7 @@ function resolveHops(
   return node as Exclude<SchemaNode, RecNode>;
 }
 
+/** The issue both walkers record when the engine reports its stack exhausted. */
 function stackIssue(path: readonly PathSegment[], limit: number, reached: number): CodecIssue {
   return {
     code: "resource_limit_exceeded",
@@ -2207,7 +2213,7 @@ function decodeWith(
       } else {
         // A missing trailing argument follows the record-field rule: null
         // for opt-like expected types, a hard error otherwise.
-        values.push(decoder.missingValue(schemas[index] as SchemaNode, path, 0));
+        values.push(decoder.missingValue(schemas[index] as SchemaNode, path));
       }
       path.pop();
     }
@@ -2777,7 +2783,7 @@ class Decoder {
    * the expected type is opt-like (`opt`, `null`, `reserved`), a hard error
    * otherwise.
    */
-  missingValue(schema: SchemaNode, path: PathSegment[], depth: number): unknown {
+  missingValue(schema: SchemaNode, path: PathSegment[]): unknown {
     const node = this.resolveSchema(schema, path);
     if (
       node.kind === "opt" ||
@@ -3224,7 +3230,7 @@ class Decoder {
       while (frame.cursor < expected.length && expected[frame.cursor].id < entry.ids[w]) {
         const field = expected[frame.cursor];
         path.push(field.key);
-        out[field.key] = this.missingValue(field.schema as SchemaNode, path, depth + 1);
+        out[field.key] = this.missingValue(field.schema as SchemaNode, path);
         path.pop();
         frame.cursor += 1;
       }
@@ -3248,7 +3254,7 @@ class Decoder {
     while (frame.cursor < expected.length) {
       const field = expected[frame.cursor];
       path.push(field.key);
-      out[field.key] = this.missingValue(field.schema as SchemaNode, path, depth + 1);
+      out[field.key] = this.missingValue(field.schema as SchemaNode, path);
       path.pop();
       frame.cursor += 1;
     }

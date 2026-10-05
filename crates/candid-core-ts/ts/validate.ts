@@ -30,8 +30,12 @@
 // alike whether its schema was built with `c.rec`, generated, or loaded from
 // a Contract. A chain of more than `maxDepth` consecutive hops resolving one
 // reference is refused with `value_depth`, which is what makes a mis-built
-// self-referential `rec` chain terminate. The walk keeps
-// its work on an explicit stack rather than the host's (issue #192), so
+// self-referential `rec` chain terminate. That cap is tied to `maxDepth`, so
+// the verdict is the same either way whenever `maxDepth` is at least the
+// schema's longest hop chain (one for a Contract-loaded schema, two for a
+// generated module); below that, a value is refused where it reaches a
+// longer chain, at its root if the root is one. The walk keeps its work on
+// an explicit stack rather than the host's (issue #192), so
 // `maxDepth` is the only depth bound: raised, it admits a 100,000-level
 // linked list, and the answer never depends on the engine or its JIT state.
 // What can still exhaust the host stack is user code the walk calls — a
@@ -184,7 +188,10 @@ export interface ValidateOptions {
    * 0, each constructor's children one below it (a variant's `null` payload
    * included), and a node deeper than this is refused. A `rec` hop is not a
    * level (issue #231); more than this many consecutive hops resolving one
-   * reference are refused instead.
+   * reference are refused instead, so with a `maxDepth` below a schema's
+   * longest hop chain (one for a Contract-loaded schema, two for a generated
+   * module) a value is refused where it reaches that chain, even a value the
+   * same schema built with no `rec` accepts.
    */
   readonly maxDepth?: number;
   /**
