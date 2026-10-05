@@ -13,14 +13,59 @@ entry here is [docs/releasing.md] in that repository.
 API, the inferred domain types, the codec's wire behaviour, and the codes and
 `$`-rooted paths validation reports. Pin an exact version.
 
-## Unreleased
+## 0.3.0 — 2026-10-06
+
+Pairs with `candid-core` 0.1.0-beta.3.
+
+`@candid-core/schema` 0.3 breaks the 0.2 API (principal values are canonical text, collapsing opts are boxed, every `vec nat8` is a `Uint8Array`, generated modules use a new binding layout and may omit declarations, and the `./actor`, `./transport-icp`, `./forms` and `./labels` subpaths are gone); there is no compatibility layer.
+
+The first stable release of the 0.3 line. It is published under the npm
+`latest` dist-tag, so a plain `npm install @candid-core/schema` selects it;
+keep it pinned, `npm install --save-exact @candid-core/schema`. A `^0.2.0`
+range does not admit it: under npm's pre-1.0 caret rules a minor is a breaking
+release. The `beta` dist-tag stays on 0.3.0-beta.1. The package stays 0.x
+through the 4.0 release of ic-reactor, the call layer built on it; 1.0 follows
+a stability window after that, not with it.
+
+**Upgrading from 0.2.0.** 0.3.0 is 0.3.0-beta.1 plus the changes in this
+entry, so the upgrade is this entry and the 0.3.0-beta.1 entry below, read
+together; every break in either is marked **BREAKING**, and none of the
+changes here undoes one there. In the order the 0.3.0-beta.1 entry gives them:
+
+- what stops resolving: the `./actor`, `./transport-icp`, `./forms` and
+  `./labels` subpaths, and the optional `@icp-sdk/core` peer;
+- what changes shape: principals are canonical text (`Principal`,
+  `principal()`, `isPrincipal()`; `PrincipalValue` and `DecodedPrincipal` are
+  gone, and validation and encoding are strict); an `opt` whose inner type
+  admits `null` is boxed as `{ some: v } | null` (`OptDomain`, `isBoxedOpt`);
+  `schemaFromContract` builds a blob for every `vec nat8`, and leaves out what
+  the generator leaves out, reporting it in a required `omitted`;
+- what changes behaviour: a structural type table, so encoded bytes no longer
+  depend on how a schema was built; `TypeError` on an unknown or invalid
+  option; iterative walkers, with `encode` charging `maxDepth` for Candid
+  nesting only; and a `"stack"` resource in both resource unions;
+- and, in this entry: the Contract documents `schemaFromContract` refuses
+  because candid-core refuses them, with three new `ContractIssueCode`
+  members; a hostile thrown value no longer escaping the codec; and the right
+  path after an absorbed coercion mismatch.
+
+**The CLI pairs with this exact version.** `@candid-core/cli` 0.2.0 declares
+this package as a peer at exactly `0.3.0`: the modules its generator emits
+need the `Principal` export and the boxed options of the 0.3 line, which 0.2.0
+does not have, and the generator and this package's `schemaFromContract` agree
+on blobs and on omitted declarations only when both come from the same
+release. Install the two at exact versions, together.
+
+Every Contract and envelope `candid-core compile` writes loads exactly as it
+did under 0.3.0-beta.1, so the `candid-core compile --envelope` on-ramp in the
+README works with the published `candid-core` 0.1.0-beta.3. No byte a 0.2.0
+encoder wrote is read differently, and no Contract document or identity moved.
 
 ### `schemaFromContract` refuses the Contract documents candid-core refuses
 
 `schemaFromContract` now refuses three kinds of document it used to load,
-because `Contract::from_json` refuses them (issue #228, found by the #196
-differential fuzz). **Who is affected:** only a hand-written or tool-mutated
-document. Every Contract and envelope `candid-core compile` writes still loads
+because `Contract::from_json`, candid-core's own loader, refuses them. **Who
+is affected:** only a hand-written or tool-mutated document. Every Contract and envelope `candid-core compile` writes still loads
 exactly as before, with the same schemas, `actor` and `omitted` — every golden
 and fixture in the repository is loaded by the suite to show it.
 
@@ -55,8 +100,8 @@ and fixture in the repository is loaded by the suite to show it.
 - **Unchanged:** a document without a `declarations` key is still refused
   (`invalid_contract_document` at `$.declarations`), although
   `Contract::from_json` defaults the key to empty; whether an absent key is
-  part of the format is the maintainer's open decision on #228. candid-core
-  always writes the key.
+  part of the format is still open, and this may change before 1.0.
+  candid-core always writes the key.
 
 ### A thrown value whose prototype cannot be read no longer escapes the codec
 
@@ -66,7 +111,7 @@ decoding, a hostile thrown value can now get a different issue code (the last
 bullet).
 
 - **`encode`, `encodeArgs`, `decode` and `decodeArgs` keep their no-throw
-  guarantee against a hostile thrown value** (issue #199). When user code a
+  guarantee against a hostile thrown value**. When user code a
   walk calls — a getter, a Proxy trap, a `rec` thunk — threw a value that
   makes `instanceof` throw (a Proxy whose `getPrototypeOf` trap throws, or a
   revoked Proxy), the codec's catch blocks raised that trap's exception out of
@@ -93,9 +138,9 @@ bullet).
 
 ### An absorbed coercion mismatch no longer leaves stale path segments
 
-- **Decode reports the right path after an absorbed coercion mismatch** (issue
-  #209). When an expected `opt` absorbed a mismatch from inside its value
-  (decoding it as `null`, which is unchanged), the path segments of the
+- **Decode reports the right path after an absorbed coercion mismatch.** When
+  an expected `opt` absorbed a mismatch from inside its value (decoding it as
+  `null`, which is unchanged), the path segments of the
   abandoned value were left behind, so the next issue anywhere later in the
   message was reported under them. Decoding `record { a : record { x : int };
   b : text }` bytes against `record { a : opt record { x : nat }; b : nat }`
@@ -106,6 +151,14 @@ bullet).
   resource figure or decoded value moves, and encode and validate are
   untouched. A consumer that matched on the old paths of such issues sees the
   corrected ones.
+
+### The declarations
+
+- `schema.d.ts` grows from 640 lines to 732 since 0.2.0, all of it in
+  0.3.0-beta.1, with the documentation of the new `Principal`, `principal()`,
+  `isPrincipal()`, `OptDomain` and `isBoxedOpt`. Every shipped declaration
+  still stands on its own, with no internal issue number, and compiles under
+  strict TypeScript without `skipLibCheck`.
 
 ## 0.3.0-beta.1 — 2026-10-02
 
