@@ -758,7 +758,19 @@ to 7, with these differences:
 - On publish day the follow-up pull request empties `UNPUBLISHED_NPM_SPECS`,
   turns the prose install lines into blocks, and rewrites the release note on
   each TypeScript page (`NOTE_TITLE`), which until then says which beta the
-  page describes.
+  page describes. It also replaces every install and `npx` line that still
+  names a beta (`@beta`, `@<schema>-beta.N`, `@<cli>-beta.N`) with the plain
+  stable line: those keep working after the publish, so no check flags them,
+  but they install the betas, which lack what the stable entries added. Find
+  them with
+  `git grep -n -E '(npm install|npx) [^<]*@(beta|[0-9.]+-beta\.[0-9]+)' -- README.md website/content`
+  (the pages that carry them: `quickstart-typescript.html`, `packages.html`,
+  `ts-overview.html`, `schema-from-contract.html`, `cli-npm.html`,
+  `generator.html`, `what-is-candid-core.html`, `migrating-from-0-2.html`,
+  `status.html`, and the root `README.md`). And it rewrites the prose that
+  says the site describes the `beta` dist-tag: `website/README.md` (the
+  `NOTE_TITLE` paragraph), `_site.json` (the migration page's lead) and
+  `what-is-candid-core.html`.
 
 If the merge slips past the date in the two changelog headings, a commit
 correcting the date comes first and is the one dispatched, as for a beta.

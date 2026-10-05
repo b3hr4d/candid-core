@@ -51,8 +51,10 @@ here undoes one there. Grouped, and within each group in the order the
   nesting only: every type the compiler accepts encodes through its generated
   module at the default limits, and an encode may be accepted where it was
   refused (a type reached through many aliases, a `schemaFromContract` schema
-  deeper than about 128 levels), and refused where it was accepted (a shallow
-  value in a hand-built schema nested past the limit);
+  deeper than about 128 levels, for a value that does not itself reach about
+  128 levels: the value walk still charges every `rec` hop, as `validate` and
+  `decode` do), and refused where it was accepted (a shallow value in a
+  hand-built schema nested past the limit);
 - and, in this entry: the Contract documents `schemaFromContract` refuses
   because candid-core refuses them, with three new `ContractIssueCode`
   members; a hostile thrown value no longer escaping the codec; and the right
