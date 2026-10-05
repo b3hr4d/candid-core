@@ -64,7 +64,17 @@
 // (`unsupported_contract_format`, `unsupported_format_version`,
 // `unsupported_semantics_profile`, `unsupported_canonicalization_profile`,
 // `dangling_type_ref`, `duplicate_field_id`, `empty_declaration_name`,
-// `duplicate_declaration_name`, `resource_limit_exceeded`). Arena size,
+// `duplicate_declaration_name`, `orphan_type_node`, `rootless_type_arena`,
+// `resource_limit_exceeded`). Every object the loader reads — the root, a
+// type node, a field, a service method, a declaration, the actor, and the
+// envelope shell — is closed exactly as the Rust loader's
+// `deny_unknown_fields` closes it: a key the format does not define is an
+// `unknown_key` issue at that key's path (issue #228). `identities` and
+// `producer` are not read (see below), so their insides are not checked.
+// Every type node must be reachable from a declaration or the actor, and a
+// non-empty arena needs at least one of them, as in candid-core's own
+// reachability rule; the walk is an explicit stack, linear in nodes plus
+// edges. Arena size,
 // total field count, and declaration count are capped by the same defaults
 // as candid-core's `Limits` (`max_type_nodes` 100_000, `max_fields` 500_000,
 // `max_declarations` 100_000), and the caller's name table by its own
@@ -105,6 +115,9 @@ export type ContractIssueCode =
   | "duplicate_field_name"
   | "empty_declaration_name"
   | "duplicate_declaration_name"
+  | "unknown_key"
+  | "orphan_type_node"
+  | "rootless_type_arena"
   | "invalid_name_table"
   | "invalid_extension_name"
   | "resource_limit_exceeded";
@@ -313,6 +326,63 @@ function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+// The closed key sets of the format's objects: `RawContract`, `TypeNode`,
+// `Field`, `ServiceMethod`, `Declaration`, and `Actor` in candid-core's
+// `src/model`, each `deny_unknown_fields`. A key outside its set is refused
+// (`unknown_key`): a future format revision must be adopted deliberately,
+// not half-read — the rule unknown node kinds already follow.
+const CONTRACT_KEYS: ReadonlySet<string> = new Set([
+  "format",
+  "format_version",
+  "semantics_profile",
+  "canonicalization_profile",
+  "identities",
+  "producer",
+  "types",
+  "declarations",
+  "actor",
+]);
+const NODE_KEYS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
+  ["primitive", new Set(["kind", "primitive"])],
+  ["opt", new Set(["kind", "inner"])],
+  ["vec", new Set(["kind", "inner"])],
+  ["record", new Set(["kind", "fields"])],
+  ["variant", new Set(["kind", "fields"])],
+  ["func", new Set(["kind", "args", "results", "mode"])],
+  ["service", new Set(["kind", "methods"])],
+  ["class", new Set(["kind", "init", "service"])],
+]);
+const FIELD_KEYS: ReadonlySet<string> = new Set(["id", "type"]);
+const METHOD_KEYS: ReadonlySet<string> = new Set(["name", "id", "function"]);
+const DECLARATION_KEYS: ReadonlySet<string> = new Set(["name", "type"]);
+const ACTOR_KEYS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
+  ["service", new Set(["kind", "service"])],
+  ["class", new Set(["kind", "class"])],
+]);
+const ENVELOPE_KEYS: ReadonlySet<string> = new Set(["contract", "extensions"]);
+
+/**
+ * The `$`-path of `key` inside the object at `base`: dotted when the key is
+ * identifier-shaped, bracketed and JSON-quoted otherwise, so any key text —
+ * empty, spaced, `__proto__` — names exactly one position.
+ */
+function keyPath(base: string, key: string): string {
+  return /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(key)
+    ? `${base}.${key}`
+    : `${base}[${JSON.stringify(key)}]`;
+}
+
+/** Every own key of `object` outside `allowed`, in the object's key order. */
+function unknownKeys(object: Record<string, unknown>, allowed: ReadonlySet<string>): string[] {
+  const unknown: string[] = [];
+  for (const key of Object.keys(object)) {
+    if (!allowed.has(key)) {
+      unknown.push(key);
+    }
+  }
+  return unknown;
+}
+
 /**
  * Build `Schema` objects for every supported declaration of a Contract,
  * leaving out — and listing in `omitted` — exactly what a generated module
@@ -379,6 +449,15 @@ interface NameTableSource {
 }
 
 /**
+ * The issues raised about a name table rather than the Contract. An envelope
+ * re-roots Contract issues under `$.contract`; these keep the path of the
+ * table they came from. Provenance is recorded where each issue is made, not
+ * read back from its path: a Contract's own unknown root key `names` is
+ * reported at `$.names` too, and it still belongs under `$.contract`.
+ */
+const nameTableIssues = new WeakSet<ContractIssue>();
+
+/**
  * Mirrors the Rust loader's `valid_extension_name`: a reverse-domain
  * namespace (dot-separated segments of lowercase letters, digits, and
  * hyphens) followed by `/v<integer>` with no leading zero. The two loaders
@@ -419,14 +498,12 @@ function buildFromDocument(
   // a valid extension name. Anything else fails closed before the nested
   // Contract is read.
   const issues: ContractIssue[] = [];
-  for (const key of Object.keys(document)) {
-    if (key !== "contract" && key !== "extensions") {
-      issues.push({
-        code: "invalid_contract_document",
-        path: "$",
-        message: `an envelope carries only contract and extensions, not ${JSON.stringify(key)}`,
-      });
-    }
+  for (const key of unknownKeys(document, ENVELOPE_KEYS)) {
+    issues.push({
+      code: "unknown_key",
+      path: keyPath("$", key),
+      message: `an envelope carries only contract and extensions, not ${JSON.stringify(key)}`,
+    });
   }
   let extensions: Record<string, unknown> = {};
   // Own-key gated like the `contract` detection itself: an `extensions`
@@ -475,12 +552,12 @@ function buildFromDocument(
     return result;
   }
   // Contract-side paths are re-rooted under `$.contract`, where the data
-  // actually sits in the supplied document; name-table paths already carry
-  // their own base and pass through untouched.
+  // actually sits in the supplied document; name-table issues already carry
+  // their table's base and pass through untouched (`nameTableIssues`).
   return {
     ok: false,
     issues: result.issues.map((issue) =>
-      issue.path === names.base || issue.path.startsWith(`${names.base}[`)
+      nameTableIssues.has(issue)
         ? issue
         : {
             ...issue,
@@ -499,11 +576,28 @@ function buildFromContract(
   const push = (code: ContractIssueCode, path: string, message: string) => {
     issues.push({ code, path, message });
   };
+  /** `push`, for an issue about the name table (see `nameTableIssues`). */
+  const pushNameTable = (code: ContractIssueCode, path: string, message: string) => {
+    const issue: ContractIssue = { code, path, message };
+    nameTableIssues.add(issue);
+    issues.push(issue);
+  };
+  /** Refuse every key of `object` the format does not define for it. */
+  const closed = (object: Record<string, unknown>, allowed: ReadonlySet<string>, base: string) => {
+    for (const key of unknownKeys(object, allowed)) {
+      push(
+        "unknown_key",
+        keyPath(base, key),
+        `${JSON.stringify(key)} is not a key the Contract format defines here`,
+      );
+    }
+  };
 
   if (!isObject(contract)) {
     push("invalid_contract_document", "$", "a Contract document is a JSON object");
     return { ok: false, issues };
   }
+  closed(contract, CONTRACT_KEYS, "$");
 
   // The four self-identification markers, checked exactly the way candid-core
   // checks them. A document claiming a different format or profile is not
@@ -620,6 +714,11 @@ function buildFromContract(
       push("invalid_contract_document", base, "a type node is an object with a kind");
       continue;
     }
+    // An unknown kind has no key set; the switch's default refuses it.
+    const nodeKeys = NODE_KEYS.get(node.kind);
+    if (nodeKeys !== undefined) {
+      closed(node, nodeKeys, base);
+    }
     switch (node.kind) {
       case "primitive": {
         const primitive = node.primitive;
@@ -669,6 +768,9 @@ function buildFromContract(
         for (let j = 0; j < node.fields.length; j += 1) {
           const field = node.fields[j];
           const fieldBase = `${base}.fields[${j}]`;
+          if (isObject(field)) {
+            closed(field, FIELD_KEYS, fieldBase);
+          }
           if (
             !isObject(field) ||
             typeof field.id !== "number" ||
@@ -762,6 +864,9 @@ function buildFromContract(
           }
           const method: unknown = node.methods[m];
           const methodBase = `${base}.methods[${m}]`;
+          if (isObject(method)) {
+            closed(method, METHOD_KEYS, methodBase);
+          }
           if (
             !isObject(method) ||
             typeof method.name !== "string" ||
@@ -899,6 +1004,9 @@ function buildFromContract(
   for (let index = 0; index < declarations.length; index += 1) {
     const base = `$.declarations[${index}]`;
     const declaration = declarations[index];
+    if (isObject(declaration)) {
+      closed(declaration, DECLARATION_KEYS, base);
+    }
     if (!isObject(declaration) || typeof declaration.name !== "string") {
       push("invalid_contract_document", base, "a declaration is { name, type }");
       continue;
@@ -931,7 +1039,7 @@ function buildFromContract(
   const nameTable = new Map<string, string>();
   const reservedKeys = new Set<string>();
   if (!Array.isArray(namesSource.entries)) {
-    push(
+    pushNameTable(
       "invalid_name_table",
       namesSource.base,
       "a name table is an array of [container, id, name] entries",
@@ -940,7 +1048,7 @@ function buildFromContract(
   }
   const rawNames: readonly unknown[] = namesSource.entries;
   if (rawNames.length > DEFAULT_MAX_NAME_TABLE_ENTRIES) {
-    issues.push({
+    const issue: ContractIssue = {
       code: "resource_limit_exceeded",
       path: namesSource.base,
       message: `name_table_entries limit ${DEFAULT_MAX_NAME_TABLE_ENTRIES} exceeded (observed ${rawNames.length})`,
@@ -949,7 +1057,9 @@ function buildFromContract(
         limit: DEFAULT_MAX_NAME_TABLE_ENTRIES,
         observed: rawNames.length,
       },
-    });
+    };
+    nameTableIssues.add(issue);
+    issues.push(issue);
     return { ok: false, issues };
   }
   for (let index = 0; index < rawNames.length; index += 1) {
@@ -965,7 +1075,7 @@ function buildFromContract(
       entry[1] < 0 ||
       typeof entry[2] !== "string"
     ) {
-      push(
+      pushNameTable(
         "invalid_name_table",
         `${namesSource.base}[${index}]`,
         "a name table entry is [container, id, name]",
@@ -978,7 +1088,7 @@ function buildFromContract(
     // wrong id, and the table is refused at the entry.
     const name = entry[2];
     if (candidLabelHash(name) !== entry[1]) {
-      push(
+      pushNameTable(
         "invalid_name_table",
         `${namesSource.base}[${index}]`,
         `${JSON.stringify(name)} hashes to ${candidLabelHash(name)}, not ${entry[1]}`,
@@ -1238,6 +1348,10 @@ function buildFromContract(
       push("invalid_contract_document", "$.actor", "an actor is { kind, service|class }");
       return { ok: false, issues };
     }
+    closed(raw, ACTOR_KEYS.get(raw.kind) as ReadonlySet<string>, "$.actor");
+    if (issues.length > 0) {
+      return { ok: false, issues };
+    }
     const target = raw[raw.kind as "service" | "class"] as number;
     if (!validRef(target)) {
       push(
@@ -1262,6 +1376,17 @@ function buildFromContract(
     }
     actorTarget = target;
     actorService = node.kind === "class" ? node.service : target;
+  }
+
+  // candid-core's reachability rule (`validate_reachability`): a non-empty
+  // arena needs a root, and every node must be reachable from one. The
+  // roots are the declarations and the actor, all in range by now.
+  const roots = parsedDeclarations.map((declaration) => declaration.type);
+  if (actorTarget !== undefined) {
+    roots.push(actorTarget);
+  }
+  if (!reachability(sound, roots, push)) {
+    return { ok: false, issues };
   }
 
   // Every refusal is behind us: the document is valid, and what remains is
@@ -1300,6 +1425,90 @@ function buildFromContract(
   }
 
   return { ok: true, schemas, actor, omitted: omission.omitted };
+}
+
+/**
+ * candid-core's reachability rule over a validated arena, reporting through
+ * `push`; true when the arena passes. An empty arena needs no root. A
+ * non-empty one with no root is `rootless_type_arena` at `$.types`, and each
+ * node no root reaches is `orphan_type_node` at `$.types[i]`, in arena order
+ * — the codes, paths, and order of `validate_reachability`.
+ *
+ * Every edge counts, a class's `init` and `service` included (only the actor
+ * root can be a class here, and its init arguments are part of the graph
+ * even though no schema reads them). The walk is an explicit stack with a
+ * visited mark per node, so it is linear in nodes plus edges and its depth
+ * is constant whatever the graph's shape.
+ */
+function reachability(
+  nodes: readonly ParsedNode[],
+  roots: readonly number[],
+  push: (code: ContractIssueCode, path: string, message: string) => void,
+): boolean {
+  if (nodes.length === 0) {
+    return true;
+  }
+  if (roots.length === 0) {
+    push(
+      "rootless_type_arena",
+      "$.types",
+      "a non-empty arena requires an actor or at least one named declaration root",
+    );
+    return false;
+  }
+  const reached = new Uint8Array(nodes.length);
+  const stack: number[] = [];
+  const visit = (ref: number) => {
+    if (reached[ref] === 0) {
+      reached[ref] = 1;
+      stack.push(ref);
+    }
+  };
+  for (const root of roots) {
+    visit(root);
+  }
+  while (stack.length > 0) {
+    const node = nodes[stack.pop() as number];
+    switch (node.kind) {
+      case "primitive":
+        break;
+      case "opt":
+      case "vec":
+        visit(node.inner);
+        break;
+      case "record":
+      case "variant":
+        for (const field of node.fields) {
+          visit(field.type);
+        }
+        break;
+      case "func":
+        node.args.forEach(visit);
+        node.results.forEach(visit);
+        break;
+      case "service":
+        for (const method of node.methods) {
+          visit(method.func);
+        }
+        break;
+      case "class":
+        node.init.forEach(visit);
+        visit(node.service);
+        break;
+    }
+  }
+  let sound = true;
+  for (let index = 0; index < nodes.length; index += 1) {
+    if (reached[index] === 0) {
+      push(
+        "orphan_type_node",
+        `$.types[${index}]`,
+        "every type node must be reachable from actor or declaration roots",
+      );
+      sound = false;
+    }
+  }
+  return sound;
 }
 
 /** A parsed declaration, as the omission analysis reads it. */

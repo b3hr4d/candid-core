@@ -469,9 +469,20 @@ built.actor; // the service schema, when the document has one
   non-negative safe integer (<code>NaN</code>, negative, fractional, a string, <code>null</code>,
   <code>Infinity</code>), throws <code>TypeError</code>. <code>0</code> is a valid cap that refuses
   any non-empty document part it bounds.
-  <code>ContractIssueCode</code> is a closed union of 14 members; several deliberately reuse the
+  <code>ContractIssueCode</code> is a closed union of 17 members; several deliberately reuse the
   codes candid-core's own Rust validator produces for the same condition, so the two loaders refuse
   the same documents under the same names.
+</p>
+
+<p>
+  The document's objects are closed the way <code>Contract::from_json</code> closes them: the root, a
+  type node, a field, a service method, a declaration, the actor and the envelope shell each accept
+  only the keys the format defines for them, and any other key is an <code>unknown_key</code> issue
+  at that key's path (<code>$.types[0].extra</code>; a key that is not identifier-shaped is
+  bracketed, <code>$.types[0]["x y"]</code>). The insides of <code>identities</code> and
+  <code>producer</code> are not read, so they are not checked either. Every type node must also be
+  reachable from a declaration or the actor, through any edge, and a non-empty arena needs at least
+  one of them; an empty arena with no declarations and no actor still loads, as it does in Rust.
 </p>
 
 <table>
@@ -485,6 +496,9 @@ built.actor; // the service schema, when the document has one
     <tr><td><code>unsupported_construct</code></td><td>A <code>class</code> node nests inside a supported type.</td></tr>
     <tr><td><code>duplicate_field_id</code>, <code>duplicate_field_name</code></td><td>Two fields of one node share an id, or two ids render to the same key.</td></tr>
     <tr><td><code>empty_declaration_name</code>, <code>duplicate_declaration_name</code></td><td>A declaration has no name, or two share one.</td></tr>
+    <tr><td><code>unknown_key</code></td><td>An object carries a key the format does not define for it. Rust refuses the same document while decoding it, as malformed JSON.</td></tr>
+    <tr><td><code>orphan_type_node</code></td><td>A type node no declaration or actor reaches; one issue per node, at <code>$.types[i]</code>.</td></tr>
+    <tr><td><code>rootless_type_arena</code></td><td>A non-empty <code>types</code> array with no declaration and no actor, at <code>$.types</code>.</td></tr>
     <tr><td><code>invalid_name_table</code></td><td>An entry is not <code>[container, id, name]</code>, or does not hash to its id. (An honest <code>_N_</code>-shaped name omits its declaration instead; see above.)</td></tr>
     <tr><td><code>invalid_extension_name</code></td><td>An envelope extension key is not a reverse-domain name followed by <code>/v&lt;integer&gt;</code>.</td></tr>
     <tr><td><code>resource_limit_exceeded</code></td><td>One of the caps above tripped; the issue carries <code>{ resource, limit, observed }</code>.</td></tr>

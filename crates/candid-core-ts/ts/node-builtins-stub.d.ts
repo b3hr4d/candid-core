@@ -31,6 +31,10 @@ declare module "node:fs" {
   // Widened for the wire-vector goldens (issue #103): UPDATE_GOLDENS=1 npm
   // test rewrites the TS-encoder hex files the Rust differential reads back.
   export function writeFileSync(path: URL | string, data: string): void;
+  // Widened for the loader-strictness suite (issue #228): every Contract the
+  // compiler wrote must keep loading, including fixtures added later, so the
+  // suite lists the fixture directories rather than naming each file.
+  export function readdirSync(path: URL | string): string[];
 }
 
 declare module "node:vm" {
