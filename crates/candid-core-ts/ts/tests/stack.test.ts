@@ -57,7 +57,7 @@ export function describeCodecResource(resource: CodecResourceLimitInfo["resource
 type Nest = Nest[];
 const Nested: Schema<Nest> = c.rec(() => c.vec(Nested));
 
-// Far deeper than any realistic stack: each level costs two depth units, and
+// Far deeper than any realistic stack: each level costs one depth unit, and
 // the recursive walkers this package had before issue #192 spent several
 // engine frames per level, of which the engines hold thousands, not hundreds
 // of thousands.
@@ -103,9 +103,9 @@ function levelsOf(value: unknown): number {
 }
 
 test("nestings far deeper than any stack walk to completion once maxDepth is raised", () => {
-  // Each level costs two depth units (the rec hop and the vec), so the walk
-  // reaches depth 400,000 — past where the recursive walkers overflowed
-  // (about 1.5k to 2.6k levels) by two orders of magnitude.
+  // Each level costs one depth unit (the vec; its rec hop charges nothing,
+  // issue #231), so the walk reaches depth 200,000 — past where the recursive
+  // walkers overflowed (about 1.5k to 2.6k levels) by two orders of magnitude.
   assert.deepStrictEqual(validate(Nested, nestedValue(LEVELS), RAISED), { ok: true });
   const encoded = encode(Nested, nestedValue(LEVELS), RAISED);
   if (!encoded.ok) {
