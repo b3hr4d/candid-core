@@ -377,9 +377,10 @@ impl Contract {
         context: &crate::RuntimeContext,
     ) -> Result<Self, ContractJsonError> {
         let mut budget = context.budget();
-        let raw: RawContract = crate::budget::decode_bounded(&mut budget, input.len(), || {
-            serde_json::from_str(input)
-        })?;
+        let raw: RawContract =
+            crate::budget::decode_bounded(&mut budget, input.as_bytes(), &[], || {
+                serde_json::from_str(input)
+            })?;
         Self::from_raw_with_mapping_and_budget(raw, &mut budget)
             .map(|(contract, _)| contract)
             .map_err(ContractJsonError::InvalidContract)
@@ -401,7 +402,7 @@ impl Contract {
         context: &crate::RuntimeContext,
     ) -> Result<Self, ContractJsonError> {
         let mut budget = context.budget();
-        let raw: RawContract = crate::budget::decode_bounded(&mut budget, input.len(), || {
+        let raw: RawContract = crate::budget::decode_bounded(&mut budget, input, &[], || {
             serde_json::from_slice(input)
         })?;
         Self::from_raw_with_mapping_and_budget(raw, &mut budget)
@@ -632,6 +633,10 @@ impl ContractDraft {
 ///
 /// Decoding this DTO is *not* a trust boundary and carries no allocation
 /// bound; gate the byte length yourself, or use the bounded parse APIs.
+/// Serde's derive also reads each struct here in sequence form, as an array
+/// of its field values in declaration order; the Contract format writes every
+/// struct as an object, and the bounded parse APIs refuse the array form
+/// (issue #235).
 ///
 /// This type is reserved for artifacts that already carry format markers and
 /// identities: [`Contract::try_from_raw`] verifies the supplied identities

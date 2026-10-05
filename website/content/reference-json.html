@@ -24,6 +24,15 @@
     and they sit outside the canonical identities by design.
   </li>
   <li>
+    <strong>Every struct is an object.</strong> serde's derive would also read a struct written as an
+    array of its field values in order, such as a record field as <code>[97, 1]</code> or a type node
+    as <code>["primitive", "nat"]</code>. The format does not admit that form: the Rust loaders
+    refuse it at any depth as malformed JSON, <code>invalid type: sequence, expected an object
+    at</code> the array's path, the error a value of the wrong type gets, and
+    <code>schemaFromContract</code> refuses it too. Arrays are only the format's own lists, such as
+    <code>types</code> and <code>fields</code>, and extension values, which are free-form.
+  </li>
+  <li>
     <strong>Absence is an omitted key, not <code>null</code>.</strong> An actorless Contract has no
     <code>actor</code> property at all; an explicit <code>"actor": null</code> is a decode error, not
     a second spelling of absence. The same holds for <code>identities.interface</code> and an
