@@ -53,8 +53,8 @@ npm install --save-dev --save-exact @candid-core/cli@beta
 <p>
   Removing published subpaths is a breaking change, so the 0.3 line is a minor: under npm's
   pre-1.0 caret rules a <code>^0.2.0</code> dependency does not select it, and moving to it is a
-  deliberate edit. Nothing on the wire moved. No byte a <code>0.2.0</code> encoder wrote is read
-  differently, and Contract JSON and every identity are untouched; what changed is the TypeScript
+  deliberate edit. Nothing on the wire moved. No byte a <code>0.2.0</code> encoder wrote decodes
+  to a different value, and Contract JSON and every identity are untouched; what changed is the TypeScript
   value shapes, the package's exports, what the generator emits, and what throws.
 </p>
 
@@ -80,7 +80,9 @@ npm install --save-dev --save-exact @candid-core/cli@beta
     <tr><td>A declaration that cannot be represented is omitted, not refused</td><td>A script that relied on the generator's non-zero exit</td><td><a href="#omission">Omission</a></td></tr>
     <tr><td>Closed unions gain or lose a member</td><td>An exhaustive <code>switch</code> over a resource or a contract code</td><td><a href="#unions">Closed unions</a></td></tr>
     <tr><td><code>schemaFromContract</code> refuses unknown keys, unreachable type nodes and a rootless arena</td><td>A hand-written or tool-mutated Contract document</td><td><a href="#contract-loading">Stricter Contract loading</a></td></tr>
+    <tr><td>A <code>rec</code> hop no longer counts against <code>maxDepth</code> or <code>maxElements</code></td><td>A value at exactly a caller-set <code>maxDepth</code> that ends in a tag-only variant, or whose message omits an <code>opt</code> field</td><td><a href="#rec-hops">Resource limits</a></td></tr>
     <tr><td>The CLI refuses a run of more than 256 consecutive comments</td><td>A <code>.did</code> with a long <code>//</code> header</td><td><a href="#comment-runs">Long comment runs</a></td></tr>
+    <tr><td>The CLI refuses a type on a cycle through <code>opt</code> alone</td><td>A script that matched on <code>ts_generation_refused</code> for it</td><td><a href="#opt-cycles">Cycles through opt</a></td></tr>
   </tbody>
 </table>
 
@@ -601,6 +603,42 @@ void kind;
   states both with their numbers.
 </p>
 
+<h2 id="rec-hops">Resource limits: a <code>rec</code> hop is not charged</h2>
+
+<p>
+  In <code>0.3.0</code>, <code>validate</code>, <code>encode</code> and <code>decode</code> charge a
+  value for its constructors alone. <code>0.2.0</code> and <code>0.3.0-beta.1</code> also charged every
+  <code>rec</code> hop a depth step and an element, and a Contract-loaded schema makes every type
+  reference a hop, so its values reached the default <code>maxDepth</code> at about 128 levels and
+  <code>maxElements</code> at about 500,000 elements. Now a generated, a Contract-loaded and a
+  hand-built schema of one type accept the same values, 256 levels deep at the defaults as candid-core
+  does, and 1,000,000 elements wide, where <code>validate</code> and <code>encode</code> also count
+  each record key they examine. Two narrow cases are refused that were accepted, both only at a
+  limit you lowered or at its exact edge:
+</p>
+
+<ul>
+  <li>
+    a tag-only variant (<code>{ tag: "a" }</code> for an arm of type <code>null</code>) sitting at exactly
+    <code>maxDepth</code>: its <code>null</code> is now a level below it in <code>validate</code> and
+    <code>encode</code>, as it already was in <code>decode</code>. At the default of 256 no type the
+    compiler accepts reaches it;
+  </li>
+  <li>
+    a message that omits an <code>opt</code>, <code>null</code> or <code>reserved</code> field: the
+    <code>null</code> that <code>decode</code> supplies is now charged at the field's own level and as one
+    element, so a record at exactly <code>maxDepth</code> that omits one, or a message whose omitted
+    fields cross <code>maxElements</code>, is refused with <code>resource_limit_exceeded</code>, as
+    <code>validate</code> refuses the same value.
+  </li>
+</ul>
+
+<p>
+  A chain of more than <code>maxDepth</code> consecutive hops is still refused with
+  <code>value_depth</code>, so with <code>maxDepth</code> set below 2 a generated module refuses a value
+  at its first declaration reference. The changelog's <code>0.3.0</code> entry lists every case.
+</p>
+
 <h2 id="contract-loading">Stricter Contract loading</h2>
 
 <p>
@@ -649,6 +687,18 @@ void kind;
   header written as hundreds of <code>//</code> lines: write it as one <code>/* */</code> block, which
   counts as one comment, or shorten it. Blank lines between comments do not end a run; any token does.
   The CLI has no flag to raise the limit.
+</p>
+
+<h2 id="opt-cycles">Cycles through opt</h2>
+
+<p>
+  <code>@candid-core/cli</code> <code>0.2.0</code> refuses a type that lies on a cycle passing only
+  through <code>opt</code>, such as <code>type T = opt T;</code>, with <code>did_type_check_error</code>
+  naming the type, exit status 1. No decoder can answer for a value that is not an <code>opt</code> at
+  such a type. <code>0.1.0</code> refused the same files at generation, with
+  <code>ts_generation_refused</code>, because each such type wraps <code>opt</code> in
+  <code>opt</code>; <code>0.2.0-beta.1</code> generated them, boxed. A cycle with any other constructor
+  on it, such as <code>type T = opt vec T</code>, still compiles.
 </p>
 
 <h2>Order of upgrade</h2>

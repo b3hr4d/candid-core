@@ -32,8 +32,10 @@ entry, so the upgrade is this entry and the 0.3.0-beta.1 entry below, read
 together. Every break in either is marked **BREAKING** but one, the
 `encode` depth rule named below, which the 0.3.0-beta.1 entry lists as
 **Changed** because only a schema's type table shows it. None of the changes
-here undoes one there. Grouped, and within each group in the order the
-0.3.0-beta.1 entry gives them:
+here undoes one there, but one sentence there no longer holds: its `encode`
+depth rule says the value walk charges `rec` hops as `validate` and `decode`
+do, and none of the three charges them now (below). Grouped, and within each
+group in the order the 0.3.0-beta.1 entry gives them:
 
 - what stops resolving: the `./actor`, `./transport-icp`, `./forms` and
   `./labels` subpaths, and the optional `@icp-sdk/core` peer;
@@ -51,14 +53,18 @@ here undoes one there. Grouped, and within each group in the order the
   nesting only: every type the compiler accepts encodes through its generated
   module at the default limits, and an encode may be accepted where it was
   refused (a type reached through many aliases, a `schemaFromContract` schema
-  deeper than about 128 levels, for a value that does not itself reach about
-  128 levels: the value walk still charges every `rec` hop, as `validate` and
-  `decode` do), and refused where it was accepted (a shallow value in a
-  hand-built schema nested past the limit);
+  deeper than about 128 levels), and refused where it was accepted (a shallow
+  value in a hand-built schema nested past the limit);
 - and, in this entry: the Contract documents `schemaFromContract` refuses
   because candid-core refuses them, with three new `ContractIssueCode`
-  members; a hostile thrown value no longer escaping the codec; and the right
-  path after an absorbed coercion mismatch.
+  members; a hostile thrown value no longer escaping the codec; the right
+  path after an absorbed coercion mismatch; and `rec` hops no longer charged
+  against `maxDepth` or `maxElements`, so a generated or Contract-loaded
+  schema accepts recursive values as deep as candid-core does and, but for
+  the examined record keys `maxElements` also counts, as wide, with two
+  narrow refusals of input accepted before (a tag-only variant at
+  exactly a caller-set `maxDepth`, and a field the wire omits, now charged
+  at its own level).
 
 **The CLI pairs with this exact version.** `@candid-core/cli` 0.2.0 declares
 this package as a peer at exactly `0.3.0`: the modules its generator emits
@@ -70,7 +76,8 @@ release. Install the two at exact versions, together.
 Every Contract and envelope `candid-core compile` writes loads exactly as it
 did under 0.3.0-beta.1, so the `candid-core compile --envelope` on-ramp in the
 README works with the published `candid-core` 0.1.0-beta.3. No byte a 0.2.0
-encoder wrote is read differently, and no Contract document or identity moved.
+encoder wrote decodes to a different value (only where the resource limits
+fall has moved, in either entry), and no Contract document or identity moved.
 
 ### `schemaFromContract` refuses the Contract documents candid-core refuses
 
@@ -110,9 +117,8 @@ and fixture in the repository is loaded by the suite to show it.
   decoding it, as malformed JSON.
 - **Unchanged:** a document without a `declarations` key is still refused
   (`invalid_contract_document` at `$.declarations`), although
-  `Contract::from_json` defaults the key to empty; whether an absent key is
-  part of the format is still open, and this may change before 1.0.
-  candid-core always writes the key.
+  `Contract::from_json` defaults the key to empty. The refusal is kept by
+  decision: candid-core always writes the key.
 
 ### A thrown value whose prototype cannot be read no longer escapes the codec
 
@@ -166,7 +172,8 @@ bullet).
 ### A `rec` hop no longer counts against `maxDepth` or `maxElements`
 
 `validate`, `encode` and `decode` used to charge every `rec` hop one depth
-step and one element (issue #231, found by the #196 differential fuzz).
+step and one element (found by the differential fuzz that compares this
+runtime with candid-core).
 `schemaFromContract` makes every type reference a hop, and a generated module
 every reference to a declaration, so a recursive value reached the default
 `maxDepth` at about 128 levels and `maxElements` at about 500,000 elements —
@@ -191,7 +198,8 @@ schema's longest hop chain (see the last bullet but one).
   already did; `validate` and `encode` charge it no element (it is spelled by
   absence, and the examined `tag` key is charged as before). Before, the
   arm's `rec` hop stood in for it, and an arm built with no `rec` was not
-  checked. **This refuses one input that was accepted before:** a value
+  checked. **BREAKING (input): this refuses one input that was accepted
+  before:** a value
   whose tag-only variant sits at exactly `maxDepth` with no `rec` on the
   path from the root to it. Such a path is not only hand-built: a generated
   module writes a method's argument and result types inline, with no
@@ -205,7 +213,8 @@ schema's longest hop chain (see the last bullet but one).
   expected type is `opt`, `null` or `reserved`, `decode` supplies `null`;
   it now charges that `null` one depth check at the field's own level and
   one element, as it charges the same `null` read from the wire. Before, it
-  charged nothing. **This refuses input `decode` accepted before:** a record
+  charged nothing. **BREAKING (input): this refuses input `decode` accepted
+  before:** a record
   at exactly `maxDepth` whose message omits such a field (the field's `null`
   one level past the bound, now `value_depth` at the field's path), and a
   message whose omitted fields take it past `maxElements` (now
@@ -241,18 +250,21 @@ schema's longest hop chain (see the last bullet but one).
   where the element charge stopped it at `maxElements` before.
 - **Unchanged:** every issue code, the `stack` refusal for user code that
   overflows the host stack, the examined-record-key element charge,
-  `encode`'s type-table depth charge (#192), and the work bound: a hostile
+  `encode`'s type-table depth charge, and the work bound: a hostile
   nesting is still refused after work proportional to `maxDepth`. An
   `opt`-only cycle (`type T = opt T`) read from a non-`opt` wire value still
   terminates, now through each `opt`'s own depth step.
 
 ### The declarations
 
-- `schema.d.ts` grows from 640 lines to 732 since 0.2.0, all of it in
+- `schema.d.ts` grows from 640 lines to 734 since 0.2.0: 92 of them in
   0.3.0-beta.1, with the documentation of the new `Principal`, `principal()`,
-  `isPrincipal()`, `OptDomain` and `isBoxedOpt`. Every shipped declaration
-  still stands on its own, with no internal issue number, and compiles under
-  strict TypeScript without `skipLibCheck`.
+  `isPrincipal()`, `OptDomain` and `isBoxedOpt`, and two in this release,
+  where the `c.rec` documentation now says a hop charges no budget. No
+  declaration changed in the `rec` hop change above: only documentation
+  comments in `schema.d.ts`, `validate.d.ts` and `codec.d.ts` moved. Every
+  shipped declaration still stands on its own, with no internal issue
+  number, and compiles under strict TypeScript without `skipLibCheck`.
 
 ## 0.3.0-beta.1 — 2026-10-02
 

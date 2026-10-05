@@ -19,11 +19,16 @@ version.
 Embeds `candid-core` 0.1.0-beta.3 and the `candid-core-ts` generator from the
 same repository commit the release is dispatched from; the release record
 names the exact SHA. That commit's `candid-core` source is ahead of the
-0.1.0-beta.3 archive on crates.io by two changes not yet in a crate release: a
-`.did` source may begin with one UTF-8 byte order mark, which beta.3 refuses
-with "Unknown token"; and a run of more than 256 consecutive comments between
-two tokens is refused with `resource_limit_exceeded` (below), which beta.3
-compiles up to a stack-dependent length and then aborts on. Every input both
+0.1.0-beta.3 archive on crates.io by four changes not yet in a crate release:
+a `.did` source may begin with one UTF-8 byte order mark, which beta.3 refuses
+with "Unknown token"; a run of more than 256 consecutive comments between two
+tokens is refused with `resource_limit_exceeded` (below), which beta.3
+compiles up to a stack-dependent length and then aborts on; a type on a cycle
+that passes only through `opt` is refused with `did_type_check_error`
+(below), which beta.3 compiles; and the crate's Contract JSON loaders refuse
+a struct written as a JSON array, which beta.3's loaders accept. No input of
+this package reaches the last one: `gen`, `didToContract` and `didToModule`
+read `.did` sources and never load a Contract document. Every input both
 accept compiles to the same Contract and identities, and envelopes still name
 0.1.0-beta.3 as their producer.
 
@@ -50,7 +55,8 @@ together. Every break in either is marked **BREAKING**: from 0.2.0-beta.1, the
 `$` binding layout, `$.Principal`, boxed collapsing opts, a declared primitive
 naming only itself and every `vec nat8` typed `Uint8Array`, and omission in
 place of refusal (`gen`'s exit status and `didToModule`'s result); from this
-entry, the refusal of a long comment run. JSDoc from `.did` doc comments and
+entry, the refusals of a long comment run and of a type on a cycle through
+`opt` alone. JSDoc from `.did` doc comments and
 `gen`'s several entries, `--json` and `--check` are additive. The library's
 three functions keep their names and signatures, and `lib/index.d.ts` and the
 command grammar are unchanged since 0.2.0-beta.1.
@@ -104,12 +110,15 @@ through `opt`: `type T = opt T;`, `type T = opt opt T;`,
 value that is not an `opt` at such a type unwraps `opt` without end, so no
 decoder can answer for it; a generated schema for it ended in a depth refusal.
 
-- **This refuses files that `gen` accepted before**: `gen`, `didToContract`
-  and `didToModule` report `did_type_check_error`, naming the type ("type T
-  lies on a cycle that passes only through opt; …"), through the existing
-  diagnostic path (the `{ ok: false, diagnostics }` document, or `--json`)
-  with exit status 1, and write nothing for that entry. The upstream Candid
-  checker accepts these files; the refusal is candid-core's own.
+- **BREAKING (input)**: this refuses files that `gen` accepted before:
+  `gen`, `didToContract` and `didToModule` report `did_type_check_error`,
+  naming the type ("type T lies on a cycle that passes only through opt;
+  …"), through the existing diagnostic path (the `{ ok: false,
+  diagnostics }` document, or `--json`) with exit status 1, and write nothing
+  for that entry. The upstream Candid checker accepts these files; the
+  refusal is candid-core's own. 0.1.0 refused them too, with
+  `ts_generation_refused` at generation, because each such type wraps `opt`
+  in `opt`; 0.2.0-beta.1 generates them, boxed.
 - **A cycle with any other constructor on it still compiles**: `type L = opt
   record { head : nat; tail : L }`, `type T = opt vec T`, `type T = record {
   a : opt T }`, `type T = opt variant { a : T }`.
