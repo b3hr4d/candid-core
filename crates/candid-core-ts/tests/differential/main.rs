@@ -147,7 +147,8 @@ const VALIDATE_DEPTH: usize = 127;
 /// (`numeric_*_groups`), `maxDepth` on the decoded
 /// variant, opt, record and vec chains, coercion-inserted `opt`s, the skip of
 /// an extra field, an absorbed value, an expected `reserved` argument and
-/// field, an extra argument and a record nested in a skipped value, and on
+/// field, an extra argument (vec, opt and variant chains) and a record nested
+/// in a skipped value, and on
 /// validate's vec, variant, record, tuple and opt chains; and `maxElements`
 /// for a skipped vec (of `null`, of a variant, of a non-empty record), a
 /// decoded vec of `null`, a blob and a decoded vec of mixed elements (record,

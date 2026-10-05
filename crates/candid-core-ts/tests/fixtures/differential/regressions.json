@@ -1163,6 +1163,44 @@
       "hex": "4449444c026d016c0161000101(01*128)00"
     },
     {
+      "name": "skip_extra_arg_opt_257_levels",
+      "target": "decode",
+      "note": "An extra argument of wire type O = opt O, 256 present levels and the innermost absent (257 levels): the skip walk follows each present opt one depth step down, so the innermost opt is charged 256 depth steps (measured), exactly the runtime's maxDepth.",
+      "origin": "written for the issue #196 review, fix round 3",
+      "agrees": "Both accept: exactly at the runtime's maxDepth (256 steps) on the skip path of an opt.",
+      "did": "type O = opt O;\n",
+      "expected": [],
+      "hex": "4449444c016e000100(01*256)00"
+    },
+    {
+      "name": "skip_extra_arg_opt_258_levels",
+      "target": "decode",
+      "note": "skip_extra_arg_opt_257_levels one level deeper: the innermost skipped opt costs 257 steps (measured), one past maxDepth; the runtime refuses (value_depth), the reference, which has no depth budget, accepts (#103, scope item 3: an explicit recursion depth limit; no rec hop on this path).",
+      "origin": "written for the issue #196 review, fix round 3",
+      "did": "type O = opt O;\n",
+      "expected": [],
+      "hex": "4449444c016e000100(01*257)00"
+    },
+    {
+      "name": "skip_extra_arg_variant_257_levels",
+      "target": "decode",
+      "note": "An extra argument of wire type V = variant { a : V; b }, 256 variants down the a arm and the last on b (257 levels with its null): the skip walk follows each arm one depth step down, so the null is charged 256 depth steps (measured), exactly the runtime's maxDepth.",
+      "origin": "written for the issue #196 review, fix round 3",
+      "agrees": "Both accept: exactly at the runtime's maxDepth (256 steps) on the skip path of a variant arm.",
+      "did": "type V = variant { a : V; b };\n",
+      "expected": [],
+      "hex": "4449444c016b026100627f0100(00*255)01"
+    },
+    {
+      "name": "skip_extra_arg_variant_258_levels",
+      "target": "decode",
+      "note": "skip_extra_arg_variant_257_levels one level deeper: the null costs 257 steps (measured), one past maxDepth; the runtime refuses (value_depth), the reference, which has no depth budget, accepts (#103, scope item 3: an explicit recursion depth limit; no rec hop on this path).",
+      "origin": "written for the issue #196 review, fix round 3",
+      "did": "type V = variant { a : V; b };\n",
+      "expected": [],
+      "hex": "4449444c016b026100627f0100(00*256)01"
+    },
+    {
       "name": "depth_reserved_field_vec_254_levels",
       "target": "decode",
       "note": "A wire record { a : W }, W = vec W nested 254 levels (the innermost empty), read at S = record { a : reserved }: the reserved field absorbs the wire value and the decoder skips it below the field's rec hop, one step per wire level, so the innermost vec is charged 256 depth steps (measured), exactly the runtime's maxDepth.",
