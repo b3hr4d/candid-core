@@ -611,8 +611,8 @@ pub const DEEP_KINDS: usize = DEEP_SHAPES.len() + 1;
 /// A deep environment of a chosen kind (the committed corpus cycles through
 /// them, so every shape and a chain appear whatever the seeds draw): shape
 /// `kind` of `DEEP_SHAPES`, or for `kind == DEEP_SHAPES.len()` a chain of
-/// 129 to 255 constructors, a type table deeper than the runtime's depth
-/// bound (values stop below it).
+/// 129 to 255 constructors, a type table deeper than the generation bound
+/// (`wire::GEN_LEVELS`; values stop below it).
 pub fn deep_env_of_kind(rng: &mut Rng, kind: usize) -> Env {
     match DEEP_SHAPES.get(kind) {
         Some(shape) => shape_env(shape),

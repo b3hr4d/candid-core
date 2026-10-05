@@ -8,8 +8,9 @@
 //   environment's envelope, against the `candid` crate's
 //   `IDLArgs::from_bytes_with_types`;
 // - validate: `validate` on a rebuilt JavaScript value, against candid-core's
-//   `validate_host_value` (its `max_value_depth` aligned with this runtime's
-//   depth budget) on the HostValue that value converts to;
+//   `validate_host_value` (under its default limits, whose `max_value_depth`
+//   this runtime's depth budget mirrors) on the HostValue that value converts
+//   to;
 // - contract: `schemaFromContract` on an edited Contract document, against
 //   `Contract::from_json` on the same graph.
 //
@@ -68,7 +69,7 @@
 //
 // For validate and contract, two refusals agree whatever their codes (the
 // two vocabularies have no class map), except a limit refusal: the
-// reference's validate budgets (`value_depth`, aligned, and `value_elements`)
+// reference's validate budgets (`value_depth` and `value_elements`)
 // are verdicts, so a `resource_limit_exceeded` refusal agrees only with the
 // reference's refusal on the same resource, and with nothing else.
 

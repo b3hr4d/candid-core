@@ -11,9 +11,9 @@
 //!   `wire.rs`); the TypeScript runner feeds the bytes to `decodeArgs` with
 //!   schemas `schemaFromContract` builds from the same declarations;
 //! - **validate** — a JavaScript domain value converted to a HostValue and
-//!   judged by `validate_host_value` (see `host.rs`) under limits aligned
-//!   with the runtime's depth budget (`VALIDATE_DEPTH`); the runner calls
-//!   `validate` with the same value;
+//!   judged by `validate_host_value` (see `host.rs`) under the default
+//!   limits, whose value depth the runtime's depth budget mirrors
+//!   (`VALIDATE_DEPTH`); the runner calls `validate` with the same value;
 //! - **contract** — a compiled Contract document edited by JSON operations
 //!   and judged by `Contract::from_json` (see `contract.rs`); the runner calls
 //!   `schemaFromContract` on the same edited document.
@@ -23,7 +23,7 @@
 //! TypeScript side loads comes from candid-core's compiler over the same text.
 //! Deep environments (`types::deep_env`: recursive shapes and declaration
 //! chains) add decode and validate cases whose values nest close to the
-//! runtime's depth bound. A drafted environment either side refuses, or one
+//! generation bound (`wire::GEN_LEVELS`), half the runtime's depth bound. A drafted environment either side refuses, or one
 //! holding an `opt`-only cycle (`wire::opt_cycle`), is redrawn, and the corpus
 //! header counts redraws by reason.
 //!
@@ -121,19 +121,14 @@ const CORPUS_SEEDS: Seeds = Seeds {
 const DEEP_SALT: u64 = 0xdee9_0000_0000_0000;
 
 /// The value depth the reference's HostValue validator is configured with:
-/// the runtime's `validate` refuses the first node at Candid level 128 under
-/// its default `maxDepth` of 256 (a Contract-loaded schema charges a `rec`
-/// hop and a constructor per level, issue #231), and
-/// `validate_host_value` refuses the first node past level `max_value_depth`,
-/// so 127 makes the two budgets the same for every node the runtime steps
-/// on. The one place they still differ is a variant arm whose payload is
-/// `null`: the runtime charges the arm's `rec` hop but never steps on the
-/// `null`, the reference charges the `null` as a node one level down, so
-/// such an arm 128 levels down is accepted there and refused here. Random
-/// generation stays below that level (`wire::GEN_LEVELS`), and an exact
-/// vector pins it (`validate_depth_variant_null_128_levels`, listed with
-/// #231).
-const VALIDATE_DEPTH: usize = 127;
+/// `Limits::default()`'s `max_value_depth`, 256. The runtime's `validate`
+/// counts depth as `validate_host_value` does (issue #231): the root at 0,
+/// each constructor's children one below it, a variant's `null` payload
+/// included, and a `rec` hop not at all, so both refuse the first node past
+/// level 256 under their defaults. Random generation stays far below it
+/// (`wire::GEN_LEVELS`), and exact vectors pin it on validate's vec,
+/// variant, record, tuple and opt chains (`validate_depth_*`).
+const VALIDATE_DEPTH: usize = 256;
 
 /// The runtime's default budgets, as the corpus header states them: the
 /// TypeScript suite checks them against `codec.ts`'s and `validate.ts`'s
@@ -486,13 +481,13 @@ fn host_levels(host: &Value) -> usize {
 }
 
 /// The reference verdict for one validate case: `validate_host_value` under
-/// `Limits::default()` with `max_value_depth` aligned to the runtime's depth
-/// budget (`VALIDATE_DEPTH`). Its two value budgets are verdicts, compared
-/// exactly with the runtime's refusals on the same resource: `value_depth`
-/// (aligned) and `value_elements` (`max_value_elements`, 1,000,000, the
-/// runtime's documented `maxElements`; the runtime also charges each `rec` hop
-/// and examined record key, so the two counts differ, and exact vectors pin
-/// where: `validate_elements_*`). A refusal on any other budget of the
+/// `Limits::default()`, `max_value_depth` stated as `VALIDATE_DEPTH`. Its two
+/// value budgets are verdicts, compared exactly with the runtime's refusals
+/// on the same resource: `value_depth` (the same count on both sides) and
+/// `value_elements` (`max_value_elements`, 1,000,000, the runtime's
+/// documented `maxElements`; the runtime also charges each examined record
+/// key, so the two counts differ on records, and exact vectors pin where:
+/// `validate_elements_*`). A refusal on any other budget of the
 /// reference (or of the HostValue constructors) is `inconclusive`.
 fn host_verdict(built: &Built, name: &str, host: &Value) -> Value {
     let limits = candid_core::Limits::default();
