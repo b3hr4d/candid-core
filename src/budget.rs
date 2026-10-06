@@ -255,8 +255,11 @@ enum Frame {
 ///   of one of [`OBJECT_KEYS`]; one at any other key is refused.
 ///
 /// A format change that adds an array-valued or object-valued key fails every
-/// document that uses it until the key is listed here; one that adds a unit
-/// enum at a new key is covered without editing either list.
+/// document that uses it until the key is listed here. One that adds a unit
+/// enum as the value of a new key, not named like a key in `OBJECT_KEYS`, is
+/// covered without editing either list. A unit enum inside an array, or at a
+/// key named like one in `OBJECT_KEYS`, is not: the scan allows any object
+/// there, so such a change needs its own check.
 ///
 /// The values of `opaque_root_keys` (the envelope's `extensions`, which are
 /// arbitrary JSON) are skipped. Documents that fail the typed decode keep the
