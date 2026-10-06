@@ -278,6 +278,13 @@ required-features = ["compiler"]
 name = "struct_sequence_form"
 required-features = ["compiler"]
 
+# Every unit-variant position of the documents the bounded loaders read,
+# written in serde's map form (#238); the `validate` command case inside is
+# gated on `filesystem-compiler`.
+[[test]]
+name = "unit_variant_map_form"
+required-features = ["compiler"]
+
 # Installs its own counting global allocator to measure what the type-depth
 # guard walks retain, so it must stay its own binary: the counters are process
 # globals and any other suite compiled beside them would perturb the

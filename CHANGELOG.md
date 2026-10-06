@@ -178,6 +178,44 @@ and therefore the identities computed over them. Pin an exact version.
   `tests/struct_sequence_form.rs` pins each position and each loader entry
   point.
 
+- **A unit variant written as a JSON map is refused** ([issue #238]). Serde's
+  derived `Deserialize` also reads a unit variant of an externally tagged enum
+  written as a map from the variant's name to a unit, so `Contract::from_json`
+  accepted a primitive node written `"primitive": {"nat": null}` instead of
+  `"primitive": "nat"`, and a func's `"mode": {"query": null}`, which
+  `@candid-core/schema`'s `schemaFromContract` refuses. Inside a type node,
+  whose fields serde buffers before it reads them, `{"nat": {}}` was read as
+  well. The format writes every unit variant as a string. The bounded loaders
+  now refuse the map form at every unit-variant position: a type node's
+  `primitive` and a func's `mode`, in the Contract and in the `contract` of an
+  envelope or a Compilation, and an import's `kind` and a function argument's
+  `direction` in the Compilation's `source_info`. The error is the one a value
+  of the wrong type gets, `ContractJsonError::MalformedJson`
+  (`malformed_contract_json` from `candid-core validate`), with the message
+  `invalid type: map, expected a string at <path>, line <l> column <c>`, such
+  as `$.types[1].primitive`. Every other map spelling at those positions
+  (`{"nat": []}`, `{"nat": 0}`, `{}`, two entries, an unknown name) was
+  already refused by the decode and keeps the decode's own error.
+
+  **This refuses input that loaded before**: a document with a unit variant
+  written as a map fails the same loaders as above (`Contract`'s five,
+  `ContractEnvelope`'s and `Compilation`'s four each) and `candid-core
+  validate`. Write the string. Every document candid-core writes,
+  `0.1.0-beta.3`'s included, writes the string and loads exactly as before,
+  with the same identities. The serde DTOs themselves still read the map form
+  when a caller decodes them with serde directly. No public API, error
+  variant, code, or serialized shape changed.
+
+  The check is the same forward pass as the struct-as-array one, which now
+  also allows an object only at the root, inside an array, or as the value of
+  one of the format's object-valued keys (`identities`, `producer`, `actor`,
+  `contract`, `extensions`, `source_info`, `origin`, `label`), and refuses one
+  anywhere else. It stays linear in the input's length, with an explicit
+  stack, and allocates as before: one frame per open object or array, plus a
+  short-lived string for each key written with an escape.
+  `tests/unit_variant_map_form.rs` pins each position in each spelling and
+  each loader entry point.
+
 ## 0.1.0-beta.3 — published 2026-08-24
 
 The third prerelease, and the first that carries a fix for a defect in an
@@ -551,3 +589,4 @@ have seen them:
 [issue #219]: https://github.com/b3hr4d/candid-core/issues/219
 [issue #234]: https://github.com/b3hr4d/candid-core/issues/234
 [issue #235]: https://github.com/b3hr4d/candid-core/issues/235
+[issue #238]: https://github.com/b3hr4d/candid-core/issues/238

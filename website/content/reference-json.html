@@ -33,6 +33,16 @@
     <code>types</code> and <code>fields</code>, and extension values, which are free-form.
   </li>
   <li>
+    <strong>Every enum value is a string.</strong> serde's derive would also read a unit variant
+    written as a map from its name, such as a primitive as <code>{"nat": null}</code> or
+    <code>{"nat": {}}</code> instead of <code>"nat"</code>, or a func's mode as
+    <code>{"query": null}</code>. The format does not admit that form either: the Rust loaders
+    refuse it as malformed JSON, <code>invalid type: map, expected a string at</code> the map's path,
+    and <code>schemaFromContract</code> refuses it too. Objects are only the document, the
+    elements of its lists, and the format's own object-valued keys, such as <code>identities</code>,
+    <code>producer</code> and <code>actor</code>.
+  </li>
+  <li>
     <strong>Absence is an omitted key, not <code>null</code>.</strong> An actorless Contract has no
     <code>actor</code> property at all; an explicit <code>"actor": null</code> is a decode error, not
     a second spelling of absence. The same holds for <code>identities.interface</code> and an
