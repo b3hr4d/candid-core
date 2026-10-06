@@ -634,9 +634,12 @@ impl ContractDraft {
 /// Decoding this DTO is *not* a trust boundary and carries no allocation
 /// bound; gate the byte length yourself, or use the bounded parse APIs.
 /// Serde's derive also reads each struct here in sequence form, as an array
-/// of its field values in declaration order; the Contract format writes every
-/// struct as an object, and the bounded parse APIs refuse the array form
-/// (issue #235).
+/// of its field values in declaration order, and each unit variant (a
+/// [`PrimitiveType`](crate::PrimitiveType), a
+/// [`MethodMode`](crate::MethodMode)) in map form, as `{"nat": null}` or,
+/// inside a [`TypeNode`], `{"nat": {}}`. The Contract format writes every
+/// struct as an object and every unit variant as a string, and the bounded
+/// parse APIs refuse the other forms (issues #235 and #238).
 ///
 /// This type is reserved for artifacts that already carry format markers and
 /// identities: [`Contract::try_from_raw`] verifies the supplied identities

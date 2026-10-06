@@ -142,13 +142,13 @@ pub(crate) fn observe_input_bytes(
         .map_err(BudgetError::into_contract_error)
 }
 
-/// Gate input length, decode a raw DTO, refuse a struct written as a JSON
-/// array, then checkpoint — the shared shape of every bounded parse entry
-/// point.
+/// Gate input length, decode a raw DTO, refuse serde's alternate forms (a
+/// struct written as a JSON array, a unit variant written as a map), then
+/// checkpoint — the shared shape of every bounded parse entry point.
 ///
 /// `opaque_root_keys` names the root keys whose values are free-form JSON
 /// rather than part of the closed format (the envelope's `extensions`); see
-/// [`refuse_struct_sequences`].
+/// [`refuse_alternate_forms`].
 ///
 /// The caller keeps the budget afterwards so validation charges the same
 /// counters the decode gate already observed, rather than starting from a
@@ -162,7 +162,7 @@ pub(crate) fn decode_bounded<T>(
     observe_input_bytes(budget, input.len()).map_err(crate::ContractJsonError::InvalidContract)?;
     let raw =
         decode().map_err(|error| crate::ContractJsonError::MalformedJson(error.to_string()))?;
-    refuse_struct_sequences(input, opaque_root_keys)
+    refuse_alternate_forms(input, opaque_root_keys)
         .map_err(crate::ContractJsonError::MalformedJson)?;
     budget
         .checkpoint()
@@ -194,6 +194,23 @@ const ARRAY_KEYS: &[&str] = &[
     "docs",
 ];
 
+/// The keys whose value is a JSON object in a document the bounded loaders
+/// read: the Contract's (`identities`, `producer`, `actor`), the envelope's
+/// (`contract`, `extensions`), the Compilation's (`contract`, `source_info`)
+/// and the `SourceInfo` sidecar's (an entry's `origin` and `label`). Every
+/// other object in those formats is the document itself or an element of one
+/// of [`ARRAY_KEYS`]; every other key holds a string, a number, or an array.
+const OBJECT_KEYS: &[&str] = &[
+    "identities",
+    "producer",
+    "actor",
+    "contract",
+    "extensions",
+    "source_info",
+    "origin",
+    "label",
+];
+
 enum Frame {
     /// An object; `key` is where the raw bytes of the key whose value comes
     /// next (or came last) sit in the input, between its quotes.
@@ -205,27 +222,44 @@ enum Frame {
     Array { index: usize },
 }
 
-/// Refuse serde's sequence form of a struct: a JSON array where the format
-/// has an object (issue #235).
+/// Refuse the two spellings serde's derive reads that the format does not
+/// have: a struct written as a JSON array (issue #235), and a unit variant
+/// written as a JSON object (issue #238).
 ///
 /// Serde's derived `Deserialize` accepts a struct written as an array of its
 /// field values in declaration order, and so does an internally tagged enum
 /// (`["primitive", "nat"]` for a type node), at every depth, because the
 /// buffered content of a tagged enum is replayed through serde's own content
-/// deserializer. The Contract format is objects only: candid-core writes
-/// nothing else, the DTOs deny unknown keys, and `@candid-core/schema`'s
-/// `schemaFromContract` refuses the array form. So the bounded loaders refuse
-/// it too, with the error a value of the wrong type gets.
+/// deserializer. It also accepts a unit variant of an externally tagged enum
+/// (a primitive type, a func's `mode`, an import's `kind`, an argument's
+/// `direction`) written as a map from the variant's name to a unit:
+/// `{"nat": null}`, and, inside a tagged enum's buffered content,
+/// `{"nat": {}}`. The Contract format writes every struct as an object and
+/// every unit variant as a string: candid-core writes nothing else, the DTOs
+/// deny unknown keys, and `@candid-core/schema`'s `schemaFromContract`
+/// refuses both forms. So the bounded loaders refuse them too, with the error
+/// a value of the wrong type gets.
 ///
 /// This runs only on a document the typed decode has just accepted, which
 /// fixes its shape: it is well-formed JSON, every key is one its DTO names,
-/// and the only arrays in it are the values of [`ARRAY_KEYS`] or a struct (or
-/// a tagged enum) in sequence form. The rule is therefore positional and
-/// knows no struct: an array is allowed only as the value of one of those
-/// keys; one at the root, one inside another array, or one at any other key
-/// is refused. A format change that adds a struct-valued key is covered
-/// without editing this list; one that adds an array-valued key fails every
-/// document that uses it until the key is listed here.
+/// the only arrays in it are the values of [`ARRAY_KEYS`] or a struct (or a
+/// tagged enum) in sequence form, and the only objects in it are the
+/// document, the elements of those arrays, the values of [`OBJECT_KEYS`], or
+/// a unit variant in map form (serde reads no other string, number, or array
+/// position from a map). The rule is therefore positional and knows no
+/// struct:
+///
+/// - an array is allowed only as the value of one of [`ARRAY_KEYS`]; one at
+///   the root, one inside another array, or one at any other key is refused;
+/// - an object is allowed only at the root, inside an array, or as the value
+///   of one of [`OBJECT_KEYS`]; one at any other key is refused.
+///
+/// A format change that adds an array-valued or object-valued key fails every
+/// document that uses it until the key is listed here. One that adds a unit
+/// enum as the value of a new key, not named like a key in `OBJECT_KEYS`, is
+/// covered without editing either list. A unit enum inside an array, or at a
+/// key named like one in `OBJECT_KEYS`, is not: the scan allows any object
+/// there, so such a change needs its own check.
 ///
 /// The values of `opaque_root_keys` (the envelope's `extensions`, which are
 /// arbitrary JSON) are skipped. Documents that fail the typed decode keep the
@@ -234,7 +268,7 @@ enum Frame {
 /// One forward pass with an explicit stack (ADR 0005): no recursion. It
 /// allocates one frame per open object or array, plus a short-lived string for
 /// each key written with an escape, which it decodes as serde does.
-fn refuse_struct_sequences(input: &[u8], opaque_root_keys: &[&str]) -> Result<(), String> {
+fn refuse_alternate_forms(input: &[u8], opaque_root_keys: &[&str]) -> Result<(), String> {
     let mut stack: Vec<Frame> = Vec::new();
     // Depth inside an opaque value; zero outside one.
     let mut opaque_depth = 0usize;
@@ -266,6 +300,14 @@ fn refuse_struct_sequences(input: &[u8], opaque_root_keys: &[&str]) -> Result<()
                 }
                 if opaque_depth == 0 {
                     if open == b'{' {
+                        if !object_allowed(input, stack.last()) {
+                            return Err(wrong_type_error(
+                                "map, expected a string",
+                                input,
+                                &stack,
+                                at,
+                            ));
+                        }
                         stack.push(Frame::Object {
                             key: 0..0,
                             awaiting_key: true,
@@ -273,7 +315,12 @@ fn refuse_struct_sequences(input: &[u8], opaque_root_keys: &[&str]) -> Result<()
                     } else if array_allowed(input, stack.last()) {
                         stack.push(Frame::Array { index: 0 });
                     } else {
-                        return Err(sequence_error(input, &stack, at));
+                        return Err(wrong_type_error(
+                            "sequence, expected an object",
+                            input,
+                            &stack,
+                            at,
+                        ));
                     }
                 }
             }
@@ -304,6 +351,17 @@ fn array_allowed(input: &[u8], parent: Option<&Frame>) -> bool {
             .iter()
             .any(|name| key_is(input, key.clone(), name)),
         None | Some(Frame::Array { .. }) => false,
+    }
+}
+
+/// Whether an object may stand in `parent` (`None`: at the root): at the
+/// root, inside an array, or as the value of one of [`OBJECT_KEYS`].
+fn object_allowed(input: &[u8], parent: Option<&Frame>) -> bool {
+    match parent {
+        Some(Frame::Object { key, .. }) => OBJECT_KEYS
+            .iter()
+            .any(|name| key_is(input, key.clone(), name)),
+        None | Some(Frame::Array { .. }) => true,
     }
 }
 
@@ -339,10 +397,10 @@ fn decode_key(input: &[u8], key: Range<usize>) -> Option<String> {
     serde_json::from_slice(quoted).ok()
 }
 
-/// The error a JSON array where an object belongs gets: the class serde gives
-/// a value of the wrong type (`invalid type: …`), the `$`-rooted path of the
-/// array, and serde's line and column of its opening bracket.
-fn sequence_error(input: &[u8], stack: &[Frame], at: usize) -> String {
+/// The error a value of the wrong type gets: the class serde gives one
+/// (`invalid type: <what>`), the `$`-rooted path of the value, and serde's
+/// line and column of its opening bracket or brace.
+fn wrong_type_error(what: &str, input: &[u8], stack: &[Frame], at: usize) -> String {
     let mut path = String::from("$");
     for frame in stack {
         match frame {
@@ -378,7 +436,7 @@ fn sequence_error(input: &[u8], stack: &[Frame], at: usize) -> String {
             .rposition(|byte| *byte == b'\n')
             .map_or(0, |n| n + 1)
         + 1;
-    format!("invalid type: sequence, expected an object at {path}, line {line} column {column}")
+    format!("invalid type: {what} at {path}, line {line} column {column}")
 }
 
 impl BudgetError {
@@ -565,10 +623,10 @@ mod tests {
 /// `tests/struct_sequence_form.rs`.
 #[cfg(test)]
 mod struct_sequence_tests {
-    use super::refuse_struct_sequences;
+    use super::refuse_alternate_forms;
 
     fn refused_at(input: &str, opaque: &[&str]) -> Option<String> {
-        refuse_struct_sequences(input.as_bytes(), opaque)
+        refuse_alternate_forms(input.as_bytes(), opaque)
             .err()
             .map(|message| {
                 let rest = message
@@ -636,10 +694,120 @@ mod struct_sequence_tests {
     #[test]
     fn line_and_column_name_the_opening_bracket() {
         let message =
-            refuse_struct_sequences(b"{\n  \"identities\": [\"x\"]\n}", &[]).expect_err("refused");
+            refuse_alternate_forms(b"{\n  \"identities\": [\"x\"]\n}", &[]).expect_err("refused");
         assert!(
             message.ends_with("at $.identities, line 2 column 17"),
             "{message}"
+        );
+    }
+}
+
+/// The scan's object rule on its own, in every feature configuration; the
+/// unit-variant positions of each loader's documents are pinned end to end in
+/// `tests/unit_variant_map_form.rs`.
+#[cfg(test)]
+mod unit_variant_map_tests {
+    use super::refuse_alternate_forms;
+
+    fn refused_at(input: &str, opaque: &[&str]) -> Option<String> {
+        refuse_alternate_forms(input.as_bytes(), opaque)
+            .err()
+            .map(|message| {
+                let rest = message
+                    .strip_prefix("invalid type: map, expected a string at ")
+                    .unwrap_or_else(|| panic!("the wrong-type class: {message}"));
+                rest[..rest.find(", line ").expect("a line")].to_string()
+            })
+    }
+
+    #[test]
+    fn objects_stand_at_the_root_in_arrays_and_at_the_formats_object_keys() {
+        let contract = r#"{"identities":{"contract":"c"},"producer":{"name":"n"},
+            "types":[{"kind":"primitive","primitive":"nat"},
+                     {"kind":"func","args":[],"results":[],"mode":"query"}],
+            "declarations":[{"name":"T","type":0}],"actor":{"kind":"service","service":0}}"#;
+        assert_eq!(refused_at(contract, &[]), None);
+        let compilation = r#"{"contract":{"types":[]},"source_info":{
+            "field_labels":[{"origin":{"kind":"actor","source":"a"},"label":{"kind":"numeric"}}],
+            "imports":[{"kind":"type"}],"function_arguments":[{"direction":"result"}]}}"#;
+        assert_eq!(refused_at(compilation, &[]), None);
+        assert_eq!(refused_at("{}", &[]), None);
+    }
+
+    #[test]
+    fn an_object_at_any_other_key_is_refused() {
+        for (input, path) in [
+            (
+                r#"{"types":[{"primitive":{"nat":null}}]}"#,
+                "$.types[0].primitive",
+            ),
+            (
+                r#"{"types":[{"primitive":{"nat":{}}}]}"#,
+                "$.types[0].primitive",
+            ),
+            (
+                r#"{"types":[{},{"mode":{"query":null}}]}"#,
+                "$.types[1].mode",
+            ),
+            (
+                r#"{"source_info":{"imports":[{"kind":{"type":null}}]}}"#,
+                "$.source_info.imports[0].kind",
+            ),
+            (
+                r#"{"source_info":{"function_arguments":[{"direction":{"argument":null}}]}}"#,
+                "$.source_info.function_arguments[0].direction",
+            ),
+            (r#"{"format":{}}"#, "$.format"),
+            (r#"{"a b":{}}"#, r#"$["a b"]"#),
+        ] {
+            assert_eq!(refused_at(input, &[]), Some(path.to_string()), "{input}");
+        }
+    }
+
+    #[test]
+    fn keys_are_read_as_serde_reads_them() {
+        // An escaped object key still holds its object; an escaped unit key
+        // still refuses one.
+        assert_eq!(refused_at(r#"{"producer":{"name":"n"}}"#, &[]), None);
+        assert_eq!(
+            refused_at(r#"{"types":[{"mode":{"query":null}}]}"#, &[]),
+            Some("$.types[0].mode".to_string())
+        );
+        // Braces inside strings are text.
+        assert_eq!(
+            refused_at(r#"{"types":[{"primitive":"{\"nat\":{}}"}]}"#, &[]),
+            None
+        );
+    }
+
+    #[test]
+    fn opaque_root_values_are_skipped() {
+        let envelope = r#"{"contract":{"types":[]},"extensions":{"a/v1":{"mode":{"x":{}}}}}"#;
+        assert_eq!(refused_at(envelope, &["extensions"]), None);
+        assert_eq!(
+            refused_at(envelope, &[]),
+            Some(r#"$.extensions["a/v1"]"#.to_string())
+        );
+        // The scan resumes after the opaque value closes.
+        assert_eq!(
+            refused_at(
+                r#"{"extensions":{"x":{}},"contract":{"types":[{"mode":{"oneway":null}}]}}"#,
+                &["extensions"]
+            ),
+            Some("$.contract.types[0].mode".to_string())
+        );
+    }
+
+    #[test]
+    fn line_and_column_name_the_opening_brace() {
+        let message = refuse_alternate_forms(
+            b"{\n  \"types\": [\n    {\"primitive\": {\"nat\": null}}\n  ]\n}",
+            &[],
+        )
+        .expect_err("refused");
+        assert_eq!(
+            message,
+            "invalid type: map, expected a string at $.types[0].primitive, line 3 column 19"
         );
     }
 }
