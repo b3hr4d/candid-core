@@ -163,6 +163,33 @@
       "agrees": "Both refuse since #235: the Rust loaders refuse a struct written as a JSON array (invalid type: sequence), as schemaFromContract does."
     },
     {
+      "name": "contract_primitive_as_map",
+      "target": "contract",
+      "note": "A primitive node whose primitive is written as a JSON map, serde's externally tagged form of a unit variant, the issue's first spelling. Contract::from_json accepted it; schemaFromContract refuses it (invalid_contract_document, unknown primitive type); Contract::from_json refuses it too since #238.",
+      "origin": "written by hand from #238's repro",
+      "did": "type R = record { a : nat; b : nat };\n",
+      "ops": [{"op": "set", "path": ["types", 1, "primitive"], "value": {"nat": null}}],
+      "agrees": "Both refuse since #238: the Rust loaders refuse a unit variant written as a JSON map (invalid type: map), as schemaFromContract does."
+    },
+    {
+      "name": "contract_primitive_as_map_of_empty_object",
+      "target": "contract",
+      "note": "The issue's second spelling: a primitive written as a JSON map to an empty object, which serde reads as a unit inside a tagged enum. Contract::from_json accepted it; schemaFromContract refuses it (invalid_contract_document, unknown primitive type); Contract::from_json refuses it too since #238.",
+      "origin": "written by hand from #238's repro",
+      "did": "type R = record { a : nat; b : nat };\n",
+      "ops": [{"op": "set", "path": ["types", 1, "primitive"], "value": {"nat": {}}}],
+      "agrees": "Both refuse since #238: the Rust loaders refuse a unit variant written as a JSON map (invalid type: map), as schemaFromContract does."
+    },
+    {
+      "name": "contract_mode_as_map",
+      "target": "contract",
+      "note": "A func node whose mode is written as a JSON map, serde's externally tagged form of a unit variant. Contract::from_json accepted it; schemaFromContract refuses it (invalid_contract_document, unknown method mode); Contract::from_json refuses it too since #238.",
+      "origin": "written by hand from #238's repro",
+      "did": "service : { m : () -> () query }\n",
+      "ops": [{"op": "set", "path": ["types", 1, "mode"], "value": {"query": null}}],
+      "agrees": "Both refuse since #238: the Rust loaders refuse a unit variant written as a JSON map (invalid type: map), as schemaFromContract does."
+    },
+    {
       "name": "contract_declarations_absent",
       "target": "contract",
       "note": "A Contract document with its empty declarations key removed. Contract::from_json accepts it (the key defaults to empty); schemaFromContract refuses invalid_contract_document (declarations must be an array). The owner's call (#228, item 9).",
