@@ -1,19 +1,21 @@
 <p>
   This page is for code written against the published <code>@candid-core/schema</code>
   <code>0.2.0</code> or <code>@candid-core/cli</code> <code>0.1.0</code>. Every other page on this
-  site describes the surface the repository builds now, published on 2026-10-02 as
-  <code>@candid-core/schema</code> <code>0.3.0-beta.1</code> and <code>@candid-core/cli</code>
-  <code>0.2.0-beta.1</code> under the npm <code>beta</code> dist-tag; <code>latest</code> stays on
+  site describes the surface the repository builds now, prepared as
+  <code>@candid-core/schema</code> <code>0.3.0</code> and <code>@candid-core/cli</code>
+  <code>0.2.0</code> for the npm <code>latest</code> dist-tag and not yet published. Most of it
+  was published on 2026-10-02 as <code>0.3.0-beta.1</code> and <code>0.2.0-beta.1</code> under the
+  <code>beta</code> dist-tag; until the stable pair is published, <code>latest</code> stays on
   <code>0.2.0</code> and <code>0.1.0</code>. The record of each change, with the reasoning, is
-  the <code>0.3.0-beta.1</code> entry of the
+  the <code>0.3.0</code> and <code>0.3.0-beta.1</code> entries of the
   <a href="https://github.com/b3hr4d/candid-core/blob/main/crates/candid-core-ts/ts/CHANGELOG.md"><code>@candid-core/schema</code> changelog</a>
-  and the <code>0.2.0-beta.1</code> entry of the
+  and the <code>0.2.0</code> and <code>0.2.0-beta.1</code> entries of the
   <a href="https://github.com/b3hr4d/candid-core/blob/main/crates/candid-core-wasm/npm/CHANGELOG.md"><code>@candid-core/cli</code> changelog</a>.
 </p>
 
 <p>
   Both changelogs state the compatibility non-goal in one line:
-  <code>@candid-core/schema</code> 0.3 betas break the 0.2 API (principal values are canonical text,
+  <code>@candid-core/schema</code> 0.3 breaks the 0.2 API (principal values are canonical text,
   collapsing opts are boxed, every <code>vec nat8</code> is a <code>Uint8Array</code>, generated
   modules use a new binding layout and may omit declarations, and the <code>./actor</code>, <code>./transport-icp</code>, <code>./forms</code> and
   <code>./labels</code> subpaths are gone); there is no compatibility layer.
@@ -34,16 +36,25 @@ npm install --save-dev --save-exact @candid-core/cli@beta
 
 <p>
   Keep both exact: one beta may break the next, and while the two packages move in lockstep every
-  schema beta is paired with a new CLI beta that peers it exactly. Because the peer is optional, npm
-  only warns about a mismatched pair (<code>ERESOLVE overriding peer dependency</code>); it does not
-  refuse it.
+  schema beta is paired with a new CLI beta that peers it exactly. npm refuses to install a
+  mismatched pair (<code>ERESOLVE could not resolve</code>).
+</p>
+
+<p>
+  The stable pair, <code>@candid-core/schema</code> <code>0.3.0</code> and
+  <code>@candid-core/cli</code> <code>0.2.0</code> with the CLI's peer at exactly
+  <code>0.3.0</code>, is prepared for <code>latest</code> and not yet published. Once it is, a
+  plain install selects it:
+  <code>npm install --save-exact @candid-core/schema</code> and
+  <code>npm install --save-dev --save-exact @candid-core/cli</code>. Until then those lines install
+  <code>0.2.0</code> and <code>0.1.0</code>.
 </p>
 
 <p>
   Removing published subpaths is a breaking change, so the 0.3 line is a minor: under npm's
   pre-1.0 caret rules a <code>^0.2.0</code> dependency does not select it, and moving to it is a
-  deliberate edit. Nothing on the wire moved. No byte a <code>0.2.0</code> encoder wrote is read
-  differently, and Contract JSON and every identity are untouched; what changed is the TypeScript
+  deliberate edit. Nothing on the wire moved. No byte a <code>0.2.0</code> encoder wrote decodes
+  to a different value, and Contract JSON and every identity are untouched; what changed is the TypeScript
   value shapes, the package's exports, what the generator emits, and what throws.
 </p>
 
@@ -68,6 +79,10 @@ npm install --save-dev --save-exact @candid-core/cli@beta
     <tr><td>Generated modules bind <code>$</code>-prefixed locals and carry JSDoc</td><td>Code that parses or patches generated source</td><td><a href="#generated-modules">Generated modules</a></td></tr>
     <tr><td>A declaration that cannot be represented is omitted, not refused</td><td>A script that relied on the generator's non-zero exit</td><td><a href="#omission">Omission</a></td></tr>
     <tr><td>Closed unions gain or lose a member</td><td>An exhaustive <code>switch</code> over a resource or a contract code</td><td><a href="#unions">Closed unions</a></td></tr>
+    <tr><td><code>schemaFromContract</code> refuses unknown keys, unreachable type nodes and a rootless arena</td><td>A hand-written or tool-mutated Contract document</td><td><a href="#contract-loading">Stricter Contract loading</a></td></tr>
+    <tr><td>A <code>rec</code> hop no longer counts against <code>maxDepth</code> or <code>maxElements</code></td><td>A value with a tag-only variant at exactly a caller-set <code>maxDepth</code>, or a message that omits an <code>opt</code> field at a <code>maxDepth</code> edge or past <code>maxElements</code>, which a large message reaches at the default limits</td><td><a href="#rec-hops">Resource limits</a></td></tr>
+    <tr><td>The CLI refuses a run of more than 256 consecutive comments</td><td>A <code>.did</code> with a long <code>//</code> header</td><td><a href="#comment-runs">Long comment runs</a></td></tr>
+    <tr><td>The CLI refuses a type on a cycle through <code>opt</code> alone</td><td>A script that matched on <code>ts_generation_refused</code> for it</td><td><a href="#opt-cycles">Cycles through opt</a></td></tr>
   </tbody>
 </table>
 
@@ -458,7 +473,9 @@ export { $Tokens as Tokens };
   that itself recurses too deeply, can cause it: the walkers keep their work on explicit stacks.
   Before, such an overflow was mislabelled <code>unreadable_value</code> or
   <code>unsupported_schema</code>. <code>ContractIssueCode</code> loses
-  <code>unrepresentable_option</code>, because the documents it refused now load.
+  <code>unrepresentable_option</code>, because the documents it refused now load, and gains
+  <code>unknown_key</code>, <code>orphan_type_node</code> and <code>rootless_type_arena</code>, the
+  refusals of <a href="#contract-loading">stricter Contract loading</a> below; it has 17 members.
 </p>
 
 <pre data-lang="ts" data-check-fails="TS2322@10">
@@ -488,6 +505,38 @@ function isOption(code: ContractIssueCode): boolean {
 void isOption;
 </pre>
 
+<pre data-lang="ts" data-check-fails="TS2322@24">
+import type { ContractIssueCode } from "@candid-core/schema/contract";
+
+function kind(code: ContractIssueCode): string {
+  switch (code) {
+    case "invalid_contract_document":
+    case "unsupported_contract_format":
+    case "unsupported_format_version":
+    case "unsupported_semantics_profile":
+    case "unsupported_canonicalization_profile":
+      return "format";
+    case "dangling_type_ref":
+    case "unsupported_construct":
+    case "duplicate_field_id":
+    case "duplicate_field_name":
+      return "types";
+    case "empty_declaration_name":
+    case "duplicate_declaration_name":
+    case "invalid_name_table":
+    case "invalid_extension_name":
+      return "names";
+    case "resource_limit_exceeded":
+      return "limits";
+    default: {
+      const unhandled: never = code; // 0.2.0's codes, less unrepresentable_option
+      return unhandled;
+    }
+  }
+}
+void kind;
+</pre>
+
 <pre data-lang="ts" data-check>
 import type { ResourceLimitInfo } from "@candid-core/schema/validate";
 
@@ -508,6 +557,41 @@ function describe(info: ResourceLimitInfo): string {
 void describe;
 </pre>
 
+<pre data-lang="ts" data-check>
+import type { ContractIssueCode } from "@candid-core/schema/contract";
+
+function kind(code: ContractIssueCode): string {
+  switch (code) {
+    case "invalid_contract_document":
+    case "unsupported_contract_format":
+    case "unsupported_format_version":
+    case "unsupported_semantics_profile":
+    case "unsupported_canonicalization_profile":
+    case "unknown_key":
+      return "format";
+    case "dangling_type_ref":
+    case "unsupported_construct":
+    case "duplicate_field_id":
+    case "duplicate_field_name":
+    case "orphan_type_node":
+    case "rootless_type_arena":
+      return "types";
+    case "empty_declaration_name":
+    case "duplicate_declaration_name":
+    case "invalid_name_table":
+    case "invalid_extension_name":
+      return "names";
+    case "resource_limit_exceeded":
+      return "limits";
+    default: {
+      const unhandled: never = code;
+      return unhandled;
+    }
+  }
+}
+void kind;
+</pre>
+
 <p>
   Two behaviours changed without changing a type. The limits are the only bounds on a walk:
   <code>DEFAULT_MAX_DEPTH</code> stays 256, and with <code>maxDepth</code> raised a 100,000-level value
@@ -517,6 +601,107 @@ void describe;
   accepts encodes through its generated module at the default limits, however it is split into
   declarations. <a href="schema-codec.html#the-budgets-and-what-a-caller-observes">The codec page</a>
   states both with their numbers.
+</p>
+
+<h2 id="rec-hops">Resource limits: a <code>rec</code> hop is not charged</h2>
+
+<p>
+  In <code>0.3.0</code>, <code>validate</code>, <code>encode</code> and <code>decode</code> charge a
+  value for its constructors alone. <code>0.2.0</code> and <code>0.3.0-beta.1</code> also charged every
+  <code>rec</code> hop a depth step and an element, and a Contract-loaded schema makes every type
+  reference a hop, so its values reached the default <code>maxDepth</code> at about 128 levels and
+  <code>maxElements</code> at about 500,000 elements. Now a generated, a Contract-loaded and a
+  hand-built schema of one type accept the same values, 256 levels deep at the defaults as candid-core
+  does, and 1,000,000 elements wide, where <code>validate</code> and <code>encode</code> also count
+  each record or variant key they examine. Two narrow cases are refused that were accepted:
+</p>
+
+<ul>
+  <li>
+    a tag-only variant (<code>{ tag: "a" }</code> for an arm of type <code>null</code>) sitting at exactly
+    <code>maxDepth</code>: its <code>null</code> is now a level below it in <code>validate</code> and
+    <code>encode</code>, as it already was in <code>decode</code>. At the default of 256 no type the
+    compiler accepts reaches it;
+  </li>
+  <li>
+    a message that omits an <code>opt</code>, <code>null</code> or <code>reserved</code> field: the
+    <code>null</code> that <code>decode</code> supplies is now charged at the field's own level and as one
+    element. A record at exactly a <code>maxDepth</code> you set that omits one is refused, and so is a
+    message whose omitted fields take it past <code>maxElements</code>, which can happen at the default
+    limits: a <code>vec</code> of 500,000 or more records that each omit such a field the reader
+    expects costs one element more per record, so a <code>vec record {}</code> of 500,000 elements
+    read at <code>vec record { x : opt nat }</code> is now refused. Both are refused with
+    <code>resource_limit_exceeded</code>, as <code>validate</code> refuses the same value.
+  </li>
+</ul>
+
+<p>
+  A chain of more than <code>maxDepth</code> consecutive hops is still refused with
+  <code>value_depth</code>, so with <code>maxDepth</code> set to 0 a generated module refuses a value at
+  its first declaration reference, and at 1 wherever it reaches an alias of another declaration (a
+  two-hop chain). The changelog's <code>0.3.0</code> entry lists every case.
+</p>
+
+<h2 id="contract-loading">Stricter Contract loading</h2>
+
+<p>
+  <code>schemaFromContract</code> now refuses three kinds of Contract document that 0.2.0 loaded,
+  because candid-core's own loader, <code>Contract::from_json</code>, refuses them. Every Contract and
+  envelope <code>candid-core compile</code> writes still loads exactly as before, with the same
+  schemas, <code>actor</code> and <code>omitted</code>; only a hand-written or tool-mutated document
+  is affected.
+</p>
+
+<ul>
+  <li>
+    <strong>Unknown keys</strong> (<code>unknown_key</code>, at the key's path, such as
+    <code>$.types[0].extra</code>). The root, a type node, a field or arm, a method, a declaration and
+    the actor accept only the keys the format defines for them, and a key of another node kind counts
+    as unknown, so an <code>opt</code> node carrying <code>fields</code> is refused. An unknown
+    envelope key, already refused, is now reported the same way (<code>$.format</code>), where 0.2.0
+    reported <code>invalid_contract_document</code> at <code>$</code>.
+  </li>
+  <li>
+    <strong>Unreachable type nodes</strong> (<code>orphan_type_node</code>, one issue per node at
+    <code>$.types[i]</code>): every node must be reachable from a declaration or the actor, a class
+    actor's <code>init</code> arguments included.
+  </li>
+  <li>
+    <strong>A rootless arena</strong> (<code>rootless_type_arena</code> at <code>$.types</code>): a
+    non-empty <code>types</code> with no declarations and no actor. An empty one still loads.
+  </li>
+</ul>
+
+<p>
+  A tool that writes or edits Contract documents must emit only the format's keys and drop nodes
+  nothing reaches; code that matched on <code>invalid_contract_document</code> for an unknown
+  envelope key must match <code>unknown_key</code>. The three codes are in the
+  <a href="#unions">closed union</a> above.
+</p>
+
+<h2 id="comment-runs">Long comment runs</h2>
+
+<p>
+  <code>@candid-core/cli</code> <code>0.2.0</code> refuses a <code>.did</code> file with more than 256
+  consecutive comments between two tokens, line and block comments alike, with
+  <code>resource_limit_exceeded</code> and resource <code>source_nesting</code> (limit 256), exit
+  status 1. <code>0.1.0</code> and <code>0.2.0-beta.1</code> compiled such a run up to a
+  stack-dependent length, about 2,700 to 2,800 comments, and then failed. The likely case is a license
+  header written as hundreds of <code>//</code> lines: write it as one <code>/* */</code> block, which
+  counts as one comment, or shorten it. Blank lines between comments do not end a run; any token does.
+  The CLI has no flag to raise the limit.
+</p>
+
+<h2 id="opt-cycles">Cycles through opt</h2>
+
+<p>
+  <code>@candid-core/cli</code> <code>0.2.0</code> refuses a type that lies on a cycle passing only
+  through <code>opt</code>, such as <code>type T = opt T;</code>, with <code>did_type_check_error</code>
+  naming the type, exit status 1. No decoder can answer for a value that is not an <code>opt</code> at
+  such a type. <code>0.1.0</code> refused the same files at generation, with
+  <code>ts_generation_refused</code>, because each such type wraps <code>opt</code> in
+  <code>opt</code>; <code>0.2.0-beta.1</code> generated them, boxed. A cycle with any other constructor
+  on it, such as <code>type T = opt vec T</code>, still compiles.
 </p>
 
 <h2>Order of upgrade</h2>

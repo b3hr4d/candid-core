@@ -8,27 +8,27 @@ calling a canister (transports, identity, actors) belongs to the layer you
 build on top of it ([below](#services-and-func-references)).
 
 ```sh
-npm install --save-exact @candid-core/schema@beta
+npm install --save-exact @candid-core/schema
 ```
 
 That is the whole install: no runtime dependencies and no peers, principal
 handling included ([principal values](#principal-values) below).
 
-> **A beta.** This README describes 0.3.0-beta.1, published under the npm
-> `beta` dist-tag. A plain `npm install @candid-core/schema` installs `latest`,
-> which is still 0.2.0 and has the old surface: it also exports `./actor`,
+> **0.3.0, the `latest` release.** This README describes 0.3.0. Upgrading from
+> 0.2.0 is a breaking change: 0.2.0 also exports `./actor`,
 > `./transport-icp`, `./forms` and `./labels`, declares an optional
 > `@icp-sdk/core` peer, types a principal as `{ toText(): string }`, and
 > refuses `opt opt T`, `opt null` and `opt reserved`. Keep `--save-exact`:
-> one beta may break the next, and `@candid-core/cli` pairs with exactly one
-> of them.
+> the package is pre-1.0, so any minor release may break the next, and
+> `@candid-core/cli` pairs with exactly one release of it.
 >
-> `@candid-core/schema` 0.3 betas break the 0.2 API (principal values are canonical text, collapsing opts are boxed, every `vec nat8` is a `Uint8Array`, generated modules use a new binding layout and may omit declarations, and the `./actor`, `./transport-icp`, `./forms` and `./labels` subpaths are gone); there is no compatibility layer.
+> `@candid-core/schema` 0.3 breaks the 0.2 API (principal values are canonical text, collapsing opts are boxed, every `vec nat8` is a `Uint8Array`, generated modules use a new binding layout and may omit declarations, and the `./actor`, `./transport-icp`, `./forms` and `./labels` subpaths are gone); there is no compatibility layer.
 >
-> Every change is recorded under `0.3.0-beta.1` in the
-> [changelog](./CHANGELOG.md), which ships in the tarball, and the
+> Every change since 0.2.0 is recorded under `0.3.0` and `0.3.0-beta.1` in
+> the [changelog](./CHANGELOG.md), which ships in the tarball, and the
 > [migration notes](https://b3hr4d.github.io/candid-core/migrating-from-0-2.html)
-> show each one as before and after code.
+> show what each break means for your code, with before and after code where
+> the compiler shows it.
 
 ```ts
 import { c, principal, type Infer } from "@candid-core/schema";
@@ -146,8 +146,8 @@ module and a `ContractEnvelope` document, `./generated/service.envelope.json`,
 which is byte-identical to the `compile --envelope` output below:
 
 ```sh
-# The CLI beta that pairs with this release: it peers exactly 0.3.0-beta.1.
-npx @candid-core/cli@0.2.0-beta.1 gen ./service.did -o ./generated
+# The CLI release that pairs with this one: it peers exactly 0.3.0.
+npx @candid-core/cli@0.2.0 gen ./service.did -o ./generated
 ```
 
 With the Rust crate, it is two commands. Install the compiler. `candid-core`

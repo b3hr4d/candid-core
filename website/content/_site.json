@@ -180,7 +180,7 @@
           "slug": "migrating-from-0-2",
           "title": "Migrating from 0.2.0",
           "nav": "Migrating from 0.2.0",
-          "lead": "What changes in the 0.3 betas (@candid-core/schema 0.3.0-beta.1 and @candid-core/cli 0.2.0-beta.1, published under the beta dist-tag) for code written against @candid-core/schema 0.2.0 and @candid-core/cli 0.1.0, each with a before and an after the compiler checks."
+          "lead": "What changes in @candid-core/schema 0.3 and @candid-core/cli 0.2 (the betas 0.3.0-beta.1 and 0.2.0-beta.1, and the prepared 0.3.0 and 0.2.0) for code written against @candid-core/schema 0.2.0 and @candid-core/cli 0.1.0, with before and after code where the compiler shows it."
         }
       ]
     },

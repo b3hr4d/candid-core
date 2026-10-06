@@ -1,6 +1,6 @@
 {
   "name": "@candid-core/schema",
-  "version": "0.3.0-beta.1",
+  "version": "0.3.0",
   "description": "Zod-style schema runtime for Candid: builders with static inference, structural validation, a TypeScript-native binary codec, and a loader that builds the same schemas from candid-core's canonical Contract documents.",
   "license": "Apache-2.0",
   "repository": {

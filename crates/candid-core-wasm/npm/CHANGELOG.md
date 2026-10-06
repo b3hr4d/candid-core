@@ -14,7 +14,52 @@ fixtures.
 grammar, the library API, and the request/response shapes. Pin an exact
 version.
 
-## Unreleased
+## 0.2.0 — 2026-10-06
+
+Embeds `candid-core` 0.1.0-beta.3 and the `candid-core-ts` generator from the
+same repository commit the release is dispatched from; the release record
+names the exact SHA. That commit's `candid-core` source is ahead of the
+0.1.0-beta.3 archive on crates.io by four changes not yet in a crate release:
+a `.did` source may begin with one UTF-8 byte order mark, which beta.3 refuses
+with "Unknown token"; a run of more than 256 consecutive comments between two
+tokens is refused with `resource_limit_exceeded` (below), which beta.3
+compiles up to a stack-dependent length and then aborts on; a type on a cycle
+that passes only through `opt` is refused with `did_type_check_error`
+(below), which beta.3 compiles; and the crate's Contract JSON loaders refuse
+a struct written as a JSON array, which beta.3's loaders accept. No input of
+this package reaches the last one: `gen`, `didToContract` and `didToModule`
+read `.did` sources and never load a Contract document. Every input both
+accept compiles to the same Contract and identities, and envelopes still name
+0.1.0-beta.3 as their producer.
+
+`@candid-core/schema` 0.3 breaks the 0.2 API (principal values are canonical text, collapsing opts are boxed, every `vec nat8` is a `Uint8Array`, generated modules use a new binding layout and may omit declarations, and the `./actor`, `./transport-icp`, `./forms` and `./labels` subpaths are gone); there is no compatibility layer.
+
+The first stable release of the 0.2 line. It is published under the npm
+`latest` dist-tag, so a plain `npx @candid-core/cli` runs it; pin it in a
+project, `npm install --save-dev --save-exact @candid-core/cli`. The `beta`
+dist-tag stays on 0.2.0-beta.1.
+
+**It pairs with exactly one schema release.** The optional peer is exactly
+`@candid-core/schema` `0.3.0` (`^0.2.0` in 0.1.0, exactly `0.3.0-beta.1` in
+0.2.0-beta.1). The modules this generator emits need that release's
+`Principal` export and boxed options, which 0.2.0 does not have, and the
+generator and that release's `schemaFromContract` agree on blobs and on
+omitted declarations only when both come from the same release. npm refuses
+to install a mismatched pair (measured with npm 11.3.0: `ERESOLVE could not
+resolve`, exit status 1); the 0.2.0-beta.1 entry below says npm only warns,
+which was wrong for a published peer. Install the pair at exact versions.
+
+**Upgrading from 0.1.0.** 0.2.0 is 0.2.0-beta.1 plus the changes in this
+entry, so the upgrade is this entry and the 0.2.0-beta.1 entry below, read
+together. Every break in either is marked **BREAKING**: from 0.2.0-beta.1, the
+`$` binding layout, `$.Principal`, boxed collapsing opts, a declared primitive
+naming only itself and every `vec nat8` typed `Uint8Array`, and omission in
+place of refusal (`gen`'s exit status and `didToModule`'s result); from this
+entry, the refusals of a long comment run and of a type on a cycle through
+`opt` alone. JSDoc from `.did` doc comments and
+`gen`'s several entries, `--json` and `--check` are additive. The library's
+three functions keep their names and signatures, and `lib/index.d.ts` and the
+command grammar are unchanged since 0.2.0-beta.1.
 
 ### A long run of comments is refused with a resource diagnostic
 
@@ -22,26 +67,40 @@ The embedded compiler now refuses a `.did` file with more than 256 consecutive
 comments between two tokens. The upstream Candid tokenizer it embeds spends one
 stack frame on each comment it skips, so the compiler counts the run first,
 without recursing, and refuses an over-long one before that tokenizer runs.
-Before, a long enough run exhausted the WebAssembly stack: measured on a local
-build (rustc 1.87.0, Node 24.2, macOS arm64), `gen` compiled a file with 2 609
-consecutive `//` lines and failed at 2 610 with `internal_error` "Maximum call
-stack size exceeded"; the threshold moves with the toolchain and the engine.
+Before, a long enough run exhausted the WebAssembly stack: measured with the
+published tarballs (Node 24.2, macOS arm64), 0.2.0-beta.1's `gen` compiled a
+file with 2 728 consecutive `//` lines and failed at 2 729 with
+`internal_error` "Maximum call stack size exceeded", and 0.1.0's compiled
+2 825 and crashed at 2 826 with an uncaught `RangeError`; the threshold moves
+with the toolchain and the engine.
 
-- **This refuses files that `gen` accepted before**: any `.did` in the bundle
-  with a run of 257 to about 2 600 comments, such as a license header written
-  as `//` lines. `gen`, `didToContract` and `didToModule` report
-  `resource_limit_exceeded` with resource `source_nesting`, limit 256 and
-  `observed` 257, through the existing diagnostic path (the
-  `{ ok: false, diagnostics }` document, or `--json`) with exit status 1. A
-  longer run, which failed with `internal_error` before, gets the same
-  diagnostic. The CLI compiles at the compiler's default limits and has no
-  flag to raise this one: write such a header as a single `/* */` block, which
-  counts as one comment, or shorten it. Line and block comments count alike;
+- **BREAKING (input)**: this refuses files that `gen` accepted before: any
+  `.did` in the bundle with a run of 257 to about 2 700 or 2 800 comments,
+  such as a license header written as `//` lines. `gen`, `didToContract` and
+  `didToModule` report `resource_limit_exceeded` with resource
+  `source_nesting`, limit 256 and `observed` 257, through the existing
+  diagnostic path (the `{ ok: false, diagnostics }` document, or `--json`)
+  with exit status 1. A longer run, which failed with `internal_error` before
+  (an uncaught `RangeError` in 0.1.0), gets the same diagnostic. The CLI
+  compiles at the compiler's default limits and has no flag to raise this one:
+  write such a header as a single `/* */` block, which counts as one comment,
+  or shorten it. Line and block comments count alike;
   blank lines between comments do not end a run, any token does, a nested
   block comment counts once, and comment markers inside a string are not
   comments.
 - **Nothing else moves.** A file within the limit generates the same module and
   the same envelope, with the same identities and documentation, as before.
+
+### The embedded generator renders on an explicit stack
+
+- The embedded `candid-core-ts` generator keeps its pending work on an explicit
+  stack instead of recursing once per type level, so generation uses constant
+  call-stack depth in the Contract's nesting. It also refuses a Contract with a
+  cycle that passes through no declared node, which a TypeScript type alias
+  cannot spell. No `.did` source produces such a Contract (a recursive Candid
+  type needs a name), so no input `gen` accepts is affected: every module it
+  writes is byte-identical to what 0.2.0-beta.1 writes for the same input, and
+  `didToModule`, which takes `.did` sources, returns the same result.
 
 ### A type on a cycle through `opt` alone is refused
 
@@ -51,12 +110,15 @@ through `opt`: `type T = opt T;`, `type T = opt opt T;`,
 value that is not an `opt` at such a type unwraps `opt` without end, so no
 decoder can answer for it; a generated schema for it ended in a depth refusal.
 
-- **This refuses files that `gen` accepted before**: `gen`, `didToContract`
-  and `didToModule` report `did_type_check_error`, naming the type ("type T
-  lies on a cycle that passes only through opt; …"), through the existing
-  diagnostic path (the `{ ok: false, diagnostics }` document, or `--json`)
-  with exit status 1, and write nothing for that entry. The upstream Candid
-  checker accepts these files; the refusal is candid-core's own.
+- **BREAKING (input)**: this refuses files that `gen` accepted before:
+  `gen`, `didToContract` and `didToModule` report `did_type_check_error`,
+  naming the type ("type T lies on a cycle that passes only through opt;
+  …"), through the existing diagnostic path (the `{ ok: false,
+  diagnostics }` document, or `--json`) with exit status 1, and write nothing
+  for that entry. The upstream Candid checker accepts these files; the
+  refusal is candid-core's own. 0.1.0 refused them too, with
+  `ts_generation_refused` at generation, because each such type wraps `opt`
+  in `opt`; 0.2.0-beta.1 generates them, boxed.
 - **A cycle with any other constructor on it still compiles**: `type L = opt
   record { head : nat; tail : L }`, `type T = opt vec T`, `type T = record {
   a : opt T }`, `type T = opt variant { a : T }`.
