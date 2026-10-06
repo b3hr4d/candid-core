@@ -33,8 +33,13 @@
     <code>types</code> and <code>fields</code>, and extension values, which are free-form.
   </li>
   <li>
-    <strong>Every enum value is a string.</strong> serde's derive would also read a unit variant
-    written as a map from its name, such as a primitive as <code>{"nat": null}</code> or
+    <strong>The four name-valued fields are strings.</strong> A type node's <code>primitive</code>,
+    a func's <code>mode</code>, a sidecar import's <code>kind</code> and a sidecar argument's
+    <code>direction</code> each hold their variant's name as a string. Other enums are objects and
+    stay objects: a type node and an actor are objects tagged by <code>kind</code>, and a HostValue
+    is an internally tagged object, <code>{"kind": "null"}</code> included. serde's derive would
+    also read one of the four fields written as a map from its name, such as a primitive as
+    <code>{"nat": null}</code> or
     <code>{"nat": {}}</code> instead of <code>"nat"</code>, or a func's mode as
     <code>{"query": null}</code>. The format does not admit that form either: the Rust loaders
     refuse it as malformed JSON, <code>invalid type: map, expected a string at</code> the map's path,
