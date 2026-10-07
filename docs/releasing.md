@@ -689,10 +689,10 @@ Once both are on the registry (`npm view <package> dist-tags` shows them under
 installable: the published specs leave `UNPUBLISHED_NPM_SPECS`, the prose
 install lines on the website become checked blocks, the one release note per
 TypeScript page (`NOTE_TITLE` in `website/check.mjs`, "Published as a beta"
-since 0.3.0-beta.1) says which beta the page describes and that `latest`
-differs, the status page records the publish date and both release runs, and
-each npm release note gains its release record (commit, run, shasum,
-integrity, from `npm view`). Nothing in a tarball can change after the fact,
+from 0.3.0-beta.1 until the stable pair) says which beta the page describes
+and that `latest` differs, the status page records the publish date and both
+release runs, and each npm release note gains its release record (commit,
+run, shasum, integrity, from `npm view`). Nothing in a tarball can change after the fact,
 which is why the package READMEs carry their beta lines in the version-bump
 pull request instead. For 0.3.0-beta.1 / 0.2.0-beta.1 this was the pull
 request that closed #194.
@@ -758,8 +758,11 @@ to 7, with these differences:
 - On publish day the follow-up pull request empties `UNPUBLISHED_NPM_SPECS`,
   turns the prose install lines into blocks, and rewrites the release note on
   each TypeScript page (`NOTE_TITLE`), which until then says which beta the
-  page describes. It also replaces every install and `npx` line that still
-  names a beta (`@beta`, `@<schema>-beta.N`, `@<cli>-beta.N`) with the plain
+  page describes. Since 0.3.0 / 0.2.0 its title is "Upgrading from an earlier
+  release", and it says which stable release the page describes, how the
+  previous stable release differs, and that `beta` still names the last
+  betas. It also replaces every install and `npx` line that still names a
+  beta (`@beta`, `@<schema>-beta.N`, `@<cli>-beta.N`) with the plain
   stable line: those keep working after the publish, so no check flags them,
   but they install the betas, which lack what the stable entries added. Find
   them with
