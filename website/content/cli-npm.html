@@ -1,27 +1,28 @@
 <callout type="note" title="Published on npm">
   <p>
-    <code>@candid-core/cli</code> <code>0.1.0</code> is on the npm registry under the
-    <code>latest</code> tag, published from this repository by its dispatch-only release workflow.
+    <code>@candid-core/cli</code> <code>0.2.0</code> is on the npm registry under the
+    <code>latest</code> tag, published from this repository by its dispatch-only release workflow,
+    beside the earlier <code>0.1.0</code> and, under the <code>beta</code> tag, <code>0.2.0-beta.1</code>.
     The registry also holds <code>0.0.0-bootstrap</code> under the <code>bootstrap</code> tag, which
     exists only so a trusted publisher could be attached to the name; do not install it. The
     <a href="cli-rust.html"><code>candid-core</code> binary</a> does the same compilation from Rust.
   </p>
 </callout>
 
-<callout type="note" title="Published as a beta">
+<callout type="note" title="Upgrading from an earlier release">
   <p>
-    This page describes the package the repository builds, published as <code>0.2.0-beta.1</code> under
-    the npm <code>beta</code> dist-tag. <code>latest</code> is still <code>0.1.0</code>, which has the old behaviour: it
+    This page describes the package the repository builds, published on 2026-10-06 as <code>0.2.0</code> under
+    the npm <code>latest</code> dist-tag. The previous stable release, <code>0.1.0</code>, has the old behaviour: it
     emits modules in the old layout with an object-shaped principal type, exits 1 with
     <code>ts_generation_refused</code> for an interface with one declaration it cannot represent, and
     returns no <code>omitted</code> list. <a href="migrating-from-0-2.html">Migrating from 0.2.0</a> shows what each break means, with before and after code,
-    and each is recorded in the package changelog under <code>0.2.0-beta.1</code>. The repository has moved on since: it is prepared as <code>0.2.0</code> for <code>latest</code>, not yet published, and the changes since the beta are recorded under <code>0.2.0</code>.
+    and each is recorded in the package changelog under <code>0.2.0</code> and <code>0.2.0-beta.1</code>. The <code>beta</code> dist-tag still names <code>0.2.0-beta.1</code>, which lacks the changes recorded under <code>0.2.0</code>.
   </p>
 </callout>
 
 <pre data-lang="bash">
-# 0.2.0-beta.1, the beta this page describes (see the note above)
-npx @candid-core/cli@0.2.0-beta.1 gen ./service.did -o ./generated
+# 0.2.0, the release this page describes (see the note above)
+npx @candid-core/cli@0.2.0 gen ./service.did -o ./generated
 </pre>
 
 <p>
@@ -54,7 +55,7 @@ npx @candid-core/cli@0.2.0-beta.1 gen ./service.did -o ./generated
   <tbody>
     <tr>
       <td>Name and version</td>
-      <td><code>@candid-core/cli</code>, <code>0.1.0</code> — published on npm under <code>latest</code></td>
+      <td><code>@candid-core/cli</code>, <code>0.2.0</code> — published on npm under <code>latest</code></td>
     </tr>
     <tr>
       <td>Binary</td>
@@ -110,10 +111,10 @@ usage: candid-core-cli gen <service.did>... [-o <dir>] [--json] [--check]
 
 <callout type="note" title="Several entries, --json and --check are not in 0.1.0">
   <p>
-    <code>latest</code>, <code>0.1.0</code>, takes exactly one entry and neither flag:
+    The previous stable release, <code>0.1.0</code>, takes exactly one entry and neither flag:
     <code>gen &lt;service.did&gt; [-o &lt;dir&gt;]</code>. Several entries, <code>--json</code> and
     <code>--check</code>, described in <a href="#several-entries-json-and-check">their own section
-    below</a>, ship in <code>0.2.0-beta.1</code>. Everything else on this page describes both.
+    below</a>, shipped in <code>0.2.0-beta.1</code> and are in <code>0.2.0</code>. Everything else on this page describes both.
   </p>
 </callout>
 

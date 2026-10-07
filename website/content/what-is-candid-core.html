@@ -447,12 +447,20 @@ candid-core = "=0.1.0-beta.3"
 </pre>
 
 <p>
-  The npm packages version independently of the crate and install normally:
-  <code>npm install --save-exact @candid-core/schema@beta</code> for the runtime this site
-  describes (a plain install selects <code>latest</code>, still <code>0.2.0</code>), and
-  <a href="cli-npm.html"><code>@candid-core/cli</code></a> for <code>.did</code> to TypeScript with
-  no Rust toolchain at all. <a href="status.html">Status, versions and releases</a> has the current
-  state of each unit and what each release changed.
+  The npm packages version independently of the crate and install normally from
+  <code>latest</code>, which holds the release this site describes: <code>@candid-core/schema</code>
+  for the runtime, and <a href="cli-npm.html"><code>@candid-core/cli</code></a> for <code>.did</code>
+  to TypeScript with no Rust toolchain at all.
+</p>
+
+<pre data-lang="bash">
+npm install --save-exact @candid-core/schema
+npm install --save-dev --save-exact @candid-core/cli
+</pre>
+
+<p>
+  <a href="status.html">Status, versions and releases</a> has the current state of each unit and
+  what each release changed.
 </p>
 
 <h2>Next</h2>

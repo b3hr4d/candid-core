@@ -86,12 +86,11 @@ const unpublishedRules = UNPUBLISHED_NPM.flatMap((name) => [
  * prepared version is a 404. The same two spellings are refused, in code
  * blocks only, so a page can still say in prose what the line will be. The
  * publish-day change empties this list and turns that prose into blocks. */
-// The stable pair, prepared for `latest`: the version-bump pull request adds
-// each prepared version here and the publish-day change empties the list
-// again, as it did once @candid-core/schema 0.3.0-beta.1 and @candid-core/cli
-// 0.2.0-beta.1 were published under `beta`. Their tags need no entry: `latest`
-// and `beta` both resolve already.
-const UNPUBLISHED_NPM_SPECS = ["@candid-core/schema@0.3.0", "@candid-core/cli@0.2.0"];
+// Emptied when @candid-core/schema 0.3.0 and @candid-core/cli 0.2.0 were
+// published under `latest`, as it was once for the 0.3.0-beta.1 / 0.2.0-beta.1
+// betas under `beta`. The next version-bump pull request adds its prepared
+// versions back until their own publish.
+const UNPUBLISHED_NPM_SPECS = [];
 
 const unpublishedSpecRules = UNPUBLISHED_NPM_SPECS.map((spec) => ({
   /* The spec followed by anything that cannot continue a version or a tag, so
@@ -133,8 +132,8 @@ const SOFT = [
 ];
 
 /* The surface the site teaches is the one the repository builds. These names
- * belong to the surface `latest` (0.2.0) still has and the 0.3 betas
- * do not, so they may be named only where the change is the subject: the
+ * belong to the surface 0.2.0 has and 0.3.0 (`latest`, and the 0.3 beta
+ * before it) does not, so they may be named only where the change is the subject: the
  * migration page, and the release history on the status page. Anywhere else
  * they would be prose or a snippet that teaches something that no longer
  * exists. The check reads prose and code alike, because a page that shows
@@ -160,9 +159,10 @@ const REMOVED_SURFACE = [
 const REMOVED_SURFACE_PAGES = new Set(["migrating-from-0-2", "status"]);
 
 /* Pages that describe the schema runtime or the generator carry the one note
- * saying they describe the beta, that `latest` (0.2.0 / 0.1.0) differs, and
- * where to read what changed. */
-const NOTE_TITLE = "Published as a beta";
+ * saying which release they describe (`latest`, 0.3.0 / 0.2.0), how the
+ * previous stable release (0.2.0 / 0.1.0) differs, and where to read what
+ * changed. */
+const NOTE_TITLE = "Upgrading from an earlier release";
 const NOTE_RE = new RegExp(`<callout[^>]*title="${NOTE_TITLE}"`, "g");
 const NOTE_LINK_RE = new RegExp(
   `<callout[^>]*title="${NOTE_TITLE}"[\\s\\S]*?href="migrating-from-0-2\\.html"[\\s\\S]*?<\\/callout>`,
@@ -330,7 +330,7 @@ for (const name of (await readdir(CONTENT)).filter((f) => f.endsWith(".html"))) 
       if (hit) {
         fail(
           page,
-          `names ${JSON.stringify(hit[0])}, which latest (0.2.0) has and the 0.3 betas remove; ` +
+          `names ${JSON.stringify(hit[0])}, which 0.2.0 has and 0.3.0 removes; ` +
             "that belongs on the migration page, not here",
         );
       }
@@ -343,7 +343,7 @@ for (const name of (await readdir(CONTENT)).filter((f) => f.endsWith(".html"))) 
     } else if (notes !== 1) {
       fail(
         page,
-        `must carry exactly one <callout title="${NOTE_TITLE}"> saying the published packages differ (found ${notes})`,
+        `must carry exactly one <callout title="${NOTE_TITLE}"> saying how the previous release differs (found ${notes})`,
       );
     } else if (!NOTE_LINK_RE.test(source)) {
       fail(page, `the ${NOTE_TITLE} note must link migrating-from-0-2.html`);

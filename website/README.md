@@ -97,16 +97,18 @@ node website/build.mjs && node website/check.mjs
   while still working on a local server — the one mistake local preview cannot
   catch;
 - a performance claim, or marketing filler, anywhere in the prose;
-- a name `latest` (`@candid-core/schema` 0.2.0) has and the 0.3 betas
-  remove (`createActor`, `httpTransport`, `PrincipalValue`, the four removed
+- a name `@candid-core/schema` 0.2.0 has and 0.3.0 (`latest`) removes
+  (`createActor`, `httpTransport`, `PrincipalValue`, the four removed
   subpaths, `unrepresentable_option`, …) on any page but the migration page and
   the release history on the status page — in prose or in a code block, because
   a block that shows one teaches it as surely as a sentence does;
 - a page that describes the TypeScript packages without carrying exactly one
-  `Published as a beta` callout (`NOTE_TITLE` in `check.mjs`) that links the
-  migration page. The site describes the surface the repository builds, which
-  is what the `beta` dist-tag holds; `latest` differs, and each page says so
-  once, in that one place;
+  `Upgrading from an earlier release` callout (`NOTE_TITLE` in `check.mjs`)
+  that links the migration page. The site describes the surface the
+  repository builds, which is what the `latest` dist-tag holds
+  (`@candid-core/schema` 0.3.0 and `@candid-core/cli` 0.2.0); the previous
+  stable release (0.2.0 / 0.1.0) differs, and each page says how once, in that
+  one place;
 - any TypeScript or JavaScript snippet that is not verified (next section).
 
 And, **in a code block only** — because a page is expected to discuss the

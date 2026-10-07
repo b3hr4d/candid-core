@@ -1,11 +1,14 @@
 # Candid Core
 
-> **Unstable beta.** `0.1.0-beta.3` is the current release on crates.io. Until 1.0, any release may change the
+> **Unstable beta: the Rust crate.** `candid-core` `0.1.0-beta.3` is the current release on crates.io. Until 1.0, any release of the crate may change the
 > public Rust API, the serialized Contract/Compilation/envelope shapes, the
 > canonical bytes, and every identity computed over them. Pin an exact version.
 > See the [changelog](CHANGELOG.md) for the beta's scope and
 > [known limitations](CHANGELOG.md#known-limitations), and
-> [docs/releasing.md](docs/releasing.md) for the release procedure.
+> [docs/releasing.md](docs/releasing.md) for the release procedure. This banner is about
+> the crate. The npm packages [below](#typescript-candid-coreschema) version
+> independently: their current releases are under npm's `latest` dist-tag and
+> are not prereleases, though they are pre-1.0 too.
 
 An early, deliberately narrow runtime foundation for turning Candid DID files into a canonical validated Contract graph. When the source compiler is enabled — it is, by default — the Rust core delegates parsing and type checking to the official `candid_parser` implementation; consumers never need to parse Candid source or reproduce its type rules. A consumer that only *consumes* Contracts can switch the compiler off and keep the model; see [Cargo features](#cargo-features).
 
@@ -25,12 +28,11 @@ See [architecture](docs/architecture.md) and the [Contract graph](docs/contract-
 This repository also produces a TypeScript package, published on npm as [`@candid-core/schema`](https://www.npmjs.com/package/@candid-core/schema): a Zod-style schema runtime driven by the same canonical Contract model — builders with static inference, fail-closed structural validation, a TypeScript-native Candid binary codec, and a loader that builds the same schemas from a Contract document at runtime.
 
 ```sh
-npm install @candid-core/schema
-# the 0.3 beta, most of the surface this repository builds:
-npm install --save-exact @candid-core/schema@beta
+npm install --save-exact @candid-core/schema
+npm install --save-dev --save-exact @candid-core/cli   # .did to TypeScript, no Rust toolchain
 ```
 
-Its source of truth, README, and changelog live in [crates/candid-core-ts/ts/](crates/candid-core-ts/ts/), and it versions independently of this crate (pre-1.0, like everything here). The package is the Candid layer only: it has no runtime dependencies and no peers, and calling a canister belongs to the layer built on top of it. That is the surface the repository builds, prepared as `0.3.0` for the npm `latest` dist-tag and not yet published (with `@candid-core/cli` `0.2.0`, which peers it exactly); most of it was published on 2026-10-02 as `0.3.0-beta.1` under the `beta` dist-tag. Until the stable pair is published, `latest`, 0.2.0, still ships `./actor`, `./transport-icp` (with an optional `@icp-sdk/core` peer), `./forms`, and `./labels`, among other differences listed under `0.3.0` and `0.3.0-beta.1` in [its changelog](crates/candid-core-ts/ts/CHANGELOG.md) and on the [migration page](https://b3hr4d.github.io/candid-core/migrating-from-0-2.html). The `candid-core` binary above is what turns a `.did` file into the Contract JSON that package's `schemaFromContract` consumes; the generator crate around it, `candid-core-ts`, is unpublishable by design. A second npm package, [`@candid-core/cli`](https://www.npmjs.com/package/@candid-core/cli) ([crates/candid-core-wasm/npm/](crates/candid-core-wasm/npm/)), compiles that same pipeline to WebAssembly so a JavaScript-only consumer gets `.did` → generated module + contract envelope with no Rust toolchain — byte-identical to the native outputs, asserted by the `wasm CLI` workflow.
+Its source of truth, README, and changelog live in [crates/candid-core-ts/ts/](crates/candid-core-ts/ts/), and it versions independently of this crate (pre-1.0, like everything here). The package is the Candid layer only: it has no runtime dependencies and no peers, and calling a canister belongs to the layer built on top of it. That is the surface the repository builds, published on 2026-10-06 as `0.3.0` under the npm `latest` dist-tag, with `@candid-core/cli` `0.2.0`, which peers it exactly; the `beta` dist-tag still names the earlier `0.3.0-beta.1` and `0.2.0-beta.1`, which lack the changes recorded under `0.3.0` and `0.2.0`. The previous stable release, 0.2.0, still ships `./actor`, `./transport-icp` (with an optional `@icp-sdk/core` peer), `./forms`, and `./labels`, among other differences listed under `0.3.0` and `0.3.0-beta.1` in [its changelog](crates/candid-core-ts/ts/CHANGELOG.md) and on the [migration page](https://b3hr4d.github.io/candid-core/migrating-from-0-2.html). The `candid-core` binary above is what turns a `.did` file into the Contract JSON that package's `schemaFromContract` consumes; the generator crate around it, `candid-core-ts`, is unpublishable by design. A second npm package, [`@candid-core/cli`](https://www.npmjs.com/package/@candid-core/cli) ([crates/candid-core-wasm/npm/](crates/candid-core-wasm/npm/)), compiles that same pipeline to WebAssembly so a JavaScript-only consumer gets `.did` → generated module + contract envelope with no Rust toolchain — byte-identical to the native outputs, asserted by the `wasm CLI` workflow.
 
 ## What each identity claims
 

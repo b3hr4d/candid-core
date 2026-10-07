@@ -444,14 +444,13 @@ match Contract::from_slice_with_context(document, &context) {
 
 <h2>The TypeScript side</h2>
 
-<callout type="note" title="Published as a beta">
+<callout type="note" title="Upgrading from an earlier release">
   <p>
-    The TypeScript half of this page describes the surface the repository builds, published as
-    <code>@candid-core/schema</code> <code>0.3.0-beta.1</code> under the npm <code>beta</code> dist-tag. <code>latest</code> is still <code>0.2.0</code>, which has
-    the old one: its closed unions differ (no <code>stack</code> resource, and a contract code for
+    The TypeScript half of this page describes <code>@candid-core/schema</code> <code>0.3.0</code>, published on
+    2026-10-06 under the npm <code>latest</code> dist-tag. The previous stable release, <code>0.2.0</code>, has
+    the old surface: its closed unions differ (no <code>stack</code> resource, and a contract code for
     <code>opt opt</code>), and a bad options object does not throw.
-    <a href="migrating-from-0-2.html">Migrating from 0.2.0</a> shows what each break means, and each is recorded in the package changelog under
-    <code>0.3.0-beta.1</code>. The Rust half is unchanged. The repository has moved on since: it is prepared as <code>0.3.0</code> for <code>latest</code>, not yet published, and the changes since the beta are recorded under <code>0.3.0</code>.
+    <a href="migrating-from-0-2.html">Migrating from 0.2.0</a> shows what each break means, and each is recorded in the package changelog under <code>0.3.0</code> and <code>0.3.0-beta.1</code>. The Rust half is unchanged. The <code>beta</code> dist-tag still names <code>0.3.0-beta.1</code>, which lacks the changes recorded under <code>0.3.0</code>.
   </p>
 </callout>
 
