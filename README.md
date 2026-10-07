@@ -1,14 +1,15 @@
 # Candid Core
 
-> **Unstable beta: the Rust crate.** `candid-core` `0.1.0-beta.3` is the current release on crates.io. Until 1.0, any release of the crate may change the
-> public Rust API, the serialized Contract/Compilation/envelope shapes, the
+> **Unstable beta: the Rust crate.** `candid-core` `0.1.0-beta.3` is the
+> current release on crates.io. Until 1.0, any release of the crate may change
+> the public Rust API, the serialized Contract/Compilation/envelope shapes, the
 > canonical bytes, and every identity computed over them. Pin an exact version.
 > See the [changelog](CHANGELOG.md) for the beta's scope and
 > [known limitations](CHANGELOG.md#known-limitations), and
-> [docs/releasing.md](docs/releasing.md) for the release procedure. This banner is about
-> the crate. The npm packages [below](#typescript-candid-coreschema) version
-> independently: their current releases are under npm's `latest` dist-tag and
-> are not prereleases, though they are pre-1.0 too.
+> [docs/releasing.md](docs/releasing.md) for the release procedure. The npm
+> packages [below](#typescript-candid-coreschema) version independently: their
+> current releases are under npm's `latest` dist-tag and are not prereleases,
+> though they are pre-1.0 too.
 
 An early, deliberately narrow runtime foundation for turning Candid DID files into a canonical validated Contract graph. When the source compiler is enabled — it is, by default — the Rust core delegates parsing and type checking to the official `candid_parser` implementation; consumers never need to parse Candid source or reproduce its type rules. A consumer that only *consumes* Contracts can switch the compiler off and keep the model; see [Cargo features](#cargo-features).
 

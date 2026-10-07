@@ -94,7 +94,7 @@ npm run build
   <dd>Linux, macOS and Windows on current stable; Linux on 1.78 for the MSRV suite; and <code>wasm32-unknown-unknown</code> for the library across every feature configuration meant to work there, with a browser runtime suite on an exact-pinned Chrome for Testing build.</dd>
 
   <dt><code>@candid-core/schema</code> runtime</dt>
-  <dd>TypeScript ≥ 5.0 (below that it is a <em>parse</em> error, not a type error); <code>moduleResolution</code> of <code>node16</code>, <code>nodenext</code> or <code>bundler</code> — <code>node10</code> cannot resolve the package at all; ESM only, with no CommonJS build; Node ≥ 16 for every subpath. The package has no runtime dependencies and no peers. The published <code>0.2.0</code> differs here, as the note above says: it also exports <code>./transport-icp</code>, which needs Node ≥ 20.19 and an optional <code>@icp-sdk/core</code> ≥ 6 peer.</dd>
+  <dd>TypeScript ≥ 5.0 (below that it is a <em>parse</em> error, not a type error); <code>moduleResolution</code> of <code>node16</code>, <code>nodenext</code> or <code>bundler</code> — <code>node10</code> cannot resolve the package at all; ESM only, with no CommonJS build; Node ≥ 16 for every subpath. The package has no runtime dependencies and no peers. The previous stable release, <code>0.2.0</code>, differs here, as the note above says: it also exports <code>./transport-icp</code>, which needs Node ≥ 20.19 and an optional <code>@icp-sdk/core</code> ≥ 6 peer.</dd>
 </dl>
 
 <h3>What does not work on bare WASM</h3>
