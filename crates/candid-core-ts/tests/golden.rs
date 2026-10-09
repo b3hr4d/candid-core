@@ -232,7 +232,7 @@ fn golden_fidelity() {
 /// `composite_query`, `update`, `oneway` — as `$.WithMode<...>` intersected
 /// with its call signature, whether the method is written inline, typed by a
 /// declared func, or has a quoted name. The tsc gate compiles the golden, and
-/// `ts/tests/schema-types.test.ts` reads every mode back with `ModeOf` and
+/// `ts/tests/method-modes.test.ts` reads every mode back with `ModeOf` and
 /// proves the call signatures are the ones emitted before the marks.
 #[test]
 fn golden_modes() {

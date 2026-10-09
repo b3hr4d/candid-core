@@ -1,7 +1,7 @@
 // Issue #244: every method mode on one actor, each carried on its `Actor`
 // method as `$.WithMode<...>` beside the unchanged call signature: written
 // inline, reached through a declared func type, and on a quoted method name.
-// `ts/tests/schema-types.test.ts` reads each one back with `ModeOf`.
+// `ts/tests/method-modes.test.ts` reads each one back with `ModeOf`.
 
 type Reader = func () -> (nat) query;
 type Notifier = func (text) -> () oneway;
