@@ -88,7 +88,7 @@ being emitted. See the crate docs.
 
 **The generated artifact is a runtime schema, not just types.** Each
 declaration emits an invariantly-annotated builder alongside its alias —
-`const $X: $.Schema<$X> = $.c.rec(() => …)` — targeting the schema core in
+`const $X: $.Schema<X> = $.c.rec(() => …)` — targeting the schema core in
 `ts/schema.ts` (imported as `@candid-core/schema`, the published npm package's name). Because `Schema<in out T>` is invariant,
 the annotation makes `tsc` itself prove on every golden that the builder infers
 exactly the reviewed alias. The builders carry the structure the Zod-style
@@ -112,16 +112,21 @@ for the same reasons. The suites run on Node's built-in test runner with native
 type stripping — no test framework, no `@types/node`, no npm dependency
 beyond the pinned TypeScript.
 
-**Every binding is a `$`-prefixed local (issue #188).** A generated module
-imports the schema core as the namespace `$` (`import * as $ from
-"@candid-core/schema"`), binds each declaration `X` — alias and builder — as
-the local `$X`, and exports it under its Candid name with
-`export { $X as X }`. A Candid name cannot contain `$`, so no declaration
-can shadow the import, the global types the lowerings reference (`Array`,
-`Record`, `Uint8Array`, `Promise`), or another declaration: `type c`,
-`type Array`, `type delete` and `type string` all generate, and a consumer
-imports them by name (`import { delete as del } from "./service"`); a
-declaration named `default` becomes the default export. The only names still
+**Every value is a `$`-prefixed local (issue #188); every type is its
+Candid name (issue #245).** A generated module imports the schema core as the
+namespace `$` (`import * as $ from "@candid-core/schema"`), binds each
+declaration `X`'s builder as the local `$X`, declares its alias under the
+Candid name itself (`export type X = …`), and adds the value to that export
+name with `export { $X as X }`, so a consumer's compiler errors name the type
+it imported (`Account`, `Actor`), not a local. A Candid name cannot contain
+`$`, so no value can shadow the import or another declaration. A type keeps
+the `$` local too (`type $X = …`) where the name cannot be a type in the
+module: a global type the lowerings reference (`Array`, `Record`,
+`Uint8Array`, `Promise`), or a word TypeScript refuses as a type's name
+(`delete`, `string`, `keyof`; the list is measured and pinned in
+`src/lib.rs`). So `type c`, `type Array`, `type delete` and `type string` all
+generate, and a consumer imports them by name (`import { delete as del } from
+"./service"`); a declaration named `default` becomes the default export. The only names still
 reserved are the module's own export names `actor` and `Actor`,
 unconditionally: a declaration by either name is omitted (below). Consumers
 import the export names, which did not change; the module's local names are
