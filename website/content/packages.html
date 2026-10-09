@@ -41,8 +41,8 @@
     <tr><td><code>candid-core</code></td><td>Rust library</td><td><code>Cargo.toml</code></td><td>crates.io</td><td><code>0.1.0-beta.3</code></td></tr>
     <tr><td><code>candid-core</code> (binary)</td><td>CLI, same crate</td><td><code>Cargo.toml</code> <code>[[bin]]</code></td><td>crates.io</td><td><code>0.1.0-beta.3</code></td></tr>
     <tr><td><code>candid-core-ts</code></td><td>Rust library</td><td><code>crates/candid-core-ts/Cargo.toml</code></td><td>none, by <code>publish = false</code></td><td><code>0.0.0</code></td></tr>
-    <tr><td><code>@candid-core/schema</code></td><td>npm package</td><td><code>crates/candid-core-ts/ts/package.json</code></td><td>npm</td><td><code>0.2.0</code>; <code>beta</code>: <code>0.3.0-beta.1</code></td></tr>
-    <tr><td><code>@candid-core/cli</code></td><td>npm package</td><td><code>crates/candid-core-wasm/npm/package.json</code></td><td>npm</td><td><code>0.1.0</code>; <code>beta</code>: <code>0.2.0-beta.1</code></td></tr>
+    <tr><td><code>@candid-core/schema</code></td><td>npm package</td><td><code>crates/candid-core-ts/ts/package.json</code></td><td>npm</td><td><code>0.3.0</code>; <code>beta</code>: <code>0.3.0-beta.1</code></td></tr>
+    <tr><td><code>@candid-core/cli</code></td><td>npm package</td><td><code>crates/candid-core-wasm/npm/package.json</code></td><td>npm</td><td><code>0.2.0</code>; <code>beta</code>: <code>0.2.0-beta.1</code></td></tr>
     <tr><td><code>candid-core-wasm</code></td><td>Rust library</td><td><code>crates/candid-core-wasm/Cargo.toml</code></td><td>none, by <code>publish = false</code></td><td><code>0.1.0</code></td></tr>
     <tr><td><code>candid-core-fuzz</code></td><td>Fuzz harness</td><td><code>fuzz/Cargo.toml</code></td><td>none, by <code>publish = false</code></td><td><code>0.0.0</code></td></tr>
   </tbody>
@@ -51,11 +51,11 @@
 <p>Four of those seven rows resolve from a package manager today, and two of them are the same crate. The rest are tracked, buildable and gated, and each carries a deliberate <code>publish = false</code>, one of them because its registry name has not been decided yet. All of them exist in the repository; none of them will install from a registry.</p>
 
 <callout type="warn" title="Everything here is pre-1.0">
-  <p>The Rust crate is a prerelease, and the npm packages are <code>0.2.0</code> (<code>@candid-core/schema</code>) and <code>0.1.0</code> (<code>@candid-core/cli</code>) under <code>latest</code>, with the betas <code>0.3.0-beta.1</code> and <code>0.2.0-beta.1</code> under <code>beta</code>. Until 1.0, any release may change the public API, the serialized document shapes, the canonical bytes, and therefore every identity computed over them. Pin an exact version in both ecosystems. See <a href="status.html">Status, versions and releases</a>.</p>
+  <p>The Rust crate is a prerelease, and the npm packages are <code>0.3.0</code> (<code>@candid-core/schema</code>) and <code>0.2.0</code> (<code>@candid-core/cli</code>) under <code>latest</code>, with the earlier betas <code>0.3.0-beta.1</code> and <code>0.2.0-beta.1</code> still under <code>beta</code>. Until 1.0, any release may change the public API, the serialized document shapes, the canonical bytes, and therefore every identity computed over them. Pin an exact version in both ecosystems. See <a href="status.html">Status, versions and releases</a>.</p>
 </callout>
 
-<callout type="note" title="Published as a beta">
-  <p>The table above shows <code>latest</code> and <code>beta</code>. The sections below describe the packages as the repository builds them, published under the npm <code>beta</code> dist-tag as <code>@candid-core/schema</code> <code>0.3.0-beta.1</code> and <code>@candid-core/cli</code> <code>0.2.0-beta.1</code>: <code>latest</code> <code>0.2.0</code> still has two more subpaths and an optional peer, and <code>latest</code> <code>0.1.0</code> still emits the old module layout. <a href="migrating-from-0-2.html">Migrating from 0.2.0</a> shows what each break means, and each is recorded in the package changelogs under <code>0.3.0-beta.1</code> and <code>0.2.0-beta.1</code>. The repository has moved on since: it is prepared as <code>@candid-core/schema</code> <code>0.3.0</code> and <code>@candid-core/cli</code> <code>0.2.0</code> for <code>latest</code>, not yet published, and the changes since the betas are recorded under those two versions.</p>
+<callout type="note" title="Upgrading from an earlier release">
+  <p>The table above shows <code>latest</code> and <code>beta</code>. The sections below describe the packages as the repository builds them, published on 2026-10-06 under the npm <code>latest</code> dist-tag as <code>@candid-core/schema</code> <code>0.3.0</code> and <code>@candid-core/cli</code> <code>0.2.0</code>. The previous stable releases differ: <code>0.2.0</code> has two more subpaths and an optional peer, and <code>0.1.0</code> emits the old module layout. <a href="migrating-from-0-2.html">Migrating from 0.2.0</a> shows what each break means, and each is recorded in the package changelogs under <code>0.3.0</code> and <code>0.2.0</code> and the betas before them. The <code>beta</code> dist-tag still names <code>0.3.0-beta.1</code> and <code>0.2.0-beta.1</code>, which lack the changes recorded under <code>0.3.0</code> and <code>0.2.0</code>.</p>
 </callout>
 
 <h2>Which one do I need?</h2>
@@ -220,13 +220,13 @@ pub fn generate_module(
 
 <ul>
   <li><strong>Manifest:</strong> <code>crates/candid-core-ts/ts/package.json</code>.</li>
-  <li><strong>Published:</strong> yes, on <a href="https://www.npmjs.com/package/@candid-core/schema">npm</a>. Released versions are <code>0.0.0-bootstrap</code>, <code>0.1.0</code>, <code>0.1.1</code>, <code>0.2.0</code> and <code>0.3.0-beta.1</code>; <code>0.2.0</code> is <code>latest</code>, <code>0.3.0-beta.1</code> is <code>beta</code>, and both pair with <code>candid-core</code> <code>0.1.0-beta.3</code>. <code>0.3.0</code>, which pairs with it too, is prepared for <code>latest</code> and not yet published.</li>
+  <li><strong>Published:</strong> yes, on <a href="https://www.npmjs.com/package/@candid-core/schema">npm</a>. Released versions are <code>0.0.0-bootstrap</code>, <code>0.1.0</code>, <code>0.1.1</code>, <code>0.2.0</code>, <code>0.3.0-beta.1</code> and <code>0.3.0</code>; <code>0.3.0</code> is <code>latest</code>, <code>0.3.0-beta.1</code> is <code>beta</code>, and <code>0.2.0</code>, <code>0.3.0-beta.1</code> and <code>0.3.0</code> all pair with <code>candid-core</code> <code>0.1.0-beta.3</code>.</li>
   <li><strong>ESM only</strong> (<code>"type": "module"</code>), <code>sideEffects: false</code>, Apache-2.0. The tarball ships <code>dist</code>, <code>README.md</code>, <code>CHANGELOG.md</code> and <code>LICENSE</code>.</li>
   <li><strong>Versions independently</strong> of the Rust crate. Its changelog names the <code>candid-core</code> version each release pairs with.</li>
 </ul>
 
 <pre data-lang="bash">
-npm install --save-exact @candid-core/schema@beta
+npm install --save-exact @candid-core/schema
 </pre>
 
 <p>That is the whole install: no runtime dependencies and no peers. Every module is self-contained, principal typing included, so nothing needs the Internet Computer SDK to exist.</p>
@@ -248,7 +248,7 @@ npm install --save-exact @candid-core/schema@beta
 <h2>@candid-core/cli, the WebAssembly on-ramp</h2>
 
 <pre data-lang="bash">
-npx @candid-core/cli@0.2.0-beta.1 gen ./service.did -o ./generated
+npx @candid-core/cli@0.2.0 gen ./service.did -o ./generated
 </pre>
 
 <p>It gives a JavaScript-only project the whole pipeline with no Rust toolchain. The <code>candid-core</code> compiler surface and the <code>candid-core-ts</code> generator are compiled together into one WebAssembly artifact, wrapped in a Node CLI and a small JS module that also runs in a browser. Both library calls are data in, data out: one JSON-serialisable request to the WebAssembly module, its parsed JSON response returned verbatim, no <code>eval</code>, and no filesystem access from the WebAssembly side.</p>

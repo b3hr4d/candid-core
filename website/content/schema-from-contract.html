@@ -1,13 +1,13 @@
-<callout type="note" title="Published as a beta">
+<callout type="note" title="Upgrading from an earlier release">
   <p>
-    This page describes the surface the repository builds, published as
-    <code>@candid-core/schema</code> <code>0.3.0-beta.1</code> under the npm <code>beta</code> dist-tag. <code>latest</code> is still
-    <code>0.2.0</code>, which has the old one: it
+    This page describes <code>@candid-core/schema</code> <code>0.3.0</code>, published on 2026-10-06
+    under the npm <code>latest</code> dist-tag. The previous stable release,
+    <code>0.2.0</code>, has the old surface: it
     refuses a document with a collapsing <code>opt</code> (<code>opt opt T</code>,
     <code>opt null</code>, <code>opt reserved</code>), builds a <code>number[]</code> for a
     <code>vec nat8</code> beside a declared <code>nat8</code> alias, and lists no omissions.
     <a href="migrating-from-0-2.html">Migrating from 0.2.0</a> shows what each break means, with before and
-    after code, and each is recorded in the package changelog under <code>0.3.0-beta.1</code>. The repository has moved on since: it is prepared as <code>0.3.0</code> for <code>latest</code>, not yet published, and the changes since the beta are recorded under <code>0.3.0</code>.
+    after code, and each is recorded in the package changelog under <code>0.3.0</code> and <code>0.3.0-beta.1</code>. The <code>beta</code> dist-tag still names <code>0.3.0-beta.1</code>, which lacks the changes recorded under <code>0.3.0</code>.
   </p>
 </callout>
 
@@ -380,7 +380,7 @@ type B = record { x : record { 100 : text } };
 <ol class="steps">
   <li>
     <h3>Install the runtime</h3>
-    <pre data-lang="bash">npm install --save-exact @candid-core/schema@beta</pre>
+    <pre data-lang="bash">npm install --save-exact @candid-core/schema</pre>
     <p>
       No other dependency is needed: the package declares no runtime dependency and no peer.
     </p>
