@@ -170,8 +170,10 @@ dependencies = [
 name = "candid-core-wasm"
 version = "0.1.0"
 dependencies = [
+ "candid",
  "candid-core",
  "candid-core-ts",
+ "candid_parser",
  "serde_json",
  "wasm-bindgen",
 ]

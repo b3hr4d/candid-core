@@ -14,6 +14,51 @@ fixtures.
 grammar, the library API, and the request/response shapes. Pin an exact
 version.
 
+## Unreleased
+
+Not yet released; the version is decided at release time. Embeds the
+`candid-core` crate and the `candid-core-ts` generator from the release's
+commit, as every entry does.
+
+### Added
+
+- **`candid-core-cli project <in.did> --methods <a,b,...> -o <out.did>`**
+  writes a `.did` holding only the methods named and every declaration they
+  reach, as one self-contained file, and prints the interface identities of
+  the input and of the projection. The output is deterministic: the same
+  input and the same set of names give the same bytes, in any order. It
+  keeps declaration names, doc comments and argument names, so `gen` on the
+  projection emits the same declarations, docs and modes as on the full
+  interface, with an `Actor` that lists only the projected methods. A
+  service class's init arguments are dropped. An unknown method name fails
+  with `unknown_method` (its `notes` list the service's methods), an empty
+  list (`--methods ""`) with `empty_method_list`, a source with no service
+  with `no_service`; each exits 1 and writes nothing. `-o` is required and
+  may not name the input file. `--json` prints one document instead of the
+  report.
+- **`candid-core-cli check <written.did> --against <live.did>`** exits 0
+  when the live interface is still a Candid subtype of the written one, and
+  1 otherwise: every written method must exist in the live service with the
+  same mode, its arguments contravariant and its results covariant, and
+  methods only the live service has are ignored. Each finding names its
+  method and a stable code (`method_missing`, `mode_changed`,
+  `method_incompatible`, the warning `special_opt_rule`, and
+  `resource_limit_exceeded`) and, inside a type, the path where the check
+  failed. The report prints the live interface identity, so an unchanged
+  interface can be told from one that changed compatibly.
+- **`projectDid(sources, methods)` and `checkCompatible(written, live)`**,
+  the library functions behind the two commands, exported beside
+  `didToContract` and `didToModule`, with their types (`ProjectionSuccess`,
+  `CompatibilityReport`, `CompatibilityDiagnostic`, `CheckFailure`,
+  `Identities`). Neither fetches anything; the package still has no runtime
+  dependencies.
+
+### Changed
+
+- **The usage text lists the three commands.** A usage error still exits 64
+  with the usage on stderr and nothing on stdout; its text now has three
+  lines, one per command.
+
 ## 0.2.0 — 2026-10-06
 
 Embeds `candid-core` 0.1.0-beta.3 and the `candid-core-ts` generator from the

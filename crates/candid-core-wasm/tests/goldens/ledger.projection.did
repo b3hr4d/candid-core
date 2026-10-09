@@ -1,0 +1,46 @@
+type Tokens = record {
+  e8s : nat64;
+};
+type Account = record {
+  owner : principal;
+  subaccount : opt blob;
+};
+type TransferArg = record {
+  to : Account;
+  fee : opt Tokens;
+  memo : opt blob;
+  from_subaccount : opt blob;
+  created_at_time : opt nat64;
+  amount : Tokens;
+};
+type TransferError = variant {
+  insufficient_funds : record {
+    balance : Tokens;
+  };
+  created_in_future : record {
+    ledger_time : nat64;
+  };
+  generic_error : record {
+    message : text;
+    error_code : nat;
+  };
+  temporarily_unavailable;
+  too_old;
+  bad_fee : record {
+    expected_fee : Tokens;
+  };
+  bad_burn : record {
+    min_burn_amount : Tokens;
+  };
+  duplicate : record {
+    duplicate_of : nat;
+  };
+};
+type TransferResult = variant {
+  ok : nat;
+  err : TransferError;
+};
+service : {
+  balance_of : (Account) -> (Tokens) query;
+  transfer : (TransferArg) -> (TransferResult);
+}

@@ -2,6 +2,14 @@
 // The @candid-core/cli entry point:
 //
 //   candid-core-cli gen <service.did>... [-o <dir>] [--json] [--check]
+//   candid-core-cli project <in.did> --methods <a,b,...> -o <out.did> [--json]
+//   candid-core-cli check <written.did> --against <live.did> [--json]
+//
+// `project` writes a `.did` holding only the named methods and the types
+// they reach; `check` exits 0 when the live interface is still a Candid
+// subtype of the written one and 1 otherwise. Both read their inputs as
+// `gen` does (the file and every `.did` beneath its directory) and never
+// touch the network: fetching a live interface is the caller's job.
 //
 // The JS host does all the I/O: for each entry it reads the entry file and
 // every `.did` beneath the entry's directory, hands them to the wasm
@@ -32,9 +40,19 @@ import { readFile, readdir, mkdir, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
 
-import { didToContract, didToModule, init } from "../lib/index.js";
+import {
+  checkCompatible,
+  didToContract,
+  didToModule,
+  init,
+  projectDid,
+} from "../lib/index.js";
 
-const USAGE = "usage: candid-core-cli gen <service.did>... [-o <dir>] [--json] [--check]";
+const USAGE = [
+  "usage: candid-core-cli gen <service.did>... [-o <dir>] [--json] [--check]",
+  "       candid-core-cli project <in.did> --methods <a,b,...> -o <out.did> [--json]",
+  "       candid-core-cli check <written.did> --against <live.did> [--json]",
+].join("\n");
 
 // The `--json` document's version. It changes only when an existing field's
 // meaning or shape changes; a consumer refuses a version it does not know.
@@ -63,6 +81,12 @@ function stemOf(entry) {
 }
 
 function parseArguments(argv) {
+  if (argv[0] === "project") {
+    return parseProject(argv);
+  }
+  if (argv[0] === "check") {
+    return parseCheck(argv);
+  }
   if (argv.length === 0 || argv[0] !== "gen") {
     usage();
   }
@@ -107,7 +131,61 @@ function parseArguments(argv) {
     }
     seen.set(key, entry);
   }
-  return { entries, outDir: outDir ?? ".", json, check };
+  return { command: "gen", entries, outDir: outDir ?? ".", json, check };
+}
+
+/**
+ * Read a command's options: each `--name` in `valued` takes the next
+ * argument, at most once; `--json` is a flag; anything else starting with
+ * `-` is a usage error, and the rest are positionals.
+ */
+function parseOptions(argv, valued) {
+  const options = {};
+  const positionals = [];
+  let json = false;
+  for (let index = 1; index < argv.length; index += 1) {
+    const argument = argv[index];
+    if (valued.includes(argument)) {
+      if (options[argument] !== undefined || index + 1 >= argv.length) {
+        usage();
+      }
+      index += 1;
+      options[argument] = argv[index];
+    } else if (argument === "--json") {
+      json = true;
+    } else if (argument.startsWith("-")) {
+      usage();
+    } else {
+      positionals.push(argument);
+    }
+  }
+  return { options, positionals, json };
+}
+
+function parseProject(argv) {
+  const { options, positionals, json } = parseOptions(argv, ["--methods", "-o"]);
+  if (positionals.length !== 1 || options["--methods"] === undefined || options["-o"] === undefined) {
+    usage();
+  }
+  const entry = positionals[0];
+  const output = options["-o"];
+  // Writing the projection over its own input would destroy the source it
+  // was cut from.
+  if (path.resolve(output) === path.resolve(entry)) {
+    usage(`error: -o ${output} is the input file; write the projection elsewhere`);
+  }
+  // `--methods ""` is the empty list, which the library refuses with a
+  // diagnostic; any other value is split on commas, verbatim.
+  const methods = options["--methods"] === "" ? [] : options["--methods"].split(",");
+  return { command: "project", entry, output, methods, json };
+}
+
+function parseCheck(argv) {
+  const { options, positionals, json } = parseOptions(argv, ["--against"]);
+  if (positionals.length !== 1 || options["--against"] === undefined) {
+    usage();
+  }
+  return { command: "check", written: positionals[0], live: options["--against"], json };
 }
 
 /** A diagnostic in the compiler's own item shape. */
@@ -210,6 +288,117 @@ function bundleOf(directory) {
 }
 
 /**
+ * The sources request for one `.did` file: the file and every `.did`
+ * beneath its directory, as `gen` reads an entry. Throws `EntryFailure`.
+ */
+async function sourcesFor(file) {
+  const directory = path.dirname(file);
+  const name = path.basename(file);
+  let files;
+  try {
+    files = await bundleOf(directory);
+  } catch (error) {
+    if (error instanceof EntryFailure) {
+      throw error;
+    }
+    const message = `cannot read ${directory}: ${error.message}`;
+    throw new EntryFailure([diagnostic("did_file_read_error", "load", message)], message);
+  }
+  if (files[name] === undefined) {
+    const message = `cannot read ${file}: no such .did file`;
+    throw new EntryFailure([diagnostic("did_source_not_found", "load", message)], message);
+  }
+  return { entry: name, files };
+}
+
+/** An unexpected error as the one failure shape. */
+function asFailure(error) {
+  return error instanceof EntryFailure
+    ? error
+    : new EntryFailure([
+        { code: "internal_error", severity: "error", message: String(error.message ?? error) },
+      ]);
+}
+
+/**
+ * Print a failure the way `gen` does: the `{ ok: false, diagnostics }`
+ * document on stdout, or the plain stderr line of a read error; with
+ * `--json`, always the document.
+ */
+function printFailure(failure, json, extra = {}) {
+  if (failure.plain !== undefined && !json) {
+    console.error(failure.plain);
+  } else {
+    console.log(JSON.stringify({ ok: false, ...extra, diagnostics: failure.diagnostics }, null, 2));
+  }
+}
+
+/** `candid-core-cli project`. Returns the exit code. */
+async function runProject({ entry, output, methods, json }) {
+  let result;
+  try {
+    const sources = await sourcesFor(entry);
+    result = await deterministic("projection", () => projectDid(sources, methods));
+  } catch (error) {
+    printFailure(asFailure(error), json);
+    return 1;
+  }
+  if (!result.ok) {
+    console.log(JSON.stringify(result, null, 2));
+    return 1;
+  }
+  const bytes = Buffer.from(result.did);
+  const existing = await onDisk(output);
+  const status = existing !== null && existing.equals(bytes) ? "unchanged" : "written";
+  if (status === "written") {
+    await mkdir(path.dirname(output), { recursive: true });
+    await writeFile(output, bytes);
+  }
+  if (json) {
+    const { ok, methods: kept, input, projection } = result;
+    console.log(JSON.stringify({ ok, output, status, methods: kept, input, projection }, null, 2));
+  } else {
+    console.log(`input:      ${result.input.interface_id}`);
+    console.log(`projection: ${result.projection.interface_id}`);
+    console.log(`${status === "written" ? "wrote" : "unchanged"} ${output}`);
+  }
+  return 0;
+}
+
+/** `candid-core-cli check`. Returns the exit code. */
+async function runCheck({ written, live, json }) {
+  let report;
+  try {
+    const sides = [await sourcesFor(written), await sourcesFor(live)];
+    report = await deterministic("check", () => checkCompatible(...sides));
+  } catch (error) {
+    printFailure(asFailure(error), json);
+    return 1;
+  }
+  if (json || !report.ok) {
+    console.log(JSON.stringify(report, null, 2));
+    return report.ok && report.compatible ? 0 : 1;
+  }
+  console.log(`written: ${report.written.interface_id}`);
+  console.log(`live:    ${report.live.interface_id}`);
+  let errors = 0;
+  let warnings = 0;
+  for (const item of report.diagnostics) {
+    const at = item.path === undefined ? "" : ` at ${item.path}`;
+    console.error(`${item.severity}: ${listedName(item.method)}: ${item.code}${at}: ${item.message}`);
+    if (item.severity === "error") {
+      errors += 1;
+    } else {
+      warnings += 1;
+    }
+  }
+  console.log(
+    `${report.compatible ? "compatible" : "incompatible"}: ${errors} error(s), ${warnings} warning(s)`,
+  );
+  return report.compatible ? 0 : 1;
+}
+
+/**
  * A name as the module header lists it, character for character: bare when
  * identifier-shaped, else quoted exactly as the generator quotes it — `"`,
  * `\\`, `\n`, `\r` and `\t` escaped, every other control character as a
@@ -292,24 +481,7 @@ async function processEntry(entry, { outDir, check }) {
   const drift = [];
   try {
     // The directory and file name as given: `dirname("a.did")` is ".".
-    const directory = path.dirname(entry);
-    const entryName = path.basename(entry);
-    let files;
-    try {
-      files = await bundleOf(directory);
-    } catch (error) {
-      if (error instanceof EntryFailure) {
-        throw error;
-      }
-      const message = `cannot read ${directory}: ${error.message}`;
-      throw new EntryFailure([diagnostic("did_file_read_error", "load", message)], message);
-    }
-    if (files[entryName] === undefined) {
-      const message = `cannot read ${entry}: no such .did file`;
-      throw new EntryFailure([diagnostic("did_source_not_found", "load", message)], message);
-    }
-
-    const sources = { entry: entryName, files };
+    const sources = await sourcesFor(entry);
     const envelope = await deterministic("contract", () => didToContract(sources));
     if (!("contract" in envelope)) {
       throw new EntryFailure(envelope.diagnostics);
@@ -355,12 +527,7 @@ async function processEntry(entry, { outDir, check }) {
     report.omitted = generated.omitted;
     report.status = drift.length > 0 ? "drifted" : wrote ? "written" : "unchanged";
   } catch (error) {
-    const failure =
-      error instanceof EntryFailure
-        ? error
-        : new EntryFailure([
-            { code: "internal_error", severity: "error", message: String(error.message ?? error) },
-          ]);
+    const failure = asFailure(error);
     report.diagnostics = failure.diagnostics;
     human.out.length = 0;
     human.err.length = 0;
@@ -374,39 +541,50 @@ async function processEntry(entry, { outDir, check }) {
   return { report, human, drift };
 }
 
-const { entries, outDir, json, check } = parseArguments(process.argv.slice(2));
+const parsed = parseArguments(process.argv.slice(2));
 
 await init();
 
-const reports = [];
-const drift = [];
-for (const entry of entries) {
-  const result = await processEntry(entry, { outDir, check });
-  reports.push(result.report);
-  drift.push(...result.drift);
-  if (!json) {
-    for (const line of result.human.out) {
-      console.log(line);
-    }
-    for (const line of result.human.err) {
-      console.error(line);
-    }
-    if (result.report.status === "failed" && result.human.err.length === 0 && entries.length > 1) {
-      console.error(`error: ${entry}: failed; its diagnostics are on stdout`);
-    }
-  }
+if (parsed.command === "project") {
+  process.exitCode = await runProject(parsed);
+} else if (parsed.command === "check") {
+  process.exitCode = await runCheck(parsed);
+} else {
+  process.exitCode = await runGen(parsed);
 }
 
-const ok = reports.every((report) => report.status !== "failed" && report.status !== "drifted");
-if (json) {
-  const document = { schemaVersion: SCHEMA_VERSION, ok, check, entries: reports, drift };
-  console.log(JSON.stringify(document, null, 2));
-} else if (drift.length > 0) {
-  console.error(
-    `${drift.length} file(s) differ from what the current sources generate; ` +
-      "run without --check to regenerate",
-  );
+/** `candid-core-cli gen`. Returns the exit code. */
+async function runGen({ entries, outDir, json, check }) {
+  const reports = [];
+  const drift = [];
+  for (const entry of entries) {
+    const result = await processEntry(entry, { outDir, check });
+    reports.push(result.report);
+    drift.push(...result.drift);
+    if (!json) {
+      for (const line of result.human.out) {
+        console.log(line);
+      }
+      for (const line of result.human.err) {
+        console.error(line);
+      }
+      if (result.report.status === "failed" && result.human.err.length === 0 && entries.length > 1) {
+        console.error(`error: ${entry}: failed; its diagnostics are on stdout`);
+      }
+    }
+  }
+
+  const ok = reports.every((report) => report.status !== "failed" && report.status !== "drifted");
+  if (json) {
+    const document = { schemaVersion: SCHEMA_VERSION, ok, check, entries: reports, drift };
+    console.log(JSON.stringify(document, null, 2));
+  } else if (drift.length > 0) {
+    console.error(
+      `${drift.length} file(s) differ from what the current sources generate; ` +
+        "run without --check to regenerate",
+    );
+  }
+  // Not `process.exit`: on some platforms a pipe drains asynchronously, and the
+  // document must reach the reader whole.
+  return ok ? 0 : 1;
 }
-// Not `process.exit`: on some platforms a pipe drains asynchronously, and the
-// document must reach the reader whole.
-process.exitCode = ok ? 0 : 1;

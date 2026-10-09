@@ -53,12 +53,19 @@
 //! canonical serialization guarantee it, a test pins it, and the CLI on top
 //! additionally double-runs every generation and refuses on any mismatch.
 
+use std::collections::BTreeSet;
+
 use candid_core::{
-    compile_with_resolver, Compilation, CompileError, CompileOptions, ContractEnvelope, Limits,
-    MemoryResolver, RuntimeContext, SourceInfo, SourceLabel,
+    compile_did_with_options, compile_with_resolver, Compilation, CompileError, CompileOptions,
+    ContractEnvelope, Limits, MemoryResolver, RuntimeContext, SourceInfo, SourceLabel,
 };
 use candid_core_ts::{generate_module, Omission, TsNames, TsOptions};
-use serde_json::{json, Value};
+use serde_json::{json, Map, Value};
+
+mod compat;
+mod project;
+
+pub use compat::{MAX_CHECK_DEPTH, MAX_CHECK_STEPS};
 
 /// The envelope extension carrying field names, per the issue #152 decision.
 pub const FIELD_NAMES_EXTENSION: &str = "org.candid-core.field-names/v1";
@@ -106,27 +113,260 @@ pub fn did_to_module(request: &str) -> String {
 /// response convention so callers return them as-is.
 fn compile_request(request: &str) -> Result<Compilation, String> {
     let (entry, resolver) = parse_request(request)?;
+    compile(&entry, &resolver).map_err(|error| diagnostics_document(&error))
+}
+
+fn compile(entry: &str, resolver: &MemoryResolver) -> Result<Compilation, CompileError> {
     compile_with_resolver(
-        &entry,
-        &resolver,
+        entry,
+        resolver,
         CompileOptions {
             include_source_info: true,
         },
         &RuntimeContext::default(),
     )
-    .map_err(|error| diagnostics_document(&error))
+}
+
+/// Project a request onto the methods it names: `{"ok": true, "did": …,
+/// "methods": […], "input": {…}, "projection": {…}}` or `{"ok": false,
+/// "diagnostics": […]}`. The request is a sources request plus `"methods":
+/// ["name", …]`.
+pub fn project_did(request: &str) -> String {
+    match project_request(request) {
+        Ok(response) | Err(response) => response,
+    }
+}
+
+fn project_request(request: &str) -> Result<String, String> {
+    let document = request_object(request)?;
+    let requested: Vec<&str> = match document.get("methods") {
+        Some(Value::Array(items)) => items
+            .iter()
+            .map(|item| {
+                item.as_str()
+                    .ok_or_else(|| invalid_request("methods must be an array of method names"))
+            })
+            .collect::<Result<_, _>>()?,
+        _ => {
+            return Err(invalid_request(
+                "the request must carry \"methods\": an array of method names",
+            ))
+        }
+    };
+    let (entry, resolver) = parse_sources(&document, &["methods"])?;
+    let compilation = compile(&entry, &resolver).map_err(|error| diagnostics_document(&error))?;
+    let contract = compilation.contract();
+    let Some(service) = compat::actor_methods(contract) else {
+        return Err(failure(vec![phase_diagnostic(
+            "no_service",
+            "project",
+            "the source declares no service, so there are no methods to project".to_string(),
+        )]));
+    };
+    if requested.is_empty() {
+        return Err(failure(vec![phase_diagnostic(
+            "empty_method_list",
+            "project",
+            "name at least one method to project".to_string(),
+        )]));
+    }
+    let mut available: Vec<&str> = service.iter().map(|(name, _)| name.as_str()).collect();
+    available.sort_unstable();
+    let mut unknown = Vec::new();
+    let mut seen = BTreeSet::new();
+    for name in &requested {
+        if !seen.insert(*name) {
+            continue;
+        }
+        if !available.contains(name) {
+            let mut item = phase_diagnostic(
+                "unknown_method",
+                "project",
+                format!(
+                    "the service has no method {name:?}; its methods are: {}",
+                    available.join(", ")
+                ),
+            );
+            item["notes"] = json!(available);
+            unknown.push(item);
+        }
+    }
+    if !unknown.is_empty() {
+        return Err(failure(unknown));
+    }
+    let wanted: BTreeSet<String> = seen.into_iter().map(str::to_string).collect();
+    let source_info = compilation
+        .source_info()
+        .expect("source info was requested");
+    let (text, methods) = project::project(source_info, &entry, &wanted)
+        .map_err(|project::Internal(message)| projection_failed(message, Vec::new()))?;
+    // The output is only as good as a second compile says it is: it must be
+    // a valid self-contained `.did` whose service has exactly these methods.
+    let projected = compile_did_with_options(
+        &text,
+        CompileOptions {
+            include_source_info: false,
+        },
+    )
+    .map_err(|error| {
+        projection_failed(
+            "the projection does not compile".to_string(),
+            error
+                .diagnostics
+                .iter()
+                .map(|item| format!("{}: {}", item.code, item.message))
+                .collect(),
+        )
+    })?;
+    let mut kept: Vec<String> = compat::actor_methods(projected.contract())
+        .unwrap_or_default()
+        .into_iter()
+        .map(|(name, _)| name)
+        .collect();
+    kept.sort();
+    if kept != wanted.iter().cloned().collect::<Vec<_>>() {
+        return Err(projection_failed(
+            format!("the projection holds the methods {kept:?}, not the ones requested"),
+            Vec::new(),
+        ));
+    }
+    Ok(pretty(&json!({
+        "ok": true,
+        "did": text,
+        "methods": methods,
+        "input": identities(contract),
+        "projection": identities(projected.contract()),
+    })))
+}
+
+/// Check that a live service is a Candid subtype of a written one:
+/// `{"ok": true, "compatible": …, "written": {…}, "live": {…},
+/// "diagnostics": […]}`, or `{"ok": false, "input"?: "written" | "live",
+/// "diagnostics": […]}` when the request or a side's sources fail. The
+/// request is `{"written": <sources request>, "live": <sources request>}`.
+pub fn check_compatible(request: &str) -> String {
+    match check_request(request) {
+        Ok(response) | Err(response) => response,
+    }
+}
+
+fn check_request(request: &str) -> Result<String, String> {
+    let document = request_object(request)?;
+    let unknown: Vec<&str> = document
+        .keys()
+        .map(String::as_str)
+        .filter(|key| !matches!(*key, "written" | "live"))
+        .collect();
+    if !unknown.is_empty() {
+        return Err(invalid_request(&format!(
+            "unknown request keys: {}",
+            unknown.join(", ")
+        )));
+    }
+    let side = |name: &str| -> Result<Compilation, String> {
+        let Some(Value::Object(object)) = document.get(name) else {
+            return Err(invalid_request(&format!(
+                "the request must carry \"{name}\": a sources request object"
+            )));
+        };
+        let (entry, resolver) = parse_sources(object, &[])?;
+        let compilation = compile(&entry, &resolver)
+            .map_err(|error| side_failure(name, json!(error.diagnostics)))?;
+        if compat::actor_methods(compilation.contract()).is_none() {
+            return Err(side_failure(
+                name,
+                json!([phase_diagnostic(
+                    "no_service",
+                    "check",
+                    format!("the {name} source declares no service to compare"),
+                )]),
+            ));
+        }
+        Ok(compilation)
+    };
+    let written = side("written")?;
+    let live = side("live")?;
+    let diagnostics = compat::check(
+        &compat::Input {
+            contract: written.contract(),
+            source_info: written.source_info(),
+        },
+        &compat::Input {
+            contract: live.contract(),
+            source_info: live.source_info(),
+        },
+    );
+    let compatible = diagnostics
+        .iter()
+        .all(|item| item["severity"] != json!("error"));
+    Ok(pretty(&json!({
+        "ok": true,
+        "compatible": compatible,
+        "written": identities(written.contract()),
+        "live": identities(live.contract()),
+        "diagnostics": diagnostics,
+    })))
+}
+
+fn identities(contract: &candid_core::Contract) -> Value {
+    json!({
+        "contract_id": contract.contract_id(),
+        "interface_id": contract.interface_id(),
+    })
+}
+
+fn phase_diagnostic(code: &str, phase: &str, message: String) -> Value {
+    json!({
+        "code": code,
+        "phase": phase,
+        "severity": "error",
+        "message": message,
+    })
+}
+
+fn failure(diagnostics: Vec<Value>) -> String {
+    pretty(&json!({ "ok": false, "diagnostics": diagnostics }))
+}
+
+fn side_failure(side: &str, diagnostics: Value) -> String {
+    pretty(&json!({ "ok": false, "input": side, "diagnostics": diagnostics }))
+}
+
+/// A projection the compiler refused or that lost a method: never expected,
+/// and reported rather than written.
+fn projection_failed(message: String, notes: Vec<String>) -> String {
+    let mut item = phase_diagnostic("projection_failed", "project", message);
+    if !notes.is_empty() {
+        item["notes"] = json!(notes);
+    }
+    failure(vec![item])
 }
 
 fn parse_request(request: &str) -> Result<(String, MemoryResolver), String> {
+    let document = request_object(request)?;
+    parse_sources(&document, &[])
+}
+
+/// The request document as a JSON object, or the `invalid_request` failure.
+fn request_object(request: &str) -> Result<Map<String, Value>, String> {
     let document: Value = serde_json::from_str(request)
         .map_err(|error| invalid_request(&format!("the request is not JSON: {error}")))?;
-    let object = document
-        .as_object()
-        .ok_or_else(|| invalid_request("the request must be a JSON object"))?;
+    match document {
+        Value::Object(object) => Ok(object),
+        _ => Err(invalid_request("the request must be a JSON object")),
+    }
+}
+
+/// The sources half of a request: `{"source": …}` or `{"entry": …,
+/// "files": {…}}`, beside only the `extra` keys the caller reads itself.
+fn parse_sources(
+    object: &Map<String, Value>,
+    extra: &[&str],
+) -> Result<(String, MemoryResolver), String> {
     let unknown: Vec<&str> = object
         .keys()
         .map(String::as_str)
-        .filter(|key| !matches!(*key, "source" | "entry" | "files"))
+        .filter(|key| !matches!(*key, "source" | "entry" | "files") && !extra.contains(key))
         .collect();
     if !unknown.is_empty() {
         return Err(invalid_request(&format!(
@@ -284,5 +524,17 @@ mod bindings {
     #[wasm_bindgen(js_name = didToModule)]
     pub fn did_to_module(request: &str) -> String {
         crate::did_to_module(request)
+    }
+
+    /// See [`crate::project_did`].
+    #[wasm_bindgen(js_name = projectDid)]
+    pub fn project_did(request: &str) -> String {
+        crate::project_did(request)
+    }
+
+    /// See [`crate::check_compatible`].
+    #[wasm_bindgen(js_name = checkCompatible)]
+    pub fn check_compatible(request: &str) -> String {
+        crate::check_compatible(request)
     }
 }

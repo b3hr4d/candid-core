@@ -217,6 +217,93 @@ import { schemaFromContract } from "@candid-core/schema/contract";
 const built = schemaFromContract(await didToContract(didText));
 ```
 
+## Projection and compatibility
+
+> **Not in 0.2.0.** `project`, `check`, `projectDid` and `checkCompatible` are
+> unreleased: they ship in the next release, recorded under `Unreleased` in
+> the [changelog](./CHANGELOG.md).
+
+Two commands for an interface you do not own, such as a canister's published
+`.did`. Both work on files already on disk: the tool never fetches anything,
+so getting the live interface is your build step's job.
+
+```text
+candid-core-cli project <in.did> --methods <a,b,...> -o <out.did> [--json]
+candid-core-cli check <written.did> --against <live.did> [--json]
+```
+
+**`project`** writes a `.did` holding only the methods you name and every
+declaration they reach, as one self-contained file (imports are inlined), and
+prints the interface identities of the input and of the projection. Feed the
+result to `gen` like any `.did`: the generated `Actor` lists only those
+methods, each with its mode. The output is deterministic: the same input and
+the same set of names give the same bytes, whatever order you name them in.
+Declaration names, doc comments and argument names are kept; a service
+class's init arguments are not, since a client never sends them. An unknown
+method name, or an empty list (`--methods ""`), fails with exit 1 and a
+diagnostic (`unknown_method`, whose `notes` list the service's methods, or
+`empty_method_list`), and writes nothing. `-o` is required and may not be the
+input file. The file is written only when it changes; `--json` prints
+`{ ok, output, status, methods, input, projection }` instead of the report.
+
+```sh
+npx @candid-core/cli project ./live/ledger.did --methods icrc1_balance_of,icrc1_transfer -o ./src/ledger.did
+```
+
+**`check`** exits `0` when the live interface is still a Candid subtype of the
+written one, and `1` otherwise. Every method of the written `.did` must exist
+in the live one with the same mode, its arguments contravariant and its
+results covariant; methods only the live service has are ignored, and so is
+a class's init. So an added method or an added `opt` result field passes,
+and a removed method, a changed mode, or a result that gained a variant arm
+fails. A projection is not the only valid written side: a hand-written
+subset `.did` checks the same way. The report prints both interface
+identities on stdout, one line per finding on stderr, and a verdict line:
+
+```text
+written: candid-core:interface:v1:sha256:…
+live:    candid-core:interface:v1:sha256:…
+error: icrc1_transfer: method_incompatible at $results[0].Err.TooOld: the other variant has no such arm
+incompatible: 1 error(s), 0 warning(s)
+```
+
+Each finding names its method and a stable code: `method_missing`,
+`mode_changed` and `method_incompatible` are errors; `special_opt_rule` is a
+warning, for a change Candid accepts only by reading the value under an `opt`
+as `null` (such as `opt nat` becoming `opt text`), so it passes but loses the
+data at that path; `resource_limit_exceeded` fails a method whose check
+reached a bound. `method_incompatible` and `special_opt_rule` carry the path
+into the method's type where the check failed: `$args[i]` or `$results[i]`,
+then `.name` per record field or variant arm (`["name"]` when it is not an
+identifier, `[id]` for a numeric label), `[*]` per `vec` element, `?` per
+`opt` content, and `::args[i]`, `::results[i]` or `::name` into a `func` or
+`service` type. `--json` prints the `checkCompatible` document below.
+
+The live interface identity tells an unchanged interface from one that
+changed compatibly: `project` prints the input's, so record it when you write
+the projection, and compare it with what `check` prints later.
+
+```js
+import { checkCompatible, projectDid } from "@candid-core/cli";
+
+const projected = await projectDid(liveDid, ["icrc1_balance_of", "icrc1_transfer"]);
+// → { ok: true, did, methods, input, projection } — the text, the methods it
+//   holds, and { contract_id, interface_id } of the input and the projection;
+//   or { ok: false, diagnostics }.
+
+const report = await checkCompatible(writtenDid, liveDid);
+// → { ok: true, compatible, written, live, diagnostics }, each diagnostic
+//   { code, severity, method, path?, message }; or { ok: false, input,
+//   diagnostics } when one side does not compile (`input` names it).
+```
+
+Both take Candid text or `{ entry, files }`, as `didToModule` does. The check
+is one Rust implementation compiled into this package's WebAssembly, tested
+against the subtype check of the `candid` crate it pins and against the one
+`@candid-core/schema`'s decoder runs on a `func` or `service` reference. Where the `candid` crate accepts a pair that is not a
+subtype (its coinductive memo can keep a pair proven under an assumption it
+later retracted), this check refuses it, as the decoder does.
+
 ## Omissions
 
 `didToModule`'s success carries `omitted`, an array of
