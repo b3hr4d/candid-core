@@ -455,6 +455,57 @@ warning: omitted method bad (references_omitted via Bad)
   <code>entry</code> — is pinned to return <code>invalid_request</code> rather than panicking.
 </p>
 
+<h2>Projection and compatibility</h2>
+
+<callout type="note" title="Unreleased">
+  <p>
+    <code>project</code>, <code>check</code>, <code>projectDid</code> and <code>checkCompatible</code>
+    are built from this repository but in no published version yet; the package changelog records
+    them under <code>Unreleased</code>.
+  </p>
+</callout>
+
+<p>
+  Two commands for an interface you do not own, such as a canister's published <code>.did</code>.
+  Both read files already on disk; neither fetches anything, so getting the live interface is the
+  caller's job.
+</p>
+
+<pre data-lang="text">
+candid-core-cli project &lt;in.did&gt; --methods &lt;a,b,...&gt; -o &lt;out.did&gt; [--json]
+candid-core-cli check &lt;written.did&gt; --against &lt;live.did&gt; [--json]
+</pre>
+
+<p>
+  <code>project</code> writes a self-contained <code>.did</code> holding only the named methods and
+  every declaration they reach, with their doc comments and argument names, and prints the interface
+  identities of the input and of the projection. The same input and the same set of names give the
+  same bytes. <code>gen</code> on the result emits an <code>Actor</code> listing only those methods,
+  each with its mode. An unknown name fails with <code>unknown_method</code>, whose
+  <code>notes</code> list the service's methods; an empty list fails with
+  <code>empty_method_list</code>.
+</p>
+
+<p>
+  <code>check</code> exits 0 when the live service is still a Candid subtype of the written one and 1
+  otherwise: every written method must exist in the live service with the same mode, arguments
+  contravariant and results covariant. Methods only the live service has are ignored. Each finding
+  names its method, a stable code (<code>method_missing</code>, <code>mode_changed</code>,
+  <code>method_incompatible</code>, the warning <code>special_opt_rule</code>, or
+  <code>resource_limit_exceeded</code>) and the path into the type where the check failed, such as
+  <code>$results[0].Err.TooOld</code>. A hand-written subset <code>.did</code> is as valid a written
+  side as a projection.
+</p>
+
+<p>
+  The check is one Rust implementation, compiled into the same WebAssembly. Its tests compare it with
+  the subtype check of the pinned <code>candid</code> crate on hand-written cases and a seeded random
+  campaign, and with the subtype relation <code>@candid-core/schema</code>'s decoder runs on a
+  reference. The one recorded disagreement is a <code>candid</code> crate defect: its coinductive memo
+  can keep a pair proven under an assumption it later retracted, and accept a pair that is not a
+  subtype. This check and the decoder refuse it.
+</p>
+
 <h2>In a browser</h2>
 
 <p>
