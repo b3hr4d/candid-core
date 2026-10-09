@@ -245,9 +245,20 @@ class's init arguments are not, since a client never sends them. Methods are
 written in name order. An unknown
 method name, or an empty list (`--methods ""`), fails with exit 1 and a
 diagnostic (`unknown_method`, whose `notes` list the service's methods, or
-`empty_method_list`), and writes nothing. `-o` is required and may not be the
-input file. The file is written only when it changes; `--json` prints
-`{ ok, output, status, methods, input, projection }` instead of the report.
+`empty_method_list`), and writes nothing. `-o` is required, and may not be
+any source of the input: `project` reads the input as `gen` does (the file and
+every `.did` beneath its directory), and an `-o` that names one of those
+files, by any path, symlink or hard link, fails with exit 1 and
+`output_is_input` (`path` is the `-o` given, `notes` the sources it names) and
+writes nothing. So write the projection outside the input's directory: a
+projection written beside its input is itself a source on the next run. An
+output that cannot be read or written (a directory, a read-only parent, a full
+disk) fails with exit 1 and `output_write_failed`, whose `notes` hold the
+system error code, such as `EISDIR` or `EACCES`; without `--json` it is one
+`cannot write …` line on stderr, as a source that cannot be read is
+`cannot read …`. The file is written only when it changes; `--json` prints
+`{ ok, output, status, methods, input, projection }` instead of the report,
+and `{ ok: false, diagnostics }` for any failure.
 
 ```sh
 npx @candid-core/cli project ./live/ledger.did --methods icrc1_balance_of,icrc1_transfer -o ./src/ledger.did

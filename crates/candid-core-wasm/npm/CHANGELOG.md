@@ -34,9 +34,13 @@ commit, as every entry does.
   with `unknown_method` (its `notes` list the service's methods), an empty
   list (`--methods ""`) with `empty_method_list`, a source with no service
   with `no_service`; each exits 1 and writes nothing. Methods are written in
-  name order. `-o` is required and
-  may not name the input file. `--json` prints one document instead of the
-  report.
+  name order. `-o` is required, and may not name any source of the input
+  (the entry or any `.did` beneath its directory, which `project` reads as
+  `gen` does) by any path, symlink or hard link: that fails with
+  `output_is_input`, exit 1, and writes nothing. An output that cannot be
+  read or written fails with `output_write_failed` (its `notes` hold the
+  system error code), exit 1. `--json` prints one document instead of the
+  report, and `{ ok: false, diagnostics }` for every failure.
 - **`candid-core-cli check <written.did> --against <live.did>`** exits 0
   when the live interface is still a Candid subtype of the written one, and
   1 otherwise: every written method must exist in the live service with the

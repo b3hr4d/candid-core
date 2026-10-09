@@ -36,7 +36,7 @@
 // `--check` generates in memory, compares byte-for-byte with the files on
 // disk, writes nothing, and exits 1 on any drift.
 
-import { readFile, readdir, mkdir, stat, writeFile } from "node:fs/promises";
+import { readFile, readdir, mkdir, realpath, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
 
@@ -169,11 +169,6 @@ function parseProject(argv) {
   }
   const entry = positionals[0];
   const output = options["-o"];
-  // Writing the projection over its own input would destroy the source it
-  // was cut from.
-  if (path.resolve(output) === path.resolve(entry)) {
-    usage(`error: -o ${output} is the input file; write the projection elsewhere`);
-  }
   // `--methods ""` is the empty list, which the library refuses with a
   // diagnostic; any other value is split on commas, verbatim.
   const methods = options["--methods"] === "" ? [] : options["--methods"].split(",");
@@ -311,6 +306,86 @@ async function sourcesFor(file) {
   return { entry: name, files };
 }
 
+/**
+ * What names a file on disk, as far as it can be told without writing:
+ * the lexical absolute path, the real path (symlinks resolved; for a file
+ * that does not exist yet, its directory's real path), and the device and
+ * inode when the file exists — which is what catches a hard link, and a
+ * different spelling on a case-insensitive file system.
+ */
+async function fileIdentity(file) {
+  const resolved = path.resolve(file);
+  let real;
+  let inode;
+  try {
+    const found = await stat(file, { bigint: true });
+    // A file system without inode numbers reports 0 for every file, which
+    // would make every file the same one.
+    if (found.ino !== 0n) {
+      inode = `${found.dev}:${found.ino}`;
+    }
+  } catch {
+    // Not there (or not statable): only the path forms below can match.
+  }
+  try {
+    real = await realpath(file);
+  } catch {
+    try {
+      real = path.join(await realpath(path.dirname(resolved)), path.basename(resolved));
+    } catch {
+      real = undefined;
+    }
+  }
+  return { resolved, real, inode };
+}
+
+function sameFile(a, b) {
+  return (
+    a.resolved === b.resolved ||
+    (a.real !== undefined && a.real === b.real) ||
+    (a.inode !== undefined && a.inode === b.inode)
+  );
+}
+
+/**
+ * Refuse an output that is one of the input bundle's sources, under any
+ * name: writing it would replace a file the projection was cut from — the
+ * entry, or any `.did` beneath the entry's directory, which `sourcesFor`
+ * hands to the compiler. Throws `EntryFailure` (`output_is_input`), whose
+ * `notes` list the sources the output names.
+ */
+async function refuseOutputInBundle(output, directory, files) {
+  const target = await fileIdentity(output);
+  const sources = [];
+  for (const relative of Object.keys(files).sort()) {
+    const source = path.join(directory, ...relative.split("/"));
+    if (sameFile(target, await fileIdentity(source))) {
+      sources.push(source);
+    }
+  }
+  if (sources.length > 0) {
+    const message =
+      `-o ${output} is ${sources.join(", ")}, a source of the input; ` +
+      `write the projection outside ${directory}`;
+    throw new EntryFailure([
+      diagnostic("output_is_input", "write", message, { path: output, notes: sources }),
+    ]);
+  }
+}
+
+/**
+ * An output that could not be read or written, as a failure: the path as
+ * given, and the system error code (such as `EISDIR` or `EACCES`) in `notes`.
+ */
+function writeFailure(output, error) {
+  const message = `cannot write ${output}: ${error.message}`;
+  const notes = typeof error.code === "string" ? { notes: [error.code] } : {};
+  return new EntryFailure(
+    [diagnostic("output_write_failed", "write", message, { path: output, ...notes })],
+    message,
+  );
+}
+
 /** An unexpected error as the one failure shape. */
 function asFailure(error) {
   return error instanceof EntryFailure
@@ -338,6 +413,7 @@ async function runProject({ entry, output, methods, json }) {
   let result;
   try {
     const sources = await sourcesFor(entry);
+    await refuseOutputInBundle(output, path.dirname(entry), sources.files);
     result = await deterministic("projection", () => projectDid(sources, methods));
   } catch (error) {
     printFailure(asFailure(error), json);
@@ -348,11 +424,17 @@ async function runProject({ entry, output, methods, json }) {
     return 1;
   }
   const bytes = Buffer.from(result.did);
-  const existing = await onDisk(output);
-  const status = existing !== null && existing.equals(bytes) ? "unchanged" : "written";
-  if (status === "written") {
-    await mkdir(path.dirname(output), { recursive: true });
-    await writeFile(output, bytes);
+  let status;
+  try {
+    const existing = await onDisk(output);
+    status = existing !== null && existing.equals(bytes) ? "unchanged" : "written";
+    if (status === "written") {
+      await mkdir(path.dirname(output), { recursive: true });
+      await writeFile(output, bytes);
+    }
+  } catch (error) {
+    printFailure(writeFailure(output, error), json);
+    return 1;
   }
   if (json) {
     const { ok, methods: kept, input, projection } = result;
