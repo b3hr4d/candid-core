@@ -109,6 +109,29 @@
 //! Tuple elements have no property to carry a doc and get none, and the
 //! compiler-free [`TsNames::from_pairs`] surface carries no docs at all.
 //!
+//! # Each `Actor` method carries its mode
+//!
+//! Since issue #244 each method of `Actor` is its call signature intersected
+//! with `$.WithMode<mode>` — `"query"`, `"composite_query"`, `"update"` or
+//! `"oneway"`, the same literal the `c.func` builder in `actor` takes — so a
+//! call layer tells a query from an update at compile time, from the `Actor`
+//! type alone, and reads it back with the runtime's `ModeOf`:
+//!
+//! ```ts
+//! type $Actor = {
+//!   icrc1_balance_of: ((arg0: $Account) => Promise<bigint>) & $.WithMode<"query">;
+//!   icrc1_transfer: ((arg0: $TransferArg) => Promise<$TransferResult>) & $.WithMode<"update">;
+//! };
+//! ```
+//!
+//! The mark is additive. `WithMode` is one optional property under a symbol
+//! no value has, so the call signature is the one emitted before, `keyof
+//! Actor` is unchanged, a plain async function still implements a method,
+//! and the module's export names are unchanged — a separate mode map would
+//! have taken a new export name from the declarations. An `Actor` written by
+//! hand without the mark stays valid, and `ModeOf` reads its methods as the
+//! whole `MethodMode` union: mode unknown.
+//!
 //! # Module layout: collision-free `$` bindings
 //!
 //! Since issue #188 every binding a generated module declares is a local
@@ -124,7 +147,7 @@
 //!
 //! const $actor: $.Schema<$.Principal> = $.c.rec(() => $.c.service({ … }));
 //! type $Actor = {
-//!   transfer: (arg0: $TransferArg) => Promise<$TransferResult>;
+//!   transfer: ((arg0: $TransferArg) => Promise<$TransferResult>) & $.WithMode<"update">;
 //! };
 //! export { $actor as actor, type $Actor as Actor };
 //! ```
@@ -817,9 +840,13 @@ impl Generator<'_> {
             }
             let mut signatures = Vec::with_capacity(methods.len());
             for method in &methods {
-                let func = match self.node(method.function)? {
-                    TypeNode::Func { args, results, .. } => (args.clone(), results.clone()),
-                    _ => (Vec::new(), Vec::new()),
+                let (func, mode) = match self.node(method.function)? {
+                    TypeNode::Func {
+                        args,
+                        results,
+                        mode,
+                    } => ((args.clone(), results.clone()), Some(*mode)),
+                    _ => ((Vec::new(), Vec::new()), None),
                 };
                 let (docs, parameters, origins) =
                     self.method_provenance(&method_origins, service_ty, method, func.0.len());
@@ -851,11 +878,21 @@ impl Generator<'_> {
                     .filter(|parameter| parameter.declared)
                     .map(|parameter| parameter.name.clone())
                     .collect();
+                // The method's mode rides on its type as a phantom
+                // intersection: the call signature is the one a call layer
+                // has always read, and `$.ModeOf` reads the mode back. A
+                // method whose node is not a func (no validated Contract
+                // holds one) carries none, which reads as mode unknown.
+                let signature =
+                    format!("({params}) => Promise<{reply}>", params = params.join(", "));
+                let ty = match mode {
+                    Some(mode) => format!("({signature}) & $.WithMode<\"{}\">", mode_text(mode)),
+                    None => signature,
+                };
                 signatures.push(format!(
-                    "{}  {key}: ({params}) => Promise<{reply}>;",
+                    "{}  {key}: {ty};",
                     doc_block(1, &docs, &tags),
                     key = method_key(&method.name),
-                    params = params.join(", "),
                 ));
             }
             let docs = doc_block(0, self.names.provenance.actor_docs(), &[]);

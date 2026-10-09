@@ -228,6 +228,25 @@ fn golden_fidelity() {
     assert_golden("fidelity");
 }
 
+/// Issue #244: each `Actor` method carries its mode — `query`,
+/// `composite_query`, `update`, `oneway` — as `$.WithMode<...>` intersected
+/// with its call signature, whether the method is written inline, typed by a
+/// declared func, or has a quoted name. The tsc gate compiles the golden, and
+/// `ts/tests/method-modes.test.ts` reads every mode back with `ModeOf` and
+/// proves the call signatures are the ones emitted before the marks.
+#[test]
+fn golden_modes() {
+    assert_golden("modes");
+}
+
+/// Issue #244: an actor with no methods generates an empty `Actor`, which
+/// has no member to carry a mode — the case a mode map would have had to
+/// render as an empty object.
+#[test]
+fn golden_methodless() {
+    assert_golden("methodless");
+}
+
 /// Issue #191: `.did` doc comments and argument names as JSDoc — on types,
 /// consts, record properties, union arms and `Actor` methods — including the
 /// hostile and degenerate texts the escaping rules exist for. The golden is
@@ -571,7 +590,7 @@ fn numeric_shaped_source_names_are_omitted() {
         assert!(!references_local(module, "Uses"), "{module}");
         assert!(module.contains("export { $Fine as Fine };"), "{module}");
         assert!(
-            module.contains("keep: (arg0: $Fine) => Promise<void>;"),
+            module.contains("keep: ((arg0: $Fine) => Promise<void>) & $.WithMode<\"update\">;"),
             "{module}"
         );
         assert!(
@@ -657,7 +676,7 @@ fn export_name_declarations_are_omitted() {
         "\n",
         "const $actor: $.Schema<$.Principal> = $.c.rec(() => $.c.service({ ping: $.c.func([], [], \"update\") }));\n",
         "type $Actor = {\n",
-        "  ping: () => Promise<void>;\n",
+        "  ping: (() => Promise<void>) & $.WithMode<\"update\">;\n",
         "};\n",
         "export { $actor as actor, type $Actor as Actor };\n",
     );
@@ -717,7 +736,7 @@ fn export_name_declarations_are_omitted() {
         "{module}"
     );
     assert!(
-        module.contains("  keep: (arg0: $Keep) => Promise<$Keep>;\n"),
+        module.contains("  keep: ((arg0: $Keep) => Promise<$Keep>) & $.WithMode<\"query\">;\n"),
         "{module}"
     );
     assert_eq!(
@@ -1147,7 +1166,9 @@ fn a_class_actor_keeps_its_methods_when_its_init_args_are_omitted() {
         )]
     );
     assert!(
-        generated.module.contains("  ping: () => Promise<void>;\n"),
+        generated
+            .module
+            .contains("  ping: (() => Promise<void>) & $.WithMode<\"update\">;\n"),
         "{}",
         generated.module
     );
@@ -1441,7 +1462,10 @@ fn actor_emission_covers_class_unwrap_and_proto_methods() {
         output.contains("export { $actor as actor, type $Actor as Actor };"),
         "{output}"
     );
-    assert!(output.contains("ping: () => Promise<void>;"), "{output}");
+    assert!(
+        output.contains("ping: (() => Promise<void>) & $.WithMode<\"update\">;"),
+        "{output}"
+    );
     assert!(
         output.contains("init args are install-time"),
         "the class note must be present: {output}"
@@ -1524,7 +1548,9 @@ fn a_declared_primitive_names_only_itself() {
         "{output}"
     );
     assert!(
-        output.contains("icrc1_balance_of: (arg0: $Account) => Promise<bigint>;"),
+        output.contains(
+            "icrc1_balance_of: ((arg0: $Account) => Promise<bigint>) & $.WithMode<\"query\">;"
+        ),
         "{output}"
     );
     assert!(
@@ -1559,7 +1585,7 @@ fn a_declared_primitive_renders_structurally_everywhere() {
         ("{ tag: \"b\" }", "an alias of null is a bare tag"),
         ("{ some: null } | null", "opt of an alias of null boxes"),
         (
-            "m: (arg0: bigint, arg1: number, arg2: Uint8Array) => Promise<[$.Principal, null]>;",
+            "m: ((arg0: bigint, arg1: number, arg2: Uint8Array) => Promise<[$.Principal, null]>) & $.WithMode<\"update\">;",
             "actor method",
         ),
         (
@@ -1802,15 +1828,15 @@ fn argument_names_become_parameters_and_param_tags() {
          };",
     );
     for (needle, why) in [
-        ("  /**\n   * @param x\n   */\n  a: (x: bigint) => Promise<void>;", "a"),
-        ("  /**\n   * @param y\n   */\n  b: (y: bigint) => Promise<void>;", "b shares a's node"),
-        ("  c: (arg0: bigint, arg1: string) => Promise<void>;", "unnamed"),
+        ("  /**\n   * @param x\n   */\n  a: ((x: bigint) => Promise<void>) & $.WithMode<\"update\">;", "a"),
+        ("  /**\n   * @param y\n   */\n  b: ((y: bigint) => Promise<void>) & $.WithMode<\"update\">;", "b shares a's node"),
+        ("  c: ((arg0: bigint, arg1: string) => Promise<void>) & $.WithMode<\"update\">;", "unnamed"),
         (
-            "  /**\n   * @param ok\n   */\n  d: (arg0: bigint, arg1: bigint, ok: bigint) => Promise<void>;",
+            "  /**\n   * @param ok\n   */\n  d: ((arg0: bigint, arg1: bigint, ok: bigint) => Promise<void>) & $.WithMode<\"update\">;",
             "reserved and non-identifier names fall back",
         ),
         (
-            "  /**\n   * @param arg1\n   */\n  e: (arg1: bigint, arg1_: string) => Promise<void>;",
+            "  /**\n   * @param arg1\n   */\n  e: ((arg1: bigint, arg1_: string) => Promise<void>) & $.WithMode<\"update\">;",
             "a fallback never steals a declared name",
         ),
     ] {
@@ -1830,7 +1856,7 @@ fn actor_methods_take_docs_from_the_right_occurrence() {
     );
     assert!(
         by_reference.contains(
-            "  /**\n   * from S\n   * @param x\n   */\n  f: (x: bigint) => Promise<void>;"
+            "  /**\n   * from S\n   * @param x\n   */\n  f: ((x: bigint) => Promise<void>) & $.WithMode<\"update\">;"
         ),
         "{by_reference}"
     );
@@ -1843,7 +1869,7 @@ fn actor_methods_take_docs_from_the_right_occurrence() {
         "service : (init : nat) -> {\n  /// from the class body\n  g : (y : text) -> ();\n};",
     );
     assert!(
-        class.contains("  /**\n   * from the class body\n   * @param y\n   */\n  g: (y: string) => Promise<void>;"),
+        class.contains("  /**\n   * from the class body\n   * @param y\n   */\n  g: ((y: string) => Promise<void>) & $.WithMode<\"update\">;"),
         "{class}"
     );
 

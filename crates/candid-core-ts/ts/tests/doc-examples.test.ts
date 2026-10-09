@@ -39,12 +39,14 @@ import {
   type FuncValue,
   type Infer,
   type MethodMode,
+  type ModeOf,
   type OptDomain,
   type Principal,
   type ResolvedNode,
   type Schema,
   type SchemaNode,
   type ServiceMethod,
+  type WithMode,
 } from "../schema.ts";
 import { formModel } from "../forms.ts";
 import {
@@ -176,6 +178,17 @@ test("every shipped @example is mirrored verbatim in this file", () => {
 {
   const mode: MethodMode = "composite_query";
   void mode;
+}
+
+{
+  type Ledger = { fee: (() => Promise<bigint>) & WithMode<"query"> };
+  const ledger: Ledger = { fee: async () => 10_000n };
+  void ledger;
+}
+
+{
+  type Fee = ModeOf<(() => Promise<bigint>) & WithMode<"query">>; // "query"
+  type Untagged = ModeOf<() => Promise<bigint>>; // MethodMode
 }
 
 // --- Mirrors: the `c` builders --------------------------------------------
@@ -313,6 +326,14 @@ test("the node-interface examples read exactly what the comment claims", () => {
   assert.strictEqual(c.rec(() => c.nat).body(), c.nat);
   assert.strictEqual(c.func([c.principal], [c.nat], "query").mode, "query");
   assert(c.service({ balance: c.func([], [c.nat], "query") }).methods.balance !== undefined);
+});
+
+test("the method-mode examples read exactly what the comment claims", () => {
+  type Equals<A, B> =
+    (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2 ? true : false;
+  const fee: Equals<ModeOf<(() => Promise<bigint>) & WithMode<"query">>, "query"> = true;
+  const untagged: Equals<ModeOf<() => Promise<bigint>>, MethodMode> = true;
+  assert.deepStrictEqual([fee, untagged], [true, true]);
 });
 
 test("the principal examples read exactly what the comment claims", () => {

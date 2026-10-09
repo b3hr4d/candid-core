@@ -31,7 +31,8 @@ inert `{ principal, method }` reference, a `service` value is the principal
 of a running service, and a contract with an actor exports the service schema
 (`actor`) plus the call interface (the type `Actor`) — one
 async method per service method, typed for whatever call layer a consumer
-builds on the codec; the package itself stops at the bytes. A `class` denotes its
+builds on the codec, each carrying its mode as `$.WithMode<mode>` since
+issue #244; the package itself stops at the bytes. A `class` denotes its
 running service; init args are install-time metadata, noted per declaration
 and not exposed. Field names are
 caller-supplied through `TsNames` — the semantic Contract stores only label

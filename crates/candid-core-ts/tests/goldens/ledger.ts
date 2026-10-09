@@ -43,13 +43,13 @@ export { $TransferResult as TransferResult };
 
 const $actor: $.Schema<$.Principal> = $.c.rec(() => $.c.service({ fee: $.c.func([], [$Tokens], "query"), decimals: $.c.func([], [$.c.nat8], "query"), name: $.c.func([], [$.c.text], "query"), balance_of: $.c.func([$Account], [$Tokens], "query"), get_transactions: $.c.func([$.c.record({ start: $.c.nat, length: $.c.nat })], [$TransactionsResponse], "query"), transfer: $.c.func([$TransferArg], [$TransferResult], "update"), total_supply: $.c.func([], [$Tokens], "query"), symbol: $.c.func([], [$.c.text], "query") }));
 type $Actor = {
-  fee: () => Promise<$Tokens>;
-  decimals: () => Promise<number>;
-  name: () => Promise<string>;
-  balance_of: (arg0: $Account) => Promise<$Tokens>;
-  get_transactions: (arg0: { start: bigint; length: bigint }) => Promise<$TransactionsResponse>;
-  transfer: (arg0: $TransferArg) => Promise<$TransferResult>;
-  total_supply: () => Promise<$Tokens>;
-  symbol: () => Promise<string>;
+  fee: (() => Promise<$Tokens>) & $.WithMode<"query">;
+  decimals: (() => Promise<number>) & $.WithMode<"query">;
+  name: (() => Promise<string>) & $.WithMode<"query">;
+  balance_of: ((arg0: $Account) => Promise<$Tokens>) & $.WithMode<"query">;
+  get_transactions: ((arg0: { start: bigint; length: bigint }) => Promise<$TransactionsResponse>) & $.WithMode<"query">;
+  transfer: ((arg0: $TransferArg) => Promise<$TransferResult>) & $.WithMode<"update">;
+  total_supply: (() => Promise<$Tokens>) & $.WithMode<"query">;
+  symbol: (() => Promise<string>) & $.WithMode<"query">;
 };
 export { $actor as actor, type $Actor as Actor };
