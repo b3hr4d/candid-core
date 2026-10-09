@@ -1873,6 +1873,55 @@
       "did": "type V = vec S;\ntype S = record { b : opt nat; z : nat };\ntype O = opt nat;\n",
       "expected": ["V"],
       "hex": "4449444c026d016c017a7d010095ac14(00*333333)"
+    },
+    {
+      "name": "service_compat_extra_method_and_opt_result_field",
+      "target": "decode",
+      "note": "A service reference whose wire type L has a method W lacks and an added opt result field, read at the written service W. L <: W (methods only the live service has are ignored, and a record may carry an extra field), so both decode the reference. The case checkCompatible calls compatible: a live service with extra methods and an added opt result field.",
+      "origin": "written by hand for the service-level compatibility check (checkCompatible)",
+      "agrees": "Both accept.",
+      "did": "type R = record { x : nat };\ntype W = service { get : () -> (R) query };\ntype LR = record { x : nat; added : opt text };\ntype L = service { get : () -> (LR) query; more : () -> () };\n",
+      "expected": ["W"],
+      "hex": "4449444c0569020367657401046d6f7265046a00010201016c02787dc0a98fe201036e716a00000001000100"
+    },
+    {
+      "name": "service_compat_mode_changed",
+      "target": "decode",
+      "note": "A service reference whose method get is an update on the wire and a query at the expected type: modes must be equal, so it is not a subtype. The case checkCompatible reports as mode_changed.",
+      "origin": "written by hand for the service-level compatibility check (checkCompatible)",
+      "agrees": "Both refuse.",
+      "did": "type W = service { get : () -> (nat) query };\ntype L = service { get : () -> (nat) };\n",
+      "expected": ["W"],
+      "hex": "4449444c02690103676574016a00017d0001000100"
+    },
+    {
+      "name": "service_compat_method_missing",
+      "target": "decode",
+      "note": "A service reference whose wire type lacks the expected method gone: not a subtype. The case checkCompatible reports as method_missing.",
+      "origin": "written by hand for the service-level compatibility check (checkCompatible)",
+      "agrees": "Both refuse.",
+      "did": "type W = service { get : () -> (nat) query; gone : () -> () };\ntype L = service { get : () -> (nat) query };\n",
+      "expected": ["W"],
+      "hex": "4449444c02690103676574016a00017d010101000100"
+    },
+    {
+      "name": "service_compat_result_arm_added",
+      "target": "decode",
+      "note": "A service reference whose method returns a variant with an arm the expected result lacks: results are covariant, so it is not a subtype. The case checkCompatible reports as method_incompatible at $results[0].c.",
+      "origin": "written by hand for the service-level compatibility check (checkCompatible)",
+      "agrees": "Both refuse.",
+      "did": "type E = variant { a; b };\ntype W = service { get : () -> (E) query };\ntype LE = variant { a; b; c };\ntype L = service { get : () -> (LE) query };\n",
+      "expected": ["W"],
+      "hex": "4449444c03690103676574016a00010201016b03617f627f637f01000100"
+    },
+    {
+      "name": "service_compat_unsound_subtype_memo",
+      "target": "decode",
+      "note": "The unsound-memo case of reference_unsound_subtype_memo, one level up: a service reference whose method get returns W3, read at a service whose get returns E3. W7 <: E7 is false (W5 has an arm x that V lacks), so the wire service is not a subtype; the reference keeps (W7, E7) in its memo after retracting (W5, V) and accepts. The runtime refuses type_mismatch, and checkCompatible refuses the same pair (method_incompatible at $results[0].v.c.x). Reference bug (unsound coinductive memo).",
+      "origin": "written by hand for the service-level compatibility check (checkCompatible)",
+      "did": "type W5 = variant { a : W7; x : text };\ntype W7 = variant { c : W5 };\ntype W3 = variant { c : opt W5; v : W7 };\ntype L = service { get : () -> (W3) };\ntype V = variant { a : E7 };\ntype E7 = variant { c : V };\ntype E3 = variant { c : opt V; v : E7 };\ntype W = service { get : () -> (E3) };\n",
+      "expected": ["W"],
+      "hex": "4449444c06690103676574016a000102006b02630376056e046b02610578716b01630401000100"
     }
   ]
 }

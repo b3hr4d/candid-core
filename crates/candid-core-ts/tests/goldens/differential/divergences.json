@@ -379,6 +379,11 @@
       "side": "reference",
       "symptom": "ts=reject:type_mismatch ref=accept"
     },
+    "r/service_compat_unsound_subtype_memo": {
+      "issue": 227,
+      "side": "reference",
+      "symptom": "ts=reject:type_mismatch ref=accept"
+    },
     "r/skip_extra_arg_opt_258_levels": {
       "issue": 103,
       "side": "decision",
