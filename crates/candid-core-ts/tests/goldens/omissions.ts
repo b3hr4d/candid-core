@@ -23,26 +23,26 @@
 // Omitted: method uses_actor (references_omitted via actor)
 import * as $ from "@candid-core/schema";
 
-type $Directory = { svc: $.Principal };
-const $Directory: $.Schema<$Directory> = $.c.rec(() => $.c.record({ svc: $.c.service({ g: $.c.func([$Good], [], "update") }) }));
+export type Directory = { svc: $.Principal };
+const $Directory: $.Schema<Directory> = $.c.rec(() => $.c.record({ svc: $.c.service({ g: $.c.func([$Good], [], "update") }) }));
 export { $Directory as Directory };
 
-type $Good = { a: bigint };
-const $Good: $.Schema<$Good> = $.c.rec(() => $.c.record({ a: $.c.nat }));
+export type Good = { a: bigint };
+const $Good: $.Schema<Good> = $.c.rec(() => $.c.record({ a: $.c.nat }));
 export { $Good as Good };
 
-type $List = { head: bigint; tail: $List } | null;
-const $List: $.Schema<$List> = $.c.rec(() => $.c.opt($.c.record({ head: $.c.nat, tail: $List })));
+export type List = { head: bigint; tail: List } | null;
+const $List: $.Schema<List> = $.c.rec(() => $.c.opt($.c.record({ head: $.c.nat, tail: $List })));
 export { $List as List };
 
-type $NoValue = never | null;
-const $NoValue: $.Schema<$NoValue> = $.c.rec(() => $.c.opt($.c.empty));
+export type NoValue = never | null;
+const $NoValue: $.Schema<NoValue> = $.c.rec(() => $.c.opt($.c.empty));
 export { $NoValue as NoValue };
 
 const $actor: $.Schema<$.Principal> = $.c.rec(() => $.c.service({ ok: $.c.func([$Good], [$Good], "query"), directory: $.c.func([$Directory], [], "update"), list: $.c.func([], [$List], "query") }));
-type $Actor = {
-  ok: ((arg0: $Good) => Promise<$Good>) & $.WithMode<"query">;
-  directory: ((arg0: $Directory) => Promise<void>) & $.WithMode<"update">;
-  list: (() => Promise<$List>) & $.WithMode<"query">;
+export type Actor = {
+  ok: ((arg0: Good) => Promise<Good>) & $.WithMode<"query">;
+  directory: ((arg0: Directory) => Promise<void>) & $.WithMode<"update">;
+  list: (() => Promise<List>) & $.WithMode<"query">;
 };
-export { $actor as actor, type $Actor as Actor };
+export { $actor as actor };

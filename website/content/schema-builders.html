@@ -198,12 +198,12 @@ unit(): UnitSchema
 </p>
 
 <pre data-lang="ts" data-file="crates/candid-core-ts/tests/goldens/collections.ts" data-partial>
-type $Grid = Array<Uint8Array>;
-const $Grid: $.Schema<$Grid> = $.c.rec(() => $.c.vec($.c.blob()));
+export type Grid = Array<Uint8Array>;
+const $Grid: $.Schema<Grid> = $.c.rec(() => $.c.vec($.c.blob()));
 export { $Grid as Grid };
 
-type $Unit = Record<string, never>;
-const $Unit: $.Schema<$Unit> = $.c.rec(() => $.c.unit());
+export type Unit = Record<string, never>;
+const $Unit: $.Schema<Unit> = $.c.rec(() => $.c.unit());
 export { $Unit as Unit };
 </pre>
 
@@ -231,8 +231,8 @@ tuple<const S extends readonly AnyFieldSchema[]>(elements: S): TupleSchema<S>
 </p>
 
 <pre data-lang="ts" data-file="crates/candid-core-ts/tests/goldens/collections.ts" data-partial>
-type $Pair = [bigint, string];
-const $Pair: $.Schema<$Pair> = $.c.rec(() => $.c.tuple([$.c.nat, $.c.text]));
+export type Pair = [bigint, string];
+const $Pair: $.Schema<Pair> = $.c.rec(() => $.c.tuple([$.c.nat, $.c.text]));
 export { $Pair as Pair };
 </pre>
 
@@ -264,8 +264,8 @@ variant<A extends FieldSchemas>(arms: A): VariantSchema<A>
 </p>
 
 <pre data-lang="ts" data-file="crates/candid-core-ts/tests/goldens/variants.ts" data-partial>
-type $Status = { tag: "ok" } | { tag: "busy"; value: number } | { tag: "failed"; value: string };
-const $Status: $.Schema<$Status> = $.c.rec(() => $.c.variant({ ok: $.c.null, busy: $.c.nat32, failed: $.c.text }));
+export type Status = { tag: "ok" } | { tag: "busy"; value: number } | { tag: "failed"; value: string };
+const $Status: $.Schema<Status> = $.c.rec(() => $.c.variant({ ok: $.c.null, busy: $.c.nat32, failed: $.c.text }));
 export { $Status as Status };
 </pre>
 
@@ -323,12 +323,12 @@ service(methods: { readonly [name: string]: AnySchema }): ServiceSchema
 </p>
 
 <pre data-lang="ts" data-file="crates/candid-core-ts/tests/goldens/deferred.ts" data-partial>
-type $Callback = { principal: $.Principal; method: string };
-const $Callback: $.Schema<$Callback> = $.c.rec(() => $.c.func([$.c.nat], [$.c.text], "query"));
+export type Callback = { principal: $.Principal; method: string };
+const $Callback: $.Schema<Callback> = $.c.rec(() => $.c.func([$.c.nat], [$.c.text], "query"));
 export { $Callback as Callback };
 
-type $Registry = $.Principal;
-const $Registry: $.Schema<$Registry> = $.c.rec(() => $.c.service({ register: $.c.func([$.c.text], [$.c.nat], "update") }));
+export type Registry = $.Principal;
+const $Registry: $.Schema<Registry> = $.c.rec(() => $.c.service({ register: $.c.func([$.c.text], [$.c.nat], "update") }));
 export { $Registry as Registry };
 </pre>
 
@@ -403,8 +403,8 @@ type Account = Infer<typeof Account>; // { owner: Principal; balance: bigint }
 </p>
 
 <pre data-lang="ts" data-file="crates/candid-core-ts/tests/goldens/ledger.ts" data-partial>
-type $Tokens = { e8s: bigint };
-const $Tokens: $.Schema<$Tokens> = $.c.rec(() => $.c.record({ e8s: $.c.nat64 }));
+export type Tokens = { e8s: bigint };
+const $Tokens: $.Schema<Tokens> = $.c.rec(() => $.c.record({ e8s: $.c.nat64 }));
 export { $Tokens as Tokens };
 </pre>
 

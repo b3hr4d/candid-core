@@ -1,0 +1,265 @@
+// Issue #245: each declaration's type is declared under its Candid name, so a
+// consumer's compiler errors name the type it imported. `$` stays on the
+// value binding, and on the type only where the name cannot be a type here.
+//
+// Ordinary names, referenced by name from records, a variant, a recursive
+// type, a vec, a later alias and the actor: each is declared plain.
+
+type Account = record { owner : principal; subaccount : opt blob };
+type TransferArg = record { to : Account; amount : nat };
+type TransferResult = variant { ok : nat; err : text };
+type Tree = variant { leaf : nat; node : record { left : Tree; right : Tree } };
+type Forest = vec Tree;
+type Grove = Forest;
+
+// The ambient types the lowerings reference keep the `$` local for their
+// type, so each lowering still means the global (`Array<T>`, `Promise<T>`,
+// `Uint8Array`, `Record<string, never>`).
+
+type Array = record { items : vec Account };
+type Promise = record { pending : Forest };
+type Record = record { bytes : blob; unit : record {} };
+type Uint8Array = int16;
+
+// Contextual keywords TypeScript accepts as a type's name, declared and
+// referenced: each is declared plain, and `Contextual` references each.
+
+type abstract = record { abstract : nat8 };
+type accessor = record { accessor : nat8 };
+type arguments = record { arguments : nat8 };
+type assert = record { assert : nat8 };
+type asserts = record { asserts : nat8 };
+type async = record { async : nat8 };
+type constructor = record { constructor : nat8 };
+type declare = record { declare : nat8 };
+type defer = record { defer : nat8 };
+type eval = record { eval : nat8 };
+type from = record { from : nat8 };
+type get = record { get : nat8 };
+type global = record { global : nat8 };
+type is = record { is : nat8 };
+type module = record { module : nat8 };
+type namespace = record { namespace : nat8 };
+type of = record { of : nat8 };
+type out = record { out : nat8 };
+type override = record { override : nat8 };
+type require = record { require : nat8 };
+type satisfies = record { satisfies : nat8 };
+type set = record { set : nat8 };
+type source = record { source : nat8 };
+type using = record { using : nat8 };
+type Contextual = record {
+  abstract : abstract;
+  accessor : accessor;
+  arguments : arguments;
+  assert : assert;
+  asserts : asserts;
+  async : async;
+  constructor : constructor;
+  declare : declare;
+  defer : defer;
+  eval : eval;
+  from : from;
+  get : get;
+  global : global;
+  is : is;
+  module : module;
+  namespace : namespace;
+  of : of;
+  out : out;
+  override : override;
+  require : require;
+  satisfies : satisfies;
+  set : set;
+  source : source;
+  using : using;
+};
+
+// Every reserved word, predefined type name or type operator Candid source
+// can declare falls back, declared and referenced (`Refused` references
+// each), and so does `intrinsic`, which TypeScript refuses where it starts
+// an alias's body (below). `import`, `null`, `true` and `false` are Candid
+// tokens, so only a Contract document can declare them; the generator's own
+// tests cover those.
+
+type any = record { any : nat16 };
+type as = record { as : nat16 };
+type await = record { await : nat16 };
+type bigint = record { bigint : nat16 };
+type boolean = record { boolean : nat16 };
+type break = record { break : nat16 };
+type case = record { case : nat16 };
+type catch = record { catch : nat16 };
+type class = record { class : nat16 };
+type const = record { const : nat16 };
+type continue = record { continue : nat16 };
+type debugger = record { debugger : nat16 };
+type default = record { default : nat16 };
+type delete = record { delete : nat16 };
+type do = record { do : nat16 };
+type else = record { else : nat16 };
+type enum = record { enum : nat16 };
+type export = record { export : nat16 };
+type extends = record { extends : nat16 };
+type finally = record { finally : nat16 };
+type for = record { for : nat16 };
+type function = record { function : nat16 };
+type if = record { if : nat16 };
+type implements = record { implements : nat16 };
+type in = record { in : nat16 };
+type infer = record { infer : nat16 };
+type instanceof = record { instanceof : nat16 };
+type interface = record { interface : nat16 };
+type intrinsic = record { intrinsic : nat16 };
+type keyof = record { keyof : nat16 };
+type let = record { let : nat16 };
+type never = record { never : nat16 };
+type new = record { new : nat16 };
+type number = record { number : nat16 };
+type object = record { object : nat16 };
+type package = record { package : nat16 };
+type private = record { private : nat16 };
+type protected = record { protected : nat16 };
+type public = record { public : nat16 };
+type readonly = record { readonly : nat16 };
+type return = record { return : nat16 };
+type static = record { static : nat16 };
+type string = record { string : nat16 };
+type super = record { super : nat16 };
+type switch = record { switch : nat16 };
+type symbol = record { symbol : nat16 };
+type this = record { this : nat16 };
+type throw = record { throw : nat16 };
+type try = record { try : nat16 };
+type typeof = record { typeof : nat16 };
+type undefined = record { undefined : nat16 };
+type unique = record { unique : nat16 };
+type unknown = record { unknown : nat16 };
+type var = record { var : nat16 };
+type void = record { void : nat16 };
+type while = record { while : nat16 };
+type with = record { with : nat16 };
+type yield = record { yield : nat16 };
+type Refused = record {
+  any : any;
+  as : as;
+  await : await;
+  bigint : bigint;
+  boolean : boolean;
+  break : break;
+  case : case;
+  catch : catch;
+  class : class;
+  const : const;
+  continue : continue;
+  debugger : debugger;
+  default : default;
+  delete : delete;
+  do : do;
+  else : else;
+  enum : enum;
+  export : export;
+  extends : extends;
+  finally : finally;
+  for : for;
+  function : function;
+  if : if;
+  implements : implements;
+  in : in;
+  infer : infer;
+  instanceof : instanceof;
+  interface : interface;
+  intrinsic : intrinsic;
+  keyof : keyof;
+  let : let;
+  never : never;
+  new : new;
+  number : number;
+  object : object;
+  package : package;
+  private : private;
+  protected : protected;
+  public : public;
+  readonly : readonly;
+  return : return;
+  static : static;
+  string : string;
+  super : super;
+  switch : switch;
+  symbol : symbol;
+  this : this;
+  throw : throw;
+  try : try;
+  typeof : typeof;
+  undefined : undefined;
+  unique : unique;
+  unknown : unknown;
+  var : var;
+  void : void;
+  while : while;
+  with : with;
+  yield : yield;
+};
+
+// Each contextual keyword, and `intrinsic`, as the start of an alias's body,
+// alone and under `opt` (`export type zz_of = of`, `of | null`), where
+// TypeScript reads a leading `intrinsic` as its own keyword. The `zz_` names
+// sort after the words they alias, so each alias references its word.
+
+type zz_abstract = abstract;
+type zz_opt_abstract = opt abstract;
+type zz_accessor = accessor;
+type zz_opt_accessor = opt accessor;
+type zz_arguments = arguments;
+type zz_opt_arguments = opt arguments;
+type zz_assert = assert;
+type zz_opt_assert = opt assert;
+type zz_asserts = asserts;
+type zz_opt_asserts = opt asserts;
+type zz_async = async;
+type zz_opt_async = opt async;
+type zz_constructor = constructor;
+type zz_opt_constructor = opt constructor;
+type zz_declare = declare;
+type zz_opt_declare = opt declare;
+type zz_defer = defer;
+type zz_opt_defer = opt defer;
+type zz_eval = eval;
+type zz_opt_eval = opt eval;
+type zz_from = from;
+type zz_opt_from = opt from;
+type zz_get = get;
+type zz_opt_get = opt get;
+type zz_global = global;
+type zz_opt_global = opt global;
+type zz_is = is;
+type zz_opt_is = opt is;
+type zz_module = module;
+type zz_opt_module = opt module;
+type zz_namespace = namespace;
+type zz_opt_namespace = opt namespace;
+type zz_of = of;
+type zz_opt_of = opt of;
+type zz_out = out;
+type zz_opt_out = opt out;
+type zz_override = override;
+type zz_opt_override = opt override;
+type zz_require = require;
+type zz_opt_require = opt require;
+type zz_satisfies = satisfies;
+type zz_opt_satisfies = opt satisfies;
+type zz_set = set;
+type zz_opt_set = opt set;
+type zz_source = source;
+type zz_opt_source = opt source;
+type zz_using = using;
+type zz_opt_using = opt using;
+type zz_intrinsic = intrinsic;
+type zz_opt_intrinsic = opt intrinsic;
+
+service : {
+  transfer : (TransferArg) -> (TransferResult);
+  remove : (delete) -> (opt delete) query;
+  pending : (Array) -> (Promise) query;
+  words : (of, Contextual) -> (Refused, Grove);
+}

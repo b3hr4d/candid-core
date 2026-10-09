@@ -221,14 +221,16 @@ fails closed instead of quietly renaming a field. Passing no table at all is
 legal and renders every field as `_id_`, which is also what
 `compile --no-source-info` leaves you with.
 
-A generated module imports this package as the namespace `$` and binds every
-declaration as a `$`-prefixed local exported under its Candid name, so no
-Candid name — `c`, `Array`, `delete` — collides with the module's own
-bindings and you import the names you wrote: `import { Tokens, actor, type
-Actor } from "./ledger"`. The `.did`'s doc comments and argument names become
-JSDoc on the exported types, on record properties and variant arms, and on the
-methods of `Actor`, and every `vec nat8` is a `Uint8Array`, however its element
-type is named.
+A generated module imports this package as the namespace `$`, declares each
+declaration's type under its Candid name and binds its schema as a
+`$`-prefixed local exported under that name, so no Candid name — `c`,
+`Array`, `delete` — collides with the module's own bindings, you import the
+names you wrote (`import { Tokens, actor, type Actor } from "./ledger"`), and
+a compiler error names them too. A name that cannot be a type in the module
+(`Array`, `delete`) keeps the `$` local for its type. The `.did`'s doc
+comments and argument names become JSDoc on the exported types, on record
+properties and variant arms, and on the methods of `Actor`, and every
+`vec nat8` is a `Uint8Array`, however its element type is named.
 
 ## Services and func references
 

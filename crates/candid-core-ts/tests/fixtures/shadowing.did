@@ -2,8 +2,10 @@
 // before the `$` layout (issue #188) and were refused (#116, #130): the
 // runtime's `c`, `Schema` and `PrincipalValue` (the principal type then; it is
 // `Principal` since issue #187, covered in golden.rs), the ambient types the
-// lowerings reference, and TypeScript reserved words. Each binds as a
-// `$`-prefixed local and leaves under its Candid name. Every one uses a
+// lowerings reference, and TypeScript reserved words. Each value binds as a
+// `$`-prefixed local and leaves under its Candid name; since issue #245 the
+// type is declared under the Candid name itself, except for the ambient
+// types and reserved words, whose type keeps the `$` local. Every one uses a
 // primitive no other declaration uses, so no alias captures a lowering.
 type c = int8;
 type Schema = int16;

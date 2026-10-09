@@ -247,6 +247,22 @@ fn golden_methodless() {
     assert_golden("methodless");
 }
 
+/// Issue #245: each declaration's type is declared under its Candid name
+/// (`export type Account = …`) and only its value binds the `$` local, so a
+/// consumer's compiler errors name `Account`. A name that cannot be a type in
+/// the module — an ambient type a lowering references, or a word TypeScript
+/// refuses there — keeps the `$` local for its type too, wherever it is
+/// referenced. The fixture declares every such word Candid source admits, and
+/// every contextual keyword, which stays plain, and references each from a
+/// record and, for the contextual keywords and `intrinsic`, as the start of an
+/// alias's body (`type A = X`, `type A = opt X`); the tsc equality gate
+/// compiles the golden, so a word missing from the fallback list fails it.
+/// `ts/tests/type-names.test.ts` reads the compiler's own error messages.
+#[test]
+fn golden_typenames() {
+    assert_golden("typenames");
+}
+
 /// Issue #191: `.did` doc comments and argument names as JSDoc — on types,
 /// consts, record properties, union arms and `Actor` methods — including the
 /// hostile and degenerate texts the escaping rules exist for. The golden is
@@ -408,10 +424,11 @@ fn nested_func_generates() {
         .expect("a reference to a func alias generates since #104")
         .module;
     assert!(
-        output.contains("type $Callback = { principal: $.Principal; method: string };"),
+        output.contains("export type Callback = { principal: $.Principal; method: string };"),
         "{output}"
     );
-    assert!(output.contains("hook: $Callback"), "{output}");
+    assert!(output.contains("hook: Callback"), "{output}");
+    assert!(output.contains("hook: $Callback"), "the builder: {output}");
     assert!(output.contains("\"query\""), "{output}");
 }
 
@@ -425,22 +442,22 @@ fn collapsing_options_box() {
     for (source, alias) in [
         (
             "type DoubleOpt = opt opt nat;",
-            "type $DoubleOpt = { some: bigint | null } | null;",
+            "export type DoubleOpt = { some: bigint | null } | null;",
         ),
         (
             "type OptNull = opt null;",
-            "type $OptNull = { some: null } | null;",
+            "export type OptNull = { some: null } | null;",
         ),
         (
             "type OptReserved = opt reserved;",
-            "type $OptReserved = { some: unknown } | null;",
+            "export type OptReserved = { some: unknown } | null;",
         ),
         (
             "type Inner = opt nat;\ntype Outer = opt Inner;",
-            "type $Outer = { some: $Inner } | null;",
+            "export type Outer = { some: Inner } | null;",
         ),
-        ("type E = opt empty;", "type $E = never | null;"),
-        ("type N = opt nat;", "type $N = bigint | null;"),
+        ("type E = opt empty;", "export type E = never | null;"),
+        ("type N = opt nat;", "export type N = bigint | null;"),
     ] {
         let compilation = compile_did(source).expect("source must compile");
         let output = generate_module(
@@ -474,7 +491,7 @@ fn collapsing_options_box() {
         .expect("a self-cycle through opt generates")
         .module;
     assert!(
-        output.contains("type $L = { some: $L } | null;"),
+        output.contains("export type L = { some: L } | null;"),
         "{output}"
     );
     assert!(output.contains("$.c.opt("), "{output}");
@@ -484,7 +501,10 @@ fn collapsing_options_box() {
 /// hostile or accidental quote cannot produce syntactically invalid output.
 /// A non-default module is imported as the bare `Principal`, which no
 /// `$`-prefixed declaration local can collide with — a declaration of that
-/// very name included (issues #188 and #187).
+/// very name included (issues #188 and #187): its type then keeps the `$`
+/// local (issue #245), because declaring it as `Principal` would shadow the
+/// import every principal lowering means. At the default the runtime type is
+/// `$.Principal`, and the declaration's type is declared plain.
 #[test]
 fn principal_import_is_escaped() {
     let compilation = compile_did("type Who = principal;\ntype Principal = record { who : Who };")
@@ -499,11 +519,20 @@ fn principal_import_is_escaped() {
         output.contains("import type { Principal } from \"bad\\\"path\";\n"),
         "specifier must be escaped: {output}"
     );
-    assert!(output.contains("type $Who = Principal;"), "{output}");
+    assert!(output.contains("export type Who = Principal;"), "{output}");
+    assert!(
+        output.contains("\ntype $Principal = { _5941054_: Principal };\n"),
+        "{output}"
+    );
+    assert!(
+        output.contains("const $Principal: $.Schema<$Principal> = "),
+        "{output}"
+    );
     assert!(
         output.contains("export { $Principal as Principal };"),
         "{output}"
     );
+    assert!(!output.contains("export type Principal"), "{output}");
     assert!(!output.contains("$.Principal"), "{output}");
     assert!(!output.contains("PrincipalValue"), "{output}");
 
@@ -516,14 +545,26 @@ fn principal_import_is_escaped() {
     )
     .expect("generate")
     .module;
-    assert!(output.contains("type $Who = $.Principal;"), "{output}");
+    assert!(
+        output.contains("export type Who = $.Principal;"),
+        "{output}"
+    );
+    assert!(
+        output.contains("export type Principal = { _5941054_: $.Principal };\n"),
+        "{output}"
+    );
+    assert!(
+        output.contains("export { $Principal as Principal };"),
+        "{output}"
+    );
     assert!(!output.contains("import type"), "{output}");
     assert!(!output.contains("PrincipalValue"), "{output}");
 }
 
 /// Issue #187, criterion 8: the runtime's principal type is now named
 /// `Principal`, and a contract declaring `type Principal = record { p :
-/// principal }` still generates — the declaration binds `$Principal`, the
+/// principal }` still generates — the declaration's value binds
+/// `$Principal` and its type is declared as `Principal` (issue #245), the
 /// runtime type is `$.Principal`, and the two never meet. Pinned line by
 /// line, so an emitter that referenced the runtime type through any bare
 /// local (an unprefixed `import type { Principal }` at the default, say)
@@ -543,8 +584,8 @@ fn principal_named_declaration_generates() {
             "// Generated by candid-core-ts from a candid-core Contract. Do not edit.\n",
             "import * as $ from \"@candid-core/schema\";\n",
             "\n",
-            "type $Principal = { p: $.Principal };\n",
-            "const $Principal: $.Schema<$Principal> = $.c.rec(() => $.c.record({ p: $.c.principal }));\n",
+            "export type Principal = { p: $.Principal };\n",
+            "const $Principal: $.Schema<Principal> = $.c.rec(() => $.c.record({ p: $.c.principal }));\n",
             "export { $Principal as Principal };\n",
         ),
     );
@@ -586,11 +627,11 @@ fn numeric_shaped_source_names_are_omitted() {
             !module.contains("_123_"),
             "the reserved name renders nowhere: {module}"
         );
-        assert!(!references_local(module, bad), "{module}");
-        assert!(!references_local(module, "Uses"), "{module}");
+        assert!(!references_declaration(module, bad), "{module}");
+        assert!(!references_declaration(module, "Uses"), "{module}");
         assert!(module.contains("export { $Fine as Fine };"), "{module}");
         assert!(
-            module.contains("keep: ((arg0: $Fine) => Promise<void>) & $.WithMode<\"update\">;"),
+            module.contains("keep: ((arg0: Fine) => Promise<void>) & $.WithMode<\"update\">;"),
             "{module}"
         );
         assert!(
@@ -611,34 +652,49 @@ fn numeric_shaped_source_names_are_omitted() {
 
 /// Issue #188: the declaration names #116 and #130 refused — the module's
 /// imports, the ambient types its lowerings reference, and (new) reserved
-/// words — generate, because every declaration binds as a `$`-prefixed
-/// local and leaves under its Candid name. The `shadowing` golden carries
-/// them through the tsc gate and Node; this pins each former refusal
-/// individually, actor or not, so no single case can regress unnoticed.
+/// words — generate, because every declaration's value binds as a
+/// `$`-prefixed local and leaves under its Candid name. Since issue #245 the
+/// type is declared under the Candid name itself (`export type c = …`)
+/// unless that name cannot be a type in the module: an ambient type a
+/// lowering references, or a word TypeScript refuses there, keeps the `$`
+/// local for its type too (`type $Array = …`). The `shadowing` golden
+/// carries them through the tsc gate and Node, and the `typenames` golden
+/// every refused word; this pins each former refusal individually, actor or
+/// not, so no single case can regress unnoticed.
 #[test]
 fn former_binding_names_generate() {
-    for (source, name) in [
-        ("type c = nat8;", "c"),
-        ("type Schema = nat8;", "Schema"),
+    for (source, name, plain) in [
+        ("type c = nat8;", "c", true),
+        ("type Schema = nat8;", "Schema", true),
         (
             "type PrincipalValue = record { p : principal };",
             "PrincipalValue",
+            true,
         ),
-        ("type PrincipalValue = nat8;", "PrincipalValue"),
-        ("type Array = nat8; type V = vec text;", "Array"),
-        ("type Record = nat8; type E = record {};", "Record"),
-        ("type Uint8Array = text; type B = blob;", "Uint8Array"),
-        ("type Array = nat8;", "Array"),
-        ("type Promise = nat8;", "Promise"),
+        ("type PrincipalValue = nat8;", "PrincipalValue", true),
+        ("type Array = nat8; type V = vec text;", "Array", false),
+        ("type Record = nat8; type E = record {};", "Record", false),
+        (
+            "type Uint8Array = text; type B = blob;",
+            "Uint8Array",
+            false,
+        ),
+        ("type Array = nat8;", "Array", false),
+        ("type Promise = nat8;", "Promise", false),
         (
             "type Promise = record { id : nat }; service : { ping : () -> () };",
             "Promise",
+            false,
         ),
-        ("type delete = text;", "delete"),
-        ("type string = nat;", "string"),
-        ("type default = bool;", "default"),
-        ("type Principal = nat8;", "Principal"),
-        ("type Principal = record { p : principal };", "Principal"),
+        ("type delete = text;", "delete", false),
+        ("type string = nat;", "string", false),
+        ("type default = bool;", "default", false),
+        ("type Principal = nat8;", "Principal", true),
+        (
+            "type Principal = record { p : principal };",
+            "Principal",
+            true,
+        ),
     ] {
         let compilation = compile_did(source).expect("compile");
         let output = generate_module(
@@ -652,13 +708,97 @@ fn former_binding_names_generate() {
             output.contains(&format!("\nexport {{ ${name} as {name} }};\n")),
             "{source}: {output}"
         );
+        let ty = if plain {
+            name.to_string()
+        } else {
+            format!("${name}")
+        };
+        let head = if plain { "export type" } else { "type" };
         assert!(
-            output.contains(&format!("\ntype ${name} = ")),
+            output.contains(&format!("\n{head} {ty} = ")),
             "{source}: {output}"
         );
         assert!(
-            output.contains(&format!("\nconst ${name}: $.Schema<${name}> = $.c.rec(")),
+            output.contains(&format!("\nconst ${name}: $.Schema<{ty}> = $.c.rec(")),
             "{source}: {output}"
+        );
+        // Exactly one of the two layouts.
+        let other = if plain {
+            format!("\ntype ${name} = ")
+        } else {
+            format!("export type {name} = ")
+        };
+        assert!(!output.contains(&other), "{source}: {output}");
+    }
+}
+
+/// Issue #245: the names only a Contract document can declare — a reserved
+/// word Candid source spells as a token (`null`, `true`, `false`, `import`),
+/// and a name containing `$` — keep the `$` local for their type, and a type
+/// that references one names that local. A fallback type name always starts
+/// with `$` and a plain one never does, so no plain name can collide with a
+/// fallback (`$x`'s type is `$$x`, not `$x`, which is `x`'s value).
+#[test]
+fn names_only_a_document_declares_fall_back() {
+    for (name, ty) in [
+        ("null", "$null"),
+        ("true", "$true"),
+        ("false", "$false"),
+        ("import", "$import"),
+        ("$", "$$"),
+        ("$x", "$$x"),
+        ("x$", "x$"),
+        ("type", "type"),
+    ] {
+        let contract = candid_core::ContractDraft::new(
+            vec![
+                candid_core::TypeNode::Record {
+                    fields: vec![candid_core::Field { id: 5, ty: 2 }],
+                },
+                candid_core::TypeNode::Record {
+                    fields: vec![candid_core::Field { id: 7, ty: 0 }],
+                },
+                candid_core::TypeNode::Primitive {
+                    primitive: candid_core::PrimitiveType::Nat8,
+                },
+            ],
+            vec![
+                candid_core::Declaration {
+                    name: name.to_string(),
+                    ty: 0,
+                },
+                candid_core::Declaration {
+                    name: "Holder".to_string(),
+                    ty: 1,
+                },
+            ],
+            None,
+        )
+        .build()
+        .expect("the model accepts the contract");
+        let output = generate_module(&contract, &TsNames::new(), &TsOptions::default())
+            .unwrap_or_else(|error| panic!("{name} must generate: {error}"))
+            .module;
+        let head = if ty == name { "export type" } else { "type" };
+        assert!(
+            output.contains(&format!("\n{head} {ty} = {{ _5_: number }};\n")),
+            "{name}: {output}"
+        );
+        assert!(
+            output.contains(&format!("\nconst ${name}: $.Schema<{ty}> = ")),
+            "{name}: {output}"
+        );
+        assert!(
+            output.contains(&format!("\nexport {{ ${name} as {name} }};\n")),
+            "{name}: {output}"
+        );
+        assert!(
+            output.contains(&format!("\nexport type Holder = {{ _7_: {ty} }};\n")),
+            "{name}: {output}"
+        );
+        assert!(
+            output.contains(&format!("$.c.record({{ _7_: ${name} }})")),
+            "{name}: {output}"
         );
     }
 }
@@ -675,10 +815,10 @@ fn export_name_declarations_are_omitted() {
         "import * as $ from \"@candid-core/schema\";\n",
         "\n",
         "const $actor: $.Schema<$.Principal> = $.c.rec(() => $.c.service({ ping: $.c.func([], [], \"update\") }));\n",
-        "type $Actor = {\n",
+        "export type Actor = {\n",
         "  ping: (() => Promise<void>) & $.WithMode<\"update\">;\n",
         "};\n",
-        "export { $actor as actor, type $Actor as Actor };\n",
+        "export { $actor as actor };\n",
     );
     for (source, name, rest) in [
         ("type actor = nat8;", "actor", ""),
@@ -736,13 +876,11 @@ fn export_name_declarations_are_omitted() {
         "{module}"
     );
     assert!(
-        module.contains("  keep: ((arg0: $Keep) => Promise<$Keep>) & $.WithMode<\"query\">;\n"),
+        module.contains("  keep: ((arg0: Keep) => Promise<Keep>) & $.WithMode<\"query\">;\n"),
         "{module}"
     );
     assert_eq!(
-        module
-            .matches("export { $actor as actor, type $Actor as Actor };")
-            .count(),
+        module.matches("export { $actor as actor };").count(),
         1,
         "{module}"
     );
@@ -770,9 +908,7 @@ fn export_name_declarations_are_omitted() {
             generated.module
         );
         assert!(
-            generated
-                .module
-                .contains("export { $actor as actor, type $Actor as Actor };"),
+            generated.module.contains("export { $actor as actor };"),
             "{source}: {}",
             generated.module
         );
@@ -933,7 +1069,7 @@ fn declared_opt_empty_variant_arms_are_omitted() {
             )],
             "{source}"
         );
-        assert!(!references_local(&generated.module, "V"), "{source}");
+        assert!(!references_declaration(&generated.module, "V"), "{source}");
         for name in kept {
             assert!(
                 generated
@@ -983,11 +1119,11 @@ fn golden_omissions() {
 }
 
 /// The closure proof: nothing the module emits references an omitted
-/// declaration — no `$` local of one appears anywhere — and each omitted
-/// method is gone from *both* actor surfaces, the `actor` schema and the
-/// `Actor` type, which are rendered by separate paths. The listed order is
-/// declarations, then methods, each by name, and the header lists exactly
-/// that order.
+/// declaration — neither its `$` local nor its type name appears in code —
+/// and each omitted method is gone from *both* actor surfaces, the `actor`
+/// schema and the `Actor` type, which are rendered by separate paths. The
+/// listed order is declarations, then methods, each by name, and the header
+/// lists exactly that order.
 #[test]
 fn omissions_leave_no_reference_behind() {
     let generated = generate_fixture_full("omissions");
@@ -1036,19 +1172,20 @@ fn omissions_leave_no_reference_behind() {
             assert_ne!(omission.reason, OmissionReason::ReferencesOmitted);
         }
     }
-    // The actor surface binds `$actor` and `$Actor` itself; with its three
-    // lines set aside, not even an omitted `actor` or `Actor` has a local.
+    // The actor surface binds `$actor` and declares `Actor` itself; with its
+    // three lines set aside, not even an omitted `actor` or `Actor` is
+    // referenced.
     let declarations_only: String = module
         .split_inclusive('\n')
         .filter(|line| {
             !line.starts_with("const $actor: ")
-                && !line.starts_with("type $Actor = {")
-                && !line.starts_with("export { $actor as actor, type $Actor as Actor };")
+                && !line.starts_with("export type Actor = {")
+                && !line.starts_with("export { $actor as actor };")
         })
         .collect();
     for name in &omitted_declarations {
         assert!(
-            !references_local(&declarations_only, name),
+            !references_declaration(&declarations_only, name),
             "the module still references omitted `{name}`:\n{module}"
         );
     }
@@ -1058,7 +1195,7 @@ fn omissions_leave_no_reference_behind() {
         .find(|line| line.starts_with("const $actor: "))
         .expect("the actor schema");
     let interface = module
-        .split("type $Actor = {\n")
+        .split("export type Actor = {\n")
         .nth(1)
         .and_then(|rest| rest.split("\n};").next())
         .expect("the Actor type");
@@ -1405,15 +1542,34 @@ fn method_omitted_via(name: &str, via: &str) -> Omission {
     }
 }
 
-/// Whether the module mentions the `$` local of declaration `name` anywhere:
-/// `$name` not followed by another identifier character.
-fn references_local(module: &str, name: &str) -> bool {
-    let local = format!("${name}");
-    module.match_indices(&local).any(|(at, _)| {
-        !module[at + local.len()..]
-            .chars()
-            .next()
-            .is_some_and(|next| next.is_ascii_alphanumeric() || next == '_' || next == '$')
+/// Whether the module's code — its comment lines set aside — references
+/// declaration `name`: by its `$` local (`$name`: the value, and the type
+/// where the name falls back), or by its plain type name (`name` as a whole
+/// identifier that is neither a property key, a member of `$`, nor inside a
+/// string). Since issue #245 a type references a declaration by its plain
+/// name, so checking the `$` local alone would miss every type reference.
+fn references_declaration(module: &str, name: &str) -> bool {
+    let code: Vec<&str> = module
+        .lines()
+        .filter(|line| {
+            let line = line.trim_start();
+            !(line.starts_with("//") || line.starts_with("/**") || line.starts_with('*'))
+        })
+        .collect();
+    let code = code.join("\n");
+    let identifier = |c: char| c.is_ascii_alphanumeric() || c == '_' || c == '$';
+    code.match_indices(name).any(|(at, _)| {
+        let mut before = code[..at].chars().rev();
+        let after = code[at + name.len()..].chars().next();
+        if after.is_some_and(identifier) {
+            return false;
+        }
+        match before.next() {
+            // `$name`, unless that `$` itself continues an identifier.
+            Some('$') => !before.next().is_some_and(identifier),
+            Some(c) if identifier(c) || c == '.' || c == '"' => false,
+            _ => !matches!(after, Some(':' | '"' | '?')),
+        }
     })
 }
 
@@ -1458,10 +1614,7 @@ fn actor_emission_covers_class_unwrap_and_proto_methods() {
     let output = generate_module(class_actor.contract(), &names, &TsOptions::default())
         .expect("a class actor generates its running service")
         .module;
-    assert!(
-        output.contains("export { $actor as actor, type $Actor as Actor };"),
-        "{output}"
-    );
+    assert!(output.contains("export { $actor as actor };"), "{output}");
     assert!(
         output.contains("ping: (() => Promise<void>) & $.WithMode<\"update\">;"),
         "{output}"
@@ -1503,14 +1656,14 @@ fn generate_source(source: &str) -> String {
 fn a_declared_primitive_names_only_itself() {
     let output = generate_source("type Memo = nat64; type R = record { a : nat64; b : Memo };");
     assert!(
-        output.contains("type $R = { a: bigint; b: bigint };"),
+        output.contains("export type R = { a: bigint; b: bigint };"),
         "{output}"
     );
     assert!(
         output.contains("$.c.record({ a: $.c.nat64, b: $.c.nat64 })"),
         "{output}"
     );
-    assert!(output.contains("type $Memo = bigint;"), "{output}");
+    assert!(output.contains("export type Memo = bigint;"), "{output}");
     assert!(output.contains("export { $Memo as Memo };"), "{output}");
 
     let output =
@@ -1523,7 +1676,7 @@ fn a_declared_primitive_names_only_itself() {
         !output.contains("$Byte;") && !output.contains("$Byte,"),
         "{output}"
     );
-    assert!(output.contains("type $Byte = number;"), "{output}");
+    assert!(output.contains("export type Byte = number;"), "{output}");
 
     // The ICRC-1 ledger shape, verbatim from the issue.
     let output = generate_source(
@@ -1536,12 +1689,16 @@ fn a_declared_primitive_names_only_itself() {
          icrc1_balance_of : (Account) -> (Tokens) query };",
     );
     assert!(
-        output
-            .contains("type $TransferArg = { to: $Account; fee: bigint | null; amount: bigint };"),
+        output.contains(
+            "export type TransferArg = { to: Account; fee: bigint | null; amount: bigint };"
+        ),
         "{output}"
     );
-    assert!(output.contains("type $Tokens = bigint;"), "{output}");
-    assert!(output.contains("type $BlockIndex = bigint;"), "{output}");
+    assert!(output.contains("export type Tokens = bigint;"), "{output}");
+    assert!(
+        output.contains("export type BlockIndex = bigint;"),
+        "{output}"
+    );
     assert!(output.contains("export { $Tokens as Tokens };"), "{output}");
     assert!(
         output.contains("export { $BlockIndex as BlockIndex };"),
@@ -1549,15 +1706,17 @@ fn a_declared_primitive_names_only_itself() {
     );
     assert!(
         output.contains(
-            "icrc1_balance_of: ((arg0: $Account) => Promise<bigint>) & $.WithMode<\"query\">;"
+            "icrc1_balance_of: ((arg0: Account) => Promise<bigint>) & $.WithMode<\"query\">;"
         ),
         "{output}"
     );
     assert!(
-        output.contains("type $TransferResult = { tag: \"Ok\"; value: bigint } | { tag: \"Err\"; value: string };"),
+        output.contains("export type TransferResult = { tag: \"Ok\"; value: bigint } | { tag: \"Err\"; value: string };"),
         "{output}"
     );
     // Never one alias standing in for the other.
+    assert!(!output.contains("= BlockIndex"), "{output}");
+    assert!(!output.contains("= Tokens"), "{output}");
     assert!(!output.contains("= $BlockIndex"), "{output}");
     assert!(!output.contains("= $Tokens"), "{output}");
 }
@@ -1595,12 +1754,32 @@ fn a_declared_primitive_renders_structurally_everywhere() {
     ] {
         assert!(output.contains(needle), "{why}: {needle}\n{output}");
     }
-    // Only the four declarations themselves carry the names.
+    // Only the four declarations themselves carry the names: with each
+    // one's own three lines set aside, nothing references it.
     for name in ["Id", "Bin", "Who", "Nothing"] {
-        let uses = output.matches(&format!("${name}")).count();
-        assert_eq!(
-            uses, 4,
-            "${name} appears only in its own four lines:\n{output}"
+        let own = [
+            format!("export type {name} = "),
+            format!("const ${name}: $.Schema<{name}> = "),
+            format!("export {{ ${name} as {name} }};"),
+        ];
+        let lines: Vec<&str> = output.lines().collect();
+        for line in &own {
+            assert_eq!(
+                lines
+                    .iter()
+                    .filter(|l| l.starts_with(line.as_str()))
+                    .count(),
+                1,
+                "{line}\n{output}"
+            );
+        }
+        let rest: Vec<&str> = lines
+            .into_iter()
+            .filter(|line| !own.iter().any(|own| line.starts_with(own.as_str())))
+            .collect();
+        assert!(
+            !references_declaration(&rest.join("\n"), name),
+            "{name} is referenced outside its own three lines:\n{output}"
         );
     }
 }
@@ -1617,7 +1796,10 @@ fn an_unrelated_primitive_declaration_changes_nothing_else() {
          type R = record { raw : blob; a : nat8; big : nat64 }; type G = vec vec nat8;",
     );
     for line in without.lines().filter(|line| {
-        line.starts_with("type $R") || line.starts_with("const $R") || line.contains("$G")
+        line.starts_with("export type R ")
+            || line.starts_with("const $R")
+            || line.starts_with("export type G ")
+            || line.contains("$G")
     }) {
         assert!(
             with.contains(line),
@@ -1732,7 +1914,7 @@ fn hostile_doc_text_stays_inside_its_comment() {
     }
     source.push_str("  field : nat;\n};\n");
     let output = generate_source(&source);
-    assert!(output.contains("type $Documented ="), "{output}");
+    assert!(output.contains("export type Documented ="), "{output}");
     assert!(
         !outside_comments(&output).contains("pwned"),
         "escaped into code:\n{output}"
@@ -1884,7 +2066,7 @@ fn actor_methods_take_docs_from_the_right_occurrence() {
         "the actor documents itself: {both}"
     );
     assert!(!both.contains("declared\n   * @param a"), "{both}");
-    assert!(both.contains("type $S = $.Principal;"), "{both}");
+    assert!(both.contains("export type S = $.Principal;"), "{both}");
 
     // A method typed by a declared func takes the declaration's names, and
     // its anonymous argument types the declaration's field docs.
@@ -1946,7 +2128,7 @@ fn documented_layout_restores_its_level_after_each_member() {
         "// Generated by candid-core-ts from a candid-core Contract. Do not edit.\n\
          import * as $ from \"@candid-core/schema\";\n\
          \n\
-         type $R = {\n\
+         export type R = {\n\
          \x20 /** One. */\n\
          \x20 a: {\n\
          \x20   /** Inner one. */\n\
@@ -1959,7 +2141,7 @@ fn documented_layout_restores_its_level_after_each_member() {
          \x20   z: bigint;\n\
          \x20 };\n\
          };\n\
-         const $R: $.Schema<$R> = $.c.rec(() => $.c.record({ a: $.c.record({ x: $.c.nat }), \
+         const $R: $.Schema<R> = $.c.rec(() => $.c.record({ a: $.c.record({ x: $.c.nat }), \
          b: $.c.variant({ y: $.c.nat }), c: $.c.record({ z: $.c.nat }) }));\n\
          export { $R as R };\n"
     );

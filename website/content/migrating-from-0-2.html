@@ -366,7 +366,10 @@ try {
   <code>delete</code> generates instead of being refused, and you import it by name
   (<code>import { delete as del } from "./service"</code>). Code that imports the generated names is
   unaffected; code that parses or patches the generated source, or relied on its module-scope names,
-  must follow the new layout.
+  must follow the new layout. After 0.3.0 the type moved back to the Candid name
+  (<code>export type Tokens = …</code>), so a compiler error names <code>Tokens</code>; only the value
+  keeps the <code>$</code> local, and a type keeps it too only where the name cannot be a type in the
+  module (<code>Array</code>, <code>delete</code>). The excerpts below show the current layout.
 </p>
 
 <pre data-lang="ts" data-check-fails="TS2305@2">
@@ -380,8 +383,8 @@ export const Tokens: Schema<Tokens> = c.rec(() => c.record({ e8s: c.nat64 }));
 <pre data-lang="ts" data-file="crates/candid-core-ts/tests/goldens/ledger.ts" data-check>
 import * as $ from "@candid-core/schema";
 // …
-type $Tokens = { e8s: bigint };
-const $Tokens: $.Schema<$Tokens> = $.c.rec(() => $.c.record({ e8s: $.c.nat64 }));
+export type Tokens = { e8s: bigint };
+const $Tokens: $.Schema<Tokens> = $.c.rec(() => $.c.record({ e8s: $.c.nat64 }));
 export { $Tokens as Tokens };
 </pre>
 
@@ -409,9 +412,9 @@ void ledger.fee;
 import * as $ from "@candid-core/schema";
 // …
 /** The amount of a transfer, in e8s. */
-type $Tokens = bigint;
+export type Tokens = bigint;
 /** The amount of a transfer, in e8s. */
-const $Tokens: $.Schema<$Tokens> = $.c.rec(() => $.c.nat);
+const $Tokens: $.Schema<Tokens> = $.c.rec(() => $.c.nat);
 export { $Tokens as Tokens };
 </pre>
 

@@ -35,7 +35,8 @@ That emits three things:
 
 - **`service.ts`** — the generated `@candid-core/schema` module: one reviewed
   type alias and one invariantly-annotated schema builder per declaration,
-  each bound as a `$`-prefixed local and exported under its Candid name, with
+  both exported under its Candid name (the alias declared as that name, so
+  compiler errors read it; the builder bound as a `$`-prefixed local), with
   the `.did`'s doc comments as JSDoc, and, for a service with an actor, the
   `actor` schema and the `Actor` call interface, each method of which carries
   its mode (`$.WithMode<"query">`); byte-identical to what the Rust-native
