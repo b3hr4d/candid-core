@@ -33,7 +33,8 @@ commit, as every entry does.
   service class's init arguments are dropped. An unknown method name fails
   with `unknown_method` (its `notes` list the service's methods), an empty
   list (`--methods ""`) with `empty_method_list`, a source with no service
-  with `no_service`; each exits 1 and writes nothing. `-o` is required and
+  with `no_service`; each exits 1 and writes nothing. Methods are written in
+  name order. `-o` is required and
   may not name the input file. `--json` prints one document instead of the
   report.
 - **`candid-core-cli check <written.did> --against <live.did>`** exits 0
@@ -44,7 +45,9 @@ commit, as every entry does.
   method and a stable code (`method_missing`, `mode_changed`,
   `method_incompatible`, the warning `special_opt_rule`, and
   `resource_limit_exceeded`) and, inside a type, the path where the check
-  failed. The report prints the live interface identity, so an unchanged
+  failed. A `special_opt_rule` warning is reported at every path that
+  decodes as `null`, a shared type under each path that reaches it. The
+  report prints the live interface identity, so an unchanged
   interface can be told from one that changed compatibly.
 - **`projectDid(sources, methods)` and `checkCompatible(written, live)`**,
   the library functions behind the two commands, exported beside

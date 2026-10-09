@@ -200,9 +200,12 @@ export interface ProjectionSuccess {
    * The projected `.did`: the methods named and every declaration they
    * reach, as one self-contained file. Declaration names, doc comments and
    * argument names are kept; a service class's init arguments are not.
+   * Methods are printed in name order (code point), record fields and
+   * variant arms in label-id order, declarations in source order (the
+   * entry's first, then each imported source's).
    */
   did: string;
-  /** The methods the projection holds, in the order the source gives them. */
+  /** The methods the projection holds, in name order (code point). */
   methods: string[];
   /** The identities of the sources projected. */
   input: Identities;
@@ -238,9 +241,12 @@ export function projectDid(
  *   of the written one; `path` says where.
  * - `special_opt_rule` (warning): the types are compatible only because
  *   Candid reads a mismatch under an `opt` as `null`, so a value at `path`
- *   decodes as `null`.
+ *   decodes as `null`. One is reported at every such path, a shared type
+ *   under each path that reaches it; inside a recursive type, at the paths
+ *   of its first unfolding.
  * - `resource_limit_exceeded` (error): the check of this method stopped at
- *   a bound (`resource_limit` says which) and fails closed.
+ *   one of its bounds (`resource_limit` says which: `check_depth`,
+ *   `check_steps`, or `check_warnings`, 1,000 warnings) and fails closed.
  */
 export interface CompatibilityDiagnostic {
   code:

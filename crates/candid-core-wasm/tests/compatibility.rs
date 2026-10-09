@@ -290,6 +290,65 @@ service : { balance_of : (Account) -> (nat) query }",
         compatible: true,
         diagnostics: &[],
     },
+    // A warning is reported at every path that decodes as null, not only
+    // the first: the two fields share one canonical pair.
+    Case {
+        name: "a_warning_at_every_field_of_one_type_pair",
+        written: "service : { get : () -> (record { a : opt nat; b : opt nat }) }",
+        live: "service : { get : () -> (record { a : opt text; b : opt text }) }",
+        compatible: true,
+        diagnostics: &[
+            ("special_opt_rule", "get", "$results[0].a"),
+            ("special_opt_rule", "get", "$results[0].b"),
+        ],
+    },
+    // An alias whose `opt` content changed, used in several places: each use
+    // is reported, those nested in a proven pair under each of its paths.
+    Case {
+        name: "a_changed_opt_alias_is_reported_at_each_use",
+        written: "type Memo = opt blob;
+type Entry = record { memo : Memo; n : nat };
+service : {
+  get : (Memo) -> (record { first : Entry; second : Entry; memo : Memo });
+}",
+        live: "type Memo = opt text;
+type Entry = record { memo : Memo; n : nat };
+service : {
+  get : (Memo) -> (record { first : Entry; second : Entry; memo : Memo });
+}",
+        compatible: true,
+        diagnostics: &[
+            ("special_opt_rule", "get", "$args[0]"),
+            ("special_opt_rule", "get", "$results[0].first.memo"),
+            ("special_opt_rule", "get", "$results[0].memo"),
+            ("special_opt_rule", "get", "$results[0].second.memo"),
+        ],
+    },
+    // A failed opt probe takes back the warnings recorded inside it: only
+    // the outer opt decodes as null, so only it is reported.
+    Case {
+        name: "a_failed_probe_takes_back_its_warnings",
+        written: "service : { get : () -> (record { x : opt record { a : opt nat; b : nat } }) }",
+        live: "service : { get : () -> (record { x : opt record { a : opt text; b : text } }) }",
+        compatible: true,
+        diagnostics: &[("special_opt_rule", "get", "$results[0].x")],
+    },
+    // A pair proven inside a failed probe (`P`, under `x`) is forgotten with
+    // its warnings: walked again under `y`, where it recurses, it must not
+    // re-report what the failed probe took back. Inside the recursion a
+    // warning is reported at its first unfolding only.
+    Case {
+        name: "a_pair_proven_in_a_failed_probe_is_forgotten",
+        written: "type P = record { n : opt P; m : opt nat };
+service : { get : () -> (record { x : opt record { p : P; bad : nat }; y : P }) }",
+        live: "type P = record { n : opt P; m : opt text };
+service : { get : () -> (record { x : opt record { p : P; bad : text }; y : P }) }",
+        compatible: true,
+        diagnostics: &[
+            ("special_opt_rule", "get", "$results[0].x"),
+            ("special_opt_rule", "get", "$results[0].y.m"),
+        ],
+    },
     // Upstream's unsound memo (its reference divergence, recorded below):
     // proving `c : opt W5 <: opt V` assumes (W5, V), proves (W7, E7) under it,
     // drops only (W5, V) when the arm `x` fails, and answers `v : W7 <: E7`
@@ -310,16 +369,68 @@ service : { get : () -> (W3) }",
             ("special_opt_rule", "get", "$results[0].c"),
         ],
     },
+    // The same memo, met by the extended campaign (its seed 992) through
+    // func and service references. `T0` reaches `T2` contravariantly
+    // (`$results[0].b::f::results[0].d[*].d::args[0]`), where the written
+    // `T2` must be a subtype of the live one; the live `T2` returns a
+    // `variant { d : null }` the written one does not, so it is not. Upstream
+    // answers that pair from one its failed opt probe left assumed, and
+    // accepts.
+    Case {
+        name: "the_unsound_memo_through_references",
+        written: "type T0 = func (T2, opt service { f : (bool, reserved) -> (bool, T1); g : (T1, empty) -> () }) -> (record { a : vec principal; b : func (T2) -> (int32, text) query; e : opt T2 });
+type T1 = variant { b : func () -> (T1); d : vec variant { c : T2; d : T0 } };
+type T2 = func (record { a : opt T1; b : nat64; c : T0; d : service { f : (T2) -> (T0, bool) } }) -> ();
+service : {
+  m0 : () -> (record { a : text; b : service { f : (empty, T0) -> (T1) }; e : vec principal }, T0);
+  m1 : () -> () query;
+}",
+        live: "type T0 = func (T2, opt service { f : (bool, reserved) -> (bool, T1); g : (T1, empty) -> () }) -> (record { a : vec principal; b : func (T2) -> (int32, text) query; e : opt T2 });
+type T1 = variant { b : func () -> (T1); d : vec variant { c : T2; d : T0 } };
+type T2 = func (record { a : opt T1; b : nat64; c : T0; d : service { f : (T2) -> (T0, bool) } }) -> (variant { d : null });
+service : {
+  m0 : () -> (record { a : text; b : service { f : (empty, T0) -> (T1) }; e : vec principal }, T0);
+}",
+        compatible: false,
+        diagnostics: &[
+            (
+                "method_incompatible",
+                "m0",
+                "$results[0].b::f::results[0].d[*].d::args[0]::results[0]",
+            ),
+            (
+                "special_opt_rule",
+                "m0",
+                "$results[0].b::f::args[1]::args[0]::args[0].a",
+            ),
+            ("special_opt_rule", "m0", "$results[0].b::f::args[1]::args[1]"),
+            (
+                "special_opt_rule",
+                "m0",
+                "$results[0].b::f::args[1]::results[0].b::args[0]::args[0].a",
+            ),
+            ("special_opt_rule", "m0", "$results[0].b::f::args[1]::results[0].e"),
+            ("method_missing", "m1", ""),
+        ],
+    },
 ];
 
 /// Disagreements with upstream that were triaged by hand: `(case, method,
 /// which verdict, reason)`. Every other disagreement fails the test.
-const KNOWN_DIVERGENCES: &[(&str, &str, &str, &str)] = &[(
-    "the_unsound_memo_case",
-    "get",
-    "lenient",
-    "upstream candid's coinductive memo keeps a pair proven under an assumption a failed opt probe retracted (b3hr4d/candid-core#227, item 3); this check refuses, upstream accepts",
-)];
+const KNOWN_DIVERGENCES: &[(&str, &str, &str, &str)] = &[
+    (
+        "the_unsound_memo_case",
+        "get",
+        "lenient",
+        "upstream candid's coinductive memo keeps a pair proven under an assumption a failed opt probe retracted (b3hr4d/candid-core#227, item 3); this check refuses, upstream accepts",
+    ),
+    (
+        "the_unsound_memo_through_references",
+        "m0",
+        "lenient",
+        "the same memo (b3hr4d/candid-core#227, item 3), through func and service references; this check refuses, upstream accepts",
+    ),
+];
 
 #[test]
 fn hand_cases_pin_verdicts_codes_and_paths() {
@@ -498,6 +609,77 @@ fn the_walk_is_bounded() {
         .spawn(|| check(&ring("W", "k", 19), &ring("L", "j", 23)))
         .unwrap();
     assert_eq!(handle.join().unwrap()["compatible"], json!(false));
+}
+
+/// A method's diagnostics do not depend on which other methods the written
+/// service declares: `b` is reported at the same path whether or not `a`,
+/// checked first and walking the same types, is there.
+#[test]
+fn a_methods_diagnostics_do_not_depend_on_the_other_methods() {
+    let source = |leaf: &str, methods: &str| {
+        format!(
+            "type X = record {{ r : R; bad : {leaf} }};\ntype R = record {{ f1 : X; f2 : {leaf} }};\nservice : {{ {methods} }}\n"
+        )
+    };
+    let both = "a : () -> (X); b : () -> (R)";
+    let only_b = "b : () -> (R)";
+    let paths = |written: &str| -> Vec<(String, String, Option<String>)> {
+        summary(&check(written, &source("text", both)))
+            .into_iter()
+            .filter(|(_, method, _)| method == "b")
+            .collect()
+    };
+    let alone = paths(&source("nat", only_b));
+    assert_eq!(
+        alone,
+        [(
+            "method_incompatible".to_string(),
+            "b".to_string(),
+            Some("$results[0].f1.bad".to_string())
+        )]
+    );
+    assert_eq!(paths(&source("nat", both)), alone);
+}
+
+/// Re-reporting a proven pair's warnings under each of its paths is bounded:
+/// a shared type graph that doubles the paths at every level fails closed
+/// past the warning bound instead of reporting without end.
+#[test]
+fn warnings_are_bounded() {
+    let doubling = |content: &str, levels: usize| {
+        let mut source = format!("type D0 = opt {content};\n");
+        for level in 1..=levels {
+            source.push_str(&format!(
+                "type D{level} = record {{ l : D{p}; r : D{p} }};\n",
+                p = level - 1
+            ));
+        }
+        source.push_str(&format!("service : {{ get : () -> (D{levels}) }}\n"));
+        source
+    };
+    // 2^9 = 512 paths decode as null: each reported.
+    let response = check(&doubling("nat", 9), &doubling("text", 9));
+    assert_eq!(response["compatible"], json!(true), "{response}");
+    let items = response["diagnostics"].as_array().unwrap();
+    assert_eq!(items.len(), 512);
+    let distinct: BTreeSet<&str> = items
+        .iter()
+        .map(|item| item["path"].as_str().unwrap())
+        .collect();
+    assert_eq!(distinct.len(), 512, "each path once");
+    // 2^10 = 1024 would be past the bound of 1000: the method fails closed.
+    let response = check(&doubling("nat", 10), &doubling("text", 10));
+    assert_eq!(response["compatible"], json!(false), "{response}");
+    assert_eq!(
+        response["diagnostics"],
+        json!([{
+            "code": "resource_limit_exceeded",
+            "severity": "error",
+            "method": "get",
+            "message": "the check of this method stopped at its check_warnings bound of 1000",
+            "resource_limit": { "resource": "check_warnings", "limit": 1000, "observed": 1001 },
+        }])
+    );
 }
 
 /// A type at the compiler's nesting bound is decided, not refused: the walk's
@@ -750,6 +932,22 @@ enum Ty {
     Variant(Vec<(&'static str, Ty)>),
     Ref(usize),
     Func(Vec<Ty>, Vec<Ty>, &'static str),
+    /// A service type: its methods, each a `Func`.
+    Service(Vec<(&'static str, Ty)>),
+}
+
+const SERVICE_METHODS: &[&str] = &["f", "g"];
+
+/// A func member of a service type: a query or an update, never oneway, so
+/// any results it is given stay valid.
+fn gen_func(rng: &mut Rng, decls: usize, depth: usize) -> Ty {
+    let args = (0..rng.below(3))
+        .map(|_| gen_ty(rng, decls, depth))
+        .collect();
+    let rets = (0..rng.below(3))
+        .map(|_| gen_ty(rng, decls, depth))
+        .collect();
+    Ty::Func(args, rets, MODES[rng.below(2)])
 }
 
 const PRIMS: &[&str] = &[
@@ -784,7 +982,7 @@ fn gen_ty(rng: &mut Rng, decls: usize, depth: usize) -> Ty {
             Ty::Prim(PRIMS[rng.below(PRIMS.len())])
         };
     }
-    match rng.below(5) {
+    match rng.below(6) {
         0 => Ty::Opt(Box::new(gen_ty(rng, decls, depth - 1))),
         1 => Ty::Vec(Box::new(gen_ty(rng, decls, depth - 1))),
         2 | 3 => {
@@ -800,15 +998,14 @@ fn gen_ty(rng: &mut Rng, decls: usize, depth: usize) -> Ty {
                 Ty::Variant(fields)
             }
         }
-        _ => {
-            let args = (0..rng.below(3))
-                .map(|_| gen_ty(rng, decls, depth - 1))
-                .collect();
-            let rets = (0..rng.below(3))
-                .map(|_| gen_ty(rng, decls, depth - 1))
-                .collect();
-            Ty::Func(args, rets, MODES[rng.below(2)])
-        }
+        4 => gen_func(rng, decls, depth - 1),
+        _ => Ty::Service(
+            SERVICE_METHODS
+                .iter()
+                .take(1 + rng.below(SERVICE_METHODS.len()))
+                .map(|name| (*name, gen_func(rng, decls, depth - 1)))
+                .collect(),
+        ),
     }
 }
 
@@ -888,6 +1085,23 @@ fn mutate_ty(ty: &mut Ty, rng: &mut Rng, decls: usize) -> bool {
                     return mutate_ty(&mut rets[at], rng, decls);
                 }
                 _ => rets.push(gen_ty(rng, decls, 1)),
+            }
+            true
+        }
+        Ty::Service(methods) if !here => {
+            let at = rng.below(methods.len());
+            mutate_ty(&mut methods[at].1, rng, decls)
+        }
+        Ty::Service(methods) => {
+            if methods.len() > 1 && rng.chance(50) {
+                methods.remove(rng.below(methods.len()));
+            } else if let Some(name) = SERVICE_METHODS
+                .iter()
+                .find(|name| methods.iter().all(|(used, _)| used != *name))
+            {
+                methods.push((name, gen_func(rng, decls, 1)));
+            } else {
+                return false;
             }
             true
         }
@@ -974,6 +1188,19 @@ fn print_ty(ty: &Ty) -> String {
         ),
         Ty::Ref(index) => format!("T{index}"),
         Ty::Func(args, rets, mode) => format!("func {}", print_signature(args, rets, mode)),
+        Ty::Service(methods) => format!(
+            "service {{ {} }}",
+            methods
+                .iter()
+                .map(|(name, ty)| match ty {
+                    Ty::Func(args, rets, mode) => {
+                        format!("{name} : {}", print_signature(args, rets, mode))
+                    }
+                    other => format!("{name} : {}", print_ty(other)),
+                })
+                .collect::<Vec<_>>()
+                .join("; ")
+        ),
     }
 }
 
@@ -999,15 +1226,21 @@ fn print_iface(iface: &Iface) -> String {
 }
 
 /// The committed campaign: this many cases from seed 1, each a random
-/// interface and a mutation of it, compared in both directions.
+/// interface and a mutation of it, compared in both directions. It is
+/// bounded: further instances of upstream's unsound memo exist past it, which
+/// [`an_extended_campaign_disagrees_only_in_the_memos_direction`] looks for.
 const RANDOM_CASES: u64 = 600;
 
-/// Draw the campaign's cases: `(id, written, live)`. A draft either compiler
-/// refuses is redrawn from the next seed.
 fn random_cases() -> Vec<(String, String, String)> {
+    random_cases_up_to(RANDOM_CASES)
+}
+
+/// Draw `count` cases: `(id, written, live)`. A draft either compiler
+/// refuses is redrawn from the next seed.
+fn random_cases_up_to(count: u64) -> Vec<(String, String, String)> {
     let mut cases = Vec::new();
     let mut seed = 0;
-    while (cases.len() as u64) < RANDOM_CASES {
+    while (cases.len() as u64) < count {
         seed += 1;
         let mut rng = Rng(seed);
         let base = gen_iface(&mut rng);
@@ -1039,7 +1272,11 @@ fn upstream_accepts(source: &str) -> bool {
 fn a_seeded_random_campaign_agrees_with_upstream() {
     let mut observed = BTreeSet::new();
     let mut verdicts = BTreeMap::<&str, usize>::new();
+    let mut with_services = 0;
     for (id, written, live) in random_cases() {
+        if written.contains("service {") || live.contains("service {") {
+            with_services += 1;
+        }
         let response = check(&written, &live);
         assert_eq!(
             response["ok"],
@@ -1063,6 +1300,12 @@ fn a_seeded_random_campaign_agrees_with_upstream() {
     // little about either.
     assert!(verdicts["compatible"] >= 100, "{verdicts:?}");
     assert!(verdicts["incompatible"] >= 100, "{verdicts:?}");
+    // Service-typed values, whose methods are contravariant in their own
+    // arguments, are drawn too.
+    assert!(
+        with_services >= 100,
+        "{with_services} cases with a service type"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -1141,4 +1384,40 @@ fn the_agreement_file_is_current() {
         path.display()
     );
     assert!(entries.len() >= 120, "only {} cases", entries.len());
+}
+
+/// A longer campaign, run on demand:
+/// `COMPAT_CAMPAIGN_CASES=15000 cargo test --test compatibility -- --ignored`.
+/// Past the committed seeds, upstream's unsound memo is met again; each
+/// disagreement must be in its direction (upstream accepts under the spec's
+/// rules but refuses under strict opt reporting, and this check refuses), so
+/// that none can be a case this check accepts and upstream refuses.
+#[test]
+#[ignore = "an on-demand campaign; the committed one is a_seeded_random_campaign_agrees_with_upstream"]
+fn an_extended_campaign_disagrees_only_in_the_memos_direction() {
+    let count = std::env::var("COMPAT_CAMPAIGN_CASES")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(5_000);
+    let mut memo = Vec::new();
+    for (id, written, live) in random_cases_up_to(count) {
+        let response = check(&written, &live);
+        let found = disagreements(&written, &live, &response);
+        if found.is_empty() {
+            continue;
+        }
+        let reference = upstream(&written, &live);
+        for (method, kind) in &found {
+            let upstream_verdict = reference.get(method).copied().flatten();
+            assert!(
+                *kind == "lenient" && upstream_verdict == Some((true, false)),
+                "{id}: method {method} disagrees on the {kind} verdict outside the memo's direction\n--- written\n{written}--- live\n{live}{response}"
+            );
+            memo.push(format!("{id}/{method}"));
+        }
+    }
+    eprintln!(
+        "{count} cases; {} disagreements, all in the memo's direction: {memo:?}",
+        memo.len()
+    );
 }

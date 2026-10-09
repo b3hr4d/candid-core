@@ -79,7 +79,7 @@ export async function didToModule(sources) {
  * names, whatever their order.
  *
  * Returns `{ ok: true, did, methods, input, projection }` — the text, the
- * methods it holds in output order, and the identities of the input and of
+ * methods it holds in name order, and the identities of the input and of
  * the projection — or `{ ok: false, diagnostics }`: `unknown_method` (one
  * per name the service lacks, its `notes` listing the service's methods),
  * `empty_method_list`, `no_service`, or the compiler's diagnostics.

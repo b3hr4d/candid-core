@@ -28,19 +28,34 @@
 //! that applied, which is reported as a warning, and it runs as a
 //! transaction: when it fails, every pair it assumed or proved is rolled
 //! back, together with every warning it recorded. A pair that fails is
-//! cached as failed for the whole check; that is sound, because assumptions
-//! only ever make more pairs hold. Each written method starts from an empty
-//! assumption set, so its diagnostics never depend on another method's.
+//! cached as failed for the rest of the method; that is sound, because
+//! assumptions only ever make more pairs hold. Each written method starts
+//! from empty state — no assumption, no cached failure, no step spent — so
+//! its diagnostics, paths and bounds included, never depend on which other
+//! methods the written service declares.
+//!
+//! # Warnings
+//!
+//! A `special_opt_rule` warning is reported at every path where a value
+//! decodes as `null`, not only the first: a pair proven once (say the two
+//! sides of `type Memo = opt blob`, used by many fields) is not walked again,
+//! but the warnings its walk recorded are re-reported under each further path
+//! it is met at. The one exception is recursion: a pair met again while its
+//! own walk is still in progress is a cycle, and its warnings are reported at
+//! the paths of that first unfolding only.
 //!
 //! # Bounds
 //!
 //! The walk is recursive, so its depth is bounded ([`MAX_CHECK_DEPTH`] pairs
-//! on one path), and so is its total work ([`MAX_CHECK_STEPS`] pairs
-//! expanded per check). Reaching either fails the method closed with
-//! `resource_limit_exceeded`; the compiler's own limits keep every Contract
-//! it accepts well below both for interfaces of ordinary shape.
+//! on one path), and so are its work ([`MAX_CHECK_STEPS`] pairs expanded)
+//! and its warnings ([`MAX_CHECK_WARNINGS`]), each per method. Reaching any
+//! of them fails the method closed with `resource_limit_exceeded`; the
+//! compiler's own limits keep every Contract it accepts well below all three
+//! for interfaces of ordinary shape. Because the bounds are per method, the
+//! live side cannot multiply the work: a check costs at most the written
+//! service's method count times one method's bounds.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use candid_core::{
     Actor, Contract, Field, MethodMode, PrimitiveType, ServiceMethod, SourceInfo, SourceLabel,
@@ -58,8 +73,14 @@ use serde_json::{json, Value};
 /// the package's tests assert.
 pub const MAX_CHECK_DEPTH: usize = 384;
 
-/// The most pairs one check may expand, across every method.
+/// The most pairs the check of one method may expand.
 pub const MAX_CHECK_STEPS: usize = 1_000_000;
+
+/// The most `special_opt_rule` warnings one method may report. Re-reporting a
+/// proven pair's warnings under every path it is met at can multiply them
+/// along a shared, non-recursive type graph (a record of two fields of a
+/// record of two fields, and so on); this bound keeps that finite.
+pub const MAX_CHECK_WARNINGS: usize = 1_000;
 
 /// Which of the two Contracts a type reference belongs to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -175,6 +196,15 @@ struct Warning {
 /// the other Contract.
 type Pair = (Side, u32, u32);
 
+/// The warnings a proven pair's walk recorded: `warnings[start..end]`, every
+/// one of whose paths begins with the pair's own path of `prefix` segments.
+#[derive(Debug, Clone, Copy)]
+struct Proven {
+    start: usize,
+    end: usize,
+    prefix: usize,
+}
+
 struct Checker<'a> {
     live: Graph<'a>,
     written: Graph<'a>,
@@ -182,7 +212,10 @@ struct Checker<'a> {
     /// they were added in so a failed probe can roll back exactly its own.
     assumed: HashSet<Pair>,
     log: Vec<Pair>,
-    /// Pairs known not to hold, for the whole check.
+    /// The assumed pairs whose walk finished, with the warnings it recorded;
+    /// an assumed pair absent here is still on the stack.
+    proven: HashMap<Pair, Proven>,
+    /// Pairs known not to hold, within the current method.
     failed: BTreeMap<Pair, Failure>,
     warnings: Vec<Warning>,
     /// The path from the method root to the pair under test, outermost
@@ -236,7 +269,10 @@ impl<'a> Checker<'a> {
             return Err(Stop::Fails(failure.clone()));
         }
         if self.assumed.contains(&pair) {
-            return Ok(());
+            return match self.proven.get(&pair).copied() {
+                Some(proven) => self.repeat(proven),
+                None => Ok(()),
+            };
         }
         self.steps += 1;
         if self.steps > MAX_CHECK_STEPS {
@@ -256,12 +292,38 @@ impl<'a> Checker<'a> {
         self.assumed.insert(pair);
         self.log.push(pair);
         self.depth += 1;
+        let start = self.warnings.len();
         let outcome = self.expand(side, sub, sup);
         self.depth -= 1;
-        if let Err(Stop::Fails(failure)) = &outcome {
-            self.failed.insert(pair, failure.clone());
+        match &outcome {
+            Ok(()) => {
+                let proven = Proven {
+                    start,
+                    end: self.warnings.len(),
+                    prefix: self.path.len(),
+                };
+                self.proven.insert(pair, proven);
+            }
+            Err(Stop::Fails(failure)) => {
+                self.failed.insert(pair, failure.clone());
+            }
+            Err(Stop::Exhausted(_)) => {}
         }
         outcome
+    }
+
+    /// Report a proven pair's warnings again under the current path. Its
+    /// range stays valid: a failed probe truncates only warnings recorded
+    /// after it began, and forgets every pair proven in that time.
+    #[inline(never)]
+    fn repeat(&mut self, proven: Proven) -> Outcome {
+        for index in proven.start..proven.end {
+            let mut path = self.path.clone();
+            path.extend_from_slice(&self.warnings[index].path[proven.prefix..]);
+            let message = self.warnings[index].message.clone();
+            self.record(Warning { path, message })?;
+        }
+        Ok(())
     }
 
     /// A child pair one segment below the current one.
@@ -285,6 +347,7 @@ impl<'a> Checker<'a> {
             Err(Stop::Fails(_)) => {
                 for pair in self.log.drain(assumed..) {
                     self.assumed.remove(&pair);
+                    self.proven.remove(&pair);
                 }
                 self.warnings.truncate(warnings);
                 Ok(false)
@@ -293,11 +356,21 @@ impl<'a> Checker<'a> {
         }
     }
 
-    fn warn(&mut self, message: String) {
-        self.warnings.push(Warning {
-            path: self.path.clone(),
-            message,
-        });
+    fn warn(&mut self, message: String) -> Outcome {
+        let path = self.path.clone();
+        self.record(Warning { path, message })
+    }
+
+    fn record(&mut self, warning: Warning) -> Outcome {
+        if self.warnings.len() >= MAX_CHECK_WARNINGS {
+            return Err(Stop::Exhausted(Exhausted {
+                resource: "check_warnings",
+                limit: MAX_CHECK_WARNINGS,
+                observed: self.warnings.len() + 1,
+            }));
+        }
+        self.warnings.push(warning);
+        Ok(())
     }
 
     /// Dispatch one pair to its rule. The recursion runs through here, so
@@ -355,10 +428,11 @@ impl<'a> Checker<'a> {
             _ if self.opt_like(side.other(), inner) => false,
             _ => self.probe(Segment::Opt, side, sub, inner)?,
         };
-        if !kept {
-            self.warn(special_opt_rule(left));
+        if kept {
+            Ok(())
+        } else {
+            self.warn(special_opt_rule(left))
         }
-        Ok(())
     }
 
     /// Every field of the super record present in the sub record as a
@@ -657,6 +731,7 @@ pub fn check(written: &Input<'_>, live: &Input<'_>) -> Vec<Value> {
         written: Graph::new(written.contract, written.source_info),
         assumed: HashSet::new(),
         log: Vec::new(),
+        proven: HashMap::new(),
         failed: BTreeMap::new(),
         warnings: Vec::new(),
         path: Vec::new(),
@@ -711,9 +786,12 @@ pub fn check(written: &Input<'_>, live: &Input<'_>) -> Vec<Value> {
         }
         checker.assumed.clear();
         checker.log.clear();
+        checker.proven.clear();
+        checker.failed.clear();
         checker.warnings.clear();
         checker.path.clear();
         checker.depth = 0;
+        checker.steps = 0;
         let outcome = checker
             .tuple(Side::Written, written_args, live_args, Segment::Argument)
             .and_then(|()| {

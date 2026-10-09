@@ -239,7 +239,8 @@ result to `gen` like any `.did`: the generated `Actor` lists only those
 methods, each with its mode. The output is deterministic: the same input and
 the same set of names give the same bytes, whatever order you name them in.
 Declaration names, doc comments and argument names are kept; a service
-class's init arguments are not, since a client never sends them. An unknown
+class's init arguments are not, since a client never sends them. Methods are
+written in name order. An unknown
 method name, or an empty list (`--methods ""`), fails with exit 1 and a
 diagnostic (`unknown_method`, whose `notes` list the service's methods, or
 `empty_method_list`), and writes nothing. `-o` is required and may not be the
@@ -271,8 +272,9 @@ Each finding names its method and a stable code: `method_missing`,
 `mode_changed` and `method_incompatible` are errors; `special_opt_rule` is a
 warning, for a change Candid accepts only by reading the value under an `opt`
 as `null` (such as `opt nat` becoming `opt text`), so it passes but loses the
-data at that path; `resource_limit_exceeded` fails a method whose check
-reached a bound. `method_incompatible` and `special_opt_rule` carry the path
+data at that path, and it is reported at every such path (a changed alias
+under each field that uses it); `resource_limit_exceeded` fails a method whose
+check reached a bound: its depth, its work, or 1,000 warnings. `method_incompatible` and `special_opt_rule` carry the path
 into the method's type where the check failed: `$args[i]` or `$results[i]`,
 then `.name` per record field or variant arm (`["name"]` when it is not an
 identifier, `[id]` for a numeric label), `[*]` per `vec` element, `?` per
