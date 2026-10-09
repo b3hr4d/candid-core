@@ -43,6 +43,8 @@ fn modules_match_the_generator_goldens() {
         "fidelity",
         "docs",
         "omissions",
+        "modes",
+        "methodless",
     ] {
         let source = repo(&format!("crates/candid-core-ts/tests/fixtures/{name}.did"));
         let golden = repo(&format!("crates/candid-core-ts/tests/goldens/{name}.ts"));

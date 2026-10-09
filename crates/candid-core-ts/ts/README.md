@@ -277,6 +277,8 @@ intersected with `WithMode<mode>`, and `ModeOf` reads the mode back, so a call
 layer can refuse an update where it builds a read at compile time.
 
 ```ts
+import type { ModeOf, WithMode } from "@candid-core/schema";
+
 type Actor = {
   fee: (() => Promise<bigint>) & WithMode<"query">;
   transfer: ((amount: bigint) => Promise<void>) & WithMode<"update">;
