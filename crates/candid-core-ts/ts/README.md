@@ -272,6 +272,23 @@ service schema, because `c.rec` erases method structure from a
 schema's *type* — schemas carry values, not calls — so a call layer cannot
 re-derive it from `typeof`.
 
+Each method of `Actor` also carries its mode: it is the call signature
+intersected with `WithMode<mode>`, and `ModeOf` reads the mode back, so a call
+layer can refuse an update where it builds a read at compile time.
+
+```ts
+type Actor = {
+  fee: (() => Promise<bigint>) & WithMode<"query">;
+  transfer: ((amount: bigint) => Promise<void>) & WithMode<"update">;
+};
+type FeeMode = ModeOf<Actor["fee"]>; // "query"
+```
+
+The mark changes nothing else: the call signature, `keyof Actor` and the
+module's exports are the same, and a plain async function still implements
+the method. An `Actor` written by hand without it reads as the whole
+`MethodMode` union, mode unknown.
+
 ## Unwrapping ok/err results
 
 `variant { ok : T; err : E }` is the universal canister result convention, and

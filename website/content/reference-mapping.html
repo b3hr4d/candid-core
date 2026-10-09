@@ -226,9 +226,13 @@
   named <code>arg0</code>, <code>arg1</code>, … for an unnamed argument, a reserved word or a
   collision; the reply convention is zero results ⇒
   <code>Promise&lt;void&gt;</code>, one ⇒ <code>Promise&lt;T&gt;</code>, several ⇒
-  <code>Promise&lt;[A, B]&gt;</code>. Calling the canister is a call layer's job, built on that
-  pair: the schema to encode arguments and decode replies with, and the interface to type the
-  client with.
+  <code>Promise&lt;[A, B]&gt;</code>. Each method's type is that call signature intersected with
+  its mode, <code>$.WithMode&lt;"query"&gt;</code> (or <code>"composite_query"</code>,
+  <code>"update"</code>, <code>"oneway"</code>), which <code>ModeOf</code> from
+  <code>@candid-core/schema</code> reads back; the mark is an optional property no value has, so
+  it changes neither the signature nor the method names. Calling the canister is a call layer's
+  job, built on that pair: the schema to encode arguments and decode replies with, and the
+  interface to type the client with.
 </p>
 
 <h3>Field names are an input</h3>
@@ -355,7 +359,7 @@ export { $Registry as Registry };
 
 const $actor: $.Schema<$.Principal> = $.c.rec(() => $.c.service({ ping: $.c.func([], [], "update") }));
 type $Actor = {
-  ping: () => Promise<void>;
+  ping: (() => Promise<void>) & $.WithMode<"update">;
 };
 export { $actor as actor, type $Actor as Actor };
 </pre>
