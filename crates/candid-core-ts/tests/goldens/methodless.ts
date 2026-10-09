@@ -2,7 +2,7 @@
 import * as $ from "@candid-core/schema";
 
 const $actor: $.Schema<$.Principal> = $.c.rec(() => $.c.service({  }));
-type $Actor = {
+export type Actor = {
 
 };
-export { $actor as actor, type $Actor as Actor };
+export { $actor as actor };

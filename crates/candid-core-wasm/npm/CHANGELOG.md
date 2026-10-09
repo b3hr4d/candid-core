@@ -18,6 +18,27 @@ version.
 
 ### Generated modules
 
+- **Compiler errors name the types you import.** A generated module now
+  declares each declaration's type under its Candid name and keeps the
+  `$`-prefixed local for the schema value only, so an app's TypeScript errors
+  read `Account` and `Actor`, the names it imports, where they read
+  `$Account` and `$Actor`:
+
+  ```ts
+  export type Account = { owner: $.Principal; subaccount: Uint8Array | null };
+  const $Account: $.Schema<Account> = $.c.rec(() => $.c.record({ … }));
+  export { $Account as Account };
+  ```
+
+  Every export name, and what each one is as a type and as a value, is
+  unchanged, and so is every module's set of declarations. A name that
+  cannot be a type in the module keeps the `$` local for its type too: a
+  global type the generated types use (`Array`, `Record`, `Uint8Array`,
+  `Promise`), and a word TypeScript refuses as a type's name (`delete`,
+  `string`, `default`, `keyof`, `readonly`, …). So `type $Array = …` still
+  appears, and errors about it still name `$Array`. Code that imports the
+  generated names is unaffected; code that parses or patches the generated
+  source must follow the new text.
 - **Each `Actor` method carries its mode.** `gen` and `didToModule` now emit
   each method of `Actor` as its call signature intersected with
   `$.WithMode<mode>` (`"query"`, `"composite_query"`, `"update"` or
@@ -25,9 +46,9 @@ version.
   layer can tell a query from an update at compile time:
 
   ```ts
-  type $Actor = {
-    icrc1_balance_of: ((arg0: $Account) => Promise<bigint>) & $.WithMode<"query">;
-    icrc1_transfer: ((arg0: $TransferArg) => Promise<$TransferResult>) & $.WithMode<"update">;
+  export type Actor = {
+    icrc1_balance_of: ((arg0: Account) => Promise<bigint>) & $.WithMode<"query">;
+    icrc1_transfer: ((arg0: TransferArg) => Promise<TransferResult>) & $.WithMode<"update">;
   };
   ```
 

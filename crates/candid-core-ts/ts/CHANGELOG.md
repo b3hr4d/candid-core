@@ -38,7 +38,18 @@ API, the inferred domain types, the codec's wire behaviour, and the codes and
   package, so it type-checks only against a release that has it.
 - `schema.d.ts` grows from 734 lines to 764, all of it the two
   declarations above and their documentation. No other declaration
-  changed.
+  changed; one documentation comment did (below).
+
+### Generated modules name their types plainly
+
+Nothing in this package's API changes for this: no export, type, verdict or
+byte. The generator in `@candid-core/cli` now declares each declaration's
+type under its Candid name (`export type Account = …`) and keeps the
+`$`-prefixed local for the schema value only
+(`const $Account: $.Schema<Account> = …`), so the errors an app's compiler
+reports name `Account` and `Actor` rather than `$Account` and `$Actor`. The
+`Schema` documentation comment that quotes the generated line is updated to
+match; the line count of `schema.d.ts` does not change.
 
 ## 0.3.0 — 2026-10-06
 

@@ -5,12 +5,12 @@ type $Array = number;
 const $Array: $.Schema<$Array> = $.c.rec(() => $.c.int32);
 export { $Array as Array };
 
-type $Bytes = Uint8Array;
-const $Bytes: $.Schema<$Bytes> = $.c.rec(() => $.c.blob());
+export type Bytes = Uint8Array;
+const $Bytes: $.Schema<Bytes> = $.c.rec(() => $.c.blob());
 export { $Bytes as Bytes };
 
-type $PrincipalValue = { p: $.Principal };
-const $PrincipalValue: $.Schema<$PrincipalValue> = $.c.rec(() => $.c.record({ p: $.c.principal }));
+export type PrincipalValue = { p: $.Principal };
+const $PrincipalValue: $.Schema<PrincipalValue> = $.c.rec(() => $.c.record({ p: $.c.principal }));
 export { $PrincipalValue as PrincipalValue };
 
 type $Promise = { id: bigint };
@@ -21,8 +21,8 @@ type $Record = bigint;
 const $Record: $.Schema<$Record> = $.c.rec(() => $.c.int64);
 export { $Record as Record };
 
-type $Schema = number;
-const $Schema: $.Schema<$Schema> = $.c.rec(() => $.c.int16);
+export type Schema = number;
+const $Schema: $.Schema<Schema> = $.c.rec(() => $.c.int16);
 export { $Schema as Schema };
 
 /**
@@ -30,25 +30,25 @@ export { $Schema as Schema };
  * that used to shadow them: `Array<T>`, `Record<string, never>`,
  * `Uint8Array`, and `Promise<T>` on every actor method.
  */
-type $Texts = Array<string>;
+export type Texts = Array<string>;
 /**
  * The lowerings that reference the ambient types, beside the declarations
  * that used to shadow them: `Array<T>`, `Record<string, never>`,
  * `Uint8Array`, and `Promise<T>` on every actor method.
  */
-const $Texts: $.Schema<$Texts> = $.c.rec(() => $.c.vec($.c.text));
+const $Texts: $.Schema<Texts> = $.c.rec(() => $.c.vec($.c.text));
 export { $Texts as Texts };
 
 type $Uint8Array = number;
 const $Uint8Array: $.Schema<$Uint8Array> = $.c.rec(() => $.c.float32);
 export { $Uint8Array as Uint8Array };
 
-type $Unit = Record<string, never>;
-const $Unit: $.Schema<$Unit> = $.c.rec(() => $.c.unit());
+export type Unit = Record<string, never>;
+const $Unit: $.Schema<Unit> = $.c.rec(() => $.c.unit());
 export { $Unit as Unit };
 
-type $Uses = { a: number; d: number; p: $Promise; s: number; t: $Texts; w: $PrincipalValue; x: number };
-const $Uses: $.Schema<$Uses> = $.c.rec(() => $.c.record({ a: $.c.int32, d: $.c.float64, p: $Promise, s: $.c.int16, t: $Texts, w: $PrincipalValue, x: $.c.int8 }));
+export type Uses = { a: number; d: number; p: $Promise; s: number; t: Texts; w: PrincipalValue; x: number };
+const $Uses: $.Schema<Uses> = $.c.rec(() => $.c.record({ a: $.c.int32, d: $.c.float64, p: $Promise, s: $.c.int16, t: $Texts, w: $PrincipalValue, x: $.c.int8 }));
 export { $Uses as Uses };
 
 /**
@@ -56,21 +56,25 @@ export { $Uses as Uses };
  * before the `$` layout (issue #188) and were refused (#116, #130): the
  * runtime's `c`, `Schema` and `PrincipalValue` (the principal type then; it is
  * `Principal` since issue #187, covered in golden.rs), the ambient types the
- * lowerings reference, and TypeScript reserved words. Each binds as a
- * `$`-prefixed local and leaves under its Candid name. Every one uses a
+ * lowerings reference, and TypeScript reserved words. Each value binds as a
+ * `$`-prefixed local and leaves under its Candid name; since issue #245 the
+ * type is declared under the Candid name itself, except for the ambient
+ * types and reserved words, whose type keeps the `$` local. Every one uses a
  * primitive no other declaration uses, so no alias captures a lowering.
  */
-type $c = number;
+export type c = number;
 /**
  * Declaration names that collided with a generated module's own bindings
  * before the `$` layout (issue #188) and were refused (#116, #130): the
  * runtime's `c`, `Schema` and `PrincipalValue` (the principal type then; it is
  * `Principal` since issue #187, covered in golden.rs), the ambient types the
- * lowerings reference, and TypeScript reserved words. Each binds as a
- * `$`-prefixed local and leaves under its Candid name. Every one uses a
+ * lowerings reference, and TypeScript reserved words. Each value binds as a
+ * `$`-prefixed local and leaves under its Candid name; since issue #245 the
+ * type is declared under the Candid name itself, except for the ambient
+ * types and reserved words, whose type keeps the `$` local. Every one uses a
  * primitive no other declaration uses, so no alias captures a lowering.
  */
-const $c: $.Schema<$c> = $.c.rec(() => $.c.int8);
+const $c: $.Schema<c> = $.c.rec(() => $.c.int8);
 export { $c as c };
 
 type $default = number;
@@ -86,9 +90,9 @@ const $string: $.Schema<$string> = $.c.rec(() => $.c.nat16);
 export { $string as string };
 
 const $actor: $.Schema<$.Principal> = $.c.rec(() => $.c.service({ all: $.c.func([$Uses], [$.c.nat32, $Bytes, $Unit], "query"), get: $.c.func([$.c.nat16], [$.c.float64], "query"), ping: $.c.func([$.c.int8], [$Promise], "update") }));
-type $Actor = {
-  all: ((arg0: $Uses) => Promise<[number, $Bytes, $Unit]>) & $.WithMode<"query">;
+export type Actor = {
+  all: ((arg0: Uses) => Promise<[number, Bytes, Unit]>) & $.WithMode<"query">;
   get: ((arg0: number) => Promise<number>) & $.WithMode<"query">;
   ping: ((arg0: number) => Promise<$Promise>) & $.WithMode<"update">;
 };
-export { $actor as actor, type $Actor as Actor };
+export { $actor as actor };

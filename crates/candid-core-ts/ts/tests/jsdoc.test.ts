@@ -3,8 +3,9 @@
 // asks the compiler what a hover would show, which is the part of the
 // acceptance a compile cannot see:
 //
-// - the doc on a declaration is visible through the `export { $X as X }`
-//   alias a consumer imports, for the type and the value meaning alike;
+// - the doc on a declaration is visible on both meanings a consumer imports:
+//   the type declared under its own name (`export type X`) and the value
+//   behind the `export { $X as X }` alias;
 // - field, arm and `Actor` method docs read back as written, with the two
 //   escapes the generator applies (`*\/` and `\@`) showing as text;
 // - a hostile doc — a terminator, a forged `@param`/`@deprecated`, an
@@ -80,10 +81,12 @@ interface Session {
   readonly checker: TsChecker;
   readonly aliasFlag: number;
   readonly callKind: number;
-  /** The symbol behind `export { $name as name }`, alias followed. */
+  /** The value behind `export { $name as name }`, alias followed. */
   exported(name: string): TsSymbol;
   /** The alias symbol itself, as written at the export specifier. */
   exportAlias(name: string): TsSymbol;
+  /** The type declared under the export name, `export type name = …`. */
+  exportedType(name: string): TsSymbol;
   declared(name: string): TsType;
   property(type: TsType, name: string): TsSymbol;
   /** The type of a property, e.g. the anonymous record a field holds. */
@@ -119,6 +122,14 @@ async function withDocsGolden(run: (session: Session) => void): Promise<void> {
       assert((alias.flags & SymbolFlags.Alias) !== 0, `${name} must be an export alias`);
       return checker.getAliasedSymbol(alias);
     };
+    const exportedType = (name: string): TsSymbol => {
+      const found = present(
+        new RegExp(`export type ${name} =`).exec(source.text),
+        `export type ${name}`,
+      );
+      const position = found.index + "export type ".length;
+      return present(checker.getSymbolAtPosition(GOLDEN, position), `type ${name}`);
+    };
     const property = (type: TsType, name: string): TsSymbol =>
       present(checker.getPropertyOfType(type, name), `property ${name}`);
     run({
@@ -127,7 +138,8 @@ async function withDocsGolden(run: (session: Session) => void): Promise<void> {
       callKind: SignatureKind.Call,
       exported,
       exportAlias,
-      declared: (name) => checker.getDeclaredTypeOfSymbol(exported(name)),
+      exportedType,
+      declared: (name) => checker.getDeclaredTypeOfSymbol(exportedType(name)),
       property,
       typeOf: (symbol) => present(checker.getTypeOfSymbol(symbol), `type of ${symbol.name}`),
       arms: (type) => present(type.getTypes(), "union members"),
@@ -148,26 +160,35 @@ async function withDocsGolden(run: (session: Session) => void): Promise<void> {
 
 test("a declaration's docs are visible through the export alias, type and value", async () => {
   await withDocsGolden((s) => {
-    // The alias symbol a consumer's `import { Account }` binds carries no
-    // docs of its own; the editor's hover resolves it, and so does this.
-    const alias = s.exportAlias("Account");
-    assert((alias.flags & s.aliasFlag) !== 0);
-    assert.strictEqual(s.docs(alias), "");
-    const account = s.exported("Account");
     const expected =
       "An account. Two `///` lines make two doc lines.\n" +
       "\n" +
       "A blank `///` line keeps its paragraph break; `backticks` and an email\n" +
       "a@b.c pass through, while an inline {\\@link Tokens} is escaped like any tag.";
+    // The symbol a consumer's `import { Account }` binds is the module's
+    // export `Account`: the type declared under that name (`export type
+    // Account`), merged with the alias that adds the value meaning. It
+    // carries the type's docs itself, and the editor's hover reads them.
+    const alias = s.exportAlias("Account");
+    assert((alias.flags & s.aliasFlag) !== 0);
+    assert.strictEqual(s.docs(alias), expected);
+    // Followed, the alias reaches the value, `$Account`, documented alike.
+    const account = s.exported("Account");
+    assert.strictEqual(account.name, "$Account");
     assert.strictEqual(s.docs(account), expected);
     assert.deepStrictEqual(s.tags(account), []);
-    // One merged symbol carries both meanings, so the same docs serve a
-    // consumer reading `Account` as a type and as a value.
-    assert.strictEqual(s.docs(s.exported("Tokens")), "The amount of a transfer, in e8s.");
-    assert.strictEqual(s.docs(s.exported("Second")), "Second is documented on its own.");
-    // A block comment above a declaration is not a doc, and the file's own
-    // header is detached from it by a blank line.
-    assert.strictEqual(s.docs(s.exported("Plain")), "");
+    // The type is its own symbol, named `Account`, with the same docs.
+    const accountType = s.exportedType("Account");
+    assert.strictEqual(accountType.name, "Account");
+    assert.strictEqual(s.docs(accountType), expected);
+    assert.deepStrictEqual(s.tags(accountType), []);
+    for (const meaning of [s.exported, s.exportedType]) {
+      assert.strictEqual(s.docs(meaning("Tokens")), "The amount of a transfer, in e8s.");
+      assert.strictEqual(s.docs(meaning("Second")), "Second is documented on its own.");
+      // A block comment above a declaration is not a doc, and the file's own
+      // header is detached from it by a blank line.
+      assert.strictEqual(s.docs(meaning("Plain")), "");
+    }
   });
 });
 
@@ -276,6 +297,7 @@ test("Actor methods: docs, and @param names that match the signature", async () 
   await withDocsGolden((s) => {
     const actor = s.declared("Actor");
     assert.strictEqual(s.docs(s.exported("actor")), "The service.");
+    assert.strictEqual(s.docs(s.exportedType("Actor")), "The service.");
     for (const [name, expected] of Object.entries(METHODS)) {
       const method = s.property(actor, name);
       assert.deepStrictEqual(s.parameters(method), expected.parameters, `${name} parameters`);

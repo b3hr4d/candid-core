@@ -64,8 +64,8 @@
 //!
 //! ```ts
 //! // type Memo = nat64; type R = record { a : nat64; b : Memo };
-//! type $Memo = bigint;
-//! type $R = { a: bigint; b: bigint }; // not { a: Memo; b: Memo }
+//! export type Memo = bigint;
+//! export type R = { a: bigint; b: bigint }; // not { a: Memo; b: Memo }
 //! ```
 //!
 //! Before, one declaration renamed every use of its primitive across the whole
@@ -118,9 +118,9 @@
 //! type alone, and reads it back with the runtime's `ModeOf`:
 //!
 //! ```ts
-//! type $Actor = {
-//!   icrc1_balance_of: ((arg0: $Account) => Promise<bigint>) & $.WithMode<"query">;
-//!   icrc1_transfer: ((arg0: $TransferArg) => Promise<$TransferResult>) & $.WithMode<"update">;
+//! export type Actor = {
+//!   icrc1_balance_of: ((arg0: Account) => Promise<bigint>) & $.WithMode<"query">;
+//!   icrc1_transfer: ((arg0: TransferArg) => Promise<TransferResult>) & $.WithMode<"update">;
 //! };
 //! ```
 //!
@@ -132,34 +132,50 @@
 //! hand without the mark stays valid, and `ModeOf` reads its methods as the
 //! whole `MethodMode` union: mode unknown.
 //!
-//! # Module layout: collision-free `$` bindings
+//! # Module layout: collision-free `$` bindings, plain type names
 //!
-//! Since issue #188 every binding a generated module declares is a local
-//! whose name starts with `$`, and each Candid name reaches consumers only
-//! as an *export* name:
+//! Since issue #188 every value a generated module declares is a local whose
+//! name starts with `$`, and each Candid name reaches consumers as an
+//! *export* name. Since issue #245 each declaration's *type* is declared
+//! under the Candid name itself, so the names a consumer's compiler errors
+//! print are the names it imported (`Account`, `Actor`), not the locals:
 //!
 //! ```ts
 //! import * as $ from "@candid-core/schema";
 //!
-//! type $Account = { owner: $.Principal; subaccount: Uint8Array | null };
-//! const $Account: $.Schema<$Account> = $.c.rec(() => $.c.record({ … }));
+//! export type Account = { owner: $.Principal; subaccount: Uint8Array | null };
+//! const $Account: $.Schema<Account> = $.c.rec(() => $.c.record({ … }));
 //! export { $Account as Account };
 //!
 //! const $actor: $.Schema<$.Principal> = $.c.rec(() => $.c.service({ … }));
-//! type $Actor = {
-//!   transfer: ((arg0: $TransferArg) => Promise<$TransferResult>) & $.WithMode<"update">;
+//! export type Actor = {
+//!   transfer: ((arg0: TransferArg) => Promise<TransferResult>) & $.WithMode<"update">;
 //! };
-//! export { $actor as actor, type $Actor as Actor };
+//! export { $actor as actor };
 //! ```
 //!
-//! The schema runtime is the namespace `$`; a declaration `X` is the local
-//! `$X`, its alias and builder sharing that name, and `export { $X as X }`
-//! exports both meanings. A declaration name is identifier-shaped
-//! (`[A-Za-z_$][A-Za-z0-9_$]*`, a superset of Candid's identifier grammar),
-//! so `$X` is always a valid binding and never a keyword, and prefixing is
-//! injective — no declaration can shadow the runtime namespace, the ambient
-//! types the lowerings use (`Array<T>`, `Record<string, never>`,
-//! `Uint8Array`, `Promise<T>`), or another declaration. A declaration named
+//! The schema runtime is the namespace `$`; a declaration `X`'s value is the
+//! local `$X`, and `export { $X as X }` adds that value to the export name
+//! `X`, which `export type X` already gives the type. Types and values live
+//! in separate namespaces, so the two never meet. A declaration name is
+//! identifier-shaped (`[A-Za-z_$][A-Za-z0-9_$]*`, a superset of Candid's
+//! identifier grammar), so `$X` is always a valid binding and never a
+//! keyword, and prefixing is injective — no value can shadow the runtime
+//! namespace or another declaration's value.
+//!
+//! A type keeps the `$` local too (`type $X = …`, referenced as `$X`) where
+//! the Candid name cannot be a type in the module: a name that starts with
+//! `$`, which only a Contract document can write; a global type the
+//! lowerings reference unqualified (`Array<T>`, `Record<string, never>`,
+//! `Uint8Array`, `Promise<T>`), or the imported `Principal` under a
+//! non-default [`TsOptions::principal_import`], either of which the
+//! declaration would shadow; and a word TypeScript refuses as a type's name,
+//! declared or referenced — the reserved words (`delete`, `default`), the
+//! predefined type names (`string`, `unknown`), the type operators
+//! (`keyof`, `readonly`), `as`, and `intrinsic`, which TypeScript reads as
+//! its own keyword where it starts an alias's body (`type A = intrinsic`),
+//! measured against TypeScript 5.7.2, 6.0.3 and 7.0.2. Every fallback type name starts with `$` and no plain one
+//! does, so type names stay as injective as values. A declaration named
 //! `c`, `Schema`, `Array`, `Promise`, or a TypeScript reserved word such as
 //! `delete` or `string` therefore generates, and consumers import it under
 //! its Candid spelling (`import { delete as del } from "./gen.ts"`). A
@@ -174,8 +190,9 @@
 //! When [`TsOptions::principal_import`] names the schema runtime (the
 //! default), the principal type is `$.Principal`; any other module is
 //! imported as `import type { Principal } from "…"`, a local that no
-//! `$`-prefixed declaration binding can collide with — so a declaration
-//! named `Principal` generates either way.
+//! `$`-prefixed declaration value can collide with, and a declaration named
+//! `Principal` then keeps the `$` local for its type — so it generates
+//! either way.
 //!
 //! # Omission instead of refusal
 //!
@@ -630,13 +647,123 @@ fn actor_service(contract: &Contract) -> Result<Option<(TypeRef, bool)>, TsGenEr
     }))
 }
 
-/// The module-local binding of a declaration: `$` plus its name. Candid
-/// names are identifier-shaped, so the local is a valid binding, never a
-/// keyword, and never equal to the runtime namespace `$`, an ambient type,
-/// or another declaration's local (see "Module layout" in the crate docs).
+/// The module-local value binding of a declaration, and its type's name
+/// where the Candid name cannot be one ([`plain_type_name`]): `$` plus its
+/// name. Candid names are identifier-shaped, so the local is a valid
+/// binding, never a keyword, and never equal to the runtime namespace `$`,
+/// an ambient type, or another declaration's local (see "Module layout" in
+/// the crate docs).
 fn local(name: &str) -> String {
     format!("${name}")
 }
+
+/// Whether a declaration's type can be declared under its own name, as
+/// `export type X = …`, which is what makes a consumer's compiler errors
+/// name `X` rather than a `$`-prefixed local. It can unless the name:
+///
+/// - starts with `$` (only a Contract document can write one): every
+///   fallback type name starts with `$` and no plain one does, so type names
+///   stay distinct, and none can be the runtime namespace `$`;
+/// - is a global type the module's types reference unqualified
+///   ([`AMBIENT_TYPES`]), or `principal`, the principal type expression,
+///   when that is the imported `Principal`: declaring it would shadow the
+///   type every other lowering means;
+/// - is a word TypeScript refuses there ([`UNUSABLE_TYPE_NAMES`]).
+///
+/// The rule reads only the name and the options, never another part of the
+/// contract, so what a declaration generates stays local to it.
+fn plain_type_name(name: &str, principal: &str) -> bool {
+    !name.starts_with('$')
+        && !AMBIENT_TYPES.contains(&name)
+        && name != principal
+        && !UNUSABLE_TYPE_NAMES.contains(&name)
+}
+
+/// The global types the module's type expressions name unqualified:
+/// `Array<T>` for a `vec`, `Uint8Array` for a blob, `Record<string, never>`
+/// for the unit record, and `Promise<T>` on every `Actor` method. Everything
+/// else the module references from the runtime goes through `$.`.
+const AMBIENT_TYPES: &[&str] = &["Array", "Promise", "Record", "Uint8Array"];
+
+/// The words TypeScript refuses as a type's name in a module, where it is
+/// declared (`export type X = …`, `$.Schema<X>`) or where another type
+/// references it — as a whole alias body (`type A = X`, `type A = X | null`)
+/// or inside one (`{ f: X }`, `Array<X>`, `[X, X]`, a variant arm's `value:
+/// X`, `(x: X) => Promise<X>`): the reserved words, the strict-mode and
+/// module reserved words (`let`, `yield`, `await`, …), the predefined type
+/// names (`string`, `number`, `unknown`, …), the type operators (`infer`,
+/// `keyof`, `readonly`, `unique`), which cannot start a type reference;
+/// `as`, which the declaration position parses as the start of an export
+/// clause; and `intrinsic`, which an alias body that starts with it parses
+/// as TypeScript's own keyword (`TS2795` alone, `TS1005` before `| null`).
+/// Measured: every keyword and contextual keyword of the language, each
+/// compiled in every one of those positions with TypeScript 5.7.2, 6.0.3
+/// and 7.0.2; these are exactly the ones every version refuses, and the
+/// others (`type`, `of`, `async`, `is`, …) compile in each.
+const UNUSABLE_TYPE_NAMES: &[&str] = &[
+    "any",
+    "as",
+    "await",
+    "bigint",
+    "boolean",
+    "break",
+    "case",
+    "catch",
+    "class",
+    "const",
+    "continue",
+    "debugger",
+    "default",
+    "delete",
+    "do",
+    "else",
+    "enum",
+    "export",
+    "extends",
+    "false",
+    "finally",
+    "for",
+    "function",
+    "if",
+    "implements",
+    "import",
+    "in",
+    "infer",
+    "instanceof",
+    "interface",
+    "intrinsic",
+    "keyof",
+    "let",
+    "never",
+    "new",
+    "null",
+    "number",
+    "object",
+    "package",
+    "private",
+    "protected",
+    "public",
+    "readonly",
+    "return",
+    "static",
+    "string",
+    "super",
+    "switch",
+    "symbol",
+    "this",
+    "throw",
+    "true",
+    "try",
+    "typeof",
+    "undefined",
+    "unique",
+    "unknown",
+    "var",
+    "void",
+    "while",
+    "with",
+    "yield",
+];
 
 /// The first declaration name for each *composite* node, in declaration
 /// order. Later aliases of the same node render as references to the first
@@ -649,7 +776,7 @@ fn local(name: &str) -> String {
 /// wrote the name (issue #191): `type Memo = nat64` would turn an unrelated
 /// `nat64` field into `Memo`, and `type Byte = nat8` would turn every `blob`
 /// into `Array<Byte>`. A primitive declaration is still emitted, structurally
-/// (`type $Memo = bigint`); it just names nothing but itself.
+/// (`export type Memo = bigint`); it just names nothing but itself.
 fn first_names(contract: &Contract) -> BTreeMap<TypeRef, String> {
     let mut map = BTreeMap::new();
     for declaration in contract.declarations() {
@@ -775,25 +902,35 @@ impl Generator<'_> {
             // is canonical (name-sorted), not dependency-sorted, and
             // the lazy thunk is what makes a forward reference safe at
             // module initialization.
-            //
-            // Both meanings bind the `$`-prefixed local and leave under the
-            // Candid name through one export specifier (issue #188).
             self.origins = vec![Origin::of(&declaration.name)];
             self.indent = 0;
             let alias = self.declaration_body(target_ty, &declaration.name, Target::Alias)?;
             let builder = self.declaration_body(target_ty, &declaration.name, Target::Builder)?;
-            // The declaration's docs sit above both meanings of the local:
-            // a hover on either the type or the value reads them, and the
-            // `export` specifier carries whichever the consumer uses.
+            // The declaration's docs sit above both the type and the value:
+            // a hover on either reads them, and the export name carries
+            // whichever the consumer uses.
             let docs = doc_block(
                 0,
                 self.names.provenance.declaration_docs(&declaration.name),
                 &[],
             );
+            // The value binds the `$`-prefixed local (issue #188). The type is
+            // declared under the Candid name itself where it can be (`export
+            // type X`, issue #245), so a consumer's compiler errors name the
+            // type the consumer imported, and the export specifier adds the
+            // value to that export name. A name that cannot be a type here
+            // keeps the `$` local for the type too, and both meanings leave
+            // through the one specifier.
             let local = local(&declaration.name);
+            let ty = self.type_name(&declaration.name);
+            let head = if ty == local {
+                format!("type {local}")
+            } else {
+                format!("export type {ty}")
+            };
             aliases.push(format!(
-                "{docs}{}\n{docs}const {local}: $.Schema<{local}> = $.c.rec(() => {builder});\nexport {{ {local} as {name} }};\n",
-                assign(&format!("type {local}"), &alias) + ";",
+                "{docs}{}\n{docs}const {local}: $.Schema<{ty}> = $.c.rec(() => {builder});\nexport {{ {local} as {name} }};\n",
+                assign(&head, &alias) + ";",
                 name = declaration.name,
             ));
         }
@@ -901,10 +1038,10 @@ impl Generator<'_> {
                 principal = self.principal,
             ));
             actor_out.push_str(&format!(
-                "{docs}type $Actor = {{\n{}\n}};\n",
+                "{docs}export type Actor = {{\n{}\n}};\n",
                 signatures.join("\n")
             ));
-            actor_out.push_str("export { $actor as actor, type $Actor as Actor };\n");
+            actor_out.push_str("export { $actor as actor };\n");
             if is_class {
                 actor_out.push_str(
                     "// Note: the actor is a service class; init args are install-time \
@@ -944,6 +1081,26 @@ impl Generator<'_> {
         Ok(out)
     }
 
+    /// How a structure references a declaration: by its type name in an
+    /// alias, by its `$`-prefixed value local in a builder.
+    fn reference(&self, name: &str, target: Target) -> String {
+        match target {
+            Target::Alias => self.type_name(name),
+            Target::Builder => local(name),
+        }
+    }
+
+    /// The name a declaration's type is declared under: the Candid name
+    /// itself, unless that name cannot be a type in this module. See
+    /// [`plain_type_name`].
+    fn type_name(&self, name: &str) -> String {
+        if plain_type_name(name, self.principal) {
+            name.to_string()
+        } else {
+            local(name)
+        }
+    }
+
     /// The right-hand side of one alias. A declaration whose node is first
     /// declared under a *different* name renders as that name, so later
     /// aliases of one node stay aliases instead of duplicating structure.
@@ -954,7 +1111,7 @@ impl Generator<'_> {
         target: Target,
     ) -> Result<String, TsGenError> {
         match self.declared.get(&ty) {
-            Some(first) if first != own_name => Ok(local(first)),
+            Some(first) if first != own_name => Ok(self.reference(first, target)),
             _ => self.render_structure(ty, own_name, target),
         }
     }
@@ -1144,7 +1301,7 @@ impl Generator<'_> {
                         kind: "class",
                     });
                 }
-                return Ok(Entered::Text(local(name)));
+                return Ok(Entered::Text(self.reference(name, target)));
             }
         }
         Ok(match self.node(reference)?.clone() {
@@ -1707,9 +1864,10 @@ fn method_key(name: &str) -> String {
 
 /// The module's own export names: the actor surface exports the service
 /// schema as `actor` and its call interface as `Actor`, so a declaration by
-/// either name would be a duplicate export. Every other binding the module
-/// declares is a `$`-prefixed local (issue #188), which no declaration name
-/// can collide with; these two are reserved unconditionally, actor or not,
+/// either name would be a duplicate export. Every value the module declares
+/// is a `$`-prefixed local (issue #188), and every type is the declaration's
+/// own name or that local (issue #245), so no other declaration name can
+/// collide; these two are reserved unconditionally, actor or not,
 /// by the #116 locality rule, and a declaration by either name is omitted
 /// (`reserved_export_name`, issue #189).
 const RESERVED_EXPORT_NAMES: &[&str] = &["actor", "Actor"];
@@ -1798,6 +1956,47 @@ mod tests {
             "_1_2_",
         ] {
             assert!(!is_reserved_numeric_name(ordinary), "{ordinary}");
+        }
+    }
+
+    #[test]
+    fn plain_type_names_fall_back_exactly_where_a_type_name_cannot_go() {
+        let default = "$.Principal";
+        // The measured list is sorted and duplicate-free, so a review sees a
+        // change to it as one inserted or deleted line.
+        assert!(UNUSABLE_TYPE_NAMES.windows(2).all(|pair| pair[0] < pair[1]));
+        assert_eq!(UNUSABLE_TYPE_NAMES.len(), 62);
+        for name in UNUSABLE_TYPE_NAMES.iter().chain(AMBIENT_TYPES) {
+            assert!(!plain_type_name(name, default), "{name}");
+        }
+        // A `$` name falls back, so no plain name can equal a fallback.
+        for name in ["$", "$x", "$Account", "$$"] {
+            assert!(!plain_type_name(name, default), "{name}");
+        }
+        // The imported principal type is a name the module references.
+        assert!(!plain_type_name("Principal", "Principal"));
+        assert!(plain_type_name("Principal", default));
+        // Ordinary names, the runtime's own names (always reached through
+        // `$.`), contextual keywords, and globals no lowering references.
+        for name in [
+            "Account",
+            "Actor2",
+            "c",
+            "Schema",
+            "WithMode",
+            "x$",
+            "type",
+            "of",
+            "async",
+            "is",
+            "asserts",
+            "eval",
+            "arguments",
+            "Map",
+            "Error",
+            "Object",
+        ] {
+            assert!(plain_type_name(name, default), "{name}");
         }
     }
 
