@@ -89,8 +89,8 @@ export { $TripleOpt as TripleOpt };
 
 const $actor: $.Schema<$.Principal> = $.c.rec(() => $.c.service({ describe: $.c.func([$AliasedOuter], [$AliasedOuter], "update"), update: $.c.func([$Settings], [$Change], "update"), settings: $.c.func([], [$Settings], "query") }));
 type $Actor = {
-  describe: (arg0: $AliasedOuter) => Promise<$AliasedOuter>;
-  update: (arg0: $Settings) => Promise<$Change>;
-  settings: () => Promise<$Settings>;
+  describe: ((arg0: $AliasedOuter) => Promise<$AliasedOuter>) & $.WithMode<"update">;
+  update: ((arg0: $Settings) => Promise<$Change>) & $.WithMode<"update">;
+  settings: (() => Promise<$Settings>) & $.WithMode<"query">;
 };
 export { $actor as actor, type $Actor as Actor };

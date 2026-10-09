@@ -18,6 +18,7 @@ import {
   type Infer,
   type Schema,
   type SchemaNode,
+  type WithMode,
 } from "../schema.ts";
 import { validate, type ValidateResult } from "../validate.ts";
 import { encode, encodeArgs, decodeArgs } from "../codec.ts";
@@ -259,25 +260,26 @@ test("a resolved node narrows without casts", () => {
 // The generated call interface, proven against a hand-written one. A module
 // generated from a contract with an actor exports the type `Actor` — one
 // async method per service method, zero results resolving to `void`, one to
-// the value, several to a tuple — as reviewed generator output for whatever
-// call layer a consumer builds on it. `Equals` is the same invariance trick
+// the value, several to a tuple, each intersected with its mode (#244) — as
+// reviewed generator output for whatever call layer a consumer builds on it. `Equals` is the same invariance trick
 // the goldens rest on, so a drift in the emitted interface turns this file
 // red under tsc.
 type Equals<A, B> =
   (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2 ? true : false;
 
 interface ExpectedLedgerActor {
-  fee: () => Promise<ledger.Tokens>;
-  decimals: () => Promise<number>;
-  name: () => Promise<string>;
-  balance_of: (arg0: ledger.Account) => Promise<ledger.Tokens>;
-  get_transactions: (arg0: {
+  fee: (() => Promise<ledger.Tokens>) & WithMode<"query">;
+  decimals: (() => Promise<number>) & WithMode<"query">;
+  name: (() => Promise<string>) & WithMode<"query">;
+  balance_of: ((arg0: ledger.Account) => Promise<ledger.Tokens>) & WithMode<"query">;
+  get_transactions: ((arg0: {
     start: bigint;
     length: bigint;
-  }) => Promise<ledger.TransactionsResponse>;
-  transfer: (arg0: ledger.TransferArg) => Promise<ledger.TransferResult>;
-  total_supply: () => Promise<ledger.Tokens>;
-  symbol: () => Promise<string>;
+  }) => Promise<ledger.TransactionsResponse>) &
+    WithMode<"query">;
+  transfer: ((arg0: ledger.TransferArg) => Promise<ledger.TransferResult>) & WithMode<"update">;
+  total_supply: (() => Promise<ledger.Tokens>) & WithMode<"query">;
+  symbol: (() => Promise<string>) & WithMode<"query">;
 }
 
 export const actorTypeMatchesHandWrittenInterface: Equals<ledger.Actor, ExpectedLedgerActor> = true;

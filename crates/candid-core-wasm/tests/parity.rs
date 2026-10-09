@@ -267,7 +267,7 @@ fn diagnostics_pass_through_verbatim() {
     );
     assert!(module.contains("export { $Fine as Fine };"), "{module}");
     assert!(
-        module.contains("  fine: (arg0: bigint) => Promise<void>;"),
+        module.contains("  fine: ((arg0: bigint) => Promise<void>) & $.WithMode<\"update\">;"),
         "{module}"
     );
     // `via` is absent, not null, when the reason carries none.

@@ -15,6 +15,6 @@ export { $Registry as Registry };
 
 const $actor: $.Schema<$.Principal> = $.c.rec(() => $.c.service({ ping: $.c.func([], [], "update") }));
 type $Actor = {
-  ping: () => Promise<void>;
+  ping: (() => Promise<void>) & $.WithMode<"update">;
 };
 export { $actor as actor, type $Actor as Actor };

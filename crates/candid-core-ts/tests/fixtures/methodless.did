@@ -1,0 +1,5 @@
+// Issue #244: an actor with no methods. Its `Actor` has no member to carry a
+// mode, so the mode marks change nothing here: the empty call interface is
+// pinned exactly as before.
+
+service : {}

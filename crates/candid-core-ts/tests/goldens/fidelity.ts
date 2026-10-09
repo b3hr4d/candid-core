@@ -75,8 +75,8 @@ export { $TransferResult as TransferResult };
 
 const $actor: $.Schema<$.Principal> = $.c.rec(() => $.c.service({ put: $.c.func([$.c.blob(), $.c.blob(), $.c.nat8], [$.c.nat64, $.c.nat64], "update"), icrc1_balance_of: $.c.func([$Account], [$.c.nat], "query"), icrc1_transfer: $.c.func([$TransferArg], [$TransferResult], "update") }));
 type $Actor = {
-  put: (arg0: Uint8Array, arg1: Uint8Array, arg2: number) => Promise<[bigint, bigint]>;
-  icrc1_balance_of: (arg0: $Account) => Promise<bigint>;
-  icrc1_transfer: (arg0: $TransferArg) => Promise<$TransferResult>;
+  put: ((arg0: Uint8Array, arg1: Uint8Array, arg2: number) => Promise<[bigint, bigint]>) & $.WithMode<"update">;
+  icrc1_balance_of: ((arg0: $Account) => Promise<bigint>) & $.WithMode<"query">;
+  icrc1_transfer: ((arg0: $TransferArg) => Promise<$TransferResult>) & $.WithMode<"update">;
 };
 export { $actor as actor, type $Actor as Actor };
