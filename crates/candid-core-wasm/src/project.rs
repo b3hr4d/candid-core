@@ -25,10 +25,13 @@
 //! `service : { … }`, the view a client calls), and the import structure — a
 //! bundle projects to one self-contained file.
 //!
-//! Determinism: methods keep the order the source gives them, whatever order
-//! they were requested in, and declarations keep the merged program's order
-//! (the entry's in source order, then each imported source's, by source ID),
-//! so the same input and the same set of names give the same bytes.
+//! Determinism: methods come out in name order (code point), the order
+//! `candid_parser` gives a service's methods, whatever order the source
+//! declares them or the caller names them in; record fields and variant arms
+//! in label-id order, as the parser gives them; and declarations in the
+//! merged program's order (the entry's in source order, then each imported
+//! source's, by source ID). So the same input and the same set of names give
+//! the same bytes.
 
 use std::collections::BTreeSet;
 
@@ -89,9 +92,10 @@ fn merged_program(source_info: &SourceInfo, entry: &str) -> Result<IDLMergedProg
 /// The methods of the actor's service type, following declaration names.
 fn service_methods(merged: &IDLMergedProg, actor: &IDLType) -> Result<Vec<Binding>, Internal> {
     let mut current = actor.clone();
-    // Each step follows one declaration, so the chain is at most as long as
-    // the declaration list; a longer one would be a cycle.
-    for _ in 0..=merged.bindings().count() {
+    // A chain is at most one class step, one step per declaration (each
+    // name followed once; a name met twice would be a cycle), and the final
+    // service: declarations + 2 iterations.
+    for _ in 0..merged.bindings().count() + 2 {
         current = match current {
             IDLType::ServT(methods) => return Ok(methods),
             IDLType::ClassT(_, service) => *service,

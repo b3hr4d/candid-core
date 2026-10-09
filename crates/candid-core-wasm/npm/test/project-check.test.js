@@ -92,6 +92,30 @@ test("gen on a projection lists only the projected methods, each with its mode",
   assert.match(module, /transfer: \$\.c\.func\(\[\$TransferArg\], \[\$TransferResult\], "update"\)/);
 });
 
+test("a service class with no declarations projects to its service", async () => {
+  const root = scratch();
+  const source = readFileSync(
+    path.join(REPO, "tests", "fixtures", "conformance", "class.did"),
+    "utf8",
+  );
+  writeFileSync(path.join(root, "live", "class.did"), source);
+  const projected = cli(
+    ["project", "live/class.did", "--methods", "get", "-o", "app/class.did"],
+    root,
+  );
+  assert.equal(projected.status, 0, projected.stderr);
+  assert.equal(
+    readFileSync(path.join(root, "app", "class.did"), "utf8"),
+    "service : {\n  get : () -> (nat) query;\n}\n",
+  );
+  const library = await projectDid(
+    { source: "type S = service { get : () -> (nat) query };\nservice : (nat) -> S\n" },
+    ["get"],
+  );
+  assert.equal(library.ok, true, JSON.stringify(library));
+  assert.equal(library.did, "service : {\n  get : () -> (nat) query;\n}\n");
+});
+
 test("an unknown method and an empty list each fail with a diagnostic", () => {
   const root = scratch();
   const unknown = cli(

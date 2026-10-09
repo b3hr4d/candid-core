@@ -31,8 +31,9 @@ candid-core = { path = "../..", default-features = false, features = ["compiler"
 candid-core-ts = { path = "../candid-core-ts", features = ["compiler"] }
 serde_json = "=1.0.150"
 # The projection (`projectDid`) works on the Candid syntax so the output keeps
-# declaration names, doc comments and argument names, and prints with
-# upstream's own printer. The exact version `candid-core` itself pins, so the
+# declaration names, doc comments and argument names. `candid_parser` only
+# parses and merges the sources; the printer is the crate's own (see
+# `src/project.rs`). The exact version `candid-core` itself pins, so the
 # resolved graph gains an edge and no package.
 candid_parser = "=0.4.0"
 # The exact wasm-bindgen the repository already pins (wasm-bindgen-test

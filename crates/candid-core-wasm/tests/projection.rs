@@ -451,3 +451,97 @@ fn service_and_method_aliases_are_followed() {
         [("get".to_string(), "query".to_string())]
     );
 }
+
+/// A class whose service is reached in more steps than there are
+/// declarations: an inline service with no declarations at all, and a
+/// named service type with one declaration. Each projects to its service.
+#[test]
+fn a_class_with_few_declarations_projects_to_its_service() {
+    let inline = "service : (nat) -> {\n  get : () -> (nat) query;\n  put : (nat) -> ();\n}\n";
+    for source in [
+        inline.to_string(),
+        inline.replace("(nat) -> {", "(n : nat) -> {"),
+        inline.replace("(nat) -> {", "() -> {"),
+    ] {
+        let response = project(json!(source), &["get"]);
+        assert_eq!(response["ok"], json!(true), "{source}: {response}");
+        assert_eq!(
+            response["did"],
+            json!("service : {\n  get : () -> (nat) query;\n}\n"),
+            "{source}"
+        );
+    }
+    let named = "type S = service {\n  get : () -> (nat) query;\n};\nservice : (nat) -> S\n";
+    let response = project(json!(named), &["get"]);
+    assert_eq!(response["ok"], json!(true), "{response}");
+    assert_eq!(
+        response["did"],
+        json!("service : {\n  get : () -> (nat) query;\n}\n")
+    );
+}
+
+/// Every conformance fixture with a method projects onto all of its methods:
+/// the same methods with the same modes, and the same interface identity
+/// unless the actor is a class (its init arguments are dropped).
+#[test]
+fn every_conformance_fixture_projects_onto_all_its_methods() {
+    let mut projected = 0;
+    for name in ["actorless", "basic", "class", "empty_actor", "recursive"] {
+        let source = repo(&format!("tests/fixtures/conformance/{name}.did"));
+        let envelope = contract(&source);
+        if envelope["contract"]["actor"].is_null() {
+            continue;
+        }
+        let methods: Vec<String> = actor_modes(&envelope)
+            .into_iter()
+            .map(|(method, _)| method)
+            .collect();
+        if methods.is_empty() {
+            continue;
+        }
+        let names: Vec<&str> = methods.iter().map(String::as_str).collect();
+        let response = project(json!(source), &names);
+        assert_eq!(response["ok"], json!(true), "{name}: {response}");
+        let text = response["did"].as_str().unwrap();
+        assert_eq!(
+            actor_modes(&contract(text)),
+            actor_modes(&envelope),
+            "{name}"
+        );
+        // A class's init arguments are dropped, which moves its interface;
+        // any other actor keeps it.
+        if envelope["contract"]["actor"]["class"].is_null() {
+            assert_eq!(
+                response["projection"]["interface_id"], response["input"]["interface_id"],
+                "{name}: {response}"
+            );
+        } else {
+            assert!(text.starts_with("service : {"), "{text}");
+        }
+        projected += 1;
+    }
+    assert_eq!(projected, 3, "basic, class and recursive have methods");
+}
+
+/// Methods come out in name order (code point), whatever order the source
+/// declares them in, and so does the `methods` field; record fields come out
+/// in label-id order.
+#[test]
+fn projected_methods_are_in_name_order() {
+    let source = "service : {\n  zeta : () -> ();\n  alpha : () -> ();\n  Mid : () -> ();\n  mid : () -> ();\n}\n";
+    let response = project(json!(source), &["zeta", "mid", "alpha", "Mid"]);
+    assert_eq!(response["ok"], json!(true), "{response}");
+    assert_eq!(response["methods"], json!(["Mid", "alpha", "mid", "zeta"]));
+    assert_eq!(
+        response["did"],
+        json!("service : {\n  Mid : () -> ();\n  alpha : () -> ();\n  mid : () -> ();\n  zeta : () -> ();\n}\n")
+    );
+    let response = project(
+        json!("type R = record { zeta : nat; alpha : text; mid : bool };\nservice : { get : () -> (R) }\n"),
+        &["get"],
+    );
+    assert_eq!(
+        response["did"],
+        json!("type R = record {\n  mid : bool;\n  alpha : text;\n  zeta : nat;\n};\nservice : {\n  get : () -> (R);\n}\n")
+    );
+}
