@@ -65,7 +65,10 @@ use serde_json::{json, Map, Value};
 mod compat;
 mod project;
 
-pub use compat::{MAX_CHECK_DEPTH, MAX_CHECK_STEPS};
+pub use compat::{MAX_CHECK_DEPTH, MAX_CHECK_STEPS, MAX_CHECK_WARNINGS};
+
+#[doc(hidden)]
+pub use compat::CheckOptions;
 
 /// The envelope extension carrying field names, per the issue #152 decision.
 pub const FIELD_NAMES_EXTENSION: &str = "org.candid-core.field-names/v1";
@@ -245,12 +248,20 @@ fn project_request(request: &str) -> Result<String, String> {
 /// "diagnostics": […]}` when the request or a side's sources fail. The
 /// request is `{"written": <sources request>, "live": <sources request>}`.
 pub fn check_compatible(request: &str) -> String {
-    match check_request(request) {
+    check_compatible_with(request, CheckOptions::default())
+}
+
+/// [`check_compatible`] under other options: this crate's tests lower the
+/// work bound, or turn off the re-reporting of proven pairs to get the
+/// reference set of warnings.
+#[doc(hidden)]
+pub fn check_compatible_with(request: &str, options: CheckOptions) -> String {
+    match check_request(request, options) {
         Ok(response) | Err(response) => response,
     }
 }
 
-fn check_request(request: &str) -> Result<String, String> {
+fn check_request(request: &str, options: CheckOptions) -> Result<String, String> {
     let document = request_object(request)?;
     let unknown: Vec<&str> = document
         .keys()
@@ -295,6 +306,7 @@ fn check_request(request: &str) -> Result<String, String> {
             contract: live.contract(),
             source_info: live.source_info(),
         },
+        options,
     );
     let compatible = diagnostics
         .iter()

@@ -272,9 +272,13 @@ Each finding names its method and a stable code: `method_missing`,
 `mode_changed` and `method_incompatible` are errors; `special_opt_rule` is a
 warning, for a change Candid accepts only by reading the value under an `opt`
 as `null` (such as `opt nat` becoming `opt text`), so it passes but loses the
-data at that path, and it is reported at every such path (a changed alias
-under each field that uses it); `resource_limit_exceeded` fails a method whose
-check reached a bound: its depth, its work, or 1,000 warnings. `method_incompatible` and `special_opt_rule` carry the path
+data at that path, and it is reported at every such path along which no pair
+of types repeats (a changed alias under each field that uses it; a recursive
+type up to where a path comes back round); `resource_limit_exceeded` fails a
+method whose check reached a bound, its depth or its work. Past 1,000
+warnings a method reports the first 1,000 and one `resource_limit_exceeded`
+warning (`check_warnings`) saying the rest were dropped; its verdict stands.
+`method_incompatible` and `special_opt_rule` carry the path
 into the method's type where the check failed: `$args[i]` or `$results[i]`,
 then `.name` per record field or variant arm (`["name"]` when it is not an
 identifier, `[id]` for a numeric label), `[*]` per `vec` element, `?` per

@@ -46,7 +46,10 @@ commit, as every entry does.
   `method_incompatible`, the warning `special_opt_rule`, and
   `resource_limit_exceeded`) and, inside a type, the path where the check
   failed. A `special_opt_rule` warning is reported at every path that
-  decodes as `null`, a shared type under each path that reaches it. The
+  decodes as `null` along which no pair of types repeats, a shared type
+  under each path that reaches it. Past 1,000 warnings a method reports the
+  first 1,000 and a `resource_limit_exceeded` warning; its verdict stands.
+  A method whose check reaches its depth or work bound fails closed. The
   report prints the live interface identity, so an unchanged
   interface can be told from one that changed compatibly.
 - **`projectDid(sources, methods)` and `checkCompatible(written, live)`**,

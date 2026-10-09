@@ -241,12 +241,15 @@ export function projectDid(
  *   of the written one; `path` says where.
  * - `special_opt_rule` (warning): the types are compatible only because
  *   Candid reads a mismatch under an `opt` as `null`, so a value at `path`
- *   decodes as `null`. One is reported at every such path, a shared type
- *   under each path that reaches it; inside a recursive type, at the paths
- *   of its first unfolding.
- * - `resource_limit_exceeded` (error): the check of this method stopped at
- *   one of its bounds (`resource_limit` says which: `check_depth`,
- *   `check_steps`, or `check_warnings`, 1,000 warnings) and fails closed.
+ *   decodes as `null`. One is reported at every such path along which no
+ *   pair of types repeats: a shared type under each path that reaches it,
+ *   and a recursive type up to where a path comes back round to a pair it
+ *   already passed through.
+ * - `resource_limit_exceeded`: as an error, the check of this method
+ *   stopped at one of its bounds (`resource_limit.resource` is
+ *   `check_depth` or `check_steps`) and fails closed. As a warning
+ *   (`check_warnings`), the method has more `special_opt_rule` warnings
+ *   than the 1,000 reported; its verdict is complete and stands.
  */
 export interface CompatibilityDiagnostic {
   code:

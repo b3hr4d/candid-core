@@ -213,6 +213,24 @@ test("a special-opt-rule change is a warning and still exits 0", () => {
   assert.match(result.stdout, /^compatible: 0 error\(s\), 1 warning\(s\)$/m);
 });
 
+test("past the warning bound the first 1,000 are reported and the check still exits 0", () => {
+  // 2^10 = 1,024 paths decode as null.
+  const doubling = (content) => {
+    let source = `type D0 = opt ${content};\n`;
+    for (let level = 1; level <= 10; level += 1) {
+      source += `type D${level} = record { l : D${level - 1}; r : D${level - 1} };\n`;
+    }
+    return `${source}service : { get : () -> (D10) }\n`;
+  };
+  const result = checkPair(doubling("nat"), doubling("text"));
+  assert.equal(result.status, 0);
+  assert.match(
+    result.stderr,
+    /^warning: get: resource_limit_exceeded: this method has more special_opt_rule warnings than its check_warnings bound of 1000; /m,
+  );
+  assert.match(result.stdout, /^compatible: 0 error\(s\), 1001 warning\(s\)$/m);
+});
+
 test("check reports which side failed to compile, and a missing file", () => {
   const broken = checkPair("service : { get : () -> (Missing) }\n", "service : {}\n");
   assert.equal(broken.status, 1);

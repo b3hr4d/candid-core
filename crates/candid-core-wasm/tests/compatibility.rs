@@ -30,7 +30,7 @@ use candid::types::subtype::{subtype_with_config, OptReport};
 use candid::TypeEnv;
 use candid_core::compile_did;
 use candid_core_ts::{generate_module, TsNames, TsOptions};
-use candid_core_wasm::check_compatible;
+use candid_core_wasm::{check_compatible, check_compatible_with, CheckOptions, MAX_CHECK_STEPS};
 use candid_parser::{check_prog, IDLProg};
 use serde_json::{json, Value};
 
@@ -336,7 +336,7 @@ service : {
     // A pair proven inside a failed probe (`P`, under `x`) is forgotten with
     // its warnings: walked again under `y`, where it recurses, it must not
     // re-report what the failed probe took back. Inside the recursion a
-    // warning is reported at its first unfolding only.
+    // warning is reported up to where its path comes back round to `P`.
     Case {
         name: "a_pair_proven_in_a_failed_probe_is_forgotten",
         written: "type P = record { n : opt P; m : opt nat };
@@ -347,6 +347,45 @@ service : { get : () -> (record { x : opt record { p : P; bad : text }; y : P })
         diagnostics: &[
             ("special_opt_rule", "get", "$results[0].x"),
             ("special_opt_rule", "get", "$results[0].y.m"),
+        ],
+    },
+    // Mutually recursive types: `Q` is first proven inside `P`'s walk, cut
+    // at `P` while `P` has not yet recorded `.y`. That proof is dropped when
+    // `P`'s walk ends, so `Q` met again is walked again and `.back.y` is
+    // reported under it. The order of the results does not change the set.
+    Case {
+        name: "a_type_proven_inside_an_enclosing_recursion_is_walked_again",
+        written: "type P = record { x : Q; y : opt nat };
+type Q = record { back : P };
+service : { m : () -> (P, Q); n : () -> (Q, P) }",
+        live: "type P = record { x : Q; y : opt text };
+type Q = record { back : P };
+service : { m : () -> (P, Q); n : () -> (Q, P) }",
+        compatible: true,
+        diagnostics: &[
+            ("special_opt_rule", "m", "$results[0].y"),
+            ("special_opt_rule", "m", "$results[1].back.y"),
+            ("special_opt_rule", "n", "$results[0].back.y"),
+            ("special_opt_rule", "n", "$results[1].y"),
+        ],
+    },
+    // The same through record fields: which label comes first (`p` before
+    // `q`, but `q` before `pp`) changes the order of the report, not what is
+    // in it.
+    Case {
+        name: "the_paths_reported_do_not_depend_on_label_order",
+        written: "type P = record { x : Q; y : opt nat };
+type Q = record { back : P };
+service : { a : () -> (record { p : P; q : Q }); b : () -> (record { pp : P; q : Q }) }",
+        live: "type P = record { x : Q; y : opt text };
+type Q = record { back : P };
+service : { a : () -> (record { p : P; q : Q }); b : () -> (record { pp : P; q : Q }) }",
+        compatible: true,
+        diagnostics: &[
+            ("special_opt_rule", "a", "$results[0].p.y"),
+            ("special_opt_rule", "a", "$results[0].q.back.y"),
+            ("special_opt_rule", "b", "$results[0].q.back.y"),
+            ("special_opt_rule", "b", "$results[0].pp.y"),
         ],
     },
     // Upstream's unsound memo (its reference divergence, recorded below):
@@ -642,8 +681,9 @@ fn a_methods_diagnostics_do_not_depend_on_the_other_methods() {
 }
 
 /// Re-reporting a proven pair's warnings under each of its paths is bounded:
-/// a shared type graph that doubles the paths at every level fails closed
-/// past the warning bound instead of reporting without end.
+/// a shared type graph that doubles the paths at every level reports the
+/// first 1,000 and says the rest were dropped. The verdict, which is
+/// complete, stands.
 #[test]
 fn warnings_are_bounded() {
     let doubling = |content: &str, levels: usize| {
@@ -667,19 +707,143 @@ fn warnings_are_bounded() {
         .map(|item| item["path"].as_str().unwrap())
         .collect();
     assert_eq!(distinct.len(), 512, "each path once");
-    // 2^10 = 1024 would be past the bound of 1000: the method fails closed.
+    // 2^10 = 1024 is past the bound of 1000: the first 1000 are reported,
+    // then one warning that the rest were not. The method stays compatible.
     let response = check(&doubling("nat", 10), &doubling("text", 10));
-    assert_eq!(response["compatible"], json!(false), "{response}");
+    assert_eq!(response["compatible"], json!(true), "{response}");
+    let items = response["diagnostics"].as_array().unwrap();
+    assert_eq!(items.len(), 1001);
+    let distinct: BTreeSet<&str> = items[..1000]
+        .iter()
+        .map(|item| {
+            assert_eq!(item["code"], json!("special_opt_rule"));
+            item["path"].as_str().unwrap()
+        })
+        .collect();
+    assert_eq!(distinct.len(), 1000, "each path once");
     assert_eq!(
-        response["diagnostics"],
-        json!([{
+        items[1000],
+        json!({
+            "code": "resource_limit_exceeded",
+            "severity": "warning",
+            "method": "get",
+            "message": "this method has more special_opt_rule warnings than its check_warnings bound of 1000; the rest are not reported, and the verdict stands",
+            "resource_limit": { "resource": "check_warnings", "limit": 1000, "observed": 1001 },
+        })
+    );
+    // A failed probe that reached the bound takes back the truncation with
+    // its warnings: only the outer opt decodes as null.
+    let inside = |content: &str, leaf: &str| {
+        doubling(content, 10).replace(
+            "service : { get : () -> (D10) }",
+            &format!("service : {{ get : () -> (record {{ x : opt record {{ d : D10; bad : {leaf} }} }}) }}"),
+        )
+    };
+    let response = check(&inside("nat", "nat"), &inside("text", "text"));
+    assert_eq!(response["compatible"], json!(true), "{response}");
+    assert_eq!(
+        summary(&response),
+        [(
+            "special_opt_rule".to_string(),
+            "get".to_string(),
+            Some("$results[0].x".to_string())
+        )]
+    );
+}
+
+/// The work bound fails a method closed, and each method starts again from
+/// nothing spent: `f` and `g` cost four steps each (the result's record pair
+/// and its three fields).
+#[test]
+fn the_work_is_bounded_per_method() {
+    assert_eq!(CheckOptions::default().step_limit, MAX_CHECK_STEPS);
+    let source = "type R = record { a : nat; b : text; c : bool };
+service : { f : () -> (R); g : () -> (R) }";
+    let request =
+        json!({ "written": { "source": source }, "live": { "source": source } }).to_string();
+    let run = |step_limit: usize| -> Value {
+        let options = CheckOptions {
+            step_limit,
+            ..CheckOptions::default()
+        };
+        serde_json::from_str(&check_compatible_with(&request, options)).unwrap()
+    };
+    let response = run(4);
+    assert_eq!(response["compatible"], json!(true), "{response}");
+    assert_eq!(response["diagnostics"], json!([]));
+    let response = run(3);
+    assert_eq!(response["compatible"], json!(false), "{response}");
+    let bound = |method: &str| {
+        json!({
             "code": "resource_limit_exceeded",
             "severity": "error",
-            "method": "get",
-            "message": "the check of this method stopped at its check_warnings bound of 1000",
-            "resource_limit": { "resource": "check_warnings", "limit": 1000, "observed": 1001 },
-        }])
+            "method": method,
+            "message": "the check of this method stopped at its check_steps bound of 3",
+            "resource_limit": { "resource": "check_steps", "limit": 3, "observed": 4 },
+        })
+    };
+    assert_eq!(response["diagnostics"], json!([bound("f"), bound("g")]));
+}
+
+/// Hold one case's response to a walk that walks every pair again instead
+/// of re-reporting a proven pair's warnings: `Some(whether it warned)`, or
+/// `None` when that walk, exponential in general, did not finish within its
+/// own bound.
+fn assert_equals_the_rewalking_walk(id: &str, written: &str, live: &str) -> Option<bool> {
+    let reference = CheckOptions {
+        step_limit: 2_000_000,
+        memo: false,
+    };
+    let request =
+        json!({ "written": { "source": written }, "live": { "source": live } }).to_string();
+    let expected: Value =
+        serde_json::from_str(&check_compatible_with(&request, reference)).unwrap();
+    let items = expected["diagnostics"].as_array().unwrap();
+    if items
+        .iter()
+        .any(|item| item["code"] == "resource_limit_exceeded")
+    {
+        return None;
+    }
+    let actual = check(written, live);
+    assert_eq!(actual, expected, "{id}\n{written}\n{live}");
+    Some(items.iter().any(|item| item["code"] == "special_opt_rule"))
+}
+
+/// The warnings re-reported from proven pairs are exactly those a walk that
+/// walks every pair again reports: every path along which no pair of types
+/// repeats. The whole response must be equal, errors included. A case the
+/// re-walking walk cannot finish is left out, and few may be.
+#[test]
+fn re_reported_warnings_equal_a_walk_that_walks_every_pair_again() {
+    let mut cases: Vec<(String, String, String)> = CASES
+        .iter()
+        .map(|case| {
+            (
+                case.name.to_string(),
+                case.written.to_string(),
+                case.live.to_string(),
+            )
+        })
+        .collect();
+    cases.extend(random_cases());
+    let (mut compared, mut warned, mut left_out) = (0, 0, 0);
+    for (id, written, live) in &cases {
+        match assert_equals_the_rewalking_walk(id, written, live) {
+            Some(warns) => {
+                compared += 1;
+                warned += usize::from(warns);
+            }
+            None => left_out += 1,
+        }
+    }
+    eprintln!("{compared} compared ({warned} with warnings), {left_out} left out");
+    assert!(
+        left_out * 20 <= cases.len(),
+        "{left_out} of {} left out",
+        cases.len()
     );
+    assert!(warned >= 50, "{warned} cases with warnings");
 }
 
 /// A type at the compiler's nesting bound is decided, not refused: the walk's
@@ -1391,16 +1555,23 @@ fn the_agreement_file_is_current() {
 /// Past the committed seeds, upstream's unsound memo is met again; each
 /// disagreement must be in its direction (upstream accepts under the spec's
 /// rules but refuses under strict opt reporting, and this check refuses), so
-/// that none can be a case this check accepts and upstream refuses.
+/// that none can be a case this check accepts and upstream refuses. Every
+/// case must also equal the re-walking walk, as in
+/// `re_reported_warnings_equal_a_walk_that_walks_every_pair_again`.
 #[test]
-#[ignore = "an on-demand campaign; the committed one is a_seeded_random_campaign_agrees_with_upstream"]
+#[ignore = "an on-demand campaign; the committed ones are a_seeded_random_campaign_agrees_with_upstream and re_reported_warnings_equal_a_walk_that_walks_every_pair_again"]
 fn an_extended_campaign_disagrees_only_in_the_memos_direction() {
     let count = std::env::var("COMPAT_CAMPAIGN_CASES")
         .ok()
         .and_then(|value| value.parse().ok())
         .unwrap_or(5_000);
     let mut memo = Vec::new();
+    let (mut rewalked, mut warned) = (0, 0);
     for (id, written, live) in random_cases_up_to(count) {
+        if let Some(warns) = assert_equals_the_rewalking_walk(&id, &written, &live) {
+            rewalked += 1;
+            warned += usize::from(warns);
+        }
         let response = check(&written, &live);
         let found = disagreements(&written, &live, &response);
         if found.is_empty() {
@@ -1417,7 +1588,7 @@ fn an_extended_campaign_disagrees_only_in_the_memos_direction() {
         }
     }
     eprintln!(
-        "{count} cases; {} disagreements, all in the memo's direction: {memo:?}",
+        "{count} cases; {} disagreements, all in the memo's direction: {memo:?}; {rewalked} equal to the re-walking walk ({warned} with warnings)",
         memo.len()
     );
 }

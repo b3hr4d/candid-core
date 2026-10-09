@@ -494,7 +494,7 @@ candid-core-cli check &lt;written.did&gt; --against &lt;live.did&gt; [--json]
   <code>method_incompatible</code>, the warning <code>special_opt_rule</code>, or
   <code>resource_limit_exceeded</code>) and the path into the type where the check failed, such as
   <code>$results[0].Err.TooOld</code>. A <code>special_opt_rule</code> warning is reported at every
-  path whose value decodes as <code>null</code>. A hand-written subset <code>.did</code> is as valid a written
+  path whose value decodes as <code>null</code> along which no pair of types repeats. A hand-written subset <code>.did</code> is as valid a written
   side as a projection.
 </p>
 
