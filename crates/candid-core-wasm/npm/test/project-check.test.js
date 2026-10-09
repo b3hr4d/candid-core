@@ -189,7 +189,12 @@ function assertRefused(root, output, aliased) {
     assert.equal(item.severity, "error");
     assert.equal(item.path, output);
     assert.deepEqual(item.notes, aliased, output);
-    assert.match(item.message, /a source of the input; write the projection outside live$/);
+    assert.match(
+      item.message,
+      aliased.length > 0
+        ? /, a source of the input; write the projection outside live$/
+        : /is a \.did beneath live, so it would be a source of the input; write the projection outside live$/,
+    );
   }
   assert.deepEqual(readFileSync(path.join(root, "live", "main.did")), before.main);
   assert.deepEqual(readFileSync(path.join(root, "live", "types.did")), before.types);
@@ -226,9 +231,26 @@ test("project refuses an output that is any source of the input bundle, under an
   writeFileSync(path.join(root, "live", "nested", "other.did"), "service : {}\n");
   assertRefused(root, "live/nested/other.did", ["live/nested/other.did"]);
 
-  // A new file, even beside the input, is not a source; nor is a file
-  // outside the bundle.
-  for (const output of ["live/projection.did", "app/main.did"]) {
+  // A new .did beneath the input's directory is not a source yet, but would
+  // be one on every later run, so it is refused on the first: beside the
+  // entry, nested, respelled, through a symlinked directory, or as the
+  // target of a dangling symlink.
+  assertRefused(root, "live/projection.did", []);
+  assertRefused(root, "live/nested/deeper/new.did", []);
+  assertRefused(root, "app/../live/projection.did", []);
+  assertRefused(root, "app/linked/projection.did", []);
+  symlinkSync(path.join("..", "live", "ghost.did"), path.join(root, "app", "dangling.did"));
+  assertRefused(root, "app/dangling.did", []);
+  if (existsSync(path.join(root, "LIVE"))) {
+    assertRefused(root, "LIVE/projection.did", []);
+  }
+  for (const name of ["projection.did", "nested/deeper/new.did", "ghost.did"]) {
+    assert.equal(existsSync(path.join(root, "live", name)), false, name);
+  }
+
+  // A file outside the bundle is not a source, and neither is a file beneath
+  // the directory that the bundle does not read (it is not a `.did`).
+  for (const output of ["app/main.did", "live/../app/other.did", "live/projection.txt"]) {
     const result = cli(["project", "live/main.did", "--methods", "get", "-o", output], root);
     assert.equal(result.status, 0, result.stdout + result.stderr);
     assert.equal(
@@ -236,9 +258,6 @@ test("project refuses an output that is any source of the input bundle, under an
       "type Item = record {\n  id : nat;\n};\nservice : {\n  get : () -> (Item) query;\n}\n",
     );
   }
-  // Once written beside the input, the projection is itself a source of the
-  // next run's bundle, and so is refused as an output.
-  assertRefused(root, "live/projection.did", ["live/projection.did"]);
 });
 
 test("project reports an output it cannot write as output_write_failed, with or without --json", () => {
@@ -252,7 +271,7 @@ test("project reports an output it cannot write as output_write_failed, with or 
     // The output is a directory.
     ["app/dir.did", () => mkdirSync(path.join(root, "app", "dir.did")), "EISDIR"],
     // Its parent is a file.
-    ["live/ledger.did/x.did", () => {}, "ENOTDIR"],
+    ["app/plain/x.did", () => writeFileSync(path.join(root, "app", "plain"), ""), "ENOTDIR"],
   ];
   // A read-only parent refuses only a process that is not root.
   if (process.getuid?.() !== 0) {
@@ -265,28 +284,34 @@ test("project reports an output it cannot write as output_write_failed, with or 
       "EACCES",
     ]);
   }
-  for (const [output, prepare, code] of cases) {
-    prepare();
-    const json = run(output, true);
-    assert.equal(json.status, 1, `${output}: ${json.stdout}${json.stderr}`);
-    assert.equal(json.stderr, "", output);
-    const failure = JSON.parse(json.stdout);
-    assert.equal(failure.ok, false);
-    assert.equal(failure.diagnostics.length, 1);
-    const [item] = failure.diagnostics;
-    assert.equal(item.code, "output_write_failed", output);
-    assert.equal(item.phase, "write");
-    assert.equal(item.severity, "error");
-    assert.equal(item.path, output);
-    assert.deepEqual(item.notes, [code], output);
-    assert.ok(item.message.startsWith(`cannot write ${output}: ${code}`), item.message);
+  try {
+    for (const [output, prepare, code] of cases) {
+      prepare();
+      const json = run(output, true);
+      assert.equal(json.status, 1, `${output}: ${json.stdout}${json.stderr}`);
+      assert.equal(json.stderr, "", output);
+      const failure = JSON.parse(json.stdout);
+      assert.equal(failure.ok, false);
+      assert.equal(failure.diagnostics.length, 1);
+      const [item] = failure.diagnostics;
+      assert.equal(item.code, "output_write_failed", output);
+      assert.equal(item.phase, "write");
+      assert.equal(item.severity, "error");
+      assert.equal(item.path, output);
+      assert.deepEqual(item.notes, [code], output);
+      assert.ok(item.message.startsWith(`cannot write ${output}: ${code}`), item.message);
 
-    const human = run(output, false);
-    assert.equal(human.status, 1, output);
-    assert.equal(human.stdout, "", output);
-    assert.equal(human.stderr, `${item.message}\n`, output);
+      const human = run(output, false);
+      assert.equal(human.status, 1, output);
+      assert.equal(human.stdout, "", output);
+      assert.equal(human.stderr, `${item.message}\n`, output);
+    }
+  } finally {
+    // Only the non-root run made the locked directory.
+    if (existsSync(path.join(root, "locked"))) {
+      chmodSync(path.join(root, "locked"), 0o755);
+    }
   }
-  chmodSync(path.join(root, "locked"), 0o755);
   assert.equal(readFileSync(path.join(root, "live", "ledger.did"), "utf8"), LEDGER);
 });
 

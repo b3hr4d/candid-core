@@ -36,7 +36,7 @@
 // `--check` generates in memory, compares byte-for-byte with the files on
 // disk, writes nothing, and exits 1 on any drift.
 
-import { readFile, readdir, mkdir, realpath, stat, writeFile } from "node:fs/promises";
+import { readFile, readdir, readlink, mkdir, realpath, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
 
@@ -307,15 +307,49 @@ async function sourcesFor(file) {
 }
 
 /**
+ * Where a write to `file` lands, with every symlink resolved: the file's
+ * real path when it exists; else a dangling symlink's target, followed; else
+ * the deepest existing ancestor's real path joined with the rest. On a
+ * case-insensitive file system the real path is the on-disk spelling.
+ */
+async function landing(file) {
+  let current = path.resolve(file);
+  for (let hops = 0; hops < 40; hops += 1) {
+    try {
+      return await realpath(current);
+    } catch {
+      // Not there: a dangling symlink, or a file not written yet.
+    }
+    let target;
+    try {
+      target = await readlink(current);
+    } catch {
+      break;
+    }
+    current = path.resolve(path.dirname(current), target);
+  }
+  const rest = [];
+  let directory = current;
+  while (directory !== path.dirname(directory)) {
+    rest.unshift(path.basename(directory));
+    directory = path.dirname(directory);
+    try {
+      return path.join(await realpath(directory), ...rest);
+    } catch {
+      // Keep climbing to an ancestor that exists.
+    }
+  }
+  return current;
+}
+
+/**
  * What names a file on disk, as far as it can be told without writing:
- * the lexical absolute path, the real path (symlinks resolved; for a file
- * that does not exist yet, its directory's real path), and the device and
- * inode when the file exists — which is what catches a hard link, and a
- * different spelling on a case-insensitive file system.
+ * the lexical absolute path, where a write to it lands (`landing`), and the
+ * device and inode when the file exists — which is what catches a hard link,
+ * and a different spelling on a case-insensitive file system.
  */
 async function fileIdentity(file) {
   const resolved = path.resolve(file);
-  let real;
   let inode;
   try {
     const found = await stat(file, { bigint: true });
@@ -327,14 +361,11 @@ async function fileIdentity(file) {
   } catch {
     // Not there (or not statable): only the path forms below can match.
   }
+  let real;
   try {
-    real = await realpath(file);
+    real = await landing(file);
   } catch {
-    try {
-      real = path.join(await realpath(path.dirname(resolved)), path.basename(resolved));
-    } catch {
-      real = undefined;
-    }
+    real = undefined;
   }
   return { resolved, real, inode };
 }
@@ -347,12 +378,22 @@ function sameFile(a, b) {
   );
 }
 
+/** Whether `inner` is strictly beneath `outer`; both absolute. */
+function beneath(outer, inner) {
+  const relative = path.relative(outer, inner);
+  return (
+    relative !== "" && !path.isAbsolute(relative) && relative.split(path.sep)[0] !== ".."
+  );
+}
+
 /**
- * Refuse an output that is one of the input bundle's sources, under any
- * name: writing it would replace a file the projection was cut from — the
- * entry, or any `.did` beneath the entry's directory, which `sourcesFor`
- * hands to the compiler. Throws `EntryFailure` (`output_is_input`), whose
- * `notes` list the sources the output names.
+ * Refuse an output that is, or would become, a source of the input bundle,
+ * under any name. `sourcesFor` hands the compiler the entry and every `.did`
+ * beneath the entry's directory, so writing one of those files would replace
+ * a file the projection was cut from, and writing a new `.did` beneath that
+ * directory would make the projection a source of every later run. Throws
+ * `EntryFailure` (`output_is_input`), whose `notes` list the existing
+ * sources the output names — empty for a file not written yet.
  */
 async function refuseOutputInBundle(output, directory, files) {
   const target = await fileIdentity(output);
@@ -363,12 +404,24 @@ async function refuseOutputInBundle(output, directory, files) {
       sources.push(source);
     }
   }
+  let message;
   if (sources.length > 0) {
-    const message =
-      `-o ${output} is ${sources.join(", ")}, a source of the input; ` +
-      `write the projection outside ${directory}`;
+    message = `-o ${output} is ${sources.join(", ")}, a source of the input`;
+  } else if (
+    target.real !== undefined &&
+    target.real.endsWith(".did") &&
+    beneath(await realpath(directory), target.real)
+  ) {
+    message = `-o ${output} is a .did beneath ${directory}, so it would be a source of the input`;
+  }
+  if (message !== undefined) {
     throw new EntryFailure([
-      diagnostic("output_is_input", "write", message, { path: output, notes: sources }),
+      diagnostic(
+        "output_is_input",
+        "write",
+        `${message}; write the projection outside ${directory}`,
+        { path: output, notes: sources },
+      ),
     ]);
   }
 }

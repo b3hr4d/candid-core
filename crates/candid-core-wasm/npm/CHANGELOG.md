@@ -34,9 +34,10 @@ commit, as every entry does.
   with `unknown_method` (its `notes` list the service's methods), an empty
   list (`--methods ""`) with `empty_method_list`, a source with no service
   with `no_service`; each exits 1 and writes nothing. Methods are written in
-  name order. `-o` is required, and may not name any source of the input
-  (the entry or any `.did` beneath its directory, which `project` reads as
-  `gen` does) by any path, symlink or hard link: that fails with
+  name order. `-o` is required, and may not be, or become, a source of the
+  input (the entry or any `.did` beneath its directory, which `project` reads
+  as `gen` does): naming one of those files by any path, symlink or hard
+  link, or a new `.did` beneath that directory, fails with
   `output_is_input`, exit 1, and writes nothing. An output that cannot be
   read or written fails with `output_write_failed` (its `notes` hold the
   system error code), exit 1. `--json` prints one document instead of the
