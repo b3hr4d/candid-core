@@ -41,8 +41,8 @@ export { $NoValue as NoValue };
 
 const $actor: $.Schema<$.Principal> = $.c.rec(() => $.c.service({ ok: $.c.func([$Good], [$Good], "query"), directory: $.c.func([$Directory], [], "update"), list: $.c.func([], [$List], "query") }));
 type $Actor = {
-  ok: (arg0: $Good) => Promise<$Good>;
-  directory: (arg0: $Directory) => Promise<void>;
-  list: () => Promise<$List>;
+  ok: ((arg0: $Good) => Promise<$Good>) & $.WithMode<"query">;
+  directory: ((arg0: $Directory) => Promise<void>) & $.WithMode<"update">;
+  list: (() => Promise<$List>) & $.WithMode<"query">;
 };
 export { $actor as actor, type $Actor as Actor };

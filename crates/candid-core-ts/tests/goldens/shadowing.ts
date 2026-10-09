@@ -87,8 +87,8 @@ export { $string as string };
 
 const $actor: $.Schema<$.Principal> = $.c.rec(() => $.c.service({ all: $.c.func([$Uses], [$.c.nat32, $Bytes, $Unit], "query"), get: $.c.func([$.c.nat16], [$.c.float64], "query"), ping: $.c.func([$.c.int8], [$Promise], "update") }));
 type $Actor = {
-  all: (arg0: $Uses) => Promise<[number, $Bytes, $Unit]>;
-  get: (arg0: number) => Promise<number>;
-  ping: (arg0: number) => Promise<$Promise>;
+  all: ((arg0: $Uses) => Promise<[number, $Bytes, $Unit]>) & $.WithMode<"query">;
+  get: ((arg0: number) => Promise<number>) & $.WithMode<"query">;
+  ping: ((arg0: number) => Promise<$Promise>) & $.WithMode<"update">;
 };
 export { $actor as actor, type $Actor as Actor };

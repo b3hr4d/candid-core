@@ -14,6 +14,29 @@ fixtures.
 grammar, the library API, and the request/response shapes. Pin an exact
 version.
 
+## Unreleased
+
+### Generated modules
+
+- **Each `Actor` method carries its mode.** `gen` and `didToModule` now emit
+  each method of `Actor` as its call signature intersected with
+  `$.WithMode<mode>` (`"query"`, `"composite_query"`, `"update"` or
+  `"oneway"`), which `@candid-core/schema`'s `ModeOf` reads back, so a call
+  layer can tell a query from an update at compile time:
+
+  ```ts
+  type $Actor = {
+    icrc1_balance_of: ((arg0: $Account) => Promise<bigint>) & $.WithMode<"query">;
+    icrc1_transfer: ((arg0: $TransferArg) => Promise<$TransferResult>) & $.WithMode<"update">;
+  };
+  ```
+
+  The call signatures, the method names and the module's exports are
+  unchanged, and an actor with no methods still generates an empty `Actor`.
+  `WithMode` is new in `@candid-core/schema`, so a module this release
+  generates needs the schema release paired with it: it does not
+  type-check against `@candid-core/schema` 0.3.0.
+
 ## 0.2.0 — 2026-10-06
 
 Embeds `candid-core` 0.1.0-beta.3 and the `candid-core-ts` generator from the

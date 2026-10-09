@@ -148,13 +148,13 @@ type $Actor = {
   /**
    * @param x
    */
-  same_a: (x: bigint) => Promise<void>;
+  same_a: ((x: bigint) => Promise<void>) & $.WithMode<"update">;
   /**
    * Same signature as same_a, different names.
    * @param y
    */
-  same_b: (y: bigint) => Promise<void>;
-  noargs: () => Promise<bigint>;
+  same_b: ((y: bigint) => Promise<void>) & $.WithMode<"update">;
+  noargs: (() => Promise<bigint>) & $.WithMode<"query">;
   /**
    * Sends tokens.
    *
@@ -163,26 +163,26 @@ type $Actor = {
    * @param to
    * @param amount
    */
-  send: (to: $Account, amount: bigint, arg2: $Event) => Promise<boolean>;
+  send: ((to: $Account, amount: bigint, arg2: $Event) => Promise<boolean>) & $.WithMode<"update">;
   /**
    * Every reserved or unusable name falls back to arg{n}.
    * @param type
    * @param $
    */
-  reserved: (arg0: bigint, arg1: bigint, arg2: bigint, arg3: bigint, arg4: bigint, arg5: bigint, arg6: bigint, type: bigint, $: bigint) => Promise<void>;
+  reserved: ((arg0: bigint, arg1: bigint, arg2: bigint, arg3: bigint, arg4: bigint, arg5: bigint, arg6: bigint, type: bigint, $: bigint) => Promise<void>) & $.WithMode<"update">;
   /**
    * Anonymous types in a signature are the method's own occurrence.
    * @param doc
    */
-  inline: (doc: {
+  inline: ((doc: {
     /** Documented in the signature. */
     id: bigint;
-  }) => Promise<{ ok: boolean }>;
+  }) => Promise<{ ok: boolean }>) & $.WithMode<"update">;
   /**
    * @param payload
    * @param count
    */
-  handle: (payload: Uint8Array, count: bigint) => Promise<void>;
+  handle: ((payload: Uint8Array, count: bigint) => Promise<void>) & $.WithMode<"update">;
   /**
    * A fence \`\`\`ts and an unclosed {\@link Inline tag, mid-line \@deprecated text,
    * a line of only
@@ -190,12 +190,12 @@ type $Actor = {
    * and a tag line \@param forged, none of which may swallow or forge tags.
    * @param survivor
    */
-  hostile: (survivor: bigint) => Promise<void>;
+  hostile: ((survivor: bigint) => Promise<void>) & $.WithMode<"update">;
   /**
    * A fallback never steals a declared name.
    * @param arg1
    * @param arg0_
    */
-  collide: (arg1: bigint, arg1_: string, arg0_: bigint) => Promise<void>;
+  collide: ((arg1: bigint, arg1_: string, arg0_: bigint) => Promise<void>) & $.WithMode<"update">;
 };
 export { $actor as actor, type $Actor as Actor };

@@ -36,7 +36,9 @@ That emits three things:
 - **`service.ts`** — the generated `@candid-core/schema` module: one reviewed
   type alias and one invariantly-annotated schema builder per declaration,
   each bound as a `$`-prefixed local and exported under its Candid name, with
-  the `.did`'s doc comments as JSDoc, byte-identical to what the Rust-native
+  the `.did`'s doc comments as JSDoc, and, for a service with an actor, the
+  `actor` schema and the `Actor` call interface, each method of which carries
+  its mode (`$.WithMode<"query">`); byte-identical to what the Rust-native
   generator emits;
 - **`service.envelope.json`** — the one-document `ContractEnvelope`: the
   canonical Contract plus its field-name table under the

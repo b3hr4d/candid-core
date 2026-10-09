@@ -147,7 +147,7 @@ export { $Registry as Registry };
 
 const $actor: $.Schema<$.Principal> = $.c.rec(() => $.c.service({ ping: $.c.func([], [], "update") }));
 type $Actor = {
-  ping: () => Promise<void>;
+  ping: (() => Promise<void>) & $.WithMode<"update">;
 };
 export { $actor as actor, type $Actor as Actor };
 </pre>
@@ -159,7 +159,11 @@ export { $actor as actor, type $Actor as Actor };
 <code>register</code> and <code>ping</code> methods render their mode as the explicit
 <code>"update"</code>. The exports <code>actor</code> (the service schema) and <code>Actor</code> (a
 type) are the pair a call layer needs: the service schema to encode and decode with, and the typed interface it
-cannot re-derive from the schema's type.</p>
+cannot re-derive from the schema's type. Each method of <code>Actor</code> is its call signature
+intersected with <code>$.WithMode&lt;mode&gt;</code>, the same mode literal, which the schema
+runtime's <code>ModeOf</code> reads back: a call layer can refuse an update where it builds a read at
+compile time. The mark is one optional property no value has, so the signature, the method names and
+the exports are unchanged, and a hand-written <code>Actor</code> without it reads as mode unknown.</p>
 
 <h3>A declared primitive names only itself</h3>
 
@@ -239,7 +243,7 @@ type $Actor = {
    * Same signature as same_a, different names.
    * @param y
    */
-  same_b: (y: bigint) => Promise<void>;
+  same_b: ((y: bigint) => Promise<void>) & $.WithMode<"update">;
 };
 </pre>
 
@@ -295,7 +299,7 @@ export { $Good as Good };
 
 const $actor: $.Schema<$.Principal> = $.c.rec(() => $.c.service({ ok: $.c.func([$Good], [$Good], "query") }));
 type $Actor = {
-  ok: (arg0: $Good) => Promise<$Good>;
+  ok: ((arg0: $Good) => Promise<$Good>) & $.WithMode<"query">;
 };
 export { $actor as actor, type $Actor as Actor };
 </pre>
