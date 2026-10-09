@@ -483,10 +483,10 @@ candid-core-cli check &lt;written.did&gt; --against &lt;live.did&gt; [--json]
   same bytes. <code>gen</code> on the result emits an <code>Actor</code> listing only those methods,
   each with its mode. An unknown name fails with <code>unknown_method</code>, whose
   <code>notes</code> list the service's methods; an empty list fails with
-  <code>empty_method_list</code>. <code>-o</code> may not name any source of the input (the file
-  and every <code>.did</code> beneath its directory) by any path or link: that fails with
-  <code>output_is_input</code> and writes nothing, so write the projection outside the input's
-  directory. An output that cannot be written fails with <code>output_write_failed</code>.
+  <code>empty_method_list</code>. <code>-o</code> may not be, or become, a source of the input (the
+  file and every <code>.did</code> beneath its directory): naming one by any path or link, or a new
+  <code>.did</code> beneath that directory, fails with <code>output_is_input</code> and writes
+  nothing, so write the projection outside the input's directory. An output that cannot be written fails with <code>output_write_failed</code>.
 </p>
 
 <p>
