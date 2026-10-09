@@ -237,7 +237,7 @@ the Rust compiler crate today; what you do with it afterwards does not.</p>
 <h3>Generate a TypeScript module ahead of time</h3>
 
 <p>The <code>candid-core-ts</code> crate turns a Contract graph into a
-TypeScript module of <code>const $X: $.Schema&lt;$X&gt; = $.c.rec(() =&gt; …)</code>
+TypeScript module of <code>const $X: $.Schema&lt;X&gt; = $.c.rec(() =&gt; …)</code>
 declarations plus the matching type aliases, each exported under its Candid name — which is why the invariance trick
 in step 2 matters: <code>tsc</code> compiling the generated file <em>is</em> the
 proof that the emitted schemas and the emitted types agree. The crate is

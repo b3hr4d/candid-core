@@ -1,5 +1,7 @@
-// Issue #188: a generated module binds every declaration as a `$`-prefixed
-// local and exports it under its Candid name, so a declaration may be named
+// Issue #188: a generated module binds every declaration's value as a
+// `$`-prefixed local and exports it under its Candid name (since issue #245
+// the type is declared under the Candid name itself, except where that name
+// cannot be a type in the module), so a declaration may be named
 // after the schema runtime's bindings (`c`, `Schema`, and `PrincipalValue`,
 // the runtime's principal type until issue #187 replaced it with `Principal`), an
 // ambient type the lowerings reference (`Array`, `Record`, `Uint8Array`,

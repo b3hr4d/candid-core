@@ -8,7 +8,7 @@ import * as $ from "@candid-core/schema";
  * anonymous `opt empty` arm and trip AmbiguousVariantArm. vec/opt are the
  * always-worked controls the acceptance criteria pin.
  */
-type $EmptyField = { f: never; g: bigint };
+export type EmptyField = { f: never; g: bigint };
 /**
  * Issue #126: `empty` in every composite position the AnyFieldSchema bound
  * admits. Variant arms live in arms.did (#127) — they cannot share this
@@ -16,21 +16,21 @@ type $EmptyField = { f: never; g: bigint };
  * anonymous `opt empty` arm and trip AmbiguousVariantArm. vec/opt are the
  * always-worked controls the acceptance criteria pin.
  */
-const $EmptyField: $.Schema<$EmptyField> = $.c.rec(() => $.c.record({ f: $.c.empty, g: $.c.nat }));
+const $EmptyField: $.Schema<EmptyField> = $.c.rec(() => $.c.record({ f: $.c.empty, g: $.c.nat }));
 export { $EmptyField as EmptyField };
 
-type $EmptyFunc = { principal: $.Principal; method: string };
-const $EmptyFunc: $.Schema<$EmptyFunc> = $.c.rec(() => $.c.func([$.c.empty], [$.c.empty], "update"));
+export type EmptyFunc = { principal: $.Principal; method: string };
+const $EmptyFunc: $.Schema<EmptyFunc> = $.c.rec(() => $.c.func([$.c.empty], [$.c.empty], "update"));
 export { $EmptyFunc as EmptyFunc };
 
-type $EmptyOpt = never | null;
-const $EmptyOpt: $.Schema<$EmptyOpt> = $.c.rec(() => $.c.opt($.c.empty));
+export type EmptyOpt = never | null;
+const $EmptyOpt: $.Schema<EmptyOpt> = $.c.rec(() => $.c.opt($.c.empty));
 export { $EmptyOpt as EmptyOpt };
 
-type $EmptyTuple = [never, bigint];
-const $EmptyTuple: $.Schema<$EmptyTuple> = $.c.rec(() => $.c.tuple([$.c.empty, $.c.nat]));
+export type EmptyTuple = [never, bigint];
+const $EmptyTuple: $.Schema<EmptyTuple> = $.c.rec(() => $.c.tuple([$.c.empty, $.c.nat]));
 export { $EmptyTuple as EmptyTuple };
 
-type $EmptyVec = Array<never>;
-const $EmptyVec: $.Schema<$EmptyVec> = $.c.rec(() => $.c.vec($.c.empty));
+export type EmptyVec = Array<never>;
+const $EmptyVec: $.Schema<EmptyVec> = $.c.rec(() => $.c.vec($.c.empty));
 export { $EmptyVec as EmptyVec };
