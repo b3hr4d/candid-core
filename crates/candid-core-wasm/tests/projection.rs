@@ -216,7 +216,7 @@ fn a_projected_module_lists_only_the_projected_methods_with_their_modes() {
     assert!(kept.iter().any(|(_, mode)| mode == "update"));
     let module: Value = serde_json::from_str(&did_to_module(&single(text))).unwrap();
     let module = module["module"].as_str().unwrap();
-    let actor = &module[module.find("type $Actor = {").expect("an Actor type")..];
+    let actor = &module[module.find("type Actor = {").expect("an Actor type")..];
     let actor = &actor[..actor.find("};").unwrap()];
     let listed: Vec<&str> = actor
         .lines()
@@ -269,7 +269,7 @@ fn docs_and_argument_names_survive() {
     let full: Value = serde_json::from_str(&did_to_module(&single(&source))).unwrap();
     let cut: Value = serde_json::from_str(&did_to_module(&single(text))).unwrap();
     let doc_block = |module: &str, method: &str| -> String {
-        let actor = &module[module.find("type $Actor = {").unwrap()..];
+        let actor = &module[module.find("type Actor = {").unwrap()..];
         let at = actor.find(&format!("  {method}:")).unwrap();
         let before = &actor[..at];
         let start = before.rfind("  /**").map_or(at, |start| start);

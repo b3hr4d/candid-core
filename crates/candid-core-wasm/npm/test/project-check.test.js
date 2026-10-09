@@ -89,7 +89,7 @@ test("gen on a projection lists only the projected methods, each with its mode",
   const generated = cli(["gen", "app/ledger.did", "-o", "out"], root);
   assert.equal(generated.status, 0, generated.stderr);
   const module = readFileSync(path.join(root, "out", "ledger.ts"), "utf8");
-  const actor = module.slice(module.indexOf("type $Actor = {"));
+  const actor = module.slice(module.indexOf("type Actor = {"));
   const listed = actor
     .slice(0, actor.indexOf("};"))
     .split("\n")
