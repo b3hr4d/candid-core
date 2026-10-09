@@ -70,8 +70,13 @@ const MISTAKES = {
   ambient: `const promise: PromiseDecl = "x";`,
   reserved: `const deleted: Deleted = 1;`,
   holder: `const holder: Refused["delete"] = 1;`,
+  // `intrinsic` falls back too, and an alias whose body starts with it
+  // references the fallback, which TypeScript can parse there.
+  intrinsic: `const intrinsic: IntrinsicDecl = 1;`,
+  intrinsicAlias: `const intrinsicAlias: zz_opt_intrinsic = 1;`,
   // A contextual keyword is a type name like any other.
   contextual: `const of: OfDecl = 1;`,
+  contextualAlias: `const ofAlias: zz_opt_of = 1;`,
 } as const;
 
 type Mistake = keyof typeof MISTAKES;
@@ -79,9 +84,9 @@ type Mistake = keyof typeof MISTAKES;
 const CONSUMER_SOURCE = [
   `import type { Account, Actor, TransferArg, TransferResult } from ${JSON.stringify(LEDGER)};`,
   `import type { Promise as PromiseDecl } from ${JSON.stringify(SHADOWING)};`,
-  `import type { Refused, delete as Deleted, of as OfDecl } from ${JSON.stringify(TYPENAMES)};`,
+  `import type { Refused, delete as Deleted, intrinsic as IntrinsicDecl, of as OfDecl, zz_opt_intrinsic, zz_opt_of } from ${JSON.stringify(TYPENAMES)};`,
   ...Object.values(MISTAKES),
-  `export { account, arg, result, ledger, fee, promise, deleted, holder, of };`,
+  `export { account, arg, result, ledger, fee, promise, deleted, holder, intrinsic, intrinsicAlias, of, ofAlias };`,
   ``,
 ].join("\n");
 
@@ -171,7 +176,10 @@ test("each mistake against a generated type reports the name the app imported", 
     ambient: ["Type 'string' is not assignable to type '$Promise'."],
     reserved: ["Type 'number' is not assignable to type '$delete'."],
     holder: ["Type 'number' is not assignable to type '$delete'."],
+    intrinsic: ["Type 'number' is not assignable to type '$intrinsic'."],
+    intrinsicAlias: ["Type '1' is not assignable to type 'zz_opt_intrinsic'."],
     contextual: ["Type 'number' is not assignable to type 'of'."],
+    contextualAlias: ["Type '1' is not assignable to type 'zz_opt_of'."],
   });
   // Stated generally: no message about an ordinary name mentions a `$`.
   for (const mistake of ["account", "field", "result", "actor", "method"] as const) {

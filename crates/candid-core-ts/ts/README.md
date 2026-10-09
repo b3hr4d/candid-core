@@ -227,10 +227,10 @@ declaration's type under its Candid name and binds its schema as a
 `Array`, `delete` — collides with the module's own bindings, you import the
 names you wrote (`import { Tokens, actor, type Actor } from "./ledger"`), and
 a compiler error names them too. A name that cannot be a type in the module
-(`Array`, `delete`) keeps the `$` local for its type. The `.did`'s doc comments and argument names become
-JSDoc on the exported types, on record properties and variant arms, and on the
-methods of `Actor`, and every `vec nat8` is a `Uint8Array`, however its element
-type is named.
+(`Array`, `delete`) keeps the `$` local for its type. The `.did`'s doc
+comments and argument names become JSDoc on the exported types, on record
+properties and variant arms, and on the methods of `Actor`, and every
+`vec nat8` is a `Uint8Array`, however its element type is named.
 
 ## Services and func references
 

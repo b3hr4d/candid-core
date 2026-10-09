@@ -126,9 +126,9 @@ function typeName(value: unknown): string {
  * type system — a schema is plain inert data at runtime.
  *
  * Deliberately **invariant** (`in out T`). Generated modules annotate every
- * declaration as `const $X: $.Schema<X> = …`, so the compiler itself
- * proves the builder's inferred type is exactly the reviewed alias:
- * assignable in both directions, not merely compatible in one.
+ * declaration `const $X: $.Schema<X> = …` (`$.Schema<$X>` where `X` cannot
+ * be a type), so the compiler proves the builder's inferred type is exactly
+ * the reviewed alias: assignable both ways, not merely compatible in one.
  *
  * @example
  * const Balance: Schema<bigint> = c.nat;

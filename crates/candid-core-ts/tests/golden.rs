@@ -253,7 +253,9 @@ fn golden_methodless() {
 /// the module — an ambient type a lowering references, or a word TypeScript
 /// refuses there — keeps the `$` local for its type too, wherever it is
 /// referenced. The fixture declares every such word Candid source admits, and
-/// every contextual keyword, which stays plain; the tsc equality gate
+/// every contextual keyword, which stays plain, and references each from a
+/// record and, for the contextual keywords and `intrinsic`, as the start of an
+/// alias's body (`type A = X`, `type A = opt X`); the tsc equality gate
 /// compiles the golden, so a word missing from the fallback list fails it.
 /// `ts/tests/type-names.test.ts` reads the compiler's own error messages.
 #[test]

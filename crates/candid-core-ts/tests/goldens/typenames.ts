@@ -9,8 +9,8 @@ type $Array = { items: Array<Account> };
 const $Array: $.Schema<$Array> = $.c.rec(() => $.c.record({ items: $.c.vec($Account) }));
 export { $Array as Array };
 
-export type Contextual = { is: is; of: of; get: get; out: out; set: set; async: async; source: source; asserts: asserts; eval: eval; intrinsic: intrinsic; from: from; require: require; override: override; assert: assert; constructor: constructor; global: global; abstract: abstract; using: using; satisfies: satisfies; module: module; accessor: accessor; defer: defer; namespace: namespace; declare: declare; arguments: arguments };
-const $Contextual: $.Schema<Contextual> = $.c.rec(() => $.c.record({ is: $is, of: $of, get: $get, out: $out, set: $set, async: $async, source: $source, asserts: $asserts, eval: $eval, intrinsic: $intrinsic, from: $from, require: $require, override: $override, assert: $assert, constructor: $constructor, global: $global, abstract: $abstract, using: $using, satisfies: $satisfies, module: $module, accessor: $accessor, defer: $defer, namespace: $namespace, declare: $declare, arguments: $arguments }));
+export type Contextual = { is: is; of: of; get: get; out: out; set: set; async: async; source: source; asserts: asserts; eval: eval; from: from; require: require; override: override; assert: assert; constructor: constructor; global: global; abstract: abstract; using: using; satisfies: satisfies; module: module; accessor: accessor; defer: defer; namespace: namespace; declare: declare; arguments: arguments };
+const $Contextual: $.Schema<Contextual> = $.c.rec(() => $.c.record({ is: $is, of: $of, get: $get, out: $out, set: $set, async: $async, source: $source, asserts: $asserts, eval: $eval, from: $from, require: $require, override: $override, assert: $assert, constructor: $constructor, global: $global, abstract: $abstract, using: $using, satisfies: $satisfies, module: $module, accessor: $accessor, defer: $defer, namespace: $namespace, declare: $declare, arguments: $arguments }));
 export { $Contextual as Contextual };
 
 export type Forest = Array<Tree>;
@@ -29,8 +29,8 @@ type $Record = { unit: Record<string, never>; bytes: Uint8Array };
 const $Record: $.Schema<$Record> = $.c.rec(() => $.c.record({ unit: $.c.unit(), bytes: $.c.blob() }));
 export { $Record as Record };
 
-export type Refused = { as: $as; do: $do; if: $if; in: $in; any: $any; for: $for; let: $let; new: $new; try: $try; var: $var; static: $static; return: $return; throw: $throw; string: $string; function: $function; object: $object; finally: $finally; await: $await; continue: $continue; interface: $interface; catch: $catch; package: $package; case: $case; else: $else; enum: $enum; class: $class; const: $const; this: $this; void: $void; with: $with; typeof: $typeof; unique: $unique; public: $public; delete: $delete; instanceof: $instanceof; extends: $extends; boolean: $boolean; super: $super; readonly: $readonly; private: $private; debugger: $debugger; protected: $protected; never: $never; default: $default; undefined: $undefined; number: $number; implements: $implements; break: $break; infer: $infer; export: $export; switch: $switch; while: $while; keyof: $keyof; unknown: $unknown; bigint: $bigint; symbol: $symbol; yield: $yield };
-const $Refused: $.Schema<Refused> = $.c.rec(() => $.c.record({ as: $as, do: $do, if: $if, in: $in, any: $any, for: $for, let: $let, new: $new, try: $try, var: $var, static: $static, return: $return, throw: $throw, string: $string, function: $function, object: $object, finally: $finally, await: $await, continue: $continue, interface: $interface, catch: $catch, package: $package, case: $case, else: $else, enum: $enum, class: $class, const: $const, this: $this, void: $void, with: $with, typeof: $typeof, unique: $unique, public: $public, delete: $delete, instanceof: $instanceof, extends: $extends, boolean: $boolean, super: $super, readonly: $readonly, private: $private, debugger: $debugger, protected: $protected, never: $never, default: $default, undefined: $undefined, number: $number, implements: $implements, break: $break, infer: $infer, export: $export, switch: $switch, while: $while, keyof: $keyof, unknown: $unknown, bigint: $bigint, symbol: $symbol, yield: $yield }));
+export type Refused = { as: $as; do: $do; if: $if; in: $in; any: $any; for: $for; let: $let; new: $new; try: $try; var: $var; static: $static; return: $return; throw: $throw; string: $string; function: $function; object: $object; finally: $finally; await: $await; continue: $continue; interface: $interface; catch: $catch; package: $package; case: $case; else: $else; enum: $enum; intrinsic: $intrinsic; class: $class; const: $const; this: $this; void: $void; with: $with; typeof: $typeof; unique: $unique; public: $public; delete: $delete; instanceof: $instanceof; extends: $extends; boolean: $boolean; super: $super; readonly: $readonly; private: $private; debugger: $debugger; protected: $protected; never: $never; default: $default; undefined: $undefined; number: $number; implements: $implements; break: $break; infer: $infer; export: $export; switch: $switch; while: $while; keyof: $keyof; unknown: $unknown; bigint: $bigint; symbol: $symbol; yield: $yield };
+const $Refused: $.Schema<Refused> = $.c.rec(() => $.c.record({ as: $as, do: $do, if: $if, in: $in, any: $any, for: $for, let: $let, new: $new, try: $try, var: $var, static: $static, return: $return, throw: $throw, string: $string, function: $function, object: $object, finally: $finally, await: $await, continue: $continue, interface: $interface, catch: $catch, package: $package, case: $case, else: $else, enum: $enum, intrinsic: $intrinsic, class: $class, const: $const, this: $this, void: $void, with: $with, typeof: $typeof, unique: $unique, public: $public, delete: $delete, instanceof: $instanceof, extends: $extends, boolean: $boolean, super: $super, readonly: $readonly, private: $private, debugger: $debugger, protected: $protected, never: $never, default: $default, undefined: $undefined, number: $number, implements: $implements, break: $break, infer: $infer, export: $export, switch: $switch, while: $while, keyof: $keyof, unknown: $unknown, bigint: $bigint, symbol: $symbol, yield: $yield }));
 export { $Refused as Refused };
 
 export type TransferArg = { to: Account; amount: bigint };
@@ -213,8 +213,8 @@ type $interface = { interface: number };
 const $interface: $.Schema<$interface> = $.c.rec(() => $.c.record({ interface: $.c.nat16 }));
 export { $interface as interface };
 
-export type intrinsic = { intrinsic: number };
-const $intrinsic: $.Schema<intrinsic> = $.c.rec(() => $.c.record({ intrinsic: $.c.nat8 }));
+type $intrinsic = { intrinsic: number };
+const $intrinsic: $.Schema<$intrinsic> = $.c.rec(() => $.c.record({ intrinsic: $.c.nat16 }));
 export { $intrinsic as intrinsic };
 
 export type is = { is: number };
@@ -376,6 +376,206 @@ export { $with as with };
 type $yield = { yield: number };
 const $yield: $.Schema<$yield> = $.c.rec(() => $.c.record({ yield: $.c.nat16 }));
 export { $yield as yield };
+
+export type zz_abstract = abstract;
+const $zz_abstract: $.Schema<zz_abstract> = $.c.rec(() => $abstract);
+export { $zz_abstract as zz_abstract };
+
+export type zz_accessor = accessor;
+const $zz_accessor: $.Schema<zz_accessor> = $.c.rec(() => $accessor);
+export { $zz_accessor as zz_accessor };
+
+export type zz_arguments = arguments;
+const $zz_arguments: $.Schema<zz_arguments> = $.c.rec(() => $arguments);
+export { $zz_arguments as zz_arguments };
+
+export type zz_assert = assert;
+const $zz_assert: $.Schema<zz_assert> = $.c.rec(() => $assert);
+export { $zz_assert as zz_assert };
+
+export type zz_asserts = asserts;
+const $zz_asserts: $.Schema<zz_asserts> = $.c.rec(() => $asserts);
+export { $zz_asserts as zz_asserts };
+
+export type zz_async = async;
+const $zz_async: $.Schema<zz_async> = $.c.rec(() => $async);
+export { $zz_async as zz_async };
+
+export type zz_constructor = constructor;
+const $zz_constructor: $.Schema<zz_constructor> = $.c.rec(() => $constructor);
+export { $zz_constructor as zz_constructor };
+
+export type zz_declare = declare;
+const $zz_declare: $.Schema<zz_declare> = $.c.rec(() => $declare);
+export { $zz_declare as zz_declare };
+
+export type zz_defer = defer;
+const $zz_defer: $.Schema<zz_defer> = $.c.rec(() => $defer);
+export { $zz_defer as zz_defer };
+
+export type zz_eval = eval;
+const $zz_eval: $.Schema<zz_eval> = $.c.rec(() => $eval);
+export { $zz_eval as zz_eval };
+
+export type zz_from = from;
+const $zz_from: $.Schema<zz_from> = $.c.rec(() => $from);
+export { $zz_from as zz_from };
+
+export type zz_get = get;
+const $zz_get: $.Schema<zz_get> = $.c.rec(() => $get);
+export { $zz_get as zz_get };
+
+export type zz_global = global;
+const $zz_global: $.Schema<zz_global> = $.c.rec(() => $global);
+export { $zz_global as zz_global };
+
+export type zz_intrinsic = $intrinsic;
+const $zz_intrinsic: $.Schema<zz_intrinsic> = $.c.rec(() => $intrinsic);
+export { $zz_intrinsic as zz_intrinsic };
+
+export type zz_is = is;
+const $zz_is: $.Schema<zz_is> = $.c.rec(() => $is);
+export { $zz_is as zz_is };
+
+export type zz_module = module;
+const $zz_module: $.Schema<zz_module> = $.c.rec(() => $module);
+export { $zz_module as zz_module };
+
+export type zz_namespace = namespace;
+const $zz_namespace: $.Schema<zz_namespace> = $.c.rec(() => $namespace);
+export { $zz_namespace as zz_namespace };
+
+export type zz_of = of;
+const $zz_of: $.Schema<zz_of> = $.c.rec(() => $of);
+export { $zz_of as zz_of };
+
+export type zz_opt_abstract = abstract | null;
+const $zz_opt_abstract: $.Schema<zz_opt_abstract> = $.c.rec(() => $.c.opt($abstract));
+export { $zz_opt_abstract as zz_opt_abstract };
+
+export type zz_opt_accessor = accessor | null;
+const $zz_opt_accessor: $.Schema<zz_opt_accessor> = $.c.rec(() => $.c.opt($accessor));
+export { $zz_opt_accessor as zz_opt_accessor };
+
+export type zz_opt_arguments = arguments | null;
+const $zz_opt_arguments: $.Schema<zz_opt_arguments> = $.c.rec(() => $.c.opt($arguments));
+export { $zz_opt_arguments as zz_opt_arguments };
+
+export type zz_opt_assert = assert | null;
+const $zz_opt_assert: $.Schema<zz_opt_assert> = $.c.rec(() => $.c.opt($assert));
+export { $zz_opt_assert as zz_opt_assert };
+
+export type zz_opt_asserts = asserts | null;
+const $zz_opt_asserts: $.Schema<zz_opt_asserts> = $.c.rec(() => $.c.opt($asserts));
+export { $zz_opt_asserts as zz_opt_asserts };
+
+export type zz_opt_async = async | null;
+const $zz_opt_async: $.Schema<zz_opt_async> = $.c.rec(() => $.c.opt($async));
+export { $zz_opt_async as zz_opt_async };
+
+export type zz_opt_constructor = constructor | null;
+const $zz_opt_constructor: $.Schema<zz_opt_constructor> = $.c.rec(() => $.c.opt($constructor));
+export { $zz_opt_constructor as zz_opt_constructor };
+
+export type zz_opt_declare = declare | null;
+const $zz_opt_declare: $.Schema<zz_opt_declare> = $.c.rec(() => $.c.opt($declare));
+export { $zz_opt_declare as zz_opt_declare };
+
+export type zz_opt_defer = defer | null;
+const $zz_opt_defer: $.Schema<zz_opt_defer> = $.c.rec(() => $.c.opt($defer));
+export { $zz_opt_defer as zz_opt_defer };
+
+export type zz_opt_eval = eval | null;
+const $zz_opt_eval: $.Schema<zz_opt_eval> = $.c.rec(() => $.c.opt($eval));
+export { $zz_opt_eval as zz_opt_eval };
+
+export type zz_opt_from = from | null;
+const $zz_opt_from: $.Schema<zz_opt_from> = $.c.rec(() => $.c.opt($from));
+export { $zz_opt_from as zz_opt_from };
+
+export type zz_opt_get = get | null;
+const $zz_opt_get: $.Schema<zz_opt_get> = $.c.rec(() => $.c.opt($get));
+export { $zz_opt_get as zz_opt_get };
+
+export type zz_opt_global = global | null;
+const $zz_opt_global: $.Schema<zz_opt_global> = $.c.rec(() => $.c.opt($global));
+export { $zz_opt_global as zz_opt_global };
+
+export type zz_opt_intrinsic = $intrinsic | null;
+const $zz_opt_intrinsic: $.Schema<zz_opt_intrinsic> = $.c.rec(() => $.c.opt($intrinsic));
+export { $zz_opt_intrinsic as zz_opt_intrinsic };
+
+export type zz_opt_is = is | null;
+const $zz_opt_is: $.Schema<zz_opt_is> = $.c.rec(() => $.c.opt($is));
+export { $zz_opt_is as zz_opt_is };
+
+export type zz_opt_module = module | null;
+const $zz_opt_module: $.Schema<zz_opt_module> = $.c.rec(() => $.c.opt($module));
+export { $zz_opt_module as zz_opt_module };
+
+export type zz_opt_namespace = namespace | null;
+const $zz_opt_namespace: $.Schema<zz_opt_namespace> = $.c.rec(() => $.c.opt($namespace));
+export { $zz_opt_namespace as zz_opt_namespace };
+
+export type zz_opt_of = of | null;
+const $zz_opt_of: $.Schema<zz_opt_of> = $.c.rec(() => $.c.opt($of));
+export { $zz_opt_of as zz_opt_of };
+
+export type zz_opt_out = out | null;
+const $zz_opt_out: $.Schema<zz_opt_out> = $.c.rec(() => $.c.opt($out));
+export { $zz_opt_out as zz_opt_out };
+
+export type zz_opt_override = override | null;
+const $zz_opt_override: $.Schema<zz_opt_override> = $.c.rec(() => $.c.opt($override));
+export { $zz_opt_override as zz_opt_override };
+
+export type zz_opt_require = require | null;
+const $zz_opt_require: $.Schema<zz_opt_require> = $.c.rec(() => $.c.opt($require));
+export { $zz_opt_require as zz_opt_require };
+
+export type zz_opt_satisfies = satisfies | null;
+const $zz_opt_satisfies: $.Schema<zz_opt_satisfies> = $.c.rec(() => $.c.opt($satisfies));
+export { $zz_opt_satisfies as zz_opt_satisfies };
+
+export type zz_opt_set = set | null;
+const $zz_opt_set: $.Schema<zz_opt_set> = $.c.rec(() => $.c.opt($set));
+export { $zz_opt_set as zz_opt_set };
+
+export type zz_opt_source = source | null;
+const $zz_opt_source: $.Schema<zz_opt_source> = $.c.rec(() => $.c.opt($source));
+export { $zz_opt_source as zz_opt_source };
+
+export type zz_opt_using = using | null;
+const $zz_opt_using: $.Schema<zz_opt_using> = $.c.rec(() => $.c.opt($using));
+export { $zz_opt_using as zz_opt_using };
+
+export type zz_out = out;
+const $zz_out: $.Schema<zz_out> = $.c.rec(() => $out);
+export { $zz_out as zz_out };
+
+export type zz_override = override;
+const $zz_override: $.Schema<zz_override> = $.c.rec(() => $override);
+export { $zz_override as zz_override };
+
+export type zz_require = require;
+const $zz_require: $.Schema<zz_require> = $.c.rec(() => $require);
+export { $zz_require as zz_require };
+
+export type zz_satisfies = satisfies;
+const $zz_satisfies: $.Schema<zz_satisfies> = $.c.rec(() => $satisfies);
+export { $zz_satisfies as zz_satisfies };
+
+export type zz_set = set;
+const $zz_set: $.Schema<zz_set> = $.c.rec(() => $set);
+export { $zz_set as zz_set };
+
+export type zz_source = source;
+const $zz_source: $.Schema<zz_source> = $.c.rec(() => $source);
+export { $zz_source as zz_source };
+
+export type zz_using = using;
+const $zz_using: $.Schema<zz_using> = $.c.rec(() => $using);
+export { $zz_using as zz_using };
 
 const $actor: $.Schema<$.Principal> = $.c.rec(() => $.c.service({ remove: $.c.func([$delete], [$.c.opt($delete)], "query"), pending: $.c.func([$Array], [$Promise], "query"), words: $.c.func([$of, $Contextual], [$Refused, $Forest], "update"), transfer: $.c.func([$TransferArg], [$TransferResult], "update") }));
 export type Actor = {

@@ -172,8 +172,9 @@
 //! declaration would shadow; and a word TypeScript refuses as a type's name,
 //! declared or referenced — the reserved words (`delete`, `default`), the
 //! predefined type names (`string`, `unknown`), the type operators
-//! (`keyof`, `readonly`) and `as`, measured against TypeScript 5.7.2, 6.0.3
-//! and 7.0.2. Every fallback type name starts with `$` and no plain one
+//! (`keyof`, `readonly`), `as`, and `intrinsic`, which TypeScript reads as
+//! its own keyword where it starts an alias's body (`type A = intrinsic`),
+//! measured against TypeScript 5.7.2, 6.0.3 and 7.0.2. Every fallback type name starts with `$` and no plain one
 //! does, so type names stay as injective as values. A declaration named
 //! `c`, `Schema`, `Array`, `Promise`, or a TypeScript reserved word such as
 //! `delete` or `string` therefore generates, and consumers import it under
@@ -685,17 +686,20 @@ fn plain_type_name(name: &str, principal: &str) -> bool {
 const AMBIENT_TYPES: &[&str] = &["Array", "Promise", "Record", "Uint8Array"];
 
 /// The words TypeScript refuses as a type's name in a module, where it is
-/// declared (`export type X = …`) or where another type references it
-/// (`{ f: X }`, `Array<X>`, `X | null`, `(x: X) => Promise<X>`): the reserved
-/// words, the strict-mode and module reserved words (`let`, `yield`,
-/// `await`, …), the predefined type names (`string`, `number`, `unknown`,
-/// …), the type operators (`infer`, `keyof`, `readonly`, `unique`), which
-/// cannot start a type reference, and `as`, which the declaration position
-/// parses as the start of an export clause. Measured: every keyword and
-/// contextual keyword of the language, compiled alone in both positions with
-/// TypeScript 5.7.2, 6.0.3 and 7.0.2; these are exactly the ones every
-/// version refuses, and the others (`type`, `of`, `async`, `is`, …) compile
-/// in each.
+/// declared (`export type X = …`, `$.Schema<X>`) or where another type
+/// references it — as a whole alias body (`type A = X`, `type A = X | null`)
+/// or inside one (`{ f: X }`, `Array<X>`, `[X, X]`, a variant arm's `value:
+/// X`, `(x: X) => Promise<X>`): the reserved words, the strict-mode and
+/// module reserved words (`let`, `yield`, `await`, …), the predefined type
+/// names (`string`, `number`, `unknown`, …), the type operators (`infer`,
+/// `keyof`, `readonly`, `unique`), which cannot start a type reference;
+/// `as`, which the declaration position parses as the start of an export
+/// clause; and `intrinsic`, which an alias body that starts with it parses
+/// as TypeScript's own keyword (`TS2795` alone, `TS1005` before `| null`).
+/// Measured: every keyword and contextual keyword of the language, each
+/// compiled in every one of those positions with TypeScript 5.7.2, 6.0.3
+/// and 7.0.2; these are exactly the ones every version refuses, and the
+/// others (`type`, `of`, `async`, `is`, …) compile in each.
 const UNUSABLE_TYPE_NAMES: &[&str] = &[
     "any",
     "as",
@@ -727,6 +731,7 @@ const UNUSABLE_TYPE_NAMES: &[&str] = &[
     "infer",
     "instanceof",
     "interface",
+    "intrinsic",
     "keyof",
     "let",
     "never",
@@ -1960,7 +1965,7 @@ mod tests {
         // The measured list is sorted and duplicate-free, so a review sees a
         // change to it as one inserted or deleted line.
         assert!(UNUSABLE_TYPE_NAMES.windows(2).all(|pair| pair[0] < pair[1]));
-        assert_eq!(UNUSABLE_TYPE_NAMES.len(), 61);
+        assert_eq!(UNUSABLE_TYPE_NAMES.len(), 62);
         for name in UNUSABLE_TYPE_NAMES.iter().chain(AMBIENT_TYPES) {
             assert!(!plain_type_name(name, default), "{name}");
         }
@@ -1985,7 +1990,6 @@ mod tests {
             "async",
             "is",
             "asserts",
-            "intrinsic",
             "eval",
             "arguments",
             "Map",

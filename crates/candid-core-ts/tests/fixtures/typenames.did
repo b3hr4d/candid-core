@@ -37,7 +37,6 @@ type eval = record { eval : nat8 };
 type from = record { from : nat8 };
 type get = record { get : nat8 };
 type global = record { global : nat8 };
-type intrinsic = record { intrinsic : nat8 };
 type is = record { is : nat8 };
 type module = record { module : nat8 };
 type namespace = record { namespace : nat8 };
@@ -63,7 +62,6 @@ type Contextual = record {
   from : from;
   get : get;
   global : global;
-  intrinsic : intrinsic;
   is : is;
   module : module;
   namespace : namespace;
@@ -79,8 +77,10 @@ type Contextual = record {
 
 // Every reserved word, predefined type name or type operator Candid source
 // can declare falls back, declared and referenced (`Refused` references
-// each). `import`, `null`, `true` and `false` are Candid tokens, so only a
-// Contract document can declare them; the generator's own tests cover those.
+// each), and so does `intrinsic`, which TypeScript refuses where it starts
+// an alias's body (below). `import`, `null`, `true` and `false` are Candid
+// tokens, so only a Contract document can declare them; the generator's own
+// tests cover those.
 
 type any = record { any : nat16 };
 type as = record { as : nat16 };
@@ -110,6 +110,7 @@ type in = record { in : nat16 };
 type infer = record { infer : nat16 };
 type instanceof = record { instanceof : nat16 };
 type interface = record { interface : nat16 };
+type intrinsic = record { intrinsic : nat16 };
 type keyof = record { keyof : nat16 };
 type let = record { let : nat16 };
 type never = record { never : nat16 };
@@ -168,6 +169,7 @@ type Refused = record {
   infer : infer;
   instanceof : instanceof;
   interface : interface;
+  intrinsic : intrinsic;
   keyof : keyof;
   let : let;
   never : never;
@@ -198,6 +200,62 @@ type Refused = record {
   with : with;
   yield : yield;
 };
+
+// Each contextual keyword, and `intrinsic`, as the start of an alias's body,
+// alone and under `opt` (`export type zz_of = of`, `of | null`), where
+// TypeScript reads a leading `intrinsic` as its own keyword. The `zz_` names
+// sort after the words they alias, so each alias references its word.
+
+type zz_abstract = abstract;
+type zz_opt_abstract = opt abstract;
+type zz_accessor = accessor;
+type zz_opt_accessor = opt accessor;
+type zz_arguments = arguments;
+type zz_opt_arguments = opt arguments;
+type zz_assert = assert;
+type zz_opt_assert = opt assert;
+type zz_asserts = asserts;
+type zz_opt_asserts = opt asserts;
+type zz_async = async;
+type zz_opt_async = opt async;
+type zz_constructor = constructor;
+type zz_opt_constructor = opt constructor;
+type zz_declare = declare;
+type zz_opt_declare = opt declare;
+type zz_defer = defer;
+type zz_opt_defer = opt defer;
+type zz_eval = eval;
+type zz_opt_eval = opt eval;
+type zz_from = from;
+type zz_opt_from = opt from;
+type zz_get = get;
+type zz_opt_get = opt get;
+type zz_global = global;
+type zz_opt_global = opt global;
+type zz_is = is;
+type zz_opt_is = opt is;
+type zz_module = module;
+type zz_opt_module = opt module;
+type zz_namespace = namespace;
+type zz_opt_namespace = opt namespace;
+type zz_of = of;
+type zz_opt_of = opt of;
+type zz_out = out;
+type zz_opt_out = opt out;
+type zz_override = override;
+type zz_opt_override = opt override;
+type zz_require = require;
+type zz_opt_require = opt require;
+type zz_satisfies = satisfies;
+type zz_opt_satisfies = opt satisfies;
+type zz_set = set;
+type zz_opt_set = opt set;
+type zz_source = source;
+type zz_opt_source = opt source;
+type zz_using = using;
+type zz_opt_using = opt using;
+type zz_intrinsic = intrinsic;
+type zz_opt_intrinsic = opt intrinsic;
 
 service : {
   transfer : (TransferArg) -> (TransferResult);
