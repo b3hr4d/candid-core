@@ -292,7 +292,8 @@ type up to where a path comes back round); `resource_limit_exceeded` fails a
 method whose check reached a bound, its depth (384 pairs on one path) or its
 work (1,000,000 steps, a step being one unit of work done: a method decided, a
 pair of types visited, a field, arm, method or value examined or passed over,
-or one path segment a warning copies or re-examines). Past 1,000
+or one path segment a warning or a failure copies, or a warning
+re-examines). Past 1,000
 warnings a method reports the first 1,000 and one `resource_limit_exceeded`
 warning (`check_warnings`) saying the rest were dropped; its verdict stands.
 The check as a whole is bounded too, so a service with many methods cannot

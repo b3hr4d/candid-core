@@ -64,8 +64,10 @@
 //! of the failure path it copies); a field, arm, method or value examined,
 //! or passed over because the other side lacks it; a proven pair's warning
 //! re-examined, one step per pair below the proven one on its path, at least
-//! one; and a warning recorded or re-reported, one step per segment of the
-//! path it copies. Fields and arms are paired in one pass over the two
+//! one; a warning recorded or re-reported, one step per segment of the
+//! path it copies; and a failure recorded for a pair, one step per segment
+//! of its path, so the failures a method keeps are bounded by its steps too.
+//! Fields and arms are paired in one pass over the two
 //! id-ordered lists, and methods in one pass by id and name, so no step
 //! hides a scan. Reaching either bound fails the method closed with
 //! `resource_limit_exceeded`; the compiler's own limits keep every Contract
@@ -126,7 +128,8 @@ pub const MAX_CHECK_DEPTH: usize = 384;
 
 /// The most work the check of one method may do, in steps: pairs visited,
 /// fields, arms, methods and values examined or passed over, and path
-/// segments warnings copy or re-examine (see the module's Bounds).
+/// segments warnings and failures copy or warnings re-examine (see the
+/// module's Bounds).
 pub const MAX_CHECK_STEPS: usize = 1_000_000;
 
 /// The most `special_opt_rule` warnings one method reports. Re-reporting a
@@ -466,7 +469,8 @@ impl<'a> Checker<'a> {
     }
 
     /// Close a pair's walk: forget the proofs that depended on it being in
-    /// progress, and record its own proof or failure.
+    /// progress, and record its own proof or failure. Recording a failure
+    /// copies its path, one step per segment.
     #[inline(never)]
     fn finish(&mut self, pair: Pair, start: usize, outcome: Outcome<'a>) -> Outcome<'a> {
         let frame = self.frames.pop().expect("the walk pushed its frame");
@@ -490,6 +494,7 @@ impl<'a> Checker<'a> {
                 }
             }
             Err(Stop::Fails(failure)) => {
+                self.spend(failure.segments.len())?;
                 self.failed.insert(pair, failure.clone());
             }
             Err(Stop::Exhausted(_)) => {}

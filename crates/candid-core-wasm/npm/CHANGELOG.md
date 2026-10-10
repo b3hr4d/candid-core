@@ -59,7 +59,8 @@ commit, as every entry does.
   A method whose check reaches its depth or work bound fails closed; work
   is counted in steps, each one unit of work done (a pair of types visited,
   a field, arm, method or value examined or passed over, a path segment a
-  warning copies or re-examines), so the bound bounds the time. The
+  warning or a failure copies or a warning re-examines), so the bound
+  bounds the time. The
   check as a whole is bounded too, so many methods sharing one type cannot
   multiply the per-method bounds: 10,000,000 steps (one more per method),
   10,000 `special_opt_rule` warnings and 4 MiB of reported text as the JSON

@@ -509,7 +509,8 @@ candid-core-cli check &lt;written.did&gt; --against &lt;live.did&gt; [--json]
 <p>
   The check is bounded per method (384 pairs on one path, 1,000,000 steps, 1,000 reported warnings),
   a step being one unit of work done: a method decided, a pair of types visited, a field, arm, method
-  or value examined or passed over, or one path segment a warning copies or re-examines. It is bounded
+  or value examined or passed over, or one path segment a warning or a failure copies, or a warning
+  re-examines. It is bounded
   too, so that a service with many methods cannot multiply those bounds, as a whole: 10,000,000
   steps (<code>check_total_steps</code>), 10,000 <code>special_opt_rule</code> warnings
   (<code>check_total_warnings</code>) and 4 MiB of reported text, the <code>method</code>,

@@ -869,7 +869,7 @@ service : { f : () -> (R); g : () -> (R); h : () -> (R); i : () -> (R) }";
     // Methods that reach their own bound first: each result probes an `opt`
     // whose content walks a 12-field, 100-level graph and then fails, so the
     // probe forgets the pairs it proved and the next result walks them
-    // again, 2,408 steps a result. Under a bound of 20,000 a method, nine
+    // again, 2,409 steps a result. Under a bound of 20,000 a method, nine
     // methods fail closed at their own bound; the tenth takes the total past
     // ten methods' worth, and it and every method after it are not decided.
     // `a_wide_record_shared_by_many_methods_reaches_the_total_step_bound`
@@ -908,15 +908,15 @@ service : { f : () -> (R); g : () -> (R); h : () -> (R); i : () -> (R) }";
     let response = check_with(&written, &live, options(usize::MAX, usize::MAX));
     assert_eq!(response["compatible"], json!(true), "{response}");
     assert_eq!(response["diagnostics"].as_array().unwrap().len(), 120);
-    // A method costs 24,080 steps of its own: decided at that bound, not
+    // A method costs 24,090 steps of its own: decided at that bound, not
     // one under.
     let (one_written, one_live) = (forgetting("nat", 1), forgetting("text", 1));
-    let response = check_with(&one_written, &one_live, options(24_080, usize::MAX));
+    let response = check_with(&one_written, &one_live, options(24_090, usize::MAX));
     assert_eq!(response["compatible"], json!(true), "{response}");
-    let response = check_with(&one_written, &one_live, options(24_079, usize::MAX));
+    let response = check_with(&one_written, &one_live, options(24_089, usize::MAX));
     assert_eq!(
         response["diagnostics"][0]["resource_limit"],
-        json!({ "resource": "check_steps", "limit": 24_079, "observed": 24_080 })
+        json!({ "resource": "check_steps", "limit": 24_089, "observed": 24_090 })
     );
     let response = check_with(&written, &live, options(20_000, 200_000));
     let items = response["diagnostics"].as_array().unwrap();
@@ -1227,7 +1227,8 @@ fn total_steps_needed(written: &str, live: &str) -> usize {
 /// work: deciding a method (one step of the whole check's bound), visiting a
 /// pair however it is answered (expanded, from a proof, at a pair in
 /// progress, or from a failed pair, which also costs the segments of the
-/// failure path it copies), examining a field, arm, method or value, passing
+/// failure path it copies), recording a pair's failure (the segments of its
+/// path), examining a field, arm, method or value, passing
 /// over one the other side lacks, re-examining a proven pair's warning (the
 /// pairs below it, at least one), and copying a warning's path (its
 /// segments). Each case pins the total; dropping any one charge changes one
@@ -1285,11 +1286,14 @@ service : { f : () -> (L) }"
         1 + 2 + 2 + 1
     );
     // A failed pair answers its second meeting, copying its one-segment
-    // path. `$results[0]`: the result and its opt pair, the content's pair
-    // visited in the probe, `v` examined and its pair visited (it fails),
-    // and the warning's one-segment path copied. `$results[1]`: the result
-    // and its opt pair, the record content's pair, `y` examined, `X`'s pair
-    // visited and answered from its failure (one segment), and the warning.
+    // path, and every pair that fails pays for the path it records.
+    // `$results[0]`: the result and its opt pair, the content's pair visited
+    // in the probe, `v` examined and its pair visited (it fails, recording
+    // no segment), `X`'s failure recorded (one segment), and the warning's
+    // one-segment path copied. `$results[1]`: the result and its opt pair,
+    // the record content's pair, `y` examined, `X`'s pair visited and
+    // answered from its failure (one segment), the record's failure
+    // recorded (two segments), and the warning.
     let failed = |leaf: &str| {
         format!(
             "type X = record {{ v : {leaf} }};
@@ -1298,7 +1302,7 @@ service : {{ f : () -> (opt X, opt record {{ y : X }}) }}"
     };
     assert_eq!(
         total_steps_needed(&failed("nat"), &failed("text")),
-        1 + (2 + 1 + 2 + 1) + (2 + 1 + 1 + 1 + 1 + 1)
+        1 + (2 + 1 + 2 + 1 + 1) + (2 + 1 + 1 + 1 + 1 + 2 + 1)
     );
     // A proven pair's warning re-examined (one pair below it) and re-reported
     // under the second result (a two-segment path). `$results[0]`: the
