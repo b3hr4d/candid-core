@@ -84,7 +84,10 @@ use serde_json::{json, Map, Value};
 mod compat;
 mod project;
 
-pub use compat::{MAX_CHECK_DEPTH, MAX_CHECK_STEPS, MAX_CHECK_WARNINGS};
+pub use compat::{
+    MAX_CHECK_DEPTH, MAX_CHECK_OUTPUT_BYTES, MAX_CHECK_STEPS, MAX_CHECK_TOTAL_STEPS,
+    MAX_CHECK_TOTAL_WARNINGS, MAX_CHECK_WARNINGS,
+};
 
 #[doc(hidden)]
 pub use compat::CheckOptions;
@@ -266,12 +269,17 @@ fn project_request(request: &str) -> Result<String, String> {
 /// "diagnostics": […]}`, or `{"ok": false, "input"?: "written" | "live",
 /// "diagnostics": […]}` when the request or a side's sources fail. The
 /// request is `{"written": <sources request>, "live": <sources request>}`.
+///
+/// The check is bounded per method ([`MAX_CHECK_DEPTH`], [`MAX_CHECK_STEPS`],
+/// [`MAX_CHECK_WARNINGS`]) and as a whole ([`MAX_CHECK_TOTAL_STEPS`],
+/// [`MAX_CHECK_TOTAL_WARNINGS`], [`MAX_CHECK_OUTPUT_BYTES`]); reaching a
+/// bound of the whole fails closed every method not yet reported.
 pub fn check_compatible(request: &str) -> String {
     check_compatible_with(request, CheckOptions::default())
 }
 
 /// [`check_compatible`] under other options: this crate's tests lower the
-/// work bound, or turn off the re-reporting of proven pairs to get the
+/// bounds, or turn off the re-reporting of proven pairs to get the
 /// reference set of warnings.
 #[doc(hidden)]
 pub fn check_compatible_with(request: &str, options: CheckOptions) -> String {

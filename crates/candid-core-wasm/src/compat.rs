@@ -31,8 +31,9 @@
 //! the rest of the method; that is sound, because assumptions only ever make
 //! more pairs hold. Each written method starts from empty state — no
 //! assumption, no cached failure, no step spent — so its diagnostics, paths
-//! and bounds included, never depend on which other methods the written
-//! service declares.
+//! and per-method bounds included, do not depend on which other methods the
+//! written service declares until the check as a whole reaches one of its
+//! aggregate bounds (see [Bounds](#bounds)).
 //!
 //! # Warnings
 //!
@@ -60,13 +61,38 @@
 //! warnings re-examined), each per method. Reaching either fails the method
 //! closed with `resource_limit_exceeded`; the compiler's own limits keep
 //! every Contract it accepts well below both for interfaces of ordinary
-//! shape. Because the bounds are per method, the live side cannot multiply
-//! the work: a check costs at most the written service's method count times
-//! one method's bounds. The warnings a method reports are bounded too
+//! shape. The warnings a method reports are bounded too
 //! ([`MAX_CHECK_WARNINGS`]), but that bound does not touch the verdict: the
 //! decision is complete, so past it the method keeps its verdict, reports
 //! the first warnings, and ends with a `resource_limit_exceeded` *warning*
 //! saying the rest were not reported.
+//!
+//! Per-method bounds alone would let the written service multiply them: a
+//! compiler-accepted source can declare thousands of methods that each walk
+//! the same shared type. So the check as a whole is bounded too, by three
+//! aggregates: [`MAX_CHECK_TOTAL_STEPS`] steps across all methods
+//! (`check_total_steps`), [`MAX_CHECK_TOTAL_WARNINGS`] `special_opt_rule`
+//! warnings reported (`check_total_warnings`), and [`MAX_CHECK_OUTPUT_BYTES`]
+//! bytes of diagnostic text — the `method`, `path` and `message` strings of
+//! every diagnostic a method reports (`check_output_bytes`). Methods are
+//! checked in name order. The step bound is checked as the work is spent;
+//! the other two when a method is decided, against everything it would
+//! report. The method at which an aggregate bound is reached, and every
+//! method after it, fail closed: each gets exactly one diagnostic, an
+//! *error* `resource_limit_exceeded` naming the aggregate resource with its
+//! limit and the value observed when it was reached, and nothing else —
+//! not its `mode_changed`, nor a `method_missing`. Below these bounds a
+//! method's diagnostics do not depend on the other methods; once one is
+//! reached, which methods are reported depends on the methods before them.
+//!
+//! So a response holds at most [`MAX_CHECK_OUTPUT_BYTES`] of reported text,
+//! at most [`MAX_CHECK_TOTAL_WARNINGS`] warnings, and per written method at
+//! most three other diagnostics (`mode_changed`, one error, and the
+//! warning-bound notice) or one fail-closed diagnostic, each of fixed shape
+//! apart from its strings: the fail-closed ones grow with the written
+//! method names, that is linearly with the input. Paths borrow their names
+//! from the two compiled sides, so the memory a walk holds does not grow
+//! with the length of a name either.
 
 use std::collections::{BTreeMap, HashMap};
 
@@ -98,6 +124,24 @@ pub const MAX_CHECK_STEPS: usize = 1_000_000;
 /// affected.
 pub const MAX_CHECK_WARNINGS: usize = 1_000;
 
+/// The most work the whole check may do, across every written method: ten
+/// methods at [`MAX_CHECK_STEPS`]. Past it the method being checked and
+/// every method after it fail closed (`check_total_steps`).
+pub const MAX_CHECK_TOTAL_STEPS: usize = 10_000_000;
+
+/// The most `special_opt_rule` warnings the whole check reports: ten
+/// methods at [`MAX_CHECK_WARNINGS`]. A method whose warnings would take
+/// the total past it, and every method after it, fail closed
+/// (`check_total_warnings`).
+pub const MAX_CHECK_TOTAL_WARNINGS: usize = 10_000;
+
+/// The most diagnostic text the whole check reports, in bytes: the
+/// `method`, `path` and `message` strings of every diagnostic a method
+/// reports, the fail-closed ones aside. 4 MiB, the compiler's default
+/// `max_input_bytes`, its bound on one document it parses. A method whose diagnostics would take the total
+/// past it, and every method after it, fail closed (`check_output_bytes`).
+pub const MAX_CHECK_OUTPUT_BYTES: usize = 4 * 1024 * 1024;
+
 /// How a check runs. [`CheckOptions::default`] is what `checkCompatible`
 /// uses; the others exist for this crate's tests.
 #[doc(hidden)]
@@ -105,6 +149,12 @@ pub const MAX_CHECK_WARNINGS: usize = 1_000;
 pub struct CheckOptions {
     /// The work bound of one method.
     pub step_limit: usize,
+    /// The work bound of the whole check.
+    pub total_step_limit: usize,
+    /// The bound on the warnings the whole check reports.
+    pub total_warning_limit: usize,
+    /// The bound on the diagnostic text the whole check reports.
+    pub output_byte_limit: usize,
     /// Whether a proven pair's warnings are re-reported instead of the pair
     /// being walked again. Off, every meeting walks it again, which is
     /// exponential in general: the tests' reference for the warnings.
@@ -115,6 +165,9 @@ impl Default for CheckOptions {
     fn default() -> Self {
         Self {
             step_limit: MAX_CHECK_STEPS,
+            total_step_limit: MAX_CHECK_TOTAL_STEPS,
+            total_warning_limit: MAX_CHECK_TOTAL_WARNINGS,
+            output_byte_limit: MAX_CHECK_OUTPUT_BYTES,
             memo: true,
         }
     }
@@ -164,11 +217,12 @@ impl<'a> Graph<'a> {
 }
 
 /// One step of a path into a method's type, innermost first while a failure
-/// travels up, reversed once when it is rendered.
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum Segment {
+/// travels up, reversed once when it is rendered. Names are borrowed from
+/// the Contracts, so a path costs the same whatever their length.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Segment<'a> {
     /// A record field or variant arm: its source name, or its numeric id.
-    Field(Option<String>, u32),
+    Field(Option<&'a str>, u32),
     /// The element type of a `vec`.
     Element,
     /// The content type of an `opt`.
@@ -178,14 +232,14 @@ enum Segment {
     /// A result of a func type (the method's own at the root).
     Result(usize),
     /// A method of a service type.
-    Method(String),
+    Method(&'a str),
 }
 
 /// Why a pair does not hold, relative to that pair.
 #[derive(Debug, Clone)]
-struct Failure {
+struct Failure<'a> {
     /// Innermost first.
-    segments: Vec<Segment>,
+    segments: Vec<Segment<'a>>,
     message: String,
 }
 
@@ -197,14 +251,14 @@ struct Exhausted {
     observed: usize,
 }
 
-enum Stop {
-    Fails(Failure),
+enum Stop<'a> {
+    Fails(Failure<'a>),
     Exhausted(Exhausted),
 }
 
-type Outcome = Result<(), Stop>;
+type Outcome<'a> = Result<(), Stop<'a>>;
 
-fn fails(message: impl Into<String>) -> Outcome {
+fn fails<'a>(message: impl Into<String>) -> Outcome<'a> {
     Err(Stop::Fails(Failure {
         segments: Vec::new(),
         message: message.into(),
@@ -212,7 +266,7 @@ fn fails(message: impl Into<String>) -> Outcome {
 }
 
 /// Prepend a segment to a failure travelling up out of a child pair.
-fn within(segment: Segment, outcome: Outcome) -> Outcome {
+fn within<'a>(segment: Segment<'a>, outcome: Outcome<'a>) -> Outcome<'a> {
     match outcome {
         Err(Stop::Fails(mut failure)) => {
             failure.segments.push(segment);
@@ -224,9 +278,9 @@ fn within(segment: Segment, outcome: Outcome) -> Outcome {
 
 /// A special-opt-rule application, recorded where the walk met it.
 #[derive(Debug, Clone)]
-struct Warning {
+struct Warning<'a> {
     /// Outermost first, relative to the method.
-    path: Vec<Segment>,
+    path: Vec<Segment<'a>>,
     /// The pair each segment of `path` leads to.
     trail: Vec<Pair>,
     message: String,
@@ -312,15 +366,18 @@ struct Checker<'a> {
     /// own.
     log: Vec<Pair>,
     /// Pairs known not to hold, within the current method.
-    failed: BTreeMap<Pair, Failure>,
-    warnings: Vec<Warning>,
+    failed: BTreeMap<Pair, Failure<'a>>,
+    warnings: Vec<Warning<'a>>,
     /// Whether a warning was dropped at [`MAX_CHECK_WARNINGS`].
     truncated: bool,
     /// The path from the method root to the pair under test, outermost
     /// first, and the pair each segment leads to; warnings copy both.
-    path: Vec<Segment>,
+    path: Vec<Segment<'a>>,
     trail: Vec<Pair>,
+    /// The work spent on the current method.
     steps: usize,
+    /// The work spent on the whole check, never reset.
+    total_steps: usize,
 }
 
 impl<'a> Checker<'a> {
@@ -333,7 +390,7 @@ impl<'a> Checker<'a> {
 
     /// The name of field `id` of a record or variant: the written source's
     /// spelling when the written side's node names it, else the live one's.
-    fn field_name(&self, sub: (Side, u32), sup: (Side, u32), id: u32) -> Option<String> {
+    fn field_name(&self, sub: (Side, u32), sup: (Side, u32), id: u32) -> Option<&'a str> {
         let (written, live) = if sub.0 == Side::Written {
             (sub.1, sup.1)
         } else {
@@ -343,7 +400,7 @@ impl<'a> Checker<'a> {
             .names
             .get(&(written, id))
             .or_else(|| self.live.names.get(&(live, id)))
-            .map(|name| (*name).to_string())
+            .copied()
     }
 
     /// Resolve a node to whether it is `null`, `reserved` or an `opt` —
@@ -361,7 +418,7 @@ impl<'a> Checker<'a> {
     /// `sub <: sup`, where `sub` is a reference into `side` and `sup` one
     /// into the other Contract.
     #[inline(never)]
-    fn sub(&mut self, side: Side, sub: u32, sup: u32) -> Outcome {
+    fn sub(&mut self, side: Side, sub: u32, sup: u32) -> Outcome<'a> {
         let pair = (side, sub, sup);
         if let Some(failure) = self.failed.get(&pair) {
             return Err(Stop::Fails(failure.clone()));
@@ -391,7 +448,7 @@ impl<'a> Checker<'a> {
     /// Close a pair's walk: forget the proofs that depended on it being in
     /// progress, and record its own proof or failure.
     #[inline(never)]
-    fn finish(&mut self, pair: Pair, start: usize, outcome: Outcome) -> Outcome {
+    fn finish(&mut self, pair: Pair, start: usize, outcome: Outcome<'a>) -> Outcome<'a> {
         let frame = self.frames.pop().expect("the walk pushed its frame");
         self.active.remove(&pair);
         for dependent in &frame.dependents {
@@ -437,9 +494,18 @@ impl<'a> Checker<'a> {
         self.depend(cut);
     }
 
-    /// Spend `amount` of the method's work bound.
-    fn spend(&mut self, amount: usize) -> Outcome {
+    /// Spend `amount` of the method's work bound and of the whole check's.
+    /// Reaching the whole check's is reported first: it stops the rest.
+    fn spend(&mut self, amount: usize) -> Outcome<'a> {
         self.steps += amount;
+        self.total_steps += amount;
+        if self.total_steps > self.options.total_step_limit {
+            return Err(Stop::Exhausted(Exhausted {
+                resource: "check_total_steps",
+                limit: self.options.total_step_limit,
+                observed: self.total_steps,
+            }));
+        }
         if self.steps > self.options.step_limit {
             return Err(Stop::Exhausted(Exhausted {
                 resource: "check_steps",
@@ -457,7 +523,7 @@ impl<'a> Checker<'a> {
     /// truncates only warnings recorded after it began, and forgets every
     /// pair proven in that time.
     #[inline(never)]
-    fn repeat(&mut self, pair: Pair) -> Outcome {
+    fn repeat(&mut self, pair: Pair) -> Outcome<'a> {
         let proven = self.proven[&pair];
         self.depend(proven.cuts);
         self.spend(proven.end - proven.start)?;
@@ -491,8 +557,8 @@ impl<'a> Checker<'a> {
 
     /// A child pair one segment below the current one.
     #[inline(never)]
-    fn child(&mut self, segment: Segment, side: Side, sub: u32, sup: u32) -> Outcome {
-        self.path.push(segment.clone());
+    fn child(&mut self, segment: Segment<'a>, side: Side, sub: u32, sup: u32) -> Outcome<'a> {
+        self.path.push(segment);
         self.trail.push((side, sub, sup));
         let outcome = self.sub(side, sub, sup);
         self.trail.pop();
@@ -504,7 +570,13 @@ impl<'a> Checker<'a> {
     /// proved and every warning it recorded. Only a bound being reached
     /// escapes it.
     #[inline(never)]
-    fn probe(&mut self, segment: Segment, side: Side, sub: u32, sup: u32) -> Result<bool, Stop> {
+    fn probe(
+        &mut self,
+        segment: Segment<'a>,
+        side: Side,
+        sub: u32,
+        sup: u32,
+    ) -> Result<bool, Stop<'a>> {
         let proven = self.log.len();
         let warnings = self.warnings.len();
         let truncated = self.truncated;
@@ -543,7 +615,7 @@ impl<'a> Checker<'a> {
     /// every rule is its own small function and every message is built out
     /// of line: what stays on the stack per level is a few words, which is
     /// what lets [`MAX_CHECK_DEPTH`] levels fit a browser's stack.
-    fn expand(&mut self, side: Side, sub: u32, sup: u32) -> Outcome {
+    fn expand(&mut self, side: Side, sub: u32, sup: u32) -> Outcome<'a> {
         let left: &'a TypeNode = self.graph(side).node(sub);
         let right: &'a TypeNode = self.graph(side.other()).node(sup);
         use PrimitiveType::{Empty, Int, Nat, Null, Reserved};
@@ -588,7 +660,7 @@ impl<'a> Checker<'a> {
     /// and `t'` not opt-like — or is read as `null`, which is what the
     /// warning reports.
     #[inline(never)]
-    fn opt_rule(&mut self, side: Side, sub: u32, left: &'a TypeNode, inner: u32) -> Outcome {
+    fn opt_rule(&mut self, side: Side, sub: u32, left: &'a TypeNode, inner: u32) -> Outcome<'a> {
         let kept = match left {
             TypeNode::Opt { inner: content } => self.probe(Segment::Opt, side, *content, inner)?,
             _ if self.opt_like(side.other(), inner) => false,
@@ -610,7 +682,7 @@ impl<'a> Checker<'a> {
         sup: u32,
         have: &'a [Field],
         want: &'a [Field],
-    ) -> Outcome {
+    ) -> Outcome<'a> {
         for field in want {
             let name = self.field_name((side, sub), (side.other(), sup), field.id);
             match have.iter().find(|candidate| candidate.id == field.id) {
@@ -637,7 +709,7 @@ impl<'a> Checker<'a> {
         sup: u32,
         have: &'a [Field],
         want: &'a [Field],
-    ) -> Outcome {
+    ) -> Outcome<'a> {
         for arm in have {
             let name = self.field_name((side, sub), (side.other(), sup), arm.id);
             match want.iter().find(|candidate| candidate.id == arm.id) {
@@ -650,7 +722,7 @@ impl<'a> Checker<'a> {
 
     /// Equal modes, arguments contravariant, results covariant.
     #[inline(never)]
-    fn func_rule(&mut self, side: Side, left: &'a TypeNode, right: &'a TypeNode) -> Outcome {
+    fn func_rule(&mut self, side: Side, left: &'a TypeNode, right: &'a TypeNode) -> Outcome<'a> {
         let (
             TypeNode::Func {
                 args: sub_args,
@@ -681,9 +753,9 @@ impl<'a> Checker<'a> {
         side: Side,
         have: &'a [ServiceMethod],
         want: &'a [ServiceMethod],
-    ) -> Outcome {
+    ) -> Outcome<'a> {
         for method in want {
-            let segment = Segment::Method(method.name.clone());
+            let segment = Segment::Method(method.name.as_str());
             match have.iter().find(|candidate| candidate.name == method.name) {
                 Some(found) => self.child(segment, side, found.function, method.function)?,
                 None => return within(segment, method_absent()),
@@ -700,8 +772,8 @@ impl<'a> Checker<'a> {
         side: Side,
         sub: &'a [u32],
         sup: &'a [u32],
-        segment: fn(usize) -> Segment,
-    ) -> Outcome {
+        segment: fn(usize) -> Segment<'a>,
+    ) -> Outcome<'a> {
         for (index, want) in sup.iter().enumerate() {
             match sub.get(index) {
                 Some(have) => self.child(segment(index), side, *have, *want)?,
@@ -718,7 +790,7 @@ impl<'a> Checker<'a> {
 
 #[cold]
 #[inline(never)]
-fn mismatch(left: &TypeNode, right: &TypeNode) -> Outcome {
+fn mismatch<'a>(left: &TypeNode, right: &TypeNode) -> Outcome<'a> {
     fails(format!(
         "{} is not a subtype of {}",
         describe(left),
@@ -728,7 +800,7 @@ fn mismatch(left: &TypeNode, right: &TypeNode) -> Outcome {
 
 #[cold]
 #[inline(never)]
-fn field_missing(missing: &TypeNode) -> Outcome {
+fn field_missing<'a>(missing: &TypeNode) -> Outcome<'a> {
     fails(format!(
         "the record has no such field, and its type {} is not null, reserved or an opt",
         describe(missing),
@@ -737,7 +809,7 @@ fn field_missing(missing: &TypeNode) -> Outcome {
 
 #[cold]
 #[inline(never)]
-fn value_missing(missing: &TypeNode) -> Outcome {
+fn value_missing<'a>(missing: &TypeNode) -> Outcome<'a> {
     fails(format!(
         "there is no value at this position, and its type {} is not null, reserved or an opt",
         describe(missing),
@@ -746,19 +818,19 @@ fn value_missing(missing: &TypeNode) -> Outcome {
 
 #[cold]
 #[inline(never)]
-fn arm_unknown() -> Outcome {
+fn arm_unknown<'a>() -> Outcome<'a> {
     fails("the other variant has no such arm")
 }
 
 #[cold]
 #[inline(never)]
-fn method_absent() -> Outcome {
+fn method_absent<'a>() -> Outcome<'a> {
     fails("the service has no such method")
 }
 
 #[cold]
 #[inline(never)]
-fn mode_differs(sub: MethodMode, sup: MethodMode) -> Outcome {
+fn mode_differs<'a>(sub: MethodMode, sup: MethodMode) -> Outcome<'a> {
     fails(format!(
         "the function is {} on one side and {} on the other",
         mode_name(sub),
@@ -841,21 +913,36 @@ fn name_segment(name: &str, prefix: &str) -> String {
 /// then `.name` or `["name"]` (or `[id]` for an unnamed label) per field or
 /// arm, `[*]` per vec element, `?` per opt content, and `::args[i]`,
 /// `::results[i]` or `::name` into a func or service type.
-fn render(path: &[Segment]) -> String {
-    let mut text = String::from("$");
+fn render(path: &[Segment<'_>]) -> String {
+    let mut text = String::new();
+    render_parts(path, |part| text.push_str(part));
+    text
+}
+
+/// The length in bytes of [`render`]'s text, holding one segment's text at
+/// a time.
+fn rendered_len(path: &[Segment<'_>]) -> usize {
+    let mut length = 0;
+    render_parts(path, |part| length += part.len());
+    length
+}
+
+/// Hand [`render`]'s text to `each`, one segment at a time.
+fn render_parts(path: &[Segment<'_>], mut each: impl FnMut(&str)) {
+    each("$");
     for (index, segment) in path.iter().enumerate() {
         let nested = if index == 0 { "" } else { "::" };
-        match segment {
-            Segment::Field(Some(name), _) => text.push_str(&name_segment(name, ".")),
-            Segment::Field(None, id) => text.push_str(&format!("[{id}]")),
-            Segment::Element => text.push_str("[*]"),
-            Segment::Opt => text.push('?'),
-            Segment::Argument(position) => text.push_str(&format!("{nested}args[{position}]")),
-            Segment::Result(position) => text.push_str(&format!("{nested}results[{position}]")),
-            Segment::Method(name) => text.push_str(&name_segment(name, "::")),
-        }
+        let part = match segment {
+            Segment::Field(Some(name), _) => name_segment(name, "."),
+            Segment::Field(None, id) => format!("[{id}]"),
+            Segment::Element => "[*]".to_string(),
+            Segment::Opt => "?".to_string(),
+            Segment::Argument(position) => format!("{nested}args[{position}]"),
+            Segment::Result(position) => format!("{nested}results[{position}]"),
+            Segment::Method(name) => name_segment(name, "::"),
+        };
+        each(&part);
     }
-    text
 }
 
 /// The methods of a Contract's actor service, in the Contract's order.
@@ -884,10 +971,185 @@ pub struct Input<'a> {
     pub source_info: Option<&'a SourceInfo>,
 }
 
+/// One diagnostic a method reports, before it is rendered: its text is
+/// measured against [`MAX_CHECK_OUTPUT_BYTES`] first.
+struct Report<'a> {
+    code: &'static str,
+    severity: &'static str,
+    /// Outermost first.
+    path: Option<Vec<Segment<'a>>>,
+    message: String,
+    resource_limit: Option<Exhausted>,
+}
+
+impl Report<'_> {
+    fn error(code: &'static str, message: String) -> Self {
+        Self {
+            code,
+            severity: "error",
+            path: None,
+            message,
+            resource_limit: None,
+        }
+    }
+
+    /// The bytes of its `method`, `path` and `message` strings.
+    fn text_len(&self, method: &str) -> usize {
+        method.len() + self.message.len() + self.path.as_deref().map_or(0, rendered_len)
+    }
+
+    fn render(&self, method: &str) -> Value {
+        let mut item = json!({
+            "code": self.code,
+            "severity": self.severity,
+            "method": method,
+        });
+        if let Some(path) = &self.path {
+            item["path"] = json!(render(path));
+        }
+        item["message"] = json!(self.message);
+        if let Some(exhausted) = &self.resource_limit {
+            item["resource_limit"] = resource_limit(exhausted);
+        }
+        item
+    }
+}
+
+fn resource_limit(exhausted: &Exhausted) -> Value {
+    json!({
+        "resource": exhausted.resource,
+        "limit": exhausted.limit,
+        "observed": exhausted.observed,
+    })
+}
+
+/// The resource of the whole check's work bound.
+const TOTAL_STEPS: &str = "check_total_steps";
+
+impl<'a> Checker<'a> {
+    /// Decide one written method from empty state: its reports, or the whole
+    /// check's work bound reached while deciding it.
+    fn method(
+        &mut self,
+        name: &str,
+        written_function: u32,
+        live_methods: &[(String, u32)],
+    ) -> Result<Vec<Report<'a>>, Exhausted> {
+        let Some((_, live_function)) = live_methods.iter().find(|(live_name, _)| live_name == name)
+        else {
+            return Ok(vec![Report::error(
+                "method_missing",
+                format!("the live service has no method {name:?}"),
+            )]);
+        };
+        let (
+            TypeNode::Func {
+                args: written_args,
+                results: written_results,
+                mode: written_mode,
+            },
+            TypeNode::Func {
+                args: live_args,
+                results: live_results,
+                mode: live_mode,
+            },
+        ) = (
+            self.written.node(written_function),
+            self.live.node(*live_function),
+        )
+        else {
+            unreachable!("a service method's type is a func in a valid Contract");
+        };
+        let mut reports = Vec::new();
+        if written_mode != live_mode {
+            reports.push(Report::error(
+                "mode_changed",
+                format!(
+                    "the written method is {} and the live one is {}",
+                    mode_name(*written_mode),
+                    mode_name(*live_mode),
+                ),
+            ));
+        }
+        self.active.clear();
+        self.frames.clear();
+        self.proven.clear();
+        self.log.clear();
+        self.failed.clear();
+        self.warnings.clear();
+        self.truncated = false;
+        self.path.clear();
+        self.trail.clear();
+        self.steps = 0;
+        let outcome = self
+            .tuple(Side::Written, written_args, live_args, Segment::Argument)
+            .and_then(|()| self.tuple(Side::Live, live_results, written_results, Segment::Result));
+        match outcome {
+            Ok(()) => {}
+            Err(Stop::Fails(failure)) => {
+                let mut path = failure.segments;
+                path.reverse();
+                reports.push(Report {
+                    path: Some(path),
+                    ..Report::error("method_incompatible", failure.message)
+                });
+            }
+            Err(Stop::Exhausted(exhausted)) if exhausted.resource == TOTAL_STEPS => {
+                return Err(exhausted);
+            }
+            Err(Stop::Exhausted(exhausted)) => {
+                reports.push(Report {
+                    resource_limit: Some(exhausted.clone()),
+                    ..Report::error(
+                        "resource_limit_exceeded",
+                        format!(
+                            "the check of this method stopped at its {} bound of {}",
+                            exhausted.resource, exhausted.limit,
+                        ),
+                    )
+                });
+                // Nothing a bounded walk recorded is complete; report the
+                // bound alone for this method.
+                self.warnings.clear();
+                self.truncated = false;
+            }
+        }
+        for warning in self.warnings.drain(..) {
+            reports.push(Report {
+                code: "special_opt_rule",
+                severity: "warning",
+                path: Some(warning.path),
+                message: warning.message,
+                resource_limit: None,
+            });
+        }
+        if self.truncated {
+            reports.push(Report {
+                code: "resource_limit_exceeded",
+                severity: "warning",
+                path: None,
+                message: format!(
+                    "this method has more special_opt_rule warnings than its check_warnings bound of {MAX_CHECK_WARNINGS}; the rest are not reported, and the verdict stands",
+                ),
+                resource_limit: Some(Exhausted {
+                    resource: "check_warnings",
+                    limit: MAX_CHECK_WARNINGS,
+                    observed: MAX_CHECK_WARNINGS + 1,
+                }),
+            });
+        }
+        Ok(reports)
+    }
+}
+
 /// The diagnostics of `live <: written`, in written-method name order (code
 /// point), each method's errors before its warnings. The check passes
 /// exactly when no diagnostic has severity `error`. Both Contracts must have
 /// an actor; the caller refuses one that does not.
+///
+/// Each method is decided on its own, until the check as a whole reaches one
+/// of its aggregate bounds: from the method at which it does, every method
+/// gets one `resource_limit_exceeded` error naming it, and nothing else.
 pub fn check(written: &Input<'_>, live: &Input<'_>, options: CheckOptions) -> Vec<Value> {
     let written_methods = actor_methods(written.contract).expect("the caller checked the actor");
     let live_methods = actor_methods(live.contract).expect("the caller checked the actor");
@@ -905,126 +1167,62 @@ pub fn check(written: &Input<'_>, live: &Input<'_>, options: CheckOptions) -> Ve
         path: Vec::new(),
         trail: Vec::new(),
         steps: 0,
+        total_steps: 0,
     };
-    let mut ordered = written_methods.clone();
+    let mut ordered = written_methods;
     ordered.sort_by(|left, right| left.0.cmp(&right.0));
     let mut diagnostics = Vec::new();
+    // The aggregate bound reached, once one is.
+    let mut stopped: Option<Exhausted> = None;
+    let mut reported_warnings = 0usize;
+    let mut reported_bytes = 0usize;
     for (name, written_function) in ordered {
-        let Some((_, live_function)) = live_methods
-            .iter()
-            .find(|(live_name, _)| *live_name == name)
-        else {
-            diagnostics.push(json!({
-                "code": "method_missing",
-                "severity": "error",
-                "method": name,
-                "message": format!("the live service has no method {name:?}"),
-            }));
-            continue;
-        };
-        let (
-            TypeNode::Func {
-                args: written_args,
-                results: written_results,
-                mode: written_mode,
-            },
-            TypeNode::Func {
-                args: live_args,
-                results: live_results,
-                mode: live_mode,
-            },
-        ) = (
-            checker.written.node(written_function),
-            checker.live.node(*live_function),
-        )
-        else {
-            unreachable!("a service method's type is a func in a valid Contract");
-        };
-        if written_mode != live_mode {
-            diagnostics.push(json!({
-                "code": "mode_changed",
-                "severity": "error",
-                "method": name,
-                "message": format!(
-                    "the written method is {} and the live one is {}",
-                    mode_name(*written_mode),
-                    mode_name(*live_mode),
-                ),
-            }));
-        }
-        checker.active.clear();
-        checker.frames.clear();
-        checker.proven.clear();
-        checker.log.clear();
-        checker.failed.clear();
-        checker.warnings.clear();
-        checker.truncated = false;
-        checker.path.clear();
-        checker.trail.clear();
-        checker.steps = 0;
-        let outcome = checker
-            .tuple(Side::Written, written_args, live_args, Segment::Argument)
-            .and_then(|()| {
-                checker.tuple(Side::Live, live_results, written_results, Segment::Result)
-            });
-        match outcome {
-            Ok(()) => {}
-            Err(Stop::Fails(failure)) => {
-                let mut path = failure.segments;
-                path.reverse();
-                diagnostics.push(json!({
-                    "code": "method_incompatible",
-                    "severity": "error",
-                    "method": name,
-                    "path": render(&path),
-                    "message": failure.message,
-                }));
-            }
-            Err(Stop::Exhausted(exhausted)) => {
-                diagnostics.push(json!({
-                    "code": "resource_limit_exceeded",
-                    "severity": "error",
-                    "method": name,
-                    "message": format!(
-                        "the check of this method stopped at its {} bound of {}",
-                        exhausted.resource, exhausted.limit,
-                    ),
-                    "resource_limit": {
-                        "resource": exhausted.resource,
-                        "limit": exhausted.limit,
-                        "observed": exhausted.observed,
-                    },
-                }));
-                // Nothing a bounded walk recorded is complete; report the
-                // bound alone for this method.
-                checker.warnings.clear();
-                checker.truncated = false;
+        if stopped.is_none() {
+            match checker.method(&name, written_function, &live_methods) {
+                Ok(reports) => {
+                    let warnings = reported_warnings
+                        + reports
+                            .iter()
+                            .filter(|report| report.code == "special_opt_rule")
+                            .count();
+                    let bytes = reported_bytes
+                        + reports
+                            .iter()
+                            .map(|report| report.text_len(&name))
+                            .sum::<usize>();
+                    if warnings > options.total_warning_limit {
+                        stopped = Some(Exhausted {
+                            resource: "check_total_warnings",
+                            limit: options.total_warning_limit,
+                            observed: warnings,
+                        });
+                    } else if bytes > options.output_byte_limit {
+                        stopped = Some(Exhausted {
+                            resource: "check_output_bytes",
+                            limit: options.output_byte_limit,
+                            observed: bytes,
+                        });
+                    } else {
+                        reported_warnings = warnings;
+                        reported_bytes = bytes;
+                        diagnostics.extend(reports.iter().map(|report| report.render(&name)));
+                        continue;
+                    }
+                }
+                Err(exhausted) => stopped = Some(exhausted),
             }
         }
-        for warning in checker.warnings.drain(..) {
-            diagnostics.push(json!({
-                "code": "special_opt_rule",
-                "severity": "warning",
-                "method": name,
-                "path": render(&warning.path),
-                "message": warning.message,
-            }));
-        }
-        if checker.truncated {
-            diagnostics.push(json!({
-                "code": "resource_limit_exceeded",
-                "severity": "warning",
-                "method": name,
-                "message": format!(
-                    "this method has more special_opt_rule warnings than its check_warnings bound of {MAX_CHECK_WARNINGS}; the rest are not reported, and the verdict stands",
-                ),
-                "resource_limit": {
-                    "resource": "check_warnings",
-                    "limit": MAX_CHECK_WARNINGS,
-                    "observed": MAX_CHECK_WARNINGS + 1,
-                },
-            }));
-        }
+        let exhausted = stopped.as_ref().expect("an aggregate bound was reached");
+        diagnostics.push(json!({
+            "code": "resource_limit_exceeded",
+            "severity": "error",
+            "method": name,
+            "message": format!(
+                "the check of the whole service reached its {} bound of {}; this method fails closed, and nothing else is reported for it",
+                exhausted.resource, exhausted.limit,
+            ),
+            "resource_limit": resource_limit(exhausted),
+        }));
     }
     diagnostics
 }
@@ -1037,14 +1235,14 @@ mod tests {
     fn paths_render_names_ids_and_nesting() {
         let path = vec![
             Segment::Result(0),
-            Segment::Field(Some("Ok".into()), 1),
+            Segment::Field(Some("Ok"), 1),
             Segment::Opt,
             Segment::Element,
             Segment::Field(None, 3),
-            Segment::Field(Some("two words".into()), 9),
+            Segment::Field(Some("two words"), 9),
             Segment::Argument(1),
-            Segment::Method("get".into()),
-            Segment::Method("not ident".into()),
+            Segment::Method("get"),
+            Segment::Method("not ident"),
             Segment::Result(2),
         ];
         assert_eq!(
@@ -1053,5 +1251,9 @@ mod tests {
         );
         assert_eq!(render(&[Segment::Argument(0)]), "$args[0]");
         assert_eq!(render(&[]), "$");
+        // The output bound measures exactly the rendered text.
+        for prefix in 0..=path.len() {
+            assert_eq!(rendered_len(&path[..prefix]), render(&path[..prefix]).len());
+        }
     }
 }

@@ -57,7 +57,15 @@ commit, as every entry does.
   under each path that reaches it. Past 1,000 warnings a method reports the
   first 1,000 and a `resource_limit_exceeded` warning; its verdict stands.
   A method whose check reaches its depth or work bound fails closed. The
-  report prints the live interface identity, so an unchanged
+  check as a whole is bounded too, so many methods sharing one type cannot
+  multiply the per-method bounds: 10,000,000 steps, 10,000
+  `special_opt_rule` warnings and 4 MiB of reported text in all
+  (`check_total_steps`, `check_total_warnings`, `check_output_bytes`).
+  Methods are checked in name order; when one of these is reached, that
+  method and every method after it get one `resource_limit_exceeded` error
+  each and nothing else, and the check exits 1. Below these bounds a
+  method's findings do not depend on the other methods. The report prints
+  the live interface identity, so an unchanged
   interface can be told from one that changed compatibly.
 - **`projectDid(sources, methods)` and `checkCompatible(written, live)`**,
   the library functions behind the two commands, exported beside

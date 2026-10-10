@@ -30,7 +30,10 @@ use candid::types::subtype::{subtype_with_config, OptReport};
 use candid::TypeEnv;
 use candid_core::compile_did;
 use candid_core_ts::{generate_module, TsNames, TsOptions};
-use candid_core_wasm::{check_compatible, check_compatible_with, CheckOptions, MAX_CHECK_STEPS};
+use candid_core_wasm::{
+    check_compatible, check_compatible_with, CheckOptions, MAX_CHECK_OUTPUT_BYTES, MAX_CHECK_STEPS,
+    MAX_CHECK_TOTAL_STEPS, MAX_CHECK_TOTAL_WARNINGS, MAX_CHECK_WARNINGS,
+};
 use candid_parser::{check_prog, IDLProg};
 use serde_json::{json, Value};
 
@@ -785,6 +788,452 @@ service : { f : () -> (R); g : () -> (R) }";
     assert_eq!(response["diagnostics"], json!([bound("f"), bound("g")]));
 }
 
+/// `checkCompatible` under `options`.
+fn check_with(written: &str, live: &str, options: CheckOptions) -> Value {
+    let request = json!({ "written": { "source": written }, "live": { "source": live } });
+    serde_json::from_str(&check_compatible_with(&request.to_string(), options)).unwrap()
+}
+
+/// The fail-closed diagnostic a method gets once the whole check has
+/// reached an aggregate bound.
+fn stopped(method: &str, resource: &str, limit: usize, observed: usize) -> Value {
+    json!({
+        "code": "resource_limit_exceeded",
+        "severity": "error",
+        "method": method,
+        "message": format!("the check of the whole service reached its {resource} bound of {limit}; this method fails closed, and nothing else is reported for it"),
+        "resource_limit": { "resource": resource, "limit": limit, "observed": observed },
+    })
+}
+
+/// Codex's example: a 10-level shared two-field graph, 1,024 paths of which
+/// decode as null, reused by `methods` methods named in name order.
+fn shared_doubling(content: &str, methods: usize) -> String {
+    let mut source = format!("type D0 = opt {content};\n");
+    for level in 1..=10 {
+        source.push_str(&format!(
+            "type D{level} = record {{ l : D{p}; r : D{p} }};\n",
+            p = level - 1
+        ));
+    }
+    let list: Vec<String> = (0..methods)
+        .map(|index| format!("m{index:05} : () -> (D10);"))
+        .collect();
+    source.push_str(&format!("service : {{ {} }}\n", list.join(" ")));
+    source
+}
+
+/// The whole check's work is bounded: the per-method bound alone would let a
+/// service multiply it by its method count. Each of `f`, `g`, `h` and `i`
+/// costs four steps; the method that takes the total past the bound, and
+/// every method after it, fail closed.
+#[test]
+fn the_work_is_bounded_across_the_check() {
+    assert_eq!(MAX_CHECK_TOTAL_STEPS, 10 * MAX_CHECK_STEPS);
+    assert_eq!(
+        CheckOptions::default().total_step_limit,
+        MAX_CHECK_TOTAL_STEPS
+    );
+    let source = "type R = record { a : nat; b : text; c : bool };
+service : { f : () -> (R); g : () -> (R); h : () -> (R); i : () -> (R) }";
+    let run = |total_step_limit: usize| {
+        let options = CheckOptions {
+            total_step_limit,
+            ..CheckOptions::default()
+        };
+        check_with(source, source, options)
+    };
+    // Exactly at the bound: 16 steps, all decided.
+    let response = run(16);
+    assert_eq!(response["compatible"], json!(true), "{response}");
+    assert_eq!(response["diagnostics"], json!([]));
+    // One step under: `i` reaches it at its fourth step.
+    let response = run(15);
+    assert_eq!(response["compatible"], json!(false), "{response}");
+    assert_eq!(
+        response["diagnostics"],
+        json!([stopped("i", "check_total_steps", 15, 16)])
+    );
+    // `h` reaches it at its third step; `i` is not walked.
+    let response = run(10);
+    assert_eq!(
+        response["diagnostics"],
+        json!([
+            stopped("h", "check_total_steps", 10, 11),
+            stopped("i", "check_total_steps", 10, 11),
+        ])
+    );
+
+    // At the shipped bound: a 12-field, 100-level shared graph makes each
+    // method spend its whole per-method bound, re-examining warnings. Nine
+    // methods fail closed at their own bound; the tenth takes the total past
+    // ten million, and it and every method after it are not decided.
+    let wide = |content: &str, methods: usize| {
+        let mut source = format!("type D0 = opt {content};\n");
+        for level in 1..=100 {
+            let fields: Vec<String> = (0..12)
+                .map(|field| format!("f{field} : D{p}", p = level - 1))
+                .collect();
+            source.push_str(&format!(
+                "type D{level} = record {{ {} }};\n",
+                fields.join("; ")
+            ));
+        }
+        let list: Vec<String> = (0..methods)
+            .map(|index| format!("m{index:05} : () -> (D100);"))
+            .collect();
+        source.push_str(&format!("service : {{ {} }}\n", list.join(" ")));
+        source
+    };
+    let response = check(&wide("nat", 12), &wide("text", 12));
+    let items = response["diagnostics"].as_array().unwrap();
+    assert_eq!(items.len(), 12, "{response}");
+    for item in &items[..9] {
+        assert_eq!(item["resource_limit"]["resource"], json!("check_steps"));
+    }
+    let observed = items[9]["resource_limit"]["observed"].as_u64().unwrap() as usize;
+    assert!(observed > MAX_CHECK_TOTAL_STEPS, "{observed}");
+    for (index, item) in items[9..].iter().enumerate() {
+        assert_eq!(
+            *item,
+            stopped(
+                &format!("m{:05}", 9 + index),
+                "check_total_steps",
+                MAX_CHECK_TOTAL_STEPS,
+                observed
+            )
+        );
+    }
+}
+
+/// The warnings the whole check reports are bounded. Codex's example: each
+/// method of a shared 10-level graph reports its first 1,000 warnings; ten
+/// methods reach the 10,000 bound exactly and are reported, an eleventh
+/// would pass it, so it and every method after it fail closed. Before this
+/// bound, 100 such methods turned a 5.3 KB request into a 27.8 MB response.
+#[test]
+fn warnings_are_bounded_across_the_check() {
+    assert_eq!(MAX_CHECK_TOTAL_WARNINGS, 10 * MAX_CHECK_WARNINGS);
+    assert_eq!(
+        CheckOptions::default().total_warning_limit,
+        MAX_CHECK_TOTAL_WARNINGS
+    );
+    let run = |methods: usize| {
+        let request = json!({
+            "written": { "source": shared_doubling("nat", methods) },
+            "live": { "source": shared_doubling("text", methods) },
+        })
+        .to_string();
+        let response = check_compatible(&request);
+        (
+            request.len(),
+            response.len(),
+            serde_json::from_str::<Value>(&response).unwrap(),
+        )
+    };
+    let (_, at_bound_bytes, at_bound) = run(10);
+    assert_eq!(at_bound["compatible"], json!(true));
+    let items = at_bound["diagnostics"].as_array().unwrap();
+    assert_eq!(items.len(), 10 * 1001);
+    assert_eq!(
+        items
+            .iter()
+            .filter(|item| item["code"] == "special_opt_rule")
+            .count(),
+        MAX_CHECK_TOTAL_WARNINGS
+    );
+
+    let mut sizes = Vec::new();
+    for methods in [11, 100, 3000] {
+        let (request_bytes, response_bytes, response) = run(methods);
+        assert_eq!(response["compatible"], json!(false));
+        let items = response["diagnostics"].as_array().unwrap();
+        assert_eq!(items.len(), 10 * 1001 + methods - 10, "{methods}");
+        // The first ten methods are reported as they are at the bound.
+        assert_eq!(
+            items[..10 * 1001],
+            at_bound["diagnostics"].as_array().unwrap()[..]
+        );
+        for (index, item) in items[10 * 1001..].iter().enumerate() {
+            assert_eq!(
+                *item,
+                stopped(
+                    &format!("m{:05}", 10 + index),
+                    "check_total_warnings",
+                    MAX_CHECK_TOTAL_WARNINGS,
+                    11_000
+                )
+            );
+        }
+        // Past the bound the response grows only by one fixed-size
+        // diagnostic per method: linearly with the request.
+        let per_method = (response_bytes - at_bound_bytes) / (methods - 10);
+        assert!(per_method < 500, "{methods}: {per_method} bytes per method");
+        sizes.push((methods, request_bytes, response_bytes));
+    }
+    // The sizes the CLI page quotes: 100 methods, a 5.3 KB request, a 2.8 MB
+    // response (27.8 MB before this bound); 3,000 methods, 4.0 MB.
+    assert_eq!(
+        sizes,
+        [
+            (11, 1_363, 2_784_821),
+            (100, 5_279, 2_820_154),
+            (3000, 132_879, 3_971_454),
+        ]
+    );
+}
+
+/// The diagnostic text the whole check reports is bounded in bytes, so a
+/// long name repeated along paths cannot multiply the response: the
+/// `method`, `path` and `message` strings of each method's diagnostics
+/// count, and the method that would pass the bound, and every method after
+/// it, fail closed.
+#[test]
+fn the_output_is_bounded_across_the_check() {
+    assert_eq!(MAX_CHECK_OUTPUT_BYTES, 4 * 1024 * 1024);
+    assert_eq!(
+        CheckOptions::default().output_byte_limit,
+        MAX_CHECK_OUTPUT_BYTES
+    );
+    let source = |leaf: &str, name: &str, methods: usize| {
+        let list: Vec<String> = (0..methods)
+            .map(|index| format!("m{index:05} : () -> (R);"))
+            .collect();
+        format!(
+            "type R = record {{ {name} : {leaf} }};\nservice : {{ {} }}\n",
+            list.join(" ")
+        )
+    };
+    // Each method fails at `$results[0].x`: its text is the method name, the
+    // path and the message.
+    let written = source("nat", "x", 3);
+    let live = source("text", "x", 3);
+    let unbounded = check(&written, &live);
+    let items = unbounded["diagnostics"].as_array().unwrap();
+    assert_eq!(items.len(), 3);
+    let text = |item: &Value| -> usize {
+        ["method", "path", "message"]
+            .iter()
+            .map(|key| item[*key].as_str().map_or(0, str::len))
+            .sum()
+    };
+    let each = text(&items[0]);
+    assert_eq!(
+        each,
+        "m00000".len() + "$results[0].x".len() + "text is not a subtype of nat".len()
+    );
+    let run = |output_byte_limit: usize| {
+        let options = CheckOptions {
+            output_byte_limit,
+            ..CheckOptions::default()
+        };
+        check_with(&written, &live, options)
+    };
+    // Exactly at the bound: all three reported.
+    assert_eq!(run(3 * each), unbounded);
+    // One byte under: the third is not.
+    let response = run(3 * each - 1);
+    assert_eq!(response["diagnostics"].as_array().unwrap()[..2], items[..2]);
+    assert_eq!(
+        response["diagnostics"][2],
+        stopped("m00002", "check_output_bytes", 3 * each - 1, 3 * each)
+    );
+
+    // At the shipped bound: a 100,000-byte field name on every path. 41
+    // methods' text fits in 4 MiB; the 42nd and the rest fail closed.
+    let name = "x".repeat(100_000);
+    let response = check(&source("nat", &name, 50), &source("text", &name, 50));
+    let items = response["diagnostics"].as_array().unwrap();
+    assert_eq!(items.len(), 50);
+    let each = "m00000".len() + 1 + "$results[0].".len() + name.len() - 1
+        + "text is not a subtype of nat".len();
+    let fits = MAX_CHECK_OUTPUT_BYTES / each;
+    assert_eq!(fits, 41);
+    for item in &items[..fits] {
+        assert_eq!(item["code"], json!("method_incompatible"));
+    }
+    for (index, item) in items[fits..].iter().enumerate() {
+        assert_eq!(
+            *item,
+            stopped(
+                &format!("m{:05}", fits + index),
+                "check_output_bytes",
+                MAX_CHECK_OUTPUT_BYTES,
+                (fits + 1) * each
+            )
+        );
+    }
+}
+
+/// Once an aggregate bound is reached, every method not yet decided fails
+/// closed with that one diagnostic: not its `method_missing`, not its
+/// `mode_changed`, not its own verdict.
+#[test]
+fn an_exhausted_check_fails_closed_for_every_method_left() {
+    let written = "type R = record { a : nat; b : text; c : bool };
+service : { a : () -> (R); b : () -> (R); c : () -> (R); d : () -> (R) query; e : () -> (R) }";
+    let live = "type R = record { a : nat; b : text; c : bool };
+type S = record { a : nat; b : text };
+service : { a : () -> (R); b : () -> (R); d : () -> (R); e : () -> (S) }";
+    let summary_with = |total_step_limit: usize| {
+        let options = CheckOptions {
+            total_step_limit,
+            ..CheckOptions::default()
+        };
+        check_with(written, live, options)
+    };
+    // Below the bound, each method's own verdict.
+    let response = summary_with(MAX_CHECK_TOTAL_STEPS);
+    assert_eq!(
+        summary(&response),
+        [
+            ("method_missing".to_string(), "c".to_string(), None),
+            ("mode_changed".to_string(), "d".to_string(), None),
+            (
+                "method_incompatible".to_string(),
+                "e".to_string(),
+                Some("$results[0].c".to_string())
+            ),
+        ]
+    );
+    // `a` costs four steps; `b` reaches a bound of 6 at its third, and `c`,
+    // `d` and `e` are not decided.
+    let response = summary_with(6);
+    assert_eq!(response["compatible"], json!(false), "{response}");
+    assert_eq!(
+        response["diagnostics"],
+        json!(["b", "c", "d", "e"]
+            .iter()
+            .map(|method| stopped(method, "check_total_steps", 6, 7))
+            .collect::<Vec<_>>())
+    );
+}
+
+/// Below the aggregate bounds a method is reported exactly as it is when the
+/// written service declares it alone, at each bound included; one step, one
+/// warning or one byte under what the check needs, the method that would
+/// pass it is not, so a method depends on the others only once a bound is
+/// reached.
+#[test]
+fn below_the_aggregate_bounds_a_method_is_reported_as_it_is_alone() {
+    let written_types = "type R = record { a : nat; b : text; c : bool };
+type O = record { o : opt nat; p : opt nat };
+type X = record { x : nat };\n";
+    let live_types = "type R = record { a : nat; b : text; c : bool };
+type O = record { o : opt text; p : opt nat };
+type X = record { x : text };\n";
+    let methods = [
+        ("f", "f : () -> (R);", "f : () -> (R);"),
+        ("g", "g : () -> (O);", "g : () -> (O);"),
+        ("h", "h : (nat) -> (R) query;", "h : (nat) -> (R);"),
+        ("k", "k : () -> (X);", "k : () -> (X);"),
+    ];
+    let service =
+        |types: &str, list: &[&str]| format!("{types}service : {{ {} }}\n", list.join(" "));
+    let written = service(written_types, &methods.map(|method| method.1));
+    let live = service(live_types, &methods.map(|method| method.2));
+    let run = |options: CheckOptions| check_with(&written, &live, options);
+    let steps = |total_step_limit: usize| CheckOptions {
+        total_step_limit,
+        ..CheckOptions::default()
+    };
+    // Each method alone, against the full live service.
+    let alone: Vec<Value> = methods
+        .iter()
+        .flat_map(|(_, method, _)| {
+            check(&service(written_types, &[method]), &live)["diagnostics"]
+                .as_array()
+                .unwrap()
+                .clone()
+        })
+        .collect();
+    assert_eq!(
+        summary(&json!({ "diagnostics": alone })),
+        [
+            (
+                "special_opt_rule".to_string(),
+                "g".to_string(),
+                Some("$results[0].o".to_string())
+            ),
+            ("mode_changed".to_string(), "h".to_string(), None),
+            (
+                "method_incompatible".to_string(),
+                "k".to_string(),
+                Some("$results[0].x".to_string())
+            ),
+        ]
+    );
+    assert_eq!(run(CheckOptions::default())["diagnostics"], json!(alone));
+
+    // The work bound: the fewest steps the whole check needs.
+    let needed = (1..1000)
+        .find(|limit| {
+            run(steps(*limit))["diagnostics"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|item| item["resource_limit"]["resource"] != "check_total_steps")
+        })
+        .unwrap();
+    assert_eq!(run(steps(needed))["diagnostics"], json!(alone));
+    let response = run(steps(needed - 1));
+    assert_eq!(
+        response["diagnostics"].as_array().unwrap().last().unwrap(),
+        &stopped("k", "check_total_steps", needed - 1, needed)
+    );
+
+    // The warning bound: `g` reports the one warning.
+    let warnings = |total_warning_limit: usize| CheckOptions {
+        total_warning_limit,
+        ..CheckOptions::default()
+    };
+    assert_eq!(run(warnings(1))["diagnostics"], json!(alone));
+    assert_eq!(
+        run(warnings(0))["diagnostics"],
+        json!(["g", "h", "k"]
+            .iter()
+            .map(|method| stopped(method, "check_total_warnings", 0, 1))
+            .collect::<Vec<_>>())
+    );
+
+    // The output bound: the text of every diagnostic.
+    let text: usize = alone
+        .iter()
+        .flat_map(|item| {
+            ["method", "path", "message"].map(|key| item[key].as_str().map_or(0, str::len))
+        })
+        .sum();
+    let output = |output_byte_limit: usize| CheckOptions {
+        output_byte_limit,
+        ..CheckOptions::default()
+    };
+    assert_eq!(run(output(text))["diagnostics"], json!(alone));
+    let response = run(output(text - 1));
+    assert_eq!(
+        response["diagnostics"].as_array().unwrap().last().unwrap(),
+        &stopped("k", "check_output_bytes", text - 1, text)
+    );
+
+    // The warning bound: each of ten methods sharing Codex's graph reports
+    // what it reports alone.
+    let together = check(&shared_doubling("nat", 10), &shared_doubling("text", 10));
+    let one = check(&shared_doubling("nat", 1), &shared_doubling("text", 10));
+    let items = together["diagnostics"].as_array().unwrap();
+    for index in 0..10 {
+        let name = format!("m{index:05}");
+        let mine: Vec<Value> = items
+            .iter()
+            .filter(|item| item["method"] == json!(name))
+            .map(|item| {
+                let mut item = item.clone();
+                item["method"] = json!("m00000");
+                item
+            })
+            .collect();
+        assert_eq!(json!(mine), one["diagnostics"], "{name}");
+    }
+}
+
 /// Hold one case's response to a walk that walks every pair again instead
 /// of re-reporting a proven pair's warnings: `Some(whether it warned)`, or
 /// `None` when that walk, exponential in general, did not finish within its
@@ -792,7 +1241,10 @@ service : { f : () -> (R); g : () -> (R) }";
 fn assert_equals_the_rewalking_walk(id: &str, written: &str, live: &str) -> Option<bool> {
     let reference = CheckOptions {
         step_limit: 2_000_000,
+        // Bounded per method only, as it was before the aggregate bound.
+        total_step_limit: usize::MAX,
         memo: false,
+        ..CheckOptions::default()
     };
     let request =
         json!({ "written": { "source": written }, "live": { "source": live } }).to_string();

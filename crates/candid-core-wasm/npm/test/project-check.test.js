@@ -35,7 +35,13 @@ const GOLDEN = readFileSync(
 );
 
 function cli(args, cwd) {
-  return spawnSync(process.execPath, [CLI, ...args], { encoding: "utf8", cwd });
+  // A check at its warning bound prints about 1.5 MB on stderr, past the
+  // default 1 MiB buffer.
+  return spawnSync(process.execPath, [CLI, ...args], {
+    encoding: "utf8",
+    cwd,
+    maxBuffer: 16 * 1024 * 1024,
+  });
 }
 
 /** A scratch directory holding `live/ledger.did` and an empty `app/`. */
@@ -426,6 +432,41 @@ test("past the warning bound the first 1,000 are reported and the check still ex
     /^warning: get: resource_limit_exceeded: this method has more special_opt_rule warnings than its check_warnings bound of 1000; /m,
   );
   assert.match(result.stdout, /^compatible: 0 error\(s\), 1001 warning\(s\)$/m);
+});
+
+test("past the whole check's warning bound the methods left fail closed and the check exits 1", async () => {
+  // A 10-level shared graph reused by many methods: each reports its first
+  // 1,000 warnings, and ten of them reach the check's bound of 10,000.
+  const doubling = (content, methods) => {
+    let source = `type D0 = opt ${content};\n`;
+    for (let level = 1; level <= 10; level += 1) {
+      source += `type D${level} = record { l : D${level - 1}; r : D${level - 1} };\n`;
+    }
+    const list = [];
+    for (let index = 0; index < methods; index += 1) {
+      list.push(`m${String(index).padStart(5, "0")} : () -> (D10);`);
+    }
+    return `${source}service : { ${list.join(" ")} }\n`;
+  };
+  const result = checkPair(doubling("nat", 11), doubling("text", 11));
+  assert.equal(result.status, 1);
+  assert.match(
+    result.stderr,
+    /^error: m00010: resource_limit_exceeded: the check of the whole service reached its check_total_warnings bound of 10000; this method fails closed, and nothing else is reported for it$/m,
+  );
+  assert.match(result.stdout, /^incompatible: 1 error\(s\), 10010 warning\(s\)$/m);
+
+  // Through the library, a hundred such methods: the response stays near
+  // the ten methods' warnings, one fail-closed diagnostic per method after.
+  const report = await checkCompatible(doubling("nat", 100), doubling("text", 100));
+  assert.equal(report.compatible, false);
+  assert.equal(report.diagnostics.length, 10 * 1001 + 90);
+  assert.ok(JSON.stringify(report).length < 3_000_000);
+  assert.deepEqual(report.diagnostics.at(-1).resource_limit, {
+    resource: "check_total_warnings",
+    limit: 10000,
+    observed: 11000,
+  });
 });
 
 test("check reports which side failed to compile, and a missing file", () => {
