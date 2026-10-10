@@ -287,7 +287,7 @@ node ./bin/cli.js gen ./service.did -o ./generated</pre>
 
 <h2>candid-core-wasm, the crate behind the CLI</h2>
 
-<p>The Rust crate that becomes that artifact. It is a thin <code>wasm-bindgen</code> shim over two things it does not implement: <code>candid-core</code>'s <code>compiler</code> surface (<code>compile_with_resolver</code> plus <code>MemoryResolver</code>, so no filesystem is ever touched from the WebAssembly side) and the <code>candid-core-ts</code> generator. It exposes two functions, both string in and string out:</p>
+<p>The Rust crate that becomes that artifact. It is a <code>wasm-bindgen</code> shim over <code>candid-core</code>'s <code>compiler</code> surface (<code>compile_with_resolver</code> plus <code>MemoryResolver</code>, so no filesystem is ever touched from the WebAssembly side) and the <code>candid-core-ts</code> generator, and it carries two pieces of its own: the projection printer behind <code>projectDid</code> (<code>src/project.rs</code>), which reprints the requested methods and what they reach from the Candid syntax, and the service compatibility check behind <code>checkCompatible</code> (<code>src/compat.rs</code>), which evaluates Candid subtyping on the two compiled Contracts. It exposes four functions, each string in and string out; their request and response documents are on <a href="cli-npm.html#in-a-browser">@candid-core/cli</a>:</p>
 
 <pre data-lang="rust" data-file="crates/candid-core-wasm/src/lib.rs">
 #[wasm_bindgen(js_name = didToContract)]
@@ -295,12 +295,18 @@ pub fn did_to_contract(request: &str) -> String
 
 #[wasm_bindgen(js_name = didToModule)]
 pub fn did_to_module(request: &str) -> String
+
+#[wasm_bindgen(js_name = projectDid)]
+pub fn project_did(request: &str) -> String
+
+#[wasm_bindgen(js_name = checkCompatible)]
+pub fn check_compatible(request: &str) -> String
 </pre>
 
 <ul>
   <li><strong>Manifest:</strong> <code>crates/candid-core-wasm/Cargo.toml</code>. Version <code>0.1.0</code>, <code>publish = false</code>, Apache-2.0, <code>crate-type = ["cdylib", "rlib"]</code>.</li>
   <li><strong>Its own workspace root.</strong> The manifest carries a bare <code>[workspace]</code> table and a tracked <code>Cargo.lock</code> of its own, and the root manifest names it in <code>exclude = ["fuzz", "crates/candid-core-wasm"]</code>. That is the point: <code>wasm-bindgen</code> never enters the main workspace's resolved graph or its feature unification, and <code>cargo metadata</code> over the published crate never sees it.</li>
-  <li><strong>Dependencies:</strong> <code>candid-core</code> and <code>candid-core-ts</code> by path, <code>serde_json =1.0.150</code>, and <code>wasm-bindgen =0.2.108</code> only under <code>cfg(target_arch = "wasm32")</code>.</li>
+  <li><strong>Dependencies:</strong> <code>candid-core</code> and <code>candid-core-ts</code> by path, <code>serde_json =1.0.150</code>, <code>candid_parser =0.4.0</code> (the version <code>candid-core</code> itself pins; the projection uses it only to parse and merge the sources), and <code>wasm-bindgen =0.2.108</code> only under <code>cfg(target_arch = "wasm32")</code>. One dev-dependency, <code>candid =0.10.30</code>, also the version <code>candid-core</code> pins: the compatibility check's differential tests compare its verdicts with upstream's subtype check.</li>
 </ul>
 
 <p>You do not depend on this crate; you build it. <code>wasm-opt</code> is switched off in the manifest on purpose, so the emitted bytes are a function of the pinned <code>rustc</code> and <code>wasm-bindgen</code> alone with no binaryen download in the build path.</p>

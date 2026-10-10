@@ -51,8 +51,10 @@
 //!   `method` and, inside a type, its `path`. A side that does not compile,
 //!   or declares no service, fails with `{"ok": false, "input": "written" |
 //!   "live", "diagnostics": […]}`.
-//! - failure, any function: `{"ok": false, "diagnostics": […]}` (plus
-//!   `input` from [`check_compatible`]) — the one and only failure shape.
+//! - failure, any function: `{"ok": false, "diagnostics": […]}` — the one
+//!   and only failure shape, plus `input` from [`check_compatible`] when one
+//!   side does not compile or declares no service (a malformed request
+//!   carries none).
 //!   Compiler diagnostics pass through verbatim; envelope-validation
 //!   refusals surface as their path-addressed violation items under the
 //!   same key (the native binary's channel, aligned in review); and the

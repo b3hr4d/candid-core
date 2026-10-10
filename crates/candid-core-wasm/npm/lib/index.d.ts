@@ -290,7 +290,10 @@ export interface CompatibilityReport {
   diagnostics: CompatibilityDiagnostic[];
 }
 
-/** A check that could not run: `input` names the side that failed. */
+/**
+ * A check that could not run. `input` names the side that failed when one
+ * side does not compile or declares no service; a malformed request has none.
+ */
 export interface CheckFailure extends Failure {
   input?: "written" | "live";
 }

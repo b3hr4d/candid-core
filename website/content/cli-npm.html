@@ -313,8 +313,10 @@ wrote generated/basic.envelope.json
 <p>
   Five exports, and the whole surface: <code>didToContract</code>, <code>didToModule</code> and
   <code>init</code> here, and <code>projectDid</code> and <code>checkCompatible</code> under
-  <a href="#projection-and-compatibility">Projection and compatibility</a>. Each operation takes one
-  JSON-serializable request and returns one parsed JSON document; nothing is thrown for a data error.
+  <a href="#projection-and-compatibility">Projection and compatibility</a>.
+  <code>didToContract</code> and <code>didToModule</code> each take one JSON-serializable request;
+  <code>projectDid</code> and <code>checkCompatible</code> take two arguments, described in that section.
+  Every operation returns one parsed JSON document, and nothing is thrown for a data error.
 </p>
 
 <div class="api-entry">
@@ -566,9 +568,10 @@ const built = schemaFromContract(envelope);
   <code>{ ok: true, did, methods, input, projection }</code> from <code>projectDid</code>, where
   <code>input</code> and <code>projection</code> each hold a <code>contract_id</code> and an
   <code>interface_id</code>; and <code>{ ok: true, compatible, written, live, diagnostics }</code>
-  from <code>checkCompatible</code>. Every failure is <code>{ ok: false, diagnostics }</code>, and a
-  <code>checkCompatible</code> failure adds <code>input</code>, naming the side,
-  <code>"written"</code> or <code>"live"</code>, that did not compile.
+  from <code>checkCompatible</code>. Every failure is <code>{ ok: false, diagnostics }</code>. A
+  <code>checkCompatible</code> failure caused by one side adds <code>input</code>, naming that side,
+  <code>"written"</code> or <code>"live"</code>, when it does not compile or declares no service; a
+  malformed request carries no <code>input</code>.
 </p>
 
 <h2>Building it from a clone</h2>

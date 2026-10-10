@@ -31,11 +31,11 @@ commit, as every entry does.
   tuple with a documented element is written one element per line) and
   argument names, so `gen` on the projection emits the same declarations,
   docs and modes as on the full interface, with an `Actor` that lists only
-  the projected methods. A
-  service class's init arguments are dropped. An unknown method name fails
-  with `unknown_method` (its `notes` list the service's methods), an empty
-  list (`--methods ""`) with `empty_method_list`, a source with no service
-  with `no_service`; each exits 1 and writes nothing. Methods are written in
+  the projected methods. A service class's init arguments are dropped. An
+  unknown method name fails with `unknown_method` (its `notes` list the
+  service's methods), an empty list (`--methods ""`) with
+  `empty_method_list`, a source with no service with `no_service`; each
+  exits 1 and writes nothing. Methods are written in
   name order. `-o` is required, and may not be, or become, a source of the
   input (the entry or any `.did` beneath its directory, which `project` reads
   as `gen` does): naming one of those files by any path, symlink or hard
