@@ -42,8 +42,19 @@
 //!   "input": {…}, "projection": {…}}`: the projected text, the methods it
 //!   holds in name order, and the `{"contract_id", "interface_id"}` of the
 //!   input and of the projection. Its own failure codes are
-//!   `unknown_method`, `empty_method_list`, `no_service` and the never
-//!   expected `projection_failed`.
+//!   `unknown_method` (one per distinct name the service lacks, in the order
+//!   the request first names it, whose message names it; the first
+//!   diagnostic of the failure lists the service's methods, sorted, in its
+//!   `notes`, once), `empty_method_list`, `no_service`,
+//!   `resource_limit_exceeded` and the never expected `projection_failed`.
+//!   `resource_limit_exceeded` names one of two bounds in its
+//!   `resource_limit`: `projection_bytes`, when the projection's text would
+//!   pass the compiler's bound on one source (1 MiB), which it must stay
+//!   within to be compiled again (`observed` is where printing stopped); and
+//!   `projection_diagnostic_bytes`, when the `unknown_method` messages would
+//!   pass [`MAX_PROJECTION_DIAGNOSTIC_BYTES`] of text: the unknown name at
+//!   which they would, and every one after it, are counted in that one
+//!   diagnostic instead of reported.
 //! - [`check_compatible`] takes `{"written": <sources request>, "live":
 //!   <sources request>}` and returns `{"ok": true, "compatible": …,
 //!   "written": {…}, "live": {…}, "diagnostics": […]}`: the verdict, both
@@ -88,9 +99,12 @@ pub use compat::{
     MAX_CHECK_DEPTH, MAX_CHECK_OUTPUT_BYTES, MAX_CHECK_STEPS, MAX_CHECK_TOTAL_STEPS,
     MAX_CHECK_TOTAL_WARNINGS, MAX_CHECK_WARNINGS,
 };
+pub use project::MAX_PROJECTION_DIAGNOSTIC_BYTES;
 
 #[doc(hidden)]
 pub use compat::CheckOptions;
+#[doc(hidden)]
+pub use project::{ProjectionOptions, ProjectionWork};
 
 /// The envelope extension carrying field names, per the issue #152 decision.
 pub const FIELD_NAMES_EXTENSION: &str = "org.candid-core.field-names/v1";
@@ -156,13 +170,34 @@ fn compile(entry: &str, resolver: &MemoryResolver) -> Result<Compilation, Compil
 /// "methods": […], "input": {…}, "projection": {…}}` or `{"ok": false,
 /// "diagnostics": […]}`. The request is a sources request plus `"methods":
 /// ["name", …]`.
+///
+/// The projection's text is bounded by the compiler's bound on one source,
+/// since it is compiled again, and the text of the unknown-method
+/// diagnostics by [`MAX_PROJECTION_DIAGNOSTIC_BYTES`]; every lookup by name
+/// is a binary search in names sorted once.
 pub fn project_did(request: &str) -> String {
-    match project_request(request) {
-        Ok(response) | Err(response) => response,
-    }
+    project_did_with(request, ProjectionOptions::default()).0
 }
 
-fn project_request(request: &str) -> Result<String, String> {
+/// [`project_did`] under other options, with what its lookups by name cost:
+/// this crate's tests lower the bounds and pin the cost.
+#[doc(hidden)]
+pub fn project_did_with(request: &str, options: ProjectionOptions) -> (String, ProjectionWork) {
+    let mut work = ProjectionWork::default();
+    let response = match project_request(request, options, &mut work) {
+        Ok(response) | Err(response) => response,
+    };
+    (response, work)
+}
+
+/// The start of an `unknown_method` message, which then quotes the name.
+const UNKNOWN_METHOD: &str = "the service has no method ";
+
+fn project_request(
+    request: &str,
+    options: ProjectionOptions,
+    work: &mut ProjectionWork,
+) -> Result<String, String> {
     let document = request_object(request)?;
     let requested: Vec<&str> = match document.get("methods") {
         Some(Value::Array(items)) => items
@@ -195,36 +230,92 @@ fn project_request(request: &str) -> Result<String, String> {
             "name at least one method to project".to_string(),
         )]));
     }
-    let mut available: Vec<&str> = service.iter().map(|(name, _)| name.as_str()).collect();
-    available.sort_unstable();
-    let mut unknown = Vec::new();
+    // The service's methods, sorted once: each requested name is then a
+    // binary search, not a scan of the service.
+    let available = project::Index::new(service.iter().map(|(name, _)| (name.as_str(), ())));
     let mut seen = BTreeSet::new();
+    let mut unknown = Vec::new();
+    // The text of the `unknown_method` messages, measured only up to the
+    // first that passes its bound; past it, unknown names are only counted.
+    let mut meter = compat::Meter {
+        counted: 0,
+        limit: options.diagnostic_byte_limit,
+    };
+    let mut unreported = 0usize;
+    let mut observed = 0usize;
     for name in &requested {
-        if !seen.insert(*name) {
+        if !seen.insert(*name) || available.get(name, work).is_some() {
             continue;
         }
-        if !available.contains(name) {
+        if !meter.over() {
+            // At least this long: quoting never shortens a name, nor JSON a
+            // string. A name past what is left of the bound is not quoted.
+            let raw = UNKNOWN_METHOD.len() + name.len() + 2;
+            let mut message = None;
+            meter.count(raw, || {
+                let text = format!("{UNKNOWN_METHOD}{name:?}");
+                let length = compat::json_len(&text);
+                message = Some(text);
+                length
+            });
+            if let (false, Some(message)) = (meter.over(), message) {
+                unknown.push(phase_diagnostic("unknown_method", "project", message));
+                continue;
+            }
+            observed = meter.counted;
+        }
+        unreported += 1;
+    }
+    if !unknown.is_empty() || unreported > 0 {
+        if unreported > 0 {
+            let limit = options.diagnostic_byte_limit;
             let mut item = phase_diagnostic(
-                "unknown_method",
+                "resource_limit_exceeded",
                 "project",
                 format!(
-                    "the service has no method {name:?}; its methods are: {}",
-                    available.join(", ")
+                    "the unknown-method diagnostics reached their projection_diagnostic_bytes bound of {limit}, so {unreported} unknown method name(s) are not reported",
                 ),
             );
-            item["notes"] = json!(available);
+            item["resource_limit"] = json!({
+                "resource": "projection_diagnostic_bytes",
+                "limit": limit,
+                "observed": observed,
+            });
             unknown.push(item);
         }
-    }
-    if !unknown.is_empty() {
+        // The service's methods, once, sorted: in the first diagnostic.
+        unknown[0]["notes"] = json!(available.names().collect::<Vec<_>>());
         return Err(failure(unknown));
     }
     let wanted: BTreeSet<String> = seen.into_iter().map(str::to_string).collect();
     let source_info = compilation
         .source_info()
         .expect("source info was requested");
-    let (text, methods) = project::project(source_info, &entry, &wanted)
-        .map_err(|project::Internal(message)| projection_failed(message, Vec::new()))?;
+    let (text, methods) = project::project(
+        source_info,
+        &entry,
+        &wanted,
+        options.text_byte_limit,
+        work,
+    )
+    .map_err(|refusal| match refusal {
+        project::Refusal::TooLong { limit, observed } => {
+            let mut item = phase_diagnostic(
+                "resource_limit_exceeded",
+                "project",
+                format!(
+                    "the projection would take more than {limit} bytes, the compiler's bound on one source, so it could not be compiled again; printing stopped at {observed} bytes",
+                ),
+            );
+            item["resource_limit"] = json!({
+                "resource": "projection_bytes",
+                "limit": limit,
+                "observed": observed,
+            });
+            failure(vec![item])
+        }
+        project::Refusal::Internal(message) => projection_failed(message, Vec::new()),
+    })?;
     // The output is only as good as a second compile says it is: it must be
     // a valid self-contained `.did` whose service has exactly these methods.
     let projected = compile_did_with_options(

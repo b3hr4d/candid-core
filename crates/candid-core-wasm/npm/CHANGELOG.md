@@ -32,17 +32,26 @@ commit, as every entry does.
   argument names, so `gen` on the projection emits the same declarations,
   docs and modes as on the full interface, with an `Actor` that lists only
   the projected methods. A service class's init arguments are dropped. An
-  unknown method name fails with `unknown_method` (its `notes` list the
-  service's methods), an empty list (`--methods ""`) with
-  `empty_method_list`, a source with no service with `no_service`; each
-  exits 1 and writes nothing. Methods are written in
-  name order. `-o` is required, and may not be, or become, a source of the
+  unknown method name fails with `unknown_method`, one per distinct name,
+  the first listing the service's methods in its `notes`, once; an empty
+  list (`--methods ""`) with `empty_method_list`, a source with no service
+  with `no_service`; each exits 1 and writes nothing. The unknown names'
+  messages are bounded at 4 MiB of text in all, the names past that bound
+  counted in one `resource_limit_exceeded` diagnostic
+  (`projection_diagnostic_bytes`) instead of reported. A projection is at
+  most 1 MiB, the compiler's bound on one source, since it is compiled
+  again: a larger one fails with `resource_limit_exceeded`
+  (`projection_bytes`), exit 1, as soon as writing it reaches that bound.
+  Every name, requested or reached, is found by binary search among names
+  sorted once. Methods are written in name order, a service import's among
+  the entry's. `-o` is required, and may not be, or become, a source of the
   input (the entry or any `.did` beneath its directory, which `project` reads
   as `gen` does): naming one of those files by any path, symlink or hard
   link, or a new `.did` beneath that directory, fails with
   `output_is_input`, exit 1, and writes nothing. An output that cannot be
   read or written fails with `output_write_failed` (its `notes` hold the
-  system error code), exit 1. `--json` prints one document instead of the
+  system error code), exit 1; an existing output of another size is
+  replaced without being read. `--json` prints one document instead of the
   report, and `{ ok: false, diagnostics }` for every failure.
 - **`candid-core-cli check <written.did> --against <live.did>`** exits 0
   when the live interface is still a Candid subtype of the written one, and

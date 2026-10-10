@@ -1239,7 +1239,7 @@ fn rendered_len(path: &[Segment<'_>]) -> usize {
 /// The bytes `text` takes inside a JSON string, quotes aside: what
 /// `serde_json` writes for it, where `"`, `\` and the control characters
 /// are escaped (`\n` and the like in two bytes, the rest as `\u00XX`).
-fn json_len(text: &str) -> usize {
+pub(crate) fn json_len(text: &str) -> usize {
     text.bytes()
         .map(|byte| match byte {
             b'"' | b'\\' | b'\n' | b'\r' | b'\t' | 0x08 | 0x0c => 2,
@@ -1285,20 +1285,21 @@ fn render_parts<'a>(path: &[Segment<'a>], mut each: impl FnMut(Part<'a>) -> Cont
 /// bound. So measuring a string costs time linear in what it adds to the
 /// count, and nothing is measured past the bound: however long the names
 /// are, and however many reports and segments a method has, measuring
-/// costs at most the bound's bytes plus one string's.
-struct Meter {
-    counted: usize,
-    limit: usize,
+/// costs at most the bound's bytes plus one string's. The projection's
+/// unknown-method messages are measured the same way.
+pub(crate) struct Meter {
+    pub(crate) counted: usize,
+    pub(crate) limit: usize,
 }
 
 impl Meter {
-    fn over(&self) -> bool {
+    pub(crate) fn over(&self) -> bool {
         self.counted > self.limit
     }
 
     /// Count a string of `raw` bytes whose written length, at least `raw`,
     /// `exact` computes in time linear in `raw`.
-    fn count(&mut self, raw: usize, exact: impl FnOnce() -> usize) {
+    pub(crate) fn count(&mut self, raw: usize, exact: impl FnOnce() -> usize) {
         if self.over() {
             return;
         }

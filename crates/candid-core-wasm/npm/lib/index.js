@@ -81,8 +81,13 @@ export async function didToModule(sources) {
  * Returns `{ ok: true, did, methods, input, projection }` — the text, the
  * methods it holds in name order, and the identities of the input and of
  * the projection — or `{ ok: false, diagnostics }`: `unknown_method` (one
- * per name the service lacks, its `notes` listing the service's methods),
- * `empty_method_list`, `no_service`, or the compiler's diagnostics.
+ * per distinct name the service lacks; the failure's first diagnostic lists
+ * the service's methods in its `notes`, once), `empty_method_list`,
+ * `no_service`, `resource_limit_exceeded` (`projection_bytes`: the
+ * projection would pass the compiler's 1 MiB bound on one source;
+ * `projection_diagnostic_bytes`: the unknown names' messages would pass
+ * 4 MiB, and the names left are counted, not reported), or the compiler's
+ * diagnostics.
  */
 export async function projectDid(sources, methods) {
   await init();

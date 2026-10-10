@@ -243,10 +243,20 @@ methods, each with its mode. The output is deterministic: the same input and
 the same set of names give the same bytes, whatever order you name them in.
 Declaration names, doc comments and argument names are kept; a service
 class's init arguments are not, since a client never sends them. Methods are
-written in name order. An unknown
-method name, or an empty list (`--methods ""`), fails with exit 1 and a
-diagnostic (`unknown_method`, whose `notes` list the service's methods, or
-`empty_method_list`), and writes nothing. `-o` is required, and may not be,
+written in name order, a service import's among the entry's. An unknown
+method name, or an empty list (`--methods ""`), fails with exit 1 and writes
+nothing: each distinct unknown name gets one `unknown_method` diagnostic
+naming it, and the first diagnostic lists the service's methods in its
+`notes`, once; an empty list gets `empty_method_list`. The unknown names'
+messages are bounded at 4 MiB of text in all, as the JSON writes them: the
+name at which they would pass it, and every one after it, are counted in one
+`resource_limit_exceeded` diagnostic (`projection_diagnostic_bytes`) instead
+of reported. A projection must compile again, so it is at most 1 MiB, the
+compiler's bound on one source: one that would be larger fails with exit 1
+and `resource_limit_exceeded` (`projection_bytes`, whose `observed` is where
+writing stopped) and writes nothing. Each name, requested or reached, is
+looked up by binary search among names sorted once, so no lookup scans the
+service or the declarations. `-o` is required, and may not be,
 or become, a source of the input: `project` reads the input as `gen` does (the
 file and every `.did` beneath its directory), so an `-o` that names one of
 those files by any path, symlink or hard link, or a new `.did` anywhere beneath
@@ -257,7 +267,8 @@ output that cannot be read or written (a directory, a read-only parent, a full
 disk) fails with exit 1 and `output_write_failed`, whose `notes` hold the
 system error code, such as `EISDIR` or `EACCES`; without `--json` it is one
 `cannot write …` line on stderr, as a source that cannot be read is
-`cannot read …`. The file is written only when it changes; `--json` prints
+`cannot read …`. The file is written only when it changes, and an existing
+file of another size is replaced without being read; `--json` prints
 `{ ok, output, status, methods, input, projection }` instead of the report,
 and `{ ok: false, diagnostics }` for any failure.
 

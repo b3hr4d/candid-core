@@ -134,14 +134,20 @@ test("a service class with no declarations projects to its service", async () =>
 test("an unknown method and an empty list each fail with a diagnostic", () => {
   const root = scratch();
   const unknown = cli(
-    ["project", "live/ledger.did", "--methods", "balance_of,nope", "-o", "app/x.did"],
+    ["project", "live/ledger.did", "--methods", "balance_of,nope,also_nope", "-o", "app/x.did"],
     root,
   );
   assert.equal(unknown.status, 1);
   const failure = JSON.parse(unknown.stdout);
   assert.equal(failure.ok, false);
-  assert.equal(failure.diagnostics.length, 1);
-  assert.equal(failure.diagnostics[0].code, "unknown_method");
+  assert.deepEqual(
+    failure.diagnostics.map((item) => [item.code, item.message]),
+    [
+      ["unknown_method", 'the service has no method "nope"'],
+      ["unknown_method", 'the service has no method "also_nope"'],
+    ],
+  );
+  // The service's methods are listed once, in the first.
   assert.deepEqual(failure.diagnostics[0].notes, [
     "balance_of",
     "decimals",
@@ -152,13 +158,92 @@ test("an unknown method and an empty list each fail with a diagnostic", () => {
     "total_supply",
     "transfer",
   ]);
-  assert.match(failure.diagnostics[0].message, /"nope".*balance_of, decimals, fee/);
+  assert.equal(failure.diagnostics[1].notes, undefined);
   assert.equal(existsSync(path.join(root, "app", "x.did")), false, "nothing is written");
 
   const empty = cli(["project", "live/ledger.did", "--methods", "", "-o", "app/x.did"], root);
   assert.equal(empty.status, 1);
   assert.equal(JSON.parse(empty.stdout).diagnostics[0].code, "empty_method_list");
   assert.equal(existsSync(path.join(root, "app", "x.did")), false);
+});
+
+test("an unknown-method failure lists the service's methods once, and its text is bounded", async () => {
+  // 3,000 methods and 3,000 unknown names: each diagnostic used to list
+  // every method twice, which made this 75 KB request a 253 MB response.
+  let source = "service:{";
+  for (let index = 0; index < 3000; index += 1) {
+    source += `m${String(index).padStart(6, "0")}:()->();`;
+  }
+  source += "}\n";
+  const unknown = Array.from({ length: 3000 }, (_, index) => `x${String(index).padStart(6, "0")}`);
+  const failure = await projectDid(source, unknown);
+  assert.equal(failure.ok, false);
+  assert.equal(failure.diagnostics.length, 3000);
+  assert.ok(failure.diagnostics.every((item) => item.code === "unknown_method"));
+  assert.equal(failure.diagnostics[0].notes.length, 3000);
+  assert.ok(failure.diagnostics.slice(1).every((item) => item.notes === undefined));
+  assert.equal(JSON.stringify(failure, null, 2).length, 522_065);
+
+  // 5,000 unknown names of 1,000 bytes: past 4 MiB of messages the rest are
+  // counted, not reported.
+  const long = Array.from({ length: 5000 }, (_, index) => String(index).padStart(1000, "0"));
+  const bounded = await projectDid(LEDGER, long);
+  assert.equal(bounded.diagnostics.length, 4073);
+  const last = bounded.diagnostics[4072];
+  assert.equal(last.code, "resource_limit_exceeded");
+  assert.deepEqual(last.resource_limit, {
+    resource: "projection_diagnostic_bytes",
+    limit: 4_194_304,
+    observed: 4072 * 1030 + 1028,
+  });
+  assert.match(last.message, /, so 928 unknown method name\(s\) are not reported$/);
+});
+
+test("a projection past the compiler's source bound fails with projection_bytes and writes nothing", () => {
+  // 200 nested records, the innermost with 50 fields of 100 doc lines each:
+  // an 18.6 KB source whose projection would print 2.1 MB behind its
+  // indentation, past the 1 MiB a source may hold.
+  let source = "type R = ";
+  source += "record { a : ".repeat(200);
+  source += "record {\n";
+  for (let index = 0; index < 50; index += 1) {
+    source += "//\n".repeat(100) + `x${index} : nat;\n`;
+  }
+  source += "}" + " }".repeat(200) + ";\nservice : { get : () -> (R) query }\n";
+  const root = scratch();
+  writeFileSync(path.join(root, "live", "deep.did"), source);
+  const run = cli(["project", "live/deep.did", "--methods", "get", "-o", "app/deep.did", "--json"], root);
+  assert.equal(run.status, 1, run.stderr);
+  const failure = JSON.parse(run.stdout);
+  assert.equal(failure.diagnostics.length, 1);
+  const [item] = failure.diagnostics;
+  assert.equal(item.code, "resource_limit_exceeded");
+  assert.equal(item.resource_limit.resource, "projection_bytes");
+  assert.equal(item.resource_limit.limit, 1_048_576);
+  assert.ok(item.resource_limit.observed > 1_048_576);
+  assert.ok(item.resource_limit.observed <= 1_048_576 + 402, `${item.resource_limit.observed}`);
+  assert.equal(existsSync(path.join(root, "app", "deep.did")), false);
+});
+
+test("project does not read an existing output of another size before replacing it", () => {
+  // A write-only file cannot be read, so reading it before comparing would
+  // fail with EACCES; a file of another size is replaced unread. Root reads
+  // it anyway, so the case is only meaningful for any other user.
+  if (process.getuid?.() === 0) {
+    return;
+  }
+  const root = scratch();
+  const output = path.join(root, "app", "locked.did");
+  writeFileSync(output, "x".repeat(10));
+  chmodSync(output, 0o200);
+  try {
+    const run = cli(["project", "live/ledger.did", "--methods", "fee", "-o", "app/locked.did"], root);
+    assert.equal(run.status, 0, `${run.stdout}${run.stderr}`);
+    assert.match(run.stdout, /^wrote app\/locked\.did$/m);
+  } finally {
+    chmodSync(output, 0o644);
+  }
+  assert.ok(readFileSync(output, "utf8").includes("fee : () -> (Tokens) query;"));
 });
 
 /** A scratch directory holding a two-file bundle: `live/main.did` imports `types.did`. */
@@ -539,6 +624,19 @@ test("the library: projectDid and checkCompatible, data in and data out", async 
   const unknown = await projectDid(LEDGER, ["nope"]);
   assert.equal(unknown.ok, false);
   assert.equal(unknown.diagnostics[0].code, "unknown_method");
+
+  // A service import's methods come out among the entry's in name order.
+  const imported = await projectDid(
+    {
+      entry: "main.did",
+      files: {
+        "main.did": 'import service "other.did";\nservice : { zeta : () -> (); mid : () -> () }',
+        "other.did": "service : { alpha : () -> (); omega : () -> () }",
+      },
+    },
+    ["omega", "zeta", "alpha", "mid"],
+  );
+  assert.deepEqual(imported.methods, ["alpha", "mid", "omega", "zeta"]);
 
   const invalid = await checkCompatible({ source: "service : {}", methods: [] }, LEDGER);
   assert.equal(invalid.ok, false);

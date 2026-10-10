@@ -4,7 +4,10 @@
 
 use std::path::PathBuf;
 
-use candid_core_wasm::{did_to_contract, did_to_module, project_did};
+use candid_core_wasm::{
+    did_to_contract, did_to_module, project_did, project_did_with, ProjectionOptions,
+    ProjectionWork, MAX_PROJECTION_DIAGNOSTIC_BYTES,
+};
 use candid_parser::syntax::{Binding, IDLProg, IDLType};
 use serde_json::{json, Value};
 
@@ -442,13 +445,16 @@ fn unknown_and_empty_method_lists_fail_with_diagnostics() {
         assert_eq!(item["phase"], json!("project"));
         assert_eq!(item["severity"], json!("error"));
         assert_eq!(
-            item["notes"], available,
-            "the diagnostic lists the service's methods"
+            item["message"],
+            json!(format!("the service has no method {name:?}"))
         );
-        let message = item["message"].as_str().unwrap();
-        assert!(message.contains(&format!("{name:?}")), "{message}");
-        assert!(message.contains("balance_of, decimals, fee"), "{message}");
     }
+    // The service's methods are listed once, sorted, in the first.
+    assert_eq!(
+        items[0]["notes"], available,
+        "the first diagnostic lists the service's methods"
+    );
+    assert!(items[1].get("notes").is_none(), "{response}");
 
     let response = project(json!(source), &[]);
     assert_eq!(response["ok"], json!(false));
@@ -675,4 +681,413 @@ fn projected_methods_are_in_name_order() {
         response["did"],
         json!("type R = record {\n  mid : bool;\n  alpha : text;\n  zeta : nat;\n};\nservice : {\n  get : () -> (R);\n}\n")
     );
+}
+
+/// A projection request: `sources` (Candid text or a bundle) and `methods`.
+fn request(sources: Value, methods: &[String]) -> String {
+    let mut request = match sources {
+        Value::String(source) => json!({ "source": source }),
+        other => other,
+    };
+    request["methods"] = json!(methods);
+    request.to_string()
+}
+
+/// The response, its length in bytes, and what its lookups by name cost.
+fn project_with(request: &str, options: ProjectionOptions) -> (Value, usize, ProjectionWork) {
+    let (response, work) = project_did_with(request, options);
+    (
+        serde_json::from_str(&response).unwrap(),
+        response.len(),
+        work,
+    )
+}
+
+/// The most names a lookup among `entries` sorted names compares: a binary
+/// search, never a scan.
+fn per_lookup(entries: usize) -> usize {
+    entries.max(1).ilog2() as usize + 2
+}
+
+/// A service of `count` methods, `m000000` on, in one line.
+fn service_of(count: usize) -> String {
+    let mut source = String::from("service:{");
+    for index in 0..count {
+        source.push_str(&format!("m{index:06}:()->();"));
+    }
+    source.push_str("}\n");
+    source
+}
+
+/// Codex round 4, finding 1: an unknown-method failure listed the service's
+/// methods in the `message` and the `notes` of every diagnostic, so this
+/// request, 3,000 methods and 3,000 unknown names in 75,037 bytes, got a
+/// 252,591,041-byte response. The methods are now listed once, in the first
+/// diagnostic's `notes`, and each message names its unknown method alone.
+#[test]
+fn an_unknown_method_failure_lists_the_services_methods_once() {
+    let unknown: Vec<String> = (0..3_000).map(|index| format!("x{index:06}")).collect();
+    let request = request(json!(service_of(3_000)), &unknown);
+    let (response, length, work) = project_with(&request, ProjectionOptions::default());
+    assert_eq!(response["ok"], json!(false));
+    let items = response["diagnostics"].as_array().unwrap();
+    assert_eq!(items.len(), 3_000);
+    for (item, name) in items.iter().zip(&unknown) {
+        assert_eq!(item["code"], json!("unknown_method"));
+        assert_eq!(
+            item["message"],
+            json!(format!("the service has no method {name:?}"))
+        );
+    }
+    let methods: Vec<String> = (0..3_000).map(|index| format!("m{index:06}")).collect();
+    assert_eq!(items[0]["notes"], json!(methods));
+    assert!(items[1..].iter().all(|item| item.get("notes").is_none()));
+    // Linear in the request: each name once in a message, each method once
+    // in the notes.
+    assert_eq!(request.len(), 75_037);
+    assert_eq!(length, 522_066);
+    // One lookup per distinct requested name, each a binary search.
+    assert_eq!(work.lookups, 3_000);
+    assert!(
+        work.compared <= work.lookups * per_lookup(3_000),
+        "{work:?}"
+    );
+}
+
+/// Codex round 4, finding 2: each requested name was looked for by a scan of
+/// the service's methods, so projecting every method of a large service was
+/// quadratic in its methods. Each distinct name is now one binary search in
+/// the methods sorted once; asked for twice, it is looked up once.
+#[test]
+fn requested_names_are_found_by_binary_search() {
+    let count = 4_000;
+    let mut names: Vec<String> = (0..count)
+        .rev()
+        .map(|index| format!("m{index:06}"))
+        .collect();
+    names.extend(names[..100].to_vec());
+    let (response, _, work) = project_with(
+        &request(json!(service_of(count)), &names),
+        ProjectionOptions::default(),
+    );
+    assert_eq!(response["ok"], json!(true), "{response}");
+    assert_eq!(response["methods"].as_array().unwrap().len(), count);
+    assert_eq!(response["did"].as_str().unwrap().len(), 88_014);
+    // The methods' types are inline: no declaration is looked up.
+    assert_eq!(work.lookups, count);
+    assert!(
+        work.compared <= work.lookups * per_lookup(count),
+        "{work:?}"
+    );
+
+    // An unknown name costs one lookup too.
+    let (response, _, work) = project_with(
+        &request(json!(service_of(count)), &["nope".to_string()]),
+        ProjectionOptions::default(),
+    );
+    assert_eq!(response["diagnostics"][0]["code"], json!("unknown_method"));
+    assert_eq!(work.lookups, 1);
+    assert!(work.compared <= per_lookup(count), "{work:?}");
+}
+
+/// Codex round 4, finding 3: reachability looked each declaration name up
+/// with `IDLMergedProg::lookup`, which scans every declaration, so a record
+/// of thousands of fields typed by separate declarations was quadratic. Each
+/// name is now looked up once, by binary search in the declarations sorted
+/// once.
+#[test]
+fn declarations_are_found_by_binary_search() {
+    let fields = 3_000;
+    let mut source = String::new();
+    for index in 0..fields {
+        source.push_str(&format!("type T{index} = nat;\n"));
+    }
+    // Declared after its field types, so a scan from the start would pass
+    // over all of them to find it.
+    source.push_str("type R = record {\n");
+    for index in 0..fields {
+        source.push_str(&format!("f{index} : T{index};\n"));
+    }
+    source.push_str(
+        "};\ntype Unused = R;\nservice : { get : () -> (R) query; put : (Unused) -> () }\n",
+    );
+    let (response, _, work) = project_with(
+        &request(json!(source), &["get".to_string()]),
+        ProjectionOptions::default(),
+    );
+    assert_eq!(response["ok"], json!(true), "{response}");
+    let text = response["did"].as_str().unwrap();
+    assert!(!text.contains("Unused"), "only what `get` reaches");
+    assert_eq!(text.matches("type ").count(), fields + 1);
+    assert_eq!(text.len(), 101_730);
+    // `get`, then `R` and each `T`: one lookup each.
+    assert_eq!(work.lookups, 1 + 1 + fields);
+    let declarations = fields + 2;
+    assert!(
+        work.compared <= per_lookup(2) + (fields + 1) * per_lookup(declarations),
+        "{work:?}"
+    );
+}
+
+/// The actor's service is resolved through the same index: each step of a
+/// chain of service names, the entry's and a service import's, is one
+/// binary search, where `IDLMergedProg::resolve_actor` and the walk to the
+/// service scanned the declarations at every step.
+#[test]
+fn the_actor_is_resolved_through_the_index() {
+    let chain = 300;
+    let declare = |prefix: &str, method: &str| {
+        let mut source = String::new();
+        for index in 0..chain {
+            if index + 1 < chain {
+                source.push_str(&format!("type {prefix}{index} = {prefix}{};\n", index + 1));
+            } else {
+                source.push_str(&format!(
+                    "type {prefix}{index} = service {{ {method} : () -> (nat) query }};\n"
+                ));
+            }
+        }
+        source
+    };
+    let bundle = json!({
+        "entry": "main.did",
+        "files": {
+            "main.did": format!("import service \"other.did\";\n{}service : E0\n", declare("E", "get")),
+            "other.did": format!("{}service : I0\n", declare("I", "put")),
+        },
+    });
+    let (response, _, work) = project_with(
+        &request(bundle, &["get".to_string(), "put".to_string()]),
+        ProjectionOptions::default(),
+    );
+    assert_eq!(response["ok"], json!(true), "{response}");
+    assert_eq!(
+        response["did"],
+        json!("service : {\n  get : () -> (nat) query;\n  put : () -> (nat) query;\n}\n")
+    );
+    // Two requested names, then each chain's steps.
+    assert_eq!(work.lookups, 2 + 2 * chain);
+    assert!(
+        work.compared <= 2 * per_lookup(2) + 2 * chain * per_lookup(2 * chain),
+        "{work:?}"
+    );
+}
+
+/// A service import's methods come out among the entry's in name order, as
+/// the docs say, not after them. Before this round the projection kept the
+/// order `IDLMergedProg::resolve_actor` gives: the entry's methods, then the
+/// import's.
+#[test]
+fn a_service_imports_methods_come_out_in_name_order() {
+    let bundle = json!({
+        "entry": "main.did",
+        "files": {
+            "main.did": "import service \"other.did\";\nservice : { zeta : () -> (); mid : () -> () }\n",
+            "other.did": "service : { alpha : () -> (); omega : () -> () }\n",
+        },
+    });
+    let response = project(bundle, &["omega", "zeta", "alpha", "mid"]);
+    assert_eq!(response["ok"], json!(true), "{response}");
+    assert_eq!(
+        response["methods"],
+        json!(["alpha", "mid", "omega", "zeta"])
+    );
+    assert_eq!(
+        response["did"],
+        json!("service : {\n  alpha : () -> ();\n  mid : () -> ();\n  omega : () -> ();\n  zeta : () -> ();\n}\n")
+    );
+}
+
+/// A source of `depth` nested records whose innermost holds `fields` fields
+/// of `docs` doc lines each: each doc line is printed behind two spaces a
+/// level, so the text printed is far longer than the source.
+fn deep_docs(depth: usize, fields: usize, docs: usize) -> String {
+    let mut source = String::from("type R = ");
+    for _ in 0..depth {
+        source.push_str("record { a : ");
+    }
+    source.push_str("record {\n");
+    for index in 0..fields {
+        for _ in 0..docs {
+            source.push_str("//\n");
+        }
+        source.push_str(&format!("x{index} : nat;\n"));
+    }
+    source.push('}');
+    for _ in 0..depth {
+        source.push_str(" }");
+    }
+    source.push_str(";\nservice : { get : () -> (R) query }\n");
+    source
+}
+
+/// A projection whose text would pass the compiler's bound on one source
+/// cannot be compiled again, so printing stops at the first piece that
+/// would pass it, and the projection fails with `projection_bytes`. Before
+/// this round the printer wrote all of it (here 2,129,300 bytes from an
+/// 18,597-byte source; up to about 18 MB within the compiler's limits), and
+/// the second compile refused it as `projection_failed`.
+#[test]
+fn a_projection_past_the_compilers_source_bound_stops_printing() {
+    let source = deep_docs(200, 50, 100);
+    assert_eq!(source.len(), 18_597);
+    let (response, length, _) = project_with(
+        &request(json!(source), &["get".to_string()]),
+        ProjectionOptions::default(),
+    );
+    assert_eq!(response["ok"], json!(false));
+    let items = response["diagnostics"].as_array().unwrap();
+    assert_eq!(items.len(), 1, "{response}");
+    assert_eq!(items[0]["code"], json!("resource_limit_exceeded"));
+    assert_eq!(items[0]["phase"], json!("project"));
+    let limit = 1_048_576;
+    assert_eq!(
+        items[0]["resource_limit"]["resource"],
+        json!("projection_bytes")
+    );
+    assert_eq!(items[0]["resource_limit"]["limit"], json!(limit));
+    // Stopped at the piece that passed the bound: at most one line's
+    // indentation (two spaces a level) past it.
+    let observed = items[0]["resource_limit"]["observed"].as_u64().unwrap() as usize;
+    assert!(
+        observed > limit && observed <= limit + 2 * 201,
+        "{observed}"
+    );
+    assert!(length < 1_000, "{length}");
+
+    // At the bound exactly the projection is written; one byte under, the
+    // last piece (the final newline) does not fit.
+    let ledger = request(json!(fixture("ledger")), &["fee".to_string()]);
+    let full = project(json!(fixture("ledger")), &["fee"])["did"]
+        .as_str()
+        .unwrap()
+        .len();
+    let bounded = |text_byte_limit| {
+        project_with(
+            &ledger,
+            ProjectionOptions {
+                text_byte_limit,
+                ..ProjectionOptions::default()
+            },
+        )
+        .0
+    };
+    assert_eq!(bounded(full)["ok"], json!(true));
+    let refused = bounded(full - 1);
+    assert_eq!(
+        refused["diagnostics"][0]["resource_limit"],
+        json!({ "resource": "projection_bytes", "limit": full - 1, "observed": full })
+    );
+}
+
+/// The text of the unknown-method messages is bounded in all
+/// ([`MAX_PROJECTION_DIAGNOSTIC_BYTES`]), as the check's reported text is:
+/// the name whose message would pass the bound, and every unknown name after
+/// it, are only counted, and one `resource_limit_exceeded` diagnostic
+/// (`projection_diagnostic_bytes`) ends the list. A message is measured as
+/// the JSON writes it, and only while its raw length fits in what is left.
+#[test]
+fn the_unknown_method_text_is_bounded() {
+    let source = fixture("ledger");
+    let names = |names: &[&str]| {
+        names
+            .iter()
+            .map(|name| name.to_string())
+            .collect::<Vec<_>>()
+    };
+    let three = request(json!(source), &names(&["x", "y", "z", "y"]));
+    let bounded = |request: &str, diagnostic_byte_limit| {
+        project_with(
+            request,
+            ProjectionOptions {
+                diagnostic_byte_limit,
+                ..ProjectionOptions::default()
+            },
+        )
+        .0
+    };
+    let codes = |response: &Value| {
+        response["diagnostics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|item| item["code"].as_str().unwrap().to_string())
+            .collect::<Vec<_>>()
+    };
+    // `the service has no method \"x\"`: 31 bytes as the JSON writes it,
+    // so three take 93.
+    let all = bounded(&three, 93);
+    assert_eq!(codes(&all), ["unknown_method"; 3]);
+    let two = bounded(&three, 92);
+    assert_eq!(
+        codes(&two),
+        [
+            "unknown_method",
+            "unknown_method",
+            "resource_limit_exceeded"
+        ]
+    );
+    assert_eq!(
+        two["diagnostics"][2]["resource_limit"],
+        json!({ "resource": "projection_diagnostic_bytes", "limit": 92, "observed": 93 })
+    );
+    assert_eq!(
+        two["diagnostics"][2]["message"],
+        json!("the unknown-method diagnostics reached their projection_diagnostic_bytes bound of 92, so 1 unknown method name(s) are not reported")
+    );
+    assert!(two["diagnostics"][0]["notes"].is_array());
+    // Not even the first fits: the bound's diagnostic is the first, and it
+    // carries the service's methods.
+    let none = bounded(&three, 30);
+    assert_eq!(codes(&none), ["resource_limit_exceeded"]);
+    assert_eq!(none["diagnostics"][0]["notes"].as_array().unwrap().len(), 8);
+    assert!(none["diagnostics"][0]["message"]
+        .as_str()
+        .unwrap()
+        .ends_with(", so 3 unknown method name(s) are not reported"));
+    // A name longer than what is left is counted at its raw length, not
+    // quoted and measured: 1,000 quotes would be 4,030 bytes written.
+    let quotes = request(json!(source), &["\"".repeat(1_000)]);
+    let long = bounded(&quotes, 100);
+    assert_eq!(
+        long["diagnostics"][0]["resource_limit"]["observed"],
+        json!(26 + 1_000 + 2)
+    );
+    let measured = bounded(&quotes, 4_030);
+    assert_eq!(codes(&measured), ["unknown_method"]);
+    assert_eq!(
+        serde_json::to_string(&measured["diagnostics"][0]["message"])
+            .unwrap()
+            .len()
+            - 2,
+        4_030
+    );
+
+    // At the default bound: 5,000 unknown names of 1,000 bytes each, 5 MB of
+    // messages (1,030 bytes each as the JSON writes them); the first 4,072
+    // are reported.
+    let long_names: Vec<String> = (0..5_000).map(|index| format!("{index:01000}")).collect();
+    let (response, length, _) = project_with(
+        &request(json!(source), &long_names),
+        ProjectionOptions::default(),
+    );
+    let items = response["diagnostics"].as_array().unwrap();
+    assert_eq!(items.len(), 4_073);
+    assert_eq!(
+        items[4_072]["resource_limit"],
+        json!({
+            "resource": "projection_diagnostic_bytes",
+            "limit": MAX_PROJECTION_DIAGNOSTIC_BYTES,
+            // The 4,073rd is longer than what is left, so it is counted
+            // at its raw length.
+            "observed": 4_072 * 1_030 + 1_028,
+        })
+    );
+    assert!(items[4_072]["message"]
+        .as_str()
+        .unwrap()
+        .ends_with(", so 928 unknown method name(s) are not reported"));
+    // 4 MiB of messages, the per-diagnostic keys, and the ledger's eight
+    // methods once.
+    assert_eq!(length, 4_675_289);
 }

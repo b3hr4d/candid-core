@@ -486,9 +486,15 @@ candid-core-cli check &lt;written.did&gt; --against &lt;live.did&gt; [--json]
   every declaration they reach, with their doc comments and argument names, and prints the interface
   identities of the input and of the projection. The same input and the same set of names give the
   same bytes. <code>gen</code> on the result emits an <code>Actor</code> listing only those methods,
-  each with its mode. An unknown name fails with <code>unknown_method</code>, whose
-  <code>notes</code> list the service's methods; an empty list fails with
-  <code>empty_method_list</code>. <code>-o</code> may not be, or become, a source of the input (the
+  each with its mode. Each distinct unknown name fails with one <code>unknown_method</code>, and the
+  failure's first diagnostic lists the service's methods in its <code>notes</code>, once; an empty
+  list fails with <code>empty_method_list</code>. The unknown names' messages are bounded at 4 MiB of
+  text in all: past that bound the names left are counted in one
+  <code>resource_limit_exceeded</code> diagnostic (<code>projection_diagnostic_bytes</code>) instead
+  of reported. A projection must compile again, so it is at most 1 MiB, the compiler's bound on one
+  source; a larger one fails with <code>resource_limit_exceeded</code>
+  (<code>projection_bytes</code>) as soon as writing it reaches that bound. Every name, requested or
+  reached, is found by binary search among names sorted once. <code>-o</code> may not be, or become, a source of the input (the
   file and every <code>.did</code> beneath its directory): naming one by any path or link, or a new
   <code>.did</code> beneath that directory, fails with <code>output_is_input</code> and writes
   nothing, so write the projection outside the input's directory. An output that cannot be written fails with <code>output_write_failed</code>.

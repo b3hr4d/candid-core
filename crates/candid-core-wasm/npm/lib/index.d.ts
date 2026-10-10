@@ -218,9 +218,16 @@ export interface ProjectionSuccess {
  * holding exactly those methods and every declaration they reach. The same
  * sources and the same set of names give the same bytes, in any order.
  *
- * A failure is `unknown_method` (one per name the service lacks; its
- * `notes` list the service's methods), `empty_method_list`, `no_service`,
- * or the compiler's own diagnostics.
+ * A failure is `unknown_method` (one per distinct name the service lacks,
+ * in the order first named; the failure's first diagnostic lists the
+ * service's methods in its `notes`, once), `empty_method_list`,
+ * `no_service`, `resource_limit_exceeded`, or the compiler's own
+ * diagnostics. `resource_limit_exceeded` names its bound in
+ * `resource_limit.resource`: `projection_bytes` when the projection would
+ * pass the 1 MiB the compiler accepts in one source (`observed` is where
+ * printing stopped), or `projection_diagnostic_bytes` when the unknown
+ * names' messages would pass 4 MiB of text, the names left being counted
+ * in that diagnostic instead of reported.
  *
  * @example
  * const result = await projectDid(ledgerDid, ["icrc1_balance_of", "icrc1_transfer"]);

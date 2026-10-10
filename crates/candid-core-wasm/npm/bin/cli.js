@@ -479,8 +479,7 @@ async function runProject({ entry, output, methods, json }) {
   const bytes = Buffer.from(result.did);
   let status;
   try {
-    const existing = await onDisk(output);
-    status = existing !== null && existing.equals(bytes) ? "unchanged" : "written";
+    status = (await holds(output, bytes)) ? "unchanged" : "written";
     if (status === "written") {
       await mkdir(path.dirname(output), { recursive: true });
       await writeFile(output, bytes);
@@ -584,6 +583,24 @@ async function deterministic(label, produce) {
     throw new EntryFailure([diagnostic("nondeterministic_output", "generate", message)], message);
   }
   return first;
+}
+
+/**
+ * Whether `file` already holds exactly `bytes`. A file of another size is
+ * not read, so comparing costs at most `bytes.length`, however large the
+ * file on disk is; a file that does not exist holds nothing.
+ */
+async function holds(file, bytes) {
+  let size;
+  try {
+    ({ size } = await stat(file));
+  } catch (error) {
+    if (error.code === "ENOENT") {
+      return false;
+    }
+    throw error;
+  }
+  return size === bytes.length && (await readFile(file)).equals(bytes);
 }
 
 /** The file's bytes, or `null` when it does not exist. */
