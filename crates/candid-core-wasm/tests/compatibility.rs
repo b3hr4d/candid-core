@@ -1478,6 +1478,11 @@ const COLLIDING: [&str; 2] = ["jhwlzguu", "jsyrjsvk"];
 /// colliding names share a 100,000-byte prefix, not a longer one: the
 /// compiler's canonicalization work, which charges every method name's bytes
 /// on each round of its refinement, refuses two of 500,000.)
+///
+/// It pins step counts and verdicts, not time. Were the names compared
+/// again, every count here would stay the same and the check would only be
+/// slower, which no test here measures: the test that fails then is the unit
+/// test `methods_are_paired_by_rank_and_never_by_name`, in `src/compat.rs`.
 #[test]
 fn a_long_or_colliding_method_name_costs_what_a_short_one_does() {
     let nested = |written: &[String], live: &[String]| {
@@ -1545,7 +1550,11 @@ fn a_long_or_colliding_method_name_costs_what_a_short_one_does() {
 /// is one step, as it is with a one-byte name, and every method is decided.
 /// Before ranks, each pairing compared the two names in full: with 3,000
 /// records and 300 methods, a 500,000-byte name took a native release
-/// build 61 s, where a one-byte name took 3 s.
+/// build 39 to 61 s, where a one-byte name took 1.9 to 2.0 s.
+///
+/// Like the test above, it pins step counts and diagnostics, not time:
+/// comparing the names again would leave both as they are, so it is
+/// `methods_are_paired_by_rank_and_never_by_name` that fails then.
 #[test]
 fn a_long_named_method_met_again_and_again_is_decided() {
     let (records, methods) = (100, 10);
