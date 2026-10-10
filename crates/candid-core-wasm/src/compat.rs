@@ -58,12 +58,12 @@
 //!
 //! The walk is recursive, so its depth is bounded ([`MAX_CHECK_DEPTH`] pairs
 //! on one path), and so is its work ([`MAX_CHECK_STEPS`] steps), each per
-//! method. A step is one unit of work done, so the bound bounds the time:
-//! a pair visited, however it is answered (expanded, from a proof, at a pair
-//! in progress, or from a failed pair, which also costs one step per segment
-//! of the failure path it copies); a field, arm, method or value examined,
-//! or passed over because the other side lacks it; a proven pair's warning
-//! re-examined, one step per pair below the proven one on its path, at least
+//! method. A step is one unit of work done, so the bound bounds the walk's
+//! time: a pair visited, however it is answered (expanded, from a proof, at
+//! a pair in progress, or from a failed pair, which also costs one step per
+//! segment of the failure path it copies); a field, arm, method or value
+//! examined, or passed over because the other side lacks it; a proven
+//! pair's warning re-examined, one step per pair below the proven one on its path, at least
 //! one; a warning recorded or re-reported, one step per segment of the
 //! path it copies; and a failure recorded for a pair, one step per segment
 //! of its path, so the failures a method keeps are bounded by its steps too.
@@ -88,12 +88,20 @@
 //! and `message` strings of every diagnostic a method reports, as the JSON
 //! response writes them, escapes included (`check_output_bytes`). Methods
 //! are checked in name order. The step bound is checked as the work is spent;
-//! the other two when a method is decided, against everything it would
-//! report. The method at which an aggregate bound is reached, and every
-//! method after it, fail closed: each gets exactly one diagnostic, an
-//! *error* `resource_limit_exceeded` naming the aggregate resource with its
-//! limit and the value observed when it was reached, and nothing else —
-//! not its `mode_changed`, nor a `method_missing`. Below these bounds a
+//! the other two when a method is decided, against what it would report.
+//! That text is measured string by string (a name, a message, one segment
+//! of a path), and only up to the first string that passes the byte bound;
+//! a string longer than what is left of it is counted at its raw length,
+//! which JSON never shortens, without being measured. The step bounds do
+//! not count this measuring, so it is bounded by the bytes instead: at most
+//! the byte bound plus one string's bytes over the whole check, however
+//! long the names, paths and lists of diagnostics are. The method at which
+//! an aggregate bound is reached, and every method after it, fail closed:
+//! each gets exactly one diagnostic, an *error* `resource_limit_exceeded`
+//! naming the aggregate resource with its limit and the value observed when
+//! it was reached (for the bytes, the count at the string that passed the
+//! bound), and nothing else — not its `mode_changed`, nor a
+//! `method_missing`. Below these bounds a
 //! method's diagnostics do not depend on the other methods; once one is
 //! reached, which methods are reported depends on the methods before them.
 //!
@@ -108,7 +116,9 @@
 //! length of a name either. Each method starts from fresh maps rather than
 //! cleared ones, whose cost would be the capacity an earlier method grew.
 
+use std::borrow::Cow;
 use std::collections::{BTreeMap, HashMap};
+use std::ops::ControlFlow;
 
 use candid_core::{
     Actor, Contract, Field, MethodMode, PrimitiveType, ServiceMethod, SourceInfo, SourceLabel,
@@ -158,7 +168,8 @@ pub const MAX_CHECK_TOTAL_WARNINGS: usize = 10_000;
 /// (escapes included, quotes not). 4 MiB, the compiler's default
 /// `max_input_bytes`, its bound on one document it parses. A method whose
 /// diagnostics would take the total past it, and every method after it,
-/// fail closed (`check_output_bytes`).
+/// fail closed (`check_output_bytes`). The text is measured only up to the
+/// first string that passes the bound (see the module's Bounds).
 pub const MAX_CHECK_OUTPUT_BYTES: usize = 4 * 1024 * 1024;
 
 /// How a check runs. [`CheckOptions::default`] is what `checkCompatible`
@@ -981,21 +992,56 @@ fn mode_name(mode: MethodMode) -> &'static str {
     }
 }
 
-/// A name as a path segment: `.name` when identifier-shaped, else quoted.
-fn name_segment(name: &str, prefix: &str) -> String {
-    let identifier = name
-        .chars()
+/// Whether a name is written as `.name` in a path, rather than quoted.
+fn is_identifier(name: &str) -> bool {
+    name.chars()
         .next()
         .is_some_and(|first| first.is_ascii_alphabetic() || first == '_' || first == '$')
         && name.chars().all(|character| {
             character.is_ascii_alphanumeric() || character == '_' || character == '$'
-        });
-    if identifier {
+        })
+}
+
+/// A name as a path segment: `.name` when identifier-shaped, else quoted.
+fn name_segment(name: &str, prefix: &str) -> String {
+    if is_identifier(name) {
         format!("{prefix}{name}")
     } else {
         let quoted = serde_json::to_string(name).expect("strings serialize");
         format!("{}[{quoted}]", prefix.trim_end_matches('.'))
     }
+}
+
+/// The bytes [`name_segment`]'s text takes inside a JSON string, quotes
+/// aside, without building it: at least `prefix.len() + name.len()`, and
+/// computed in time linear in that.
+fn name_segment_len(name: &str, prefix: &str) -> usize {
+    if is_identifier(name) {
+        // Neither the prefix nor an identifier needs an escape.
+        prefix.len() + name.len()
+    } else {
+        // `[`, the name as `serde_json` quotes it, and `]`, then escaped
+        // again as a JSON string: each quote and backslash doubles, so the
+        // two quotes take four bytes, and so does a quote or a backslash in
+        // the name (`\"` written as `\\\"`).
+        let quoted: usize = name
+            .bytes()
+            .map(|byte| match byte {
+                b'"' | b'\\' => 4,
+                b'\n' | b'\r' | b'\t' | 0x08 | 0x0c => 3,
+                0x00..=0x1f => 7,
+                _ => 1,
+            })
+            .sum();
+        prefix.trim_end_matches('.').len() + 2 + 4 + quoted
+    }
+}
+
+/// One segment of a rendered path: a name, rendered by [`name_segment`]
+/// with its prefix, or text of its own of a few bytes.
+enum Part<'a> {
+    Name(&'a str, &'static str),
+    Text(Cow<'static, str>),
 }
 
 /// Render a path, outermost first: `$args[0]`, `$results[1]` at the root,
@@ -1004,16 +1050,26 @@ fn name_segment(name: &str, prefix: &str) -> String {
 /// `::results[i]` or `::name` into a func or service type.
 fn render(path: &[Segment<'_>]) -> String {
     let mut text = String::new();
-    render_parts(path, |part| text.push_str(part));
+    render_parts(path, |part| {
+        match part {
+            Part::Name(name, prefix) => text.push_str(&name_segment(name, prefix)),
+            Part::Text(part) => text.push_str(&part),
+        }
+        ControlFlow::Continue(())
+    });
     text
 }
 
 /// The length in bytes of [`render`]'s text as a JSON string writes it,
-/// quotes aside, holding one segment's text at a time.
+/// quotes aside.
+#[cfg(test)]
 fn rendered_len(path: &[Segment<'_>]) -> usize {
-    let mut length = 0;
-    render_parts(path, |part| length += json_len(part));
-    length
+    let mut meter = Meter {
+        counted: 0,
+        limit: usize::MAX,
+    };
+    meter.path(path);
+    meter.counted
 }
 
 /// The bytes `text` takes inside a JSON string, quotes aside: what
@@ -1029,21 +1085,85 @@ fn json_len(text: &str) -> usize {
         .sum()
 }
 
-/// Hand [`render`]'s text to `each`, one segment at a time.
-fn render_parts(path: &[Segment<'_>], mut each: impl FnMut(&str)) {
-    each("$");
+/// Hand [`render`]'s text to `each`, one segment at a time, until it
+/// breaks.
+fn render_parts<'a>(path: &[Segment<'a>], mut each: impl FnMut(Part<'a>) -> ControlFlow<()>) {
+    if each(Part::Text(Cow::Borrowed("$"))).is_break() {
+        return;
+    }
     for (index, segment) in path.iter().enumerate() {
         let nested = if index == 0 { "" } else { "::" };
-        let part = match segment {
-            Segment::Field(Some(name), _) => name_segment(name, "."),
-            Segment::Field(None, id) => format!("[{id}]"),
-            Segment::Element => "[*]".to_string(),
-            Segment::Opt => "?".to_string(),
-            Segment::Argument(position) => format!("{nested}args[{position}]"),
-            Segment::Result(position) => format!("{nested}results[{position}]"),
-            Segment::Method(name) => name_segment(name, "::"),
+        let part = match *segment {
+            Segment::Field(Some(name), _) => Part::Name(name, "."),
+            Segment::Field(None, id) => Part::Text(Cow::Owned(format!("[{id}]"))),
+            Segment::Element => Part::Text(Cow::Borrowed("[*]")),
+            Segment::Opt => Part::Text(Cow::Borrowed("?")),
+            Segment::Argument(position) => {
+                Part::Text(Cow::Owned(format!("{nested}args[{position}]")))
+            }
+            Segment::Result(position) => {
+                Part::Text(Cow::Owned(format!("{nested}results[{position}]")))
+            }
+            Segment::Method(name) => Part::Name(name, "::"),
         };
-        each(&part);
+        if each(part).is_break() {
+            return;
+        }
+    }
+}
+
+/// Counts diagnostic text as the JSON response writes it, against the
+/// output bound, and stops counting once past it.
+///
+/// A string is measured exactly only while its raw bytes fit in what is
+/// left of the bound. One that does not is counted at its raw length,
+/// which is never more than what JSON writes for it, and that passes the
+/// bound. So measuring a string costs time linear in what it adds to the
+/// count, and nothing is measured past the bound: however long the names
+/// are, and however many reports and segments a method has, measuring
+/// costs at most the bound's bytes plus one string's.
+struct Meter {
+    counted: usize,
+    limit: usize,
+}
+
+impl Meter {
+    fn over(&self) -> bool {
+        self.counted > self.limit
+    }
+
+    /// Count a string of `raw` bytes whose written length, at least `raw`,
+    /// `exact` computes in time linear in `raw`.
+    fn count(&mut self, raw: usize, exact: impl FnOnce() -> usize) {
+        if self.over() {
+            return;
+        }
+        let length = if raw > self.limit - self.counted {
+            raw
+        } else {
+            exact()
+        };
+        self.counted = self.counted.saturating_add(length);
+    }
+
+    fn text(&mut self, text: &str) {
+        self.count(text.len(), || json_len(text));
+    }
+
+    fn path(&mut self, path: &[Segment<'_>]) {
+        render_parts(path, |part| {
+            match part {
+                Part::Name(name, prefix) => {
+                    self.count(prefix.len() + name.len(), || name_segment_len(name, prefix))
+                }
+                Part::Text(part) => self.text(&part),
+            }
+            if self.over() {
+                ControlFlow::Break(())
+            } else {
+                ControlFlow::Continue(())
+            }
+        });
     }
 }
 
@@ -1095,10 +1215,14 @@ impl Report<'_> {
         }
     }
 
-    /// The bytes of its `method`, `path` and `message` strings, as the JSON
-    /// response writes them.
-    fn text_len(&self, method: &str) -> usize {
-        json_len(method) + json_len(&self.message) + self.path.as_deref().map_or(0, rendered_len)
+    /// Count the bytes of its `method`, `message` and `path` strings, as the
+    /// JSON response writes them, until the count passes the bound.
+    fn measure(&self, method: &str, meter: &mut Meter) {
+        meter.text(method);
+        meter.text(&self.message);
+        if let Some(path) = &self.path {
+            meter.path(path);
+        }
     }
 
     fn render(&self, method: &str) -> Value {
@@ -1304,18 +1428,26 @@ pub fn check(written: &Input<'_>, live: &Input<'_>, options: CheckOptions) -> Ve
                             .iter()
                             .filter(|report| report.code == "special_opt_rule")
                             .count();
-                    let bytes = reported_bytes
-                        + reports
-                            .iter()
-                            .map(|report| report.text_len(&name))
-                            .sum::<usize>();
+                    // Measured up to the first string that passes the bound,
+                    // and no further.
+                    let mut meter = Meter {
+                        counted: reported_bytes,
+                        limit: options.output_byte_limit,
+                    };
+                    for report in &reports {
+                        report.measure(&name, &mut meter);
+                        if meter.over() {
+                            break;
+                        }
+                    }
+                    let bytes = meter.counted;
                     if warnings > options.total_warning_limit {
                         stopped = Some(Exhausted {
                             resource: "check_total_warnings",
                             limit: options.total_warning_limit,
                             observed: warnings,
                         });
-                    } else if bytes > options.output_byte_limit {
+                    } else if meter.over() {
                         stopped = Some(Exhausted {
                             resource: "check_output_bytes",
                             limit: options.output_byte_limit,
@@ -1394,5 +1526,50 @@ mod tests {
             json_len(&every_byte),
             serde_json::to_string(&every_byte).unwrap().len() - 2
         );
+        // A name of every byte, as a field and as a method, measured
+        // without being built.
+        let named = [
+            Segment::Result(0),
+            Segment::Field(Some(&every_byte), 1),
+            Segment::Method(&every_byte),
+        ];
+        assert_eq!(rendered_len(&named), written(&named));
+    }
+
+    /// The meter stops at the first string that passes the bound, and a
+    /// string longer than what is left is counted at its raw length, not
+    /// measured: so measuring costs at most the bound plus one string.
+    #[test]
+    fn the_meter_stops_at_the_bound() {
+        let quotes = "\"".repeat(1_000);
+        let path = [
+            Segment::Result(0),
+            Segment::Field(Some(&quotes), 1),
+            Segment::Opt,
+        ];
+        // `$results[0]`, then `["\"…"]` escaped again (4 bytes a quote),
+        // then `?`.
+        let exact = 11 + 2 + 4 + 4 * quotes.len() + 1;
+        assert_eq!(rendered_len(&path), exact);
+        let meter = |limit: usize| {
+            let mut meter = Meter { counted: 0, limit };
+            meter.path(&path);
+            meter.counted
+        };
+        assert_eq!(meter(exact), exact);
+        // Past the bound at the name: its raw 1,001 bytes, and nothing
+        // after it.
+        assert_eq!(meter(100), 11 + 1 + quotes.len());
+        // Past the bound before the name: it is not counted at all.
+        assert_eq!(meter(5), 11);
+        // A text longer than what is left is not measured either.
+        let mut meter = Meter {
+            counted: 0,
+            limit: 10,
+        };
+        meter.text(&quotes);
+        assert_eq!(meter.counted, quotes.len());
+        meter.text("more");
+        assert_eq!(meter.counted, quotes.len());
     }
 }

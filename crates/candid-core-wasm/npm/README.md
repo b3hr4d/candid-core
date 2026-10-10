@@ -290,18 +290,19 @@ data at that path, and it is reported at every such path along which no pair
 of types repeats (a changed alias under each field that uses it; a recursive
 type up to where a path comes back round); `resource_limit_exceeded` fails a
 method whose check reached a bound, its depth (384 pairs on one path) or its
-work (1,000,000 steps, a step being one unit of work done: a method decided, a
-pair of types visited, a field, arm, method or value examined or passed over,
+work (1,000,000 steps, a step being one unit of work done: a pair of types
+visited, a field, arm, method or value examined or passed over,
 or one path segment a warning or a failure copies, or a warning
 re-examines). Past 1,000
 warnings a method reports the first 1,000 and one `resource_limit_exceeded`
 warning (`check_warnings`) saying the rest were dropped; its verdict stands.
 The check as a whole is bounded too, so a service with many methods cannot
-multiply those per-method bounds: 10,000,000 steps in all
-(`check_total_steps`), 10,000 `special_opt_rule` warnings in all
+multiply those per-method bounds: 10,000,000 steps in all, one more per
+method decided (`check_total_steps`), 10,000 `special_opt_rule` warnings in all
 (`check_total_warnings`), and 4 MiB of reported text, the `method`, `path`
 and `message` strings of every diagnostic but the fail-closed ones below, as
-the JSON writes them (`check_output_bytes`). Methods are checked in name order. When one of these
+the JSON writes them (`check_output_bytes`), measured only up to the first
+string that passes that bound. Methods are checked in name order. When one of these
 is reached, the method at which it was reached and every method after it fail
 closed: each gets one `resource_limit_exceeded` error naming the bound, with
 its limit and the observed value, and nothing else, and the check exits `1`.

@@ -1136,6 +1136,83 @@ fn the_output_is_bounded_across_the_check() {
     }
 }
 
+/// Measuring a method's text stops at the first string that takes it past
+/// the output bound, so `observed` is at most the bound plus that string,
+/// however much more text the method has. Measuring it all would cost time
+/// in the length of every name times the paths and reports it is on, which
+/// the step bounds do not count: a reviewer's 208 KB request of this shape
+/// took 70 s to measure 1,000 warnings' paths of long names.
+#[test]
+fn measuring_the_output_stops_at_the_bound() {
+    // A recursive written record whose two fields have long names, spelled
+    // once, against a live chain of distinct records labelled by the names'
+    // ids: every warning path holds about 30 long-named segments, and the
+    // method reports 1,000 of them, about 30 MB of text.
+    let long = 1_000;
+    let (a, b) = ("a".repeat(long), "b".repeat(long));
+    let (id_a, id_b) = (candid::idl_hash(&a), candid::idl_hash(&b));
+    let written =
+        format!("type W = opt record {{ {a} : W; {b} : W }};\nservice : {{ f : () -> (W) }}\n");
+    let mut live = String::from("type D0 = text;\n");
+    for level in 1..=10 {
+        live.push_str(&format!(
+            "type D{level} = opt record {{ {id_a} : D{p}; {id_b} : D{p} }};\n",
+            p = level - 1
+        ));
+    }
+    live.push_str("type C0 = D10;\n");
+    for level in 1..=20 {
+        live.push_str(&format!(
+            "type C{level} = record {{ {id_a} : C{p} }};\n",
+            p = level - 1
+        ));
+    }
+    live.push_str("service : { f : () -> (C20) }\n");
+    // The largest string is one segment: `.` and a name.
+    let segment = 1 + long;
+    for limit in [10_000, MAX_CHECK_OUTPUT_BYTES] {
+        let options = CheckOptions {
+            output_byte_limit: limit,
+            ..CheckOptions::default()
+        };
+        let response = check_with(&written, &live, options);
+        let observed = response["diagnostics"][0]["resource_limit"]["observed"]
+            .as_u64()
+            .unwrap() as usize;
+        assert!(
+            observed > limit && observed <= limit + segment,
+            "{observed}"
+        );
+        assert_eq!(
+            response["diagnostics"],
+            json!([stopped("f", "check_output_bytes", limit, observed)])
+        );
+    }
+
+    // A 100,000-byte method name, on each of 1,001 reports (Codex's 1,000
+    // warnings and the warning-bound notice), about 100 MB of text: the
+    // name is measured until the count passes the bound, and not after.
+    let name = "m".repeat(100_000);
+    let source = |content: &str| shared_doubling(content, 1).replace("m00000", &name);
+    let response = check(&source("nat"), &source("text"));
+    let observed = response["diagnostics"][0]["resource_limit"]["observed"]
+        .as_u64()
+        .unwrap() as usize;
+    assert!(
+        observed > MAX_CHECK_OUTPUT_BYTES && observed <= MAX_CHECK_OUTPUT_BYTES + name.len(),
+        "{observed}"
+    );
+    assert_eq!(
+        response["diagnostics"],
+        json!([stopped(
+            &name,
+            "check_output_bytes",
+            MAX_CHECK_OUTPUT_BYTES,
+            observed
+        )])
+    );
+}
+
 /// Once an aggregate bound is reached, every method not yet decided fails
 /// closed with that one diagnostic: not its `method_missing`, not its
 /// `mode_changed`, not its own verdict.
