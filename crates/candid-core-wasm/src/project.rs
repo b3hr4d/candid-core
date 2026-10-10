@@ -18,7 +18,10 @@
 //! quotes only what the lexer requires and writes each doc line so that it
 //! parses back to the same doc text. Its layout is fixed: one member per
 //! line inside every non-empty record, variant and service, two spaces per
-//! level, tuples and signatures on one line.
+//! level, and signatures on one line. A tuple sits on one line too, unless
+//! one of its elements is documented: then it takes one element per line,
+//! like a record, so each element's docs sit above it. (A signature's
+//! arguments carry no docs in Candid, so one line loses nothing there.)
 //!
 //! What the output drops: every method not requested, every declaration no
 //! requested method reaches, a service class's init arguments (the output is
@@ -306,8 +309,10 @@ fn ty(out: &mut String, indent: &str, typ: &IDLType) {
         }
         IDLType::RecordT(fields) => {
             out.push_str("record ");
-            if !fields.is_empty() && fields.iter().all(|f| matches!(f.label, Label::Unnamed(_))) {
-                // Tuple syntax. Docs on an element have nowhere to attach.
+            let tuple =
+                !fields.is_empty() && fields.iter().all(|f| matches!(f.label, Label::Unnamed(_)));
+            if tuple && fields.iter().all(|field| field.docs.is_empty()) {
+                // Tuple syntax, on one line: no element has a doc to keep.
                 out.push_str("{ ");
                 for (index, field) in fields.iter().enumerate() {
                     if index > 0 {
@@ -316,13 +321,17 @@ fn ty(out: &mut String, indent: &str, typ: &IDLType) {
                     ty(out, indent, &field.typ);
                 }
                 out.push_str(" }");
+            } else if tuple {
+                // A documented element needs a line of its own for its docs:
+                // tuple syntax, one element per line, labels still implicit.
+                members(out, indent, fields, Members::Tuple);
             } else {
-                members(out, indent, fields, false);
+                members(out, indent, fields, Members::Record);
             }
         }
         IDLType::VariantT(fields) => {
             out.push_str("variant ");
-            members(out, indent, fields, true);
+            members(out, indent, fields, Members::Variant);
         }
         IDLType::FuncT(func) => {
             out.push_str("func ");
@@ -340,8 +349,20 @@ fn ty(out: &mut String, indent: &str, typ: &IDLType) {
     }
 }
 
-/// `{ … }` of a record or variant, one field per line, docs above each.
-fn members(out: &mut String, indent: &str, fields: &[TypeField], variant: bool) {
+/// What a `{ … }` block of fields holds, which decides how a field prints.
+#[derive(Clone, Copy, PartialEq)]
+enum Members {
+    /// `label : type`.
+    Record,
+    /// `label : type`, or a bare `label` for a `null` arm.
+    Variant,
+    /// A tuple's elements: a bare `type`, the parser numbering them again.
+    Tuple,
+}
+
+/// `{ … }` of a record, variant or documented tuple, one field per line,
+/// docs above each.
+fn members(out: &mut String, indent: &str, fields: &[TypeField], kind: Members) {
     if fields.is_empty() {
         out.push_str("{}");
         return;
@@ -351,10 +372,14 @@ fn members(out: &mut String, indent: &str, fields: &[TypeField], variant: bool) 
     for field in fields {
         docs(out, &inner, &field.docs);
         out.push_str(&inner);
-        out.push_str(&label(&field.label));
-        if !(variant && field.typ == IDLType::PrimT(PrimType::Null)) {
-            out.push_str(" : ");
+        if kind == Members::Tuple {
             ty(out, &inner, &field.typ);
+        } else {
+            out.push_str(&label(&field.label));
+            if !(kind == Members::Variant && field.typ == IDLType::PrimT(PrimType::Null)) {
+                out.push_str(" : ");
+                ty(out, &inner, &field.typ);
+            }
         }
         out.push_str(";\n");
     }

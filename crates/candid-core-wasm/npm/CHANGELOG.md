@@ -27,9 +27,11 @@ commit, as every entry does.
   reach, as one self-contained file, and prints the interface identities of
   the input and of the projection. The output is deterministic: the same
   input and the same set of names give the same bytes, in any order. It
-  keeps declaration names, doc comments and argument names, so `gen` on the
-  projection emits the same declarations, docs and modes as on the full
-  interface, with an `Actor` that lists only the projected methods. A
+  keeps declaration names, doc comments (a tuple element's included: a
+  tuple with a documented element is written one element per line) and
+  argument names, so `gen` on the projection emits the same declarations,
+  docs and modes as on the full interface, with an `Actor` that lists only
+  the projected methods. A
   service class's init arguments are dropped. An unknown method name fails
   with `unknown_method` (its `notes` list the service's methods), an empty
   list (`--methods ""`) with `empty_method_list`, a source with no service

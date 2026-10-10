@@ -5,6 +5,7 @@
 use std::path::PathBuf;
 
 use candid_core_wasm::{did_to_contract, did_to_module, project_did};
+use candid_parser::syntax::{Binding, IDLProg, IDLType};
 use serde_json::{json, Value};
 
 fn repo(path: &str) -> String {
@@ -63,6 +64,29 @@ fn actor_modes(envelope: &Value) -> Vec<(String, String)> {
     modes
 }
 
+/// A single-source `.did` as the parser reads it: its declarations and its
+/// service's docs and methods, every doc comment included (a field's,
+/// a tuple element's, an arm's, a method's, a declaration's). Labels compare
+/// by id, so a tuple element and the numbered field it stands for agree.
+fn parsed(source: &str) -> (Vec<Binding>, Vec<String>, Vec<Binding>) {
+    let program: IDLProg = source
+        .parse()
+        .unwrap_or_else(|error| panic!("{error}\n{source}"));
+    let actor = program.actor.expect("a service");
+    let mut service = actor.typ;
+    if let IDLType::ClassT(_, inner) = service {
+        service = *inner;
+    }
+    let IDLType::ServT(methods) = service else {
+        panic!("an inline service: {service:?}");
+    };
+    (
+        IDLProg::typ_decs(program.decs).collect(),
+        actor.docs,
+        methods,
+    )
+}
+
 const FIXTURES_WITH_A_SERVICE: &[&str] = &[
     "deferred",
     "fidelity",
@@ -95,9 +119,11 @@ const FIXTURES: &[&str] = &[
 /// The printer is faithful. Each generator fixture gets one extra method
 /// whose arguments name every declaration (and a service holding just that
 /// method when it has none), so that a projection of all methods drops
-/// nothing; it must then keep the Contract identity, and its generated
-/// module must be byte-identical to the full one — declaration names, doc
-/// comments, argument names, labels and quoting included.
+/// nothing; it must then keep the Contract identity, its generated module
+/// must be byte-identical to the full one — declaration names, doc
+/// comments, argument names, labels and quoting included — and it must
+/// parse back to the same declarations and methods, docs included, the
+/// ones the generator does not emit (a tuple element's) among them.
 #[test]
 fn projecting_every_method_reprints_the_source_faithfully() {
     for name in FIXTURES {
@@ -133,6 +159,11 @@ fn projecting_every_method_reprints_the_source_faithfully() {
         let before: Value = serde_json::from_str(&did_to_module(&single(&source))).unwrap();
         let after: Value = serde_json::from_str(&did_to_module(&single(projected))).unwrap();
         assert_eq!(after, before, "{name}: the module changed\n{projected}");
+        assert_eq!(
+            parsed(projected),
+            parsed(&source),
+            "{name}: the parsed source changed\n{projected}"
+        );
     }
 }
 
@@ -283,6 +314,106 @@ fn docs_and_argument_names_survive() {
         );
         assert_eq!(doc_block(cut["module"].as_str().unwrap(), method), expected);
     }
+}
+
+/// A tuple element's doc comment survives: in a declared tuple, in a tuple
+/// nested in another tuple, a record field, a variant arm, an `opt` or a
+/// `vec`, and in tuples a method takes and returns inline. The parser keeps
+/// those docs (the generator does not emit them, so the module alone cannot
+/// show the loss); the projection must parse back to the same docs, keep the
+/// Contract identity and generate the same module. A tuple with no
+/// documented element keeps its one-line form.
+#[test]
+fn documented_tuple_elements_keep_their_docs() {
+    let source = "\
+/// A documented pair.
+type Pair = record {
+  /// The amount.
+  nat;
+  text;
+};
+type Plain = record { nat; text };
+type Nested = record {
+  /// The outer element.
+  record {
+    /// The inner element.
+    nat;
+    /// A doc line that is //// slashes.
+    //// A doc line that starts with a slash.
+    principal;
+  };
+  vec record {
+    /// In a vec.
+    nat8;
+  };
+};
+type Holder = record {
+  pair : opt record {
+    bool;
+    /// In an opt, in a field, second.
+    int;
+  };
+  choice : variant {
+    Both : record {
+      /// In an arm.
+      text;
+      nat;
+    };
+    Neither;
+  };
+  plain : record { nat; Plain };
+};
+service : {
+  /// The call.
+  call : (Pair, Nested, Holder, record {
+    /// In an argument.
+    nat;
+  }) -> (record {
+    /// In a result.
+    text;
+    bool;
+  }) query;
+}
+";
+    let response = project(json!(source), &["call"]);
+    assert_eq!(response["ok"], json!(true), "{response}");
+    let projected = response["did"].as_str().unwrap();
+    assert_eq!(
+        parsed(projected),
+        parsed(source),
+        "the parsed source changed\n{projected}"
+    );
+    assert_eq!(
+        response["projection"], response["input"],
+        "identities moved\n{projected}"
+    );
+    let before: Value = serde_json::from_str(&did_to_module(&single(source))).unwrap();
+    let after: Value = serde_json::from_str(&did_to_module(&single(projected))).unwrap();
+    assert_eq!(after, before, "the module changed\n{projected}");
+    // Every doc of the source is in the text, and an undocumented tuple,
+    // alone or holding another, stays on one line.
+    for doc in [
+        "The amount.",
+        "The outer element.",
+        "The inner element.",
+        "A doc line that is //// slashes.",
+        "A doc line that starts with a slash.",
+        "In a vec.",
+        "In an opt, in a field, second.",
+        "In an arm.",
+        "In an argument.",
+        "In a result.",
+    ] {
+        assert!(projected.contains(doc), "{doc} is missing\n{projected}");
+    }
+    assert!(
+        projected.contains("type Plain = record { nat; text };\n"),
+        "{projected}"
+    );
+    assert!(
+        projected.contains("  plain : record { nat; Plain };\n"),
+        "{projected}"
+    );
 }
 
 #[test]
