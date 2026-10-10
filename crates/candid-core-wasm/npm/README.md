@@ -220,6 +220,146 @@ import { schemaFromContract } from "@candid-core/schema/contract";
 const built = schemaFromContract(await didToContract(didText));
 ```
 
+## Projection and compatibility
+
+> **Not in 0.2.0.** `project`, `check`, `projectDid` and `checkCompatible` are
+> unreleased: they ship in the next release, recorded under `Unreleased` in
+> the [changelog](./CHANGELOG.md).
+
+Two commands for an interface you do not own, such as a canister's published
+`.did`. Both work on files already on disk: the tool never fetches anything,
+so getting the live interface is your build step's job.
+
+```text
+candid-core-cli project <in.did> --methods <a,b,...> -o <out.did> [--json]
+candid-core-cli check <written.did> --against <live.did> [--json]
+```
+
+**`project`** writes a `.did` holding only the methods you name and every
+declaration they reach, as one self-contained file (imports are inlined), and
+prints the interface identities of the input and of the projection. Feed the
+result to `gen` like any `.did`: the generated `Actor` lists only those
+methods, each with its mode. The output is deterministic: the same input and
+the same set of names give the same bytes, whatever order you name them in.
+Declaration names, doc comments and argument names are kept; a service
+class's init arguments are not, since a client never sends them. Methods are
+written in name order, a service import's among the entry's. An unknown
+method name, or an empty list (`--methods ""`), fails with exit 1 and writes
+nothing: each distinct unknown name gets one `unknown_method` diagnostic
+naming it, and the first diagnostic lists the service's methods in its
+`notes`, once; an empty list gets `empty_method_list`. The unknown names'
+messages are bounded at 4 MiB of text in all, as the JSON writes them: the
+name at which they would pass it, and every one after it, are counted in one
+`resource_limit_exceeded` diagnostic (`projection_diagnostic_bytes`) instead
+of reported. A projection must compile again, so it is at most 1 MiB, the
+compiler's bound on one source: one that would be larger fails with exit 1
+and `resource_limit_exceeded` (`projection_bytes`, whose `observed` is where
+writing stopped) and writes nothing. Each name, requested or reached, is
+looked up by binary search among names sorted once, so no lookup scans the
+service or the declarations. `-o` is required, and may not be,
+or become, a source of the input: `project` reads the input as `gen` does (the
+file and every `.did` beneath its directory), so an `-o` that names one of
+those files by any path, symlink or hard link, or a new `.did` anywhere beneath
+that directory, fails with exit 1 and `output_is_input` (`path` is the `-o`
+given, `notes` the existing sources it names, empty for a new file) and writes
+nothing. Write the projection outside the input's directory. An
+output that cannot be read or written (a directory, a read-only parent, a full
+disk) fails with exit 1 and `output_write_failed`, whose `notes` hold the
+system error code, such as `EISDIR` or `EACCES`; without `--json` it is one
+`cannot write …` line on stderr, as a source that cannot be read is
+`cannot read …`. The file is written only when it changes, and an existing
+file of another size is replaced without being read; `--json` prints
+`{ ok, output, status, methods, input, projection }` instead of the report,
+and `{ ok: false, diagnostics }` for any failure.
+
+```sh
+npx @candid-core/cli project ./live/ledger.did --methods icrc1_balance_of,icrc1_transfer -o ./src/ledger.did
+```
+
+**`check`** exits `0` when the live interface is still a Candid subtype of the
+written one, and `1` otherwise. Every method of the written `.did` must exist
+in the live one with the same mode, its arguments contravariant and its
+results covariant; methods only the live service has are ignored, and so is
+a class's init. So an added method or an added `opt` result field passes,
+and a removed method, a changed mode, or a result that gained a variant arm
+fails. A projection is not the only valid written side: a hand-written
+subset `.did` checks the same way. The report prints both interface
+identities on stdout, one line per finding on stderr, and a verdict line:
+
+```text
+written: candid-core:interface:v1:sha256:…
+live:    candid-core:interface:v1:sha256:…
+error: icrc1_transfer: method_incompatible at $results[0].Err.TooOld: the other variant has no such arm
+incompatible: 1 error(s), 0 warning(s)
+```
+
+Each finding names its method and a stable code: `method_missing`,
+`mode_changed` and `method_incompatible` are errors; `special_opt_rule` is a
+warning, for a change Candid accepts only by reading the value under an `opt`
+as `null` (such as `opt nat` becoming `opt text`), so it passes but loses the
+data at that path, and it is reported at every such path along which no pair
+of types repeats (a changed alias under each field that uses it; a recursive
+type up to where a path comes back round); `resource_limit_exceeded` fails a
+method whose check reached a bound, its depth (384 pairs on one path) or its
+work (1,000,000 steps, a step being one unit of work done: a pair of types
+visited, a field, arm, method or value examined or passed over,
+or one path segment a warning or a failure copies, or a warning
+re-examines). A step reads no name: service methods are paired by ranks
+computed once per check, and a field's name is read by its position. So a
+step's cost does not grow with the length of the names: it does a bounded
+amount of work, and its lookups in the maps of type pairs the walk keeps take
+time logarithmic in their size. Past 1,000
+warnings a method reports the first 1,000 and one `resource_limit_exceeded`
+warning (`check_warnings`) saying the rest were dropped; its verdict stands.
+The check as a whole is bounded too, so a service with many methods cannot
+multiply those per-method bounds: 10,000,000 steps in all, one more per
+method decided (`check_total_steps`), 10,000 `special_opt_rule` warnings in all
+(`check_total_warnings`), and 4 MiB of reported text, the `method`, `path`
+and `message` strings of every diagnostic but the fail-closed ones below, as
+the JSON writes them (`check_output_bytes`), measured only up to the first
+string that passes that bound. Methods are checked in name order. When one of these
+is reached, the method at which it was reached and every method after it fail
+closed: each gets one `resource_limit_exceeded` error naming the bound, with
+its limit and the observed value, and nothing else, and the check exits `1`.
+Below these bounds a method's findings do not depend on the other methods;
+once one is reached, they do. Each method left adds its one diagnostic, 397
+bytes for a six-character name, so past a bound the response grows only with
+the method count. So the walk's time grows with its steps (times that
+logarithm) and the reported text's with its bytes; compiling both sides,
+within the compiler's own limits, and ranking the method names are done once
+per check, before the walk.
+`method_incompatible` and `special_opt_rule` carry the path
+into the method's type where the check failed: `$args[i]` or `$results[i]`,
+then `.name` per record field or variant arm (`["name"]` when it is not an
+identifier, `[id]` for a numeric label), `[*]` per `vec` element, `?` per
+`opt` content, and `::args[i]`, `::results[i]` or `::name` into a `func` or
+`service` type. `--json` prints the `checkCompatible` document below.
+
+The live interface identity tells an unchanged interface from one that
+changed compatibly: `project` prints the input's, so record it when you write
+the projection, and compare it with what `check` prints later.
+
+```js
+import { checkCompatible, projectDid } from "@candid-core/cli";
+
+const projected = await projectDid(liveDid, ["icrc1_balance_of", "icrc1_transfer"]);
+// → { ok: true, did, methods, input, projection } — the text, the methods it
+//   holds, and { contract_id, interface_id } of the input and the projection;
+//   or { ok: false, diagnostics }.
+
+const report = await checkCompatible(writtenDid, liveDid);
+// → { ok: true, compatible, written, live, diagnostics }, each diagnostic
+//   { code, severity, method, path?, message }; or { ok: false, input,
+//   diagnostics } when one side does not compile (`input` names it).
+```
+
+Both take Candid text or `{ entry, files }`, as `didToModule` does. The check
+is one Rust implementation compiled into this package's WebAssembly, tested
+against the subtype check of the `candid` crate it pins and against the one
+`@candid-core/schema`'s decoder runs on a `func` or `service` reference. Where the `candid` crate accepts a pair that is not a
+subtype (its coinductive memo can keep a pair proven under an assumption it
+later retracted), this check refuses it, as the decoder does.
+
 ## Omissions
 
 `didToModule`'s success carries `omitted`, an array of

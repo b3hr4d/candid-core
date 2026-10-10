@@ -1,5 +1,5 @@
 // The library surface of @candid-core/cli: data in, data out.
-// Both functions hand one JSON-serializable request to the wasm compiler and
+// Every function hands one JSON-serializable request to the wasm compiler and
 // return its parsed JSON response verbatim — no eval and no network, nothing
 // thrown for data errors, and no filesystem access from the wasm side (this
 // module reads the embedded artifact itself on Node):
@@ -7,8 +7,10 @@
 // `candid-core` CLI prints, passed through byte-for-byte.
 
 import initWasm, {
+  checkCompatible as wasmCheckCompatible,
   didToContract as wasmDidToContract,
   didToModule as wasmDidToModule,
+  projectDid as wasmProjectDid,
 } from "../wasm/candid_core_wasm.js";
 
 let initialized;
@@ -36,8 +38,12 @@ export function init(input) {
   return initialized;
 }
 
+function sourcesOf(sources) {
+  return typeof sources === "string" ? { source: sources } : sources;
+}
+
 function requestOf(sources) {
-  return JSON.stringify(typeof sources === "string" ? { source: sources } : sources);
+  return JSON.stringify(sourcesOf(sources));
 }
 
 /**
@@ -64,4 +70,44 @@ export async function didToContract(sources) {
 export async function didToModule(sources) {
   await init();
   return JSON.parse(wasmDidToModule(requestOf(sources)));
+}
+
+/**
+ * Project Candid sources onto the methods named: a self-contained `.did`
+ * holding exactly those methods of the service and every declaration they
+ * reach, deterministic to the byte for the same sources and the same set of
+ * names, whatever their order.
+ *
+ * Returns `{ ok: true, did, methods, input, projection }` — the text, the
+ * methods it holds in name order, and the identities of the input and of
+ * the projection — or `{ ok: false, diagnostics }`: `unknown_method` (one
+ * per distinct name the service lacks; the failure's first diagnostic lists
+ * the service's methods in its `notes`, once), `empty_method_list`,
+ * `no_service`, `resource_limit_exceeded` (`projection_bytes`: the
+ * projection would pass the compiler's 1 MiB bound on one source;
+ * `projection_diagnostic_bytes`: the unknown names' messages would pass
+ * 4 MiB, and the names left are counted, not reported), or the compiler's
+ * diagnostics.
+ */
+export async function projectDid(sources, methods) {
+  await init();
+  return JSON.parse(wasmProjectDid(JSON.stringify({ ...sourcesOf(sources), methods })));
+}
+
+/**
+ * Check that a live interface is still compatible with a written one: every
+ * method of the written service exists in the live one with the same mode,
+ * and the live method's type is a Candid subtype of the written one.
+ * Methods only the live service has are ignored.
+ *
+ * Returns `{ ok: true, compatible, written, live, diagnostics }`, where each
+ * diagnostic names its method and, inside a type, the path where the check
+ * failed; or `{ ok: false, input, diagnostics }` when a side does not
+ * compile (`input` names it).
+ */
+export async function checkCompatible(written, live) {
+  await init();
+  return JSON.parse(
+    wasmCheckCompatible(JSON.stringify({ written: sourcesOf(written), live: sourcesOf(live) })),
+  );
 }

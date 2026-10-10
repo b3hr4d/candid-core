@@ -182,6 +182,157 @@ export function didToContract(sources: Sources): Promise<ContractEnvelope | Fail
  */
 export function didToModule(sources: Sources): Promise<ModuleSuccess | Failure>;
 
+/** The identities of one compiled interface. */
+export interface Identities {
+  /** The Contract identity: the whole canonical graph, declarations included. */
+  contract_id: string;
+  /**
+   * The interface identity: only what the service reaches. Equal identities
+   * mean an unchanged interface.
+   */
+  interface_id: string;
+}
+
+/** A successful projection. */
+export interface ProjectionSuccess {
+  ok: true;
+  /**
+   * The projected `.did`: the methods named and every declaration they
+   * reach, as one self-contained file. Declaration names, doc comments and
+   * argument names are kept; a service class's init arguments are not.
+   * Methods are printed in name order (code point), record fields and
+   * variant arms in label-id order, declarations in source order (the
+   * entry's first, then each imported source's).
+   */
+  did: string;
+  /** The methods the projection holds, in name order (code point). */
+  methods: string[];
+  /** The identities of the sources projected. */
+  input: Identities;
+  /** The identities of the projection. */
+  projection: Identities;
+}
+
+/**
+ * Project Candid sources onto the methods named: a self-contained `.did`
+ * holding exactly those methods and every declaration they reach. The same
+ * sources and the same set of names give the same bytes, in any order.
+ *
+ * A failure is `unknown_method` (one per distinct name the service lacks,
+ * in the order first named; the failure's first diagnostic lists the
+ * service's methods in its `notes`, once), `empty_method_list`,
+ * `no_service`, `resource_limit_exceeded`, or the compiler's own
+ * diagnostics. `resource_limit_exceeded` names its bound in
+ * `resource_limit.resource`: `projection_bytes` when the projection would
+ * pass the 1 MiB the compiler accepts in one source (`observed` is where
+ * printing stopped), or `projection_diagnostic_bytes` when the unknown
+ * names' messages would pass 4 MiB of text, the names left being counted
+ * in that diagnostic instead of reported.
+ *
+ * @example
+ * const result = await projectDid(ledgerDid, ["icrc1_balance_of", "icrc1_transfer"]);
+ * if (result.ok) await writeFile("./ledger.did", result.did);
+ */
+export function projectDid(
+  sources: Sources,
+  methods: readonly string[],
+): Promise<ProjectionSuccess | Failure>;
+
+/**
+ * One finding of a compatibility check.
+ *
+ * - `method_missing` (error): the live service has no method of that name.
+ * - `mode_changed` (error): the method's mode differs (`query`,
+ *   `composite_query`, `update` or `oneway`).
+ * - `method_incompatible` (error): the live method's type is not a subtype
+ *   of the written one; `path` says where.
+ * - `special_opt_rule` (warning): the types are compatible only because
+ *   Candid reads a mismatch under an `opt` as `null`, so a value at `path`
+ *   decodes as `null`. One is reported at every such path along which no
+ *   pair of types repeats: a shared type under each path that reaches it,
+ *   and a recursive type up to where a path comes back round to a pair it
+ *   already passed through.
+ * - `resource_limit_exceeded`: as an error, the check of this method
+ *   stopped at one of its bounds (`resource_limit.resource` is
+ *   `check_depth` or `check_steps`; a step is one unit of work done, such
+ *   as a pair of types visited or a field examined) and fails closed. As a
+ *   warning (`check_warnings`), the method has more `special_opt_rule`
+ *   warnings than the 1,000 reported; its verdict is complete and stands.
+ *   As an error naming `check_total_steps`, `check_total_warnings` or
+ *   `check_output_bytes`, the check as a whole reached one of its bounds
+ *   (10,000,000 steps, 10,000 `special_opt_rule` warnings, or 4 MiB of
+ *   `method`, `path` and `message` text as the JSON writes it): methods
+ *   are checked in name order, and the method at which the bound was
+ *   reached and every method after it get this one diagnostic and nothing
+ *   else. Below these bounds a
+ *   method's findings do not depend on the other methods.
+ */
+export interface CompatibilityDiagnostic {
+  code:
+    | "method_missing"
+    | "mode_changed"
+    | "method_incompatible"
+    | "special_opt_rule"
+    | "resource_limit_exceeded";
+  severity: "error" | "warning";
+  /** The written method the finding is about. */
+  method: string;
+  /**
+   * Where in the method's type: `$args[i]` or `$results[i]`, then `.name`
+   * (or `["name"]`, or `[id]` for a numeric label) per record field or
+   * variant arm, `[*]` per vec element, `?` per opt content, and
+   * `::args[i]`, `::results[i]` or `::name` into a func or service type.
+   * Absent for `method_missing`, `mode_changed` and
+   * `resource_limit_exceeded`.
+   */
+  path?: string;
+  message: string;
+  resource_limit?: ResourceLimitInfo;
+}
+
+/** A completed compatibility check. */
+export interface CompatibilityReport {
+  ok: true;
+  /** True when no diagnostic is an error. Warnings do not clear it. */
+  compatible: boolean;
+  written: Identities;
+  /**
+   * The live interface's identities. Compare `interface_id` with the one
+   * recorded when the written file was made to tell an unchanged interface
+   * from one that changed compatibly.
+   */
+  live: Identities;
+  /** By written method name, each method's errors before its warnings. */
+  diagnostics: CompatibilityDiagnostic[];
+}
+
+/**
+ * A check that could not run. `input` names the side that failed when one
+ * side does not compile or declares no service; a malformed request has none.
+ */
+export interface CheckFailure extends Failure {
+  input?: "written" | "live";
+}
+
+/**
+ * Check that a live interface is still compatible with a written one: the
+ * live service must be a Candid subtype of the written one. Every written
+ * method must exist in the live service with the same mode, its arguments
+ * contravariant and its results covariant; methods only the live service
+ * has are ignored. A hand-written subset `.did` is as valid a written side
+ * as a projection.
+ *
+ * @example
+ * const report = await checkCompatible(writtenDid, liveDid);
+ * if (report.ok && !report.compatible) {
+ *   for (const item of report.diagnostics) console.error(item.method, item.code, item.path);
+ * }
+ */
+export function checkCompatible(
+  written: Sources,
+  live: Sources,
+): Promise<CompatibilityReport | CheckFailure>;
+
 /**
  * What happened to one entry of `candid-core-cli gen`.
  *

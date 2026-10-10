@@ -286,6 +286,83 @@ def main():
             )
         target.write_bytes(original)
 
+        # 5c. `project` and `check` from the tarball: the projection holds
+        #     exactly the named method and is byte-stable, `check` accepts it
+        #     against the full interface (exit 0) and refuses the reverse with
+        #     a per-method diagnostic (exit 1), and an unknown method fails
+        #     with exit 1 and writes nothing.
+        (consumer / "live").mkdir()
+        (consumer / "live" / "full.did").write_text(
+            "type Account = record { owner : principal; tokens : nat };\n"
+            "service : {\n  balance : (Account) -> (nat) query;\n  burn : (nat) -> ();\n}\n"
+        )
+        projected = run(
+            cli + ["project", "./live/full.did", "--methods", "balance", "-o", "./app/cut.did", "--json"],
+            cwd=consumer,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        projection = json.loads(projected.stdout)
+        cut = (consumer / "app" / "cut.did").read_text()
+        if (
+            projected.stderr != ""
+            or projection.get("ok") is not True
+            or projection.get("methods") != ["balance"]
+            or projection.get("status") != "written"
+            or "burn" in cut
+            or "balance : (Account) -> (nat) query;" not in cut
+        ):
+            raise SystemExit(f"project from the tarball is wrong: {projected.stdout}\n{cut}")
+        again = run(
+            cli + ["project", "./live/full.did", "--methods", "balance", "-o", "./app/cut.did", "--json"],
+            cwd=consumer,
+            stdout=subprocess.PIPE,
+        )
+        if json.loads(again.stdout).get("status") != "unchanged":
+            raise SystemExit(f"a second projection rewrote its output: {again.stdout}")
+        compatible = subprocess.run(
+            cli + ["check", "./app/cut.did", "--against", "./live/full.did", "--json"],
+            cwd=consumer,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        report = json.loads(compatible.stdout)
+        if (
+            compatible.returncode != 0
+            or report.get("compatible") is not True
+            or report.get("live", {}).get("interface_id") != projection["input"]["interface_id"]
+        ):
+            raise SystemExit(f"check of a projection against its source failed: {compatible.stdout}")
+        reverse = subprocess.run(
+            cli + ["check", "./live/full.did", "--against", "./app/cut.did", "--json"],
+            cwd=consumer,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        refused = json.loads(reverse.stdout)
+        if (
+            reverse.returncode != 1
+            or refused.get("compatible") is not False
+            or [(d["code"], d["method"]) for d in refused.get("diagnostics", [])]
+            != [("method_missing", "burn")]
+        ):
+            raise SystemExit(f"check did not refuse a missing method: {reverse.stdout}")
+        unknown = subprocess.run(
+            cli + ["project", "./live/full.did", "--methods", "nope", "-o", "./app/nope.did"],
+            cwd=consumer,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        if (
+            unknown.returncode != 1
+            or json.loads(unknown.stdout)["diagnostics"][0]["code"] != "unknown_method"
+            or (consumer / "app" / "nope.did").exists()
+        ):
+            raise SystemExit(f"an unknown method did not fail cleanly: {unknown.stdout}")
+
         # 6. The declared peer must be able to load what the CLI emitted, and
         #    the package's own declarations must compile without the DOM.
         # No host globals here on purpose (no `console`, no `process`): with
@@ -293,8 +370,8 @@ def main():
         # make this probe fail for a reason that has nothing to do with the
         # package's own declarations.
         (consumer / "check.ts").write_text(
-            'import { didToContract, didToModule } from "@candid-core/cli";\n'
-            'import type { CliReport } from "@candid-core/cli";\n'
+            'import { checkCompatible, didToContract, didToModule, projectDid } from "@candid-core/cli";\n'
+            'import type { CliReport, CompatibilityDiagnostic } from "@candid-core/cli";\n'
             'import { schemaFromContract } from "@candid-core/schema/contract";\n'
             "\n"
             "export async function main(): Promise<string[]> {\n"
@@ -310,6 +387,19 @@ def main():
             "  }\n"
             '  const emitted = await didToModule({ source: "service : { ping : () -> (); }" });\n'
             '  notes.push(emitted.ok ? String(emitted.module.length) : "failed");\n'
+            '  const cut = await projectDid("service : { ping : () -> (); pong : () -> () }", ["ping"]);\n'
+            "  if (cut.ok) {\n"
+            "    notes.push(cut.did, cut.input.interface_id, cut.projection.contract_id, ...cut.methods);\n"
+            '    const report = await checkCompatible(cut.did, { source: "service : { ping : () -> () }" });\n'
+            "    if (report.ok) {\n"
+            "      const found: CompatibilityDiagnostic[] = report.diagnostics;\n"
+            "      notes.push(String(report.compatible), report.live.interface_id, String(found.length));\n"
+            "    } else {\n"
+            '      notes.push(report.input ?? "request", report.diagnostics[0]?.code ?? "");\n'
+            "    }\n"
+            "  } else {\n"
+            "    notes.push(...cut.diagnostics.map((issue) => issue.code));\n"
+            "  }\n"
             "  return notes;\n"
             "}\n"
             "\n"
@@ -361,8 +451,8 @@ def main():
     print(
         "npm cli package verified: manifest file list, wasm present "
         f"({size} bytes), self-contained prose, end-to-end gen, --json and "
-        "--check from the tarball, envelope "
-        "shape, DOM-less strict compile, emitted module compiles against "
+        "--check from the tarball, project and check from the tarball, "
+        "envelope shape, DOM-less strict compile, emitted module compiles against "
         f"the declared peer {manifest['peerDependencies']['@candid-core/schema']}"
     )
 

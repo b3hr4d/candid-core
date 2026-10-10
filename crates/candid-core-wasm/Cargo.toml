@@ -30,11 +30,23 @@ candid-core = { path = "../..", default-features = false, features = ["compiler"
 # decision recorded on issue #153; its crates.io `publish = false` stands.
 candid-core-ts = { path = "../candid-core-ts", features = ["compiler"] }
 serde_json = "=1.0.150"
+# The projection (`projectDid`) works on the Candid syntax so the output keeps
+# declaration names, doc comments and argument names. `candid_parser` only
+# parses and merges the sources; the printer is the crate's own (see
+# `src/project.rs`). The exact version `candid-core` itself pins, so the
+# resolved graph gains an edge and no package.
+candid_parser = "=0.4.0"
 # The exact wasm-bindgen the repository already pins (wasm-bindgen-test
 # 0.3.58 pins =0.2.108 in the main workspace); wasm-pack 0.14.0 — the
 # browser job's pinned tool — drives the matching CLI.
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen = "=0.2.108"
+
+# The compatibility check's differential tests compare its verdicts with
+# upstream's own subtype check, from the exact `candid` version `candid-core`
+# pins: already in this lockfile, so no package is added.
+[dev-dependencies]
+candid = "=0.10.30"
 
 # wasm-opt is deliberately off: the artifact's bytes are then a pure function
 # of the pinned rustc and wasm-bindgen, with no binaryen download in the

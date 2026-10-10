@@ -311,8 +311,12 @@ wrote generated/basic.envelope.json
 <h2>The library API</h2>
 
 <p>
-  Three exports, and the whole surface. Both operations take one JSON-serializable request and return
-  one parsed JSON document; nothing is thrown for a data error.
+  Five exports, and the whole surface: <code>didToContract</code>, <code>didToModule</code> and
+  <code>init</code> here, and <code>projectDid</code> and <code>checkCompatible</code> under
+  <a href="#projection-and-compatibility">Projection and compatibility</a>.
+  <code>didToContract</code> and <code>didToModule</code> each take one JSON-serializable request;
+  <code>projectDid</code> and <code>checkCompatible</code> take two arguments, described in that section.
+  Every operation returns one parsed JSON document, and nothing is thrown for a data error.
 </p>
 
 <div class="api-entry">
@@ -452,7 +456,95 @@ warning: omitted method bad (references_omitted via Bad)
   generator refusal of an invalid Contract graph — which a Contract compiled from Candid source never
   is, so no <code>.did</code> reaches it: what cannot be represented is omitted instead. A matrix of nine malformed requests — including
   <code>"not json"</code>, <code>"{}"</code>, and a request carrying both <code>source</code> and
-  <code>entry</code> — is pinned to return <code>invalid_request</code> rather than panicking.
+  <code>entry</code> — is pinned to return <code>invalid_request</code> rather than panicking. The codes
+  <code>projectDid</code> and <code>checkCompatible</code> add are listed with them below.
+</p>
+
+<h2>Projection and compatibility</h2>
+
+<callout type="note" title="Unreleased">
+  <p>
+    <code>project</code>, <code>check</code>, <code>projectDid</code> and <code>checkCompatible</code>
+    are built from this repository but in no published version yet; the package changelog records
+    them under <code>Unreleased</code>.
+  </p>
+</callout>
+
+<p>
+  Two commands for an interface you do not own, such as a canister's published <code>.did</code>.
+  Both read files already on disk; neither fetches anything, so getting the live interface is the
+  caller's job.
+</p>
+
+<pre data-lang="text">
+candid-core-cli project &lt;in.did&gt; --methods &lt;a,b,...&gt; -o &lt;out.did&gt; [--json]
+candid-core-cli check &lt;written.did&gt; --against &lt;live.did&gt; [--json]
+</pre>
+
+<p>
+  <code>project</code> writes a self-contained <code>.did</code> holding only the named methods and
+  every declaration they reach, with their doc comments and argument names, and prints the interface
+  identities of the input and of the projection. The same input and the same set of names give the
+  same bytes. <code>gen</code> on the result emits an <code>Actor</code> listing only those methods,
+  each with its mode. Each distinct unknown name fails with one <code>unknown_method</code>, and the
+  failure's first diagnostic lists the service's methods in its <code>notes</code>, once; an empty
+  list fails with <code>empty_method_list</code>. The unknown names' messages are bounded at 4 MiB of
+  text in all: past that bound the names left are counted in one
+  <code>resource_limit_exceeded</code> diagnostic (<code>projection_diagnostic_bytes</code>) instead
+  of reported. A projection must compile again, so it is at most 1 MiB, the compiler's bound on one
+  source; a larger one fails with <code>resource_limit_exceeded</code>
+  (<code>projection_bytes</code>) as soon as writing it reaches that bound. Every name, requested or
+  reached, is found by binary search among names sorted once. <code>-o</code> may not be, or become, a source of the input (the
+  file and every <code>.did</code> beneath its directory): naming one by any path or link, or a new
+  <code>.did</code> beneath that directory, fails with <code>output_is_input</code> and writes
+  nothing, so write the projection outside the input's directory. An output that cannot be written fails with <code>output_write_failed</code>.
+</p>
+
+<p>
+  <code>check</code> exits 0 when the live service is still a Candid subtype of the written one and 1
+  otherwise: every written method must exist in the live service with the same mode, arguments
+  contravariant and results covariant. Methods only the live service has are ignored. Each finding
+  names its method, a stable code (<code>method_missing</code>, <code>mode_changed</code>,
+  <code>method_incompatible</code>, the warning <code>special_opt_rule</code>, or
+  <code>resource_limit_exceeded</code>) and the path into the type where the check failed, such as
+  <code>$results[0].Err.TooOld</code>. A <code>special_opt_rule</code> warning is reported at every
+  path whose value decodes as <code>null</code> along which no pair of types repeats. A hand-written subset <code>.did</code> is as valid a written
+  side as a projection.
+</p>
+
+<p>
+  The check is bounded per method (384 pairs on one path, 1,000,000 steps, 1,000 reported warnings),
+  a step being one unit of work done: a pair of types visited, a field, arm, method or value examined
+  or passed over, or one path segment a warning or a failure copies, or a warning re-examines. A step
+  reads no name: service methods are paired by ranks computed once per check, and a field's name is
+  read by its position. So a step's cost does not grow with the length of the names: it does a bounded
+  amount of work, and its lookups in the maps of type pairs the walk keeps take time logarithmic in
+  their size. It is
+  bounded too, so that a service with many methods cannot multiply those bounds, as a whole: 10,000,000
+  steps, one more per method decided (<code>check_total_steps</code>), 10,000 <code>special_opt_rule</code> warnings
+  (<code>check_total_warnings</code>) and 4 MiB of reported text, the <code>method</code>,
+  <code>path</code> and <code>message</code> strings of every diagnostic but the fail-closed ones, as
+  the JSON writes them (<code>check_output_bytes</code>), measured only up to the first string that
+  passes that bound. Methods are checked in name order. When the check reaches one of
+  these, the method at which it did and every method after it fail closed: each gets one
+  <code>resource_limit_exceeded</code> error naming the bound, with its limit and observed value, and
+  nothing else, and the check exits 1. Below these bounds a method's findings do not depend on the
+  other methods; once one is reached, they do. Without them, a 10-level shared two-field type reused by
+  100 methods turned a 5.3 KB request into a 27.8 MB response; with them it is 2.8 MB, and 3,000 such
+  methods give 4.0 MB. Past a bound each method left adds its one diagnostic, 397 bytes for a
+  six-character name, so from there the response grows only with the method count. So the walk's time
+  grows with its steps (times that logarithm) and the reported text's with its bytes; compiling both
+  sides, within the compiler's own limits, and ranking the method names are done once per check,
+  before the walk.
+</p>
+
+<p>
+  The check is one Rust implementation, compiled into the same WebAssembly. Its tests compare it with
+  the subtype check of the pinned <code>candid</code> crate on hand-written cases and a seeded random
+  campaign, and with the subtype relation <code>@candid-core/schema</code>'s decoder runs on a
+  reference. The one recorded disagreement is a <code>candid</code> crate defect: its coinductive memo
+  can keep a pair proven under an assumption it later retracted, and accept a pair that is not a
+  subtype. This check and the decoder refuse it.
 </p>
 
 <h2>In a browser</h2>
@@ -487,11 +579,31 @@ const built = schemaFromContract(envelope);
 
 <p>
   Note the shapes there: importing the wasm module directly gives you the raw wasm-bindgen exports,
-  which are string in, string out. The whole wasm ABI is two functions wide —
-  <code>didToContract(request: string): string</code> and
-  <code>didToModule(request: string): string</code> — and every richer shape lives in the JSON
+  which are string in, string out. The whole wasm ABI is four functions wide —
+  <code>didToContract(request: string): string</code>,
+  <code>didToModule(request: string): string</code>,
+  <code>projectDid(request: string): string</code> and
+  <code>checkCompatible(request: string): string</code> — and every richer shape lives in the JSON
   documents, which is what keeps the boundary reviewable. Importing from the package instead gives you
   the wrapper that does the JSON encoding for you.
+</p>
+
+<p>
+  Each request is one JSON document. <code>didToContract</code> and <code>didToModule</code> take a
+  sources request: <code>{ "source": "&lt;did text&gt;" }</code>, or
+  <code>{ "entry": "&lt;name&gt;", "files": { "&lt;name&gt;": "&lt;did text&gt;" } }</code> for a
+  bundle. <code>projectDid</code> takes a sources request with <code>"methods": ["a", "b"]</code>
+  added. <code>checkCompatible</code> takes <code>{ "written": &lt;sources request&gt;, "live":
+  &lt;sources request&gt; }</code>. Each response is one JSON document too, the same documents the
+  wrapper returns parsed: the envelope from <code>didToContract</code>;
+  <code>{ ok: true, module, omitted }</code> from <code>didToModule</code>;
+  <code>{ ok: true, did, methods, input, projection }</code> from <code>projectDid</code>, where
+  <code>input</code> and <code>projection</code> each hold a <code>contract_id</code> and an
+  <code>interface_id</code>; and <code>{ ok: true, compatible, written, live, diagnostics }</code>
+  from <code>checkCompatible</code>. Every failure is <code>{ ok: false, diagnostics }</code>. A
+  <code>checkCompatible</code> failure caused by one side adds <code>input</code>, naming that side,
+  <code>"written"</code> or <code>"live"</code>, when it does not compile or declares no service; a
+  malformed request carries no <code>input</code>.
 </p>
 
 <h2>Building it from a clone</h2>

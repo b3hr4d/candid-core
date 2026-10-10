@@ -16,6 +16,93 @@ version.
 
 ## Unreleased
 
+Not yet released; the version is decided at release time. Embeds the
+`candid-core` crate and the `candid-core-ts` generator from the release's
+commit, as every entry does.
+
+### Added
+
+- **`candid-core-cli project <in.did> --methods <a,b,...> -o <out.did>`**
+  writes a `.did` holding only the methods named and every declaration they
+  reach, as one self-contained file, and prints the interface identities of
+  the input and of the projection. The output is deterministic: the same
+  input and the same set of names give the same bytes, in any order. It
+  keeps declaration names, doc comments (a tuple element's included: a
+  tuple with a documented element is written one element per line) and
+  argument names, so `gen` on the projection emits the same declarations,
+  docs and modes as on the full interface, with an `Actor` that lists only
+  the projected methods. A service class's init arguments are dropped. An
+  unknown method name fails with `unknown_method`, one per distinct name,
+  the first listing the service's methods in its `notes`, once; an empty
+  list (`--methods ""`) with `empty_method_list`, a source with no service
+  with `no_service`; each exits 1 and writes nothing. The unknown names'
+  messages are bounded at 4 MiB of text in all, the names past that bound
+  counted in one `resource_limit_exceeded` diagnostic
+  (`projection_diagnostic_bytes`) instead of reported. A projection is at
+  most 1 MiB, the compiler's bound on one source, since it is compiled
+  again: a larger one fails with `resource_limit_exceeded`
+  (`projection_bytes`), exit 1, as soon as writing it reaches that bound.
+  Every name, requested or reached, is found by binary search among names
+  sorted once. Methods are written in name order, a service import's among
+  the entry's. `-o` is required, and may not be, or become, a source of the
+  input (the entry or any `.did` beneath its directory, which `project` reads
+  as `gen` does): naming one of those files by any path, symlink or hard
+  link, or a new `.did` beneath that directory, fails with
+  `output_is_input`, exit 1, and writes nothing. An output that cannot be
+  read or written fails with `output_write_failed` (its `notes` hold the
+  system error code), exit 1; an existing output of another size is
+  replaced without being read. `--json` prints one document instead of the
+  report, and `{ ok: false, diagnostics }` for every failure.
+- **`candid-core-cli check <written.did> --against <live.did>`** exits 0
+  when the live interface is still a Candid subtype of the written one, and
+  1 otherwise: every written method must exist in the live service with the
+  same mode, its arguments contravariant and its results covariant, and
+  methods only the live service has are ignored. Each finding names its
+  method and a stable code (`method_missing`, `mode_changed`,
+  `method_incompatible`, the warning `special_opt_rule`, and
+  `resource_limit_exceeded`) and, inside a type, the path where the check
+  failed. A `special_opt_rule` warning is reported at every path that
+  decodes as `null` along which no pair of types repeats, a shared type
+  under each path that reaches it. Past 1,000 warnings a method reports the
+  first 1,000 and a `resource_limit_exceeded` warning; its verdict stands.
+  A method whose check reaches its depth or work bound fails closed; work
+  is counted in steps, each one unit of work done (a pair of types visited,
+  a field, arm, method or value examined or passed over, a path segment a
+  warning or a failure copies or a warning re-examines). A step reads no
+  name: service methods are paired by ranks computed once per check and a
+  field's name is read by its position, so a step's cost does not grow with
+  the length of the names: it does a bounded amount of work, and its
+  lookups in the maps of type pairs the walk keeps take time logarithmic in
+  their size. The
+  check as a whole is bounded too, so many methods sharing one type cannot
+  multiply the per-method bounds: 10,000,000 steps (one more per method),
+  10,000 `special_opt_rule` warnings and 4 MiB of reported text as the JSON
+  writes it, in all
+  (`check_total_steps`, `check_total_warnings`, `check_output_bytes`); the
+  text is measured only up to the first string that passes its bound, so
+  long names cannot make the measuring itself slow. So the walk's time
+  grows with its steps (times that logarithm) and the reported text's with
+  its bytes; compiling both sides, within the compiler's own limits, and
+  ranking the method names are done once per check, before the walk.
+  Methods are checked in name order; when one of these is reached, that
+  method and every method after it get one `resource_limit_exceeded` error
+  each and nothing else, and the check exits 1. Below these bounds a
+  method's findings do not depend on the other methods. The report prints
+  the live interface identity, so an unchanged
+  interface can be told from one that changed compatibly.
+- **`projectDid(sources, methods)` and `checkCompatible(written, live)`**,
+  the library functions behind the two commands, exported beside
+  `didToContract` and `didToModule`, with their types (`ProjectionSuccess`,
+  `CompatibilityReport`, `CompatibilityDiagnostic`, `CheckFailure`,
+  `Identities`). Neither fetches anything; the package still has no runtime
+  dependencies.
+
+### Changed
+
+- **The usage text lists the three commands.** A usage error still exits 64
+  with the usage on stderr and nothing on stdout; its text now has three
+  lines, one per command.
+
 ### Generated modules
 
 - **Compiler errors name the types you import.** A generated module now

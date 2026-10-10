@@ -8,11 +8,13 @@
 //!
 //! # The request/response convention
 //!
-//! Both functions take one JSON document and return one JSON document, so
-//! the wasm ABI stays two strings wide and every richer shape lives in
-//! reviewable JSON:
+//! The wasm ABI is four functions — `didToContract`, `didToModule`,
+//! `projectDid` and `checkCompatible` (here [`did_to_contract`],
+//! [`did_to_module`], [`project_did`] and [`check_compatible`]) — and each
+//! takes one JSON document and returns one JSON document, so every one is
+//! string in, string out and every richer shape lives in reviewable JSON:
 //!
-//! - request: `{"source": "<did text>"}` for a self-contained source, or
+//! - sources request: `{"source": "<did text>"}` for a self-contained source, or
 //!   `{"entry": "<name>", "files": {"<name>": "<did text>", …}}` for a
 //!   bundle resolved through `MemoryResolver` (names are `memory:/` source
 //!   IDs; a bare name is prefixed automatically).
@@ -35,17 +37,45 @@
 //!   The array is empty, never absent, when nothing was omitted. A module
 //!   with omissions is still a success: everything it emits is exactly what
 //!   it would be without the omitted declarations.
-//! - failure, either function: `{"ok": false, "diagnostics": […]}` — the
-//!   one and only failure shape. Compiler diagnostics pass through verbatim;
-//!   envelope-validation refusals surface as their path-addressed violation
-//!   items under the same key (the native binary's channel, aligned in
-//!   review); and the two codes this crate itself originates are
-//!   `invalid_request` (`"phase": "load"` — the request document is not one
-//!   of the two shapes) and `ts_generation_refused`
-//!   (`"phase": "generate"` — the generator's refusal of an invalid
-//!   Contract graph, message text verbatim; a Contract compiled from
-//!   Candid source is always valid, so since issue #189 this is a
-//!   fail-closed guard that no `.did` input reaches).
+//! - [`project_did`] takes a sources request plus `"methods": ["name", …]`
+//!   and returns `{"ok": true, "did": "<did text>", "methods": […],
+//!   "input": {…}, "projection": {…}}`: the projected text, the methods it
+//!   holds in name order, and the `{"contract_id", "interface_id"}` of the
+//!   input and of the projection. Its own failure codes are
+//!   `unknown_method` (one per distinct name the service lacks, in the order
+//!   the request first names it, whose message names it; the first
+//!   diagnostic of the failure lists the service's methods, sorted, in its
+//!   `notes`, once), `empty_method_list`, `no_service`,
+//!   `resource_limit_exceeded` and the never expected `projection_failed`.
+//!   `resource_limit_exceeded` names one of two bounds in its
+//!   `resource_limit`: `projection_bytes`, when the projection's text would
+//!   pass the compiler's bound on one source (1 MiB), which it must stay
+//!   within to be compiled again (`observed` is where printing stopped); and
+//!   `projection_diagnostic_bytes`, when the `unknown_method` messages would
+//!   pass [`MAX_PROJECTION_DIAGNOSTIC_BYTES`] of text: the unknown name at
+//!   which they would, and every one after it, are counted in that one
+//!   diagnostic instead of reported.
+//! - [`check_compatible`] takes `{"written": <sources request>, "live":
+//!   <sources request>}` and returns `{"ok": true, "compatible": …,
+//!   "written": {…}, "live": {…}, "diagnostics": […]}`: the verdict, both
+//!   sides' identities, and one diagnostic per finding, each naming its
+//!   `method` and, inside a type, its `path`. A side that does not compile,
+//!   or declares no service, fails with `{"ok": false, "input": "written" |
+//!   "live", "diagnostics": […]}`.
+//! - failure, any function: `{"ok": false, "diagnostics": […]}` — the one
+//!   and only failure shape, plus `input` from [`check_compatible`] when one
+//!   side does not compile or declares no service (a malformed request
+//!   carries none).
+//!   Compiler diagnostics pass through verbatim; envelope-validation
+//!   refusals surface as their path-addressed violation items under the
+//!   same key (the native binary's channel, aligned in review); and the
+//!   codes this crate itself originates are `invalid_request` (`"phase":
+//!   "load"` — the request document is not the function's shape),
+//!   `ts_generation_refused` (`"phase": "generate"` — the generator's
+//!   refusal of an invalid Contract graph, message text verbatim; a
+//!   Contract compiled from Candid source is always valid, so this is a
+//!   fail-closed guard that no `.did` input reaches), and the projection
+//!   and check codes above.
 //!
 //! # Determinism
 //!
@@ -53,12 +83,28 @@
 //! canonical serialization guarantee it, a test pins it, and the CLI on top
 //! additionally double-runs every generation and refuses on any mismatch.
 
+use std::collections::BTreeSet;
+
 use candid_core::{
-    compile_with_resolver, Compilation, CompileError, CompileOptions, ContractEnvelope, Limits,
-    MemoryResolver, RuntimeContext, SourceInfo, SourceLabel,
+    compile_did_with_options, compile_with_resolver, Compilation, CompileError, CompileOptions,
+    ContractEnvelope, Limits, MemoryResolver, RuntimeContext, SourceInfo, SourceLabel,
 };
 use candid_core_ts::{generate_module, Omission, TsNames, TsOptions};
-use serde_json::{json, Value};
+use serde_json::{json, Map, Value};
+
+mod compat;
+mod project;
+
+pub use compat::{
+    MAX_CHECK_DEPTH, MAX_CHECK_OUTPUT_BYTES, MAX_CHECK_STEPS, MAX_CHECK_TOTAL_STEPS,
+    MAX_CHECK_TOTAL_WARNINGS, MAX_CHECK_WARNINGS,
+};
+pub use project::MAX_PROJECTION_DIAGNOSTIC_BYTES;
+
+#[doc(hidden)]
+pub use compat::CheckOptions;
+#[doc(hidden)]
+pub use project::{ProjectionOptions, ProjectionWork};
 
 /// The envelope extension carrying field names, per the issue #152 decision.
 pub const FIELD_NAMES_EXTENSION: &str = "org.candid-core.field-names/v1";
@@ -106,27 +152,351 @@ pub fn did_to_module(request: &str) -> String {
 /// response convention so callers return them as-is.
 fn compile_request(request: &str) -> Result<Compilation, String> {
     let (entry, resolver) = parse_request(request)?;
+    compile(&entry, &resolver).map_err(|error| diagnostics_document(&error))
+}
+
+fn compile(entry: &str, resolver: &MemoryResolver) -> Result<Compilation, CompileError> {
     compile_with_resolver(
-        &entry,
-        &resolver,
+        entry,
+        resolver,
         CompileOptions {
             include_source_info: true,
         },
         &RuntimeContext::default(),
     )
-    .map_err(|error| diagnostics_document(&error))
+}
+
+/// Project a request onto the methods it names: `{"ok": true, "did": …,
+/// "methods": […], "input": {…}, "projection": {…}}` or `{"ok": false,
+/// "diagnostics": […]}`. The request is a sources request plus `"methods":
+/// ["name", …]`.
+///
+/// The projection's text is bounded by the compiler's bound on one source,
+/// since it is compiled again, and the text of the unknown-method
+/// diagnostics by [`MAX_PROJECTION_DIAGNOSTIC_BYTES`]; every lookup by name
+/// is a binary search in names sorted once.
+pub fn project_did(request: &str) -> String {
+    project_did_with(request, ProjectionOptions::default()).0
+}
+
+/// [`project_did`] under other options, with what its indexes and lookups by
+/// name cost: this crate's tests lower the bounds and pin the cost.
+#[doc(hidden)]
+pub fn project_did_with(request: &str, options: ProjectionOptions) -> (String, ProjectionWork) {
+    let mut work = ProjectionWork::default();
+    let response = match project_request(request, options, &mut work) {
+        Ok(response) | Err(response) => response,
+    };
+    (response, work)
+}
+
+/// The start of an `unknown_method` message, which then quotes the name.
+const UNKNOWN_METHOD: &str = "the service has no method ";
+
+fn project_request(
+    request: &str,
+    options: ProjectionOptions,
+    work: &mut ProjectionWork,
+) -> Result<String, String> {
+    let document = request_object(request)?;
+    let requested: Vec<&str> = match document.get("methods") {
+        Some(Value::Array(items)) => items
+            .iter()
+            .map(|item| {
+                item.as_str()
+                    .ok_or_else(|| invalid_request("methods must be an array of method names"))
+            })
+            .collect::<Result<_, _>>()?,
+        _ => {
+            return Err(invalid_request(
+                "the request must carry \"methods\": an array of method names",
+            ))
+        }
+    };
+    let (entry, resolver) = parse_sources(&document, &["methods"])?;
+    let compilation = compile(&entry, &resolver).map_err(|error| diagnostics_document(&error))?;
+    let contract = compilation.contract();
+    let Some(service) = compat::actor_methods(contract) else {
+        return Err(failure(vec![phase_diagnostic(
+            "no_service",
+            "project",
+            "the source declares no service, so there are no methods to project".to_string(),
+        )]));
+    };
+    if requested.is_empty() {
+        return Err(failure(vec![phase_diagnostic(
+            "empty_method_list",
+            "project",
+            "name at least one method to project".to_string(),
+        )]));
+    }
+    // The service's methods, sorted once: each requested name is then a
+    // binary search, not a scan of the service.
+    let available = project::Index::new(service.iter().map(|(name, _)| (name.as_str(), ())), work);
+    let mut seen = BTreeSet::new();
+    let mut unknown = Vec::new();
+    // The text of the `unknown_method` messages, measured only up to the
+    // first that passes its bound; past it, unknown names are only counted.
+    let mut meter = compat::Meter {
+        counted: 0,
+        limit: options.diagnostic_byte_limit,
+    };
+    let mut unreported = 0usize;
+    let mut observed = 0usize;
+    for name in &requested {
+        if !seen.insert(*name) || available.get(name, work).is_some() {
+            continue;
+        }
+        if !meter.over() {
+            // At least this long: quoting never shortens a name, nor JSON a
+            // string. A name past what is left of the bound is not quoted.
+            let raw = UNKNOWN_METHOD.len() + name.len() + 2;
+            let mut message = None;
+            meter.count(raw, || {
+                let text = format!("{UNKNOWN_METHOD}{name:?}");
+                let length = compat::json_len(&text);
+                message = Some(text);
+                length
+            });
+            if let (false, Some(message)) = (meter.over(), message) {
+                unknown.push(phase_diagnostic("unknown_method", "project", message));
+                continue;
+            }
+            observed = meter.counted;
+        }
+        unreported += 1;
+    }
+    if !unknown.is_empty() || unreported > 0 {
+        if unreported > 0 {
+            let limit = options.diagnostic_byte_limit;
+            let mut item = phase_diagnostic(
+                "resource_limit_exceeded",
+                "project",
+                format!(
+                    "the unknown-method diagnostics reached their projection_diagnostic_bytes bound of {limit}, so {unreported} unknown method name(s) are not reported",
+                ),
+            );
+            item["resource_limit"] = json!({
+                "resource": "projection_diagnostic_bytes",
+                "limit": limit,
+                "observed": observed,
+            });
+            unknown.push(item);
+        }
+        // The service's methods, once, sorted: in the first diagnostic.
+        unknown[0]["notes"] = json!(available.names().collect::<Vec<_>>());
+        return Err(failure(unknown));
+    }
+    let wanted: BTreeSet<String> = seen.into_iter().map(str::to_string).collect();
+    let source_info = compilation
+        .source_info()
+        .expect("source info was requested");
+    let (text, methods) = project::project(
+        source_info,
+        &entry,
+        &wanted,
+        options.text_byte_limit,
+        work,
+    )
+    .map_err(|refusal| match refusal {
+        project::Refusal::TooLong { limit, observed } => {
+            let mut item = phase_diagnostic(
+                "resource_limit_exceeded",
+                "project",
+                format!(
+                    "the projection would take more than {limit} bytes, the compiler's bound on one source, so it could not be compiled again; printing stopped at {observed} bytes",
+                ),
+            );
+            item["resource_limit"] = json!({
+                "resource": "projection_bytes",
+                "limit": limit,
+                "observed": observed,
+            });
+            failure(vec![item])
+        }
+        project::Refusal::Internal(message) => projection_failed(message, Vec::new()),
+    })?;
+    // The output is only as good as a second compile says it is: it must be
+    // a valid self-contained `.did` whose service has exactly these methods.
+    let projected = compile_did_with_options(
+        &text,
+        CompileOptions {
+            include_source_info: false,
+        },
+    )
+    .map_err(|error| {
+        projection_failed(
+            "the projection does not compile".to_string(),
+            error
+                .diagnostics
+                .iter()
+                .map(|item| format!("{}: {}", item.code, item.message))
+                .collect(),
+        )
+    })?;
+    let mut kept: Vec<String> = compat::actor_methods(projected.contract())
+        .unwrap_or_default()
+        .into_iter()
+        .map(|(name, _)| name)
+        .collect();
+    kept.sort();
+    if kept != wanted.iter().cloned().collect::<Vec<_>>() {
+        return Err(projection_failed(
+            format!("the projection holds the methods {kept:?}, not the ones requested"),
+            Vec::new(),
+        ));
+    }
+    Ok(pretty(&json!({
+        "ok": true,
+        "did": text,
+        "methods": methods,
+        "input": identities(contract),
+        "projection": identities(projected.contract()),
+    })))
+}
+
+/// Check that a live service is a Candid subtype of a written one:
+/// `{"ok": true, "compatible": …, "written": {…}, "live": {…},
+/// "diagnostics": […]}`, or `{"ok": false, "input"?: "written" | "live",
+/// "diagnostics": […]}` when the request or a side's sources fail. The
+/// request is `{"written": <sources request>, "live": <sources request>}`.
+///
+/// The check is bounded per method ([`MAX_CHECK_DEPTH`], [`MAX_CHECK_STEPS`],
+/// [`MAX_CHECK_WARNINGS`]) and as a whole ([`MAX_CHECK_TOTAL_STEPS`],
+/// [`MAX_CHECK_TOTAL_WARNINGS`], [`MAX_CHECK_OUTPUT_BYTES`]); reaching a
+/// bound of the whole fails closed every method not yet reported.
+pub fn check_compatible(request: &str) -> String {
+    check_compatible_with(request, CheckOptions::default())
+}
+
+/// [`check_compatible`] under other options: this crate's tests lower the
+/// bounds, or turn off the re-reporting of proven pairs to get the
+/// reference set of warnings.
+#[doc(hidden)]
+pub fn check_compatible_with(request: &str, options: CheckOptions) -> String {
+    match check_request(request, options) {
+        Ok(response) | Err(response) => response,
+    }
+}
+
+fn check_request(request: &str, options: CheckOptions) -> Result<String, String> {
+    let document = request_object(request)?;
+    let unknown: Vec<&str> = document
+        .keys()
+        .map(String::as_str)
+        .filter(|key| !matches!(*key, "written" | "live"))
+        .collect();
+    if !unknown.is_empty() {
+        return Err(invalid_request(&format!(
+            "unknown request keys: {}",
+            unknown.join(", ")
+        )));
+    }
+    let side = |name: &str| -> Result<Compilation, String> {
+        let Some(Value::Object(object)) = document.get(name) else {
+            return Err(invalid_request(&format!(
+                "the request must carry \"{name}\": a sources request object"
+            )));
+        };
+        let (entry, resolver) = parse_sources(object, &[])?;
+        let compilation = compile(&entry, &resolver)
+            .map_err(|error| side_failure(name, json!(error.diagnostics)))?;
+        if compat::actor_methods(compilation.contract()).is_none() {
+            return Err(side_failure(
+                name,
+                json!([phase_diagnostic(
+                    "no_service",
+                    "check",
+                    format!("the {name} source declares no service to compare"),
+                )]),
+            ));
+        }
+        Ok(compilation)
+    };
+    let written = side("written")?;
+    let live = side("live")?;
+    let diagnostics = compat::check(
+        &compat::Input {
+            contract: written.contract(),
+            source_info: written.source_info(),
+        },
+        &compat::Input {
+            contract: live.contract(),
+            source_info: live.source_info(),
+        },
+        options,
+    );
+    let compatible = diagnostics
+        .iter()
+        .all(|item| item["severity"] != json!("error"));
+    Ok(pretty(&json!({
+        "ok": true,
+        "compatible": compatible,
+        "written": identities(written.contract()),
+        "live": identities(live.contract()),
+        "diagnostics": diagnostics,
+    })))
+}
+
+fn identities(contract: &candid_core::Contract) -> Value {
+    json!({
+        "contract_id": contract.contract_id(),
+        "interface_id": contract.interface_id(),
+    })
+}
+
+fn phase_diagnostic(code: &str, phase: &str, message: String) -> Value {
+    json!({
+        "code": code,
+        "phase": phase,
+        "severity": "error",
+        "message": message,
+    })
+}
+
+fn failure(diagnostics: Vec<Value>) -> String {
+    pretty(&json!({ "ok": false, "diagnostics": diagnostics }))
+}
+
+fn side_failure(side: &str, diagnostics: Value) -> String {
+    pretty(&json!({ "ok": false, "input": side, "diagnostics": diagnostics }))
+}
+
+/// A projection the compiler refused or that lost a method: never expected,
+/// and reported rather than written.
+fn projection_failed(message: String, notes: Vec<String>) -> String {
+    let mut item = phase_diagnostic("projection_failed", "project", message);
+    if !notes.is_empty() {
+        item["notes"] = json!(notes);
+    }
+    failure(vec![item])
 }
 
 fn parse_request(request: &str) -> Result<(String, MemoryResolver), String> {
+    let document = request_object(request)?;
+    parse_sources(&document, &[])
+}
+
+/// The request document as a JSON object, or the `invalid_request` failure.
+fn request_object(request: &str) -> Result<Map<String, Value>, String> {
     let document: Value = serde_json::from_str(request)
         .map_err(|error| invalid_request(&format!("the request is not JSON: {error}")))?;
-    let object = document
-        .as_object()
-        .ok_or_else(|| invalid_request("the request must be a JSON object"))?;
+    match document {
+        Value::Object(object) => Ok(object),
+        _ => Err(invalid_request("the request must be a JSON object")),
+    }
+}
+
+/// The sources half of a request: `{"source": …}` or `{"entry": …,
+/// "files": {…}}`, beside only the `extra` keys the caller reads itself.
+fn parse_sources(
+    object: &Map<String, Value>,
+    extra: &[&str],
+) -> Result<(String, MemoryResolver), String> {
     let unknown: Vec<&str> = object
         .keys()
         .map(String::as_str)
-        .filter(|key| !matches!(*key, "source" | "entry" | "files"))
+        .filter(|key| !matches!(*key, "source" | "entry" | "files") && !extra.contains(key))
         .collect();
     if !unknown.is_empty() {
         return Err(invalid_request(&format!(
@@ -284,5 +654,17 @@ mod bindings {
     #[wasm_bindgen(js_name = didToModule)]
     pub fn did_to_module(request: &str) -> String {
         crate::did_to_module(request)
+    }
+
+    /// See [`crate::project_did`].
+    #[wasm_bindgen(js_name = projectDid)]
+    pub fn project_did(request: &str) -> String {
+        crate::project_did(request)
+    }
+
+    /// See [`crate::check_compatible`].
+    #[wasm_bindgen(js_name = checkCompatible)]
+    pub fn check_compatible(request: &str) -> String {
+        crate::check_compatible(request)
     }
 }
