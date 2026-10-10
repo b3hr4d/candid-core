@@ -693,7 +693,8 @@ fn request(sources: Value, methods: &[String]) -> String {
     request.to_string()
 }
 
-/// The response, its length in bytes, and what its lookups by name cost.
+/// The response, its length in bytes, and what its indexes and lookups by
+/// name cost.
 fn project_with(request: &str, options: ProjectionOptions) -> (Value, usize, ProjectionWork) {
     let (response, work) = project_did_with(request, options);
     (
@@ -746,7 +747,10 @@ fn an_unknown_method_failure_lists_the_services_methods_once() {
     // in the notes.
     assert_eq!(request.len(), 75_037);
     assert_eq!(length, 522_066);
-    // One lookup per distinct requested name, each a binary search.
+    // The methods sorted once, and no declaration, since the failure comes
+    // first; then one lookup per distinct requested name, each a binary
+    // search.
+    assert_eq!(work.indexed, 3_000);
     assert_eq!(work.lookups, 3_000);
     assert!(
         work.compared <= work.lookups * per_lookup(3_000),
@@ -773,19 +777,22 @@ fn requested_names_are_found_by_binary_search() {
     assert_eq!(response["ok"], json!(true), "{response}");
     assert_eq!(response["methods"].as_array().unwrap().len(), count);
     assert_eq!(response["did"].as_str().unwrap().len(), 88_014);
-    // The methods' types are inline: no declaration is looked up.
+    // The methods sorted once. Their types are inline, so there is no
+    // declaration to sort or look up.
+    assert_eq!(work.indexed, count);
     assert_eq!(work.lookups, count);
     assert!(
         work.compared <= work.lookups * per_lookup(count),
         "{work:?}"
     );
 
-    // An unknown name costs one lookup too.
+    // An unknown name costs one lookup too, in the methods sorted once.
     let (response, _, work) = project_with(
         &request(json!(service_of(count)), &["nope".to_string()]),
         ProjectionOptions::default(),
     );
     assert_eq!(response["diagnostics"][0]["code"], json!("unknown_method"));
+    assert_eq!(work.indexed, count);
     assert_eq!(work.lookups, 1);
     assert!(work.compared <= per_lookup(count), "{work:?}");
 }
@@ -820,9 +827,11 @@ fn declarations_are_found_by_binary_search() {
     assert!(!text.contains("Unused"), "only what `get` reaches");
     assert_eq!(text.matches("type ").count(), fields + 1);
     assert_eq!(text.len(), 101_730);
+    // The service's two methods, then its declarations, each sorted once.
+    let declarations = fields + 2;
+    assert_eq!(work.indexed, 2 + declarations);
     // `get`, then `R` and each `T`: one lookup each.
     assert_eq!(work.lookups, 1 + 1 + fields);
-    let declarations = fields + 2;
     assert!(
         work.compared <= per_lookup(2) + (fields + 1) * per_lookup(declarations),
         "{work:?}"
@@ -865,6 +874,8 @@ fn the_actor_is_resolved_through_the_index() {
         response["did"],
         json!("service : {\n  get : () -> (nat) query;\n  put : () -> (nat) query;\n}\n")
     );
+    // The two methods, then both chains' declarations, each sorted once.
+    assert_eq!(work.indexed, 2 + 2 * chain);
     // Two requested names, then each chain's steps.
     assert_eq!(work.lookups, 2 + 2 * chain);
     assert!(

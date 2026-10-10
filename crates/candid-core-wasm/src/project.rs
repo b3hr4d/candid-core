@@ -111,12 +111,17 @@ impl Default for ProjectionOptions {
     }
 }
 
-/// What a projection's lookups by name cost: this crate's tests pin it, so
-/// that a lookup that scans, or a name looked up by anything but an
-/// [`Index`], fails them.
+/// What a projection's indexes and lookups by name cost: this crate's tests
+/// pin it, so that an index built more than once, a lookup that scans, or a
+/// name looked up by anything but an [`Index`], fails them.
 #[doc(hidden)]
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct ProjectionWork {
+    /// The entries sorted into an [`Index`]. Each index is built once: the
+    /// service's methods, and, when every requested name is one of them,
+    /// the declarations. So this is the method count, plus the declaration
+    /// count when the declarations are indexed.
+    pub indexed: usize,
     /// Names looked up: each distinct requested name among the service's
     /// methods, each step from the actor to its service, and each
     /// declaration name reachability meets for the first time.
@@ -149,8 +154,12 @@ pub struct Index<'a, T> {
 }
 
 impl<'a, T> Index<'a, T> {
-    pub fn new(entries: impl IntoIterator<Item = (&'a str, T)>) -> Self {
+    /// The entries sorted by name, each one counted in `work.indexed`, so
+    /// that an index built again for each lookup fails the tests that pin
+    /// it.
+    pub fn new(entries: impl IntoIterator<Item = (&'a str, T)>, work: &mut ProjectionWork) -> Self {
         let mut entries: Vec<(&'a str, T)> = entries.into_iter().collect();
+        work.indexed += entries.len();
         // A stable sort keeps the first entry of a name ahead of any later
         // one, and `dedup_by` keeps the first of each run.
         entries.sort_by(|left, right| left.0.cmp(right.0));
@@ -353,6 +362,7 @@ pub fn project(
             .declarations
             .iter()
             .map(|binding| (binding.id.as_str(), binding)),
+        work,
     );
     let (service, docs) = bundle.service(&declarations, work)?;
     let selected: Vec<&Binding> = service

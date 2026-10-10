@@ -179,8 +179,8 @@ pub fn project_did(request: &str) -> String {
     project_did_with(request, ProjectionOptions::default()).0
 }
 
-/// [`project_did`] under other options, with what its lookups by name cost:
-/// this crate's tests lower the bounds and pin the cost.
+/// [`project_did`] under other options, with what its indexes and lookups by
+/// name cost: this crate's tests lower the bounds and pin the cost.
 #[doc(hidden)]
 pub fn project_did_with(request: &str, options: ProjectionOptions) -> (String, ProjectionWork) {
     let mut work = ProjectionWork::default();
@@ -232,7 +232,7 @@ fn project_request(
     }
     // The service's methods, sorted once: each requested name is then a
     // binary search, not a scan of the service.
-    let available = project::Index::new(service.iter().map(|(name, _)| (name.as_str(), ())));
+    let available = project::Index::new(service.iter().map(|(name, _)| (name.as_str(), ())), work);
     let mut seen = BTreeSet::new();
     let mut unknown = Vec::new();
     // The text of the `unknown_method` messages, measured only up to the
