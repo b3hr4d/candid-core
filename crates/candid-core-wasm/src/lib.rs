@@ -8,11 +8,13 @@
 //!
 //! # The request/response convention
 //!
-//! Both functions take one JSON document and return one JSON document, so
-//! the wasm ABI stays two strings wide and every richer shape lives in
-//! reviewable JSON:
+//! The wasm ABI is four functions — `didToContract`, `didToModule`,
+//! `projectDid` and `checkCompatible` (here [`did_to_contract`],
+//! [`did_to_module`], [`project_did`] and [`check_compatible`]) — and each
+//! takes one JSON document and returns one JSON document, so every one is
+//! string in, string out and every richer shape lives in reviewable JSON:
 //!
-//! - request: `{"source": "<did text>"}` for a self-contained source, or
+//! - sources request: `{"source": "<did text>"}` for a self-contained source, or
 //!   `{"entry": "<name>", "files": {"<name>": "<did text>", …}}` for a
 //!   bundle resolved through `MemoryResolver` (names are `memory:/` source
 //!   IDs; a bare name is prefixed automatically).
@@ -35,17 +37,32 @@
 //!   The array is empty, never absent, when nothing was omitted. A module
 //!   with omissions is still a success: everything it emits is exactly what
 //!   it would be without the omitted declarations.
-//! - failure, either function: `{"ok": false, "diagnostics": […]}` — the
-//!   one and only failure shape. Compiler diagnostics pass through verbatim;
-//!   envelope-validation refusals surface as their path-addressed violation
-//!   items under the same key (the native binary's channel, aligned in
-//!   review); and the two codes this crate itself originates are
-//!   `invalid_request` (`"phase": "load"` — the request document is not one
-//!   of the two shapes) and `ts_generation_refused`
-//!   (`"phase": "generate"` — the generator's refusal of an invalid
-//!   Contract graph, message text verbatim; a Contract compiled from
-//!   Candid source is always valid, so since issue #189 this is a
-//!   fail-closed guard that no `.did` input reaches).
+//! - [`project_did`] takes a sources request plus `"methods": ["name", …]`
+//!   and returns `{"ok": true, "did": "<did text>", "methods": […],
+//!   "input": {…}, "projection": {…}}`: the projected text, the methods it
+//!   holds in name order, and the `{"contract_id", "interface_id"}` of the
+//!   input and of the projection. Its own failure codes are
+//!   `unknown_method`, `empty_method_list`, `no_service` and the never
+//!   expected `projection_failed`.
+//! - [`check_compatible`] takes `{"written": <sources request>, "live":
+//!   <sources request>}` and returns `{"ok": true, "compatible": …,
+//!   "written": {…}, "live": {…}, "diagnostics": […]}`: the verdict, both
+//!   sides' identities, and one diagnostic per finding, each naming its
+//!   `method` and, inside a type, its `path`. A side that does not compile,
+//!   or declares no service, fails with `{"ok": false, "input": "written" |
+//!   "live", "diagnostics": […]}`.
+//! - failure, any function: `{"ok": false, "diagnostics": […]}` (plus
+//!   `input` from [`check_compatible`]) — the one and only failure shape.
+//!   Compiler diagnostics pass through verbatim; envelope-validation
+//!   refusals surface as their path-addressed violation items under the
+//!   same key (the native binary's channel, aligned in review); and the
+//!   codes this crate itself originates are `invalid_request` (`"phase":
+//!   "load"` — the request document is not the function's shape),
+//!   `ts_generation_refused` (`"phase": "generate"` — the generator's
+//!   refusal of an invalid Contract graph, message text verbatim; a
+//!   Contract compiled from Candid source is always valid, so this is a
+//!   fail-closed guard that no `.did` input reaches), and the projection
+//!   and check codes above.
 //!
 //! # Determinism
 //!

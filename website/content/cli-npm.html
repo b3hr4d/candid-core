@@ -311,8 +311,10 @@ wrote generated/basic.envelope.json
 <h2>The library API</h2>
 
 <p>
-  Three exports, and the whole surface. Both operations take one JSON-serializable request and return
-  one parsed JSON document; nothing is thrown for a data error.
+  Five exports, and the whole surface: <code>didToContract</code>, <code>didToModule</code> and
+  <code>init</code> here, and <code>projectDid</code> and <code>checkCompatible</code> under
+  <a href="#projection-and-compatibility">Projection and compatibility</a>. Each operation takes one
+  JSON-serializable request and returns one parsed JSON document; nothing is thrown for a data error.
 </p>
 
 <div class="api-entry">
@@ -452,7 +454,8 @@ warning: omitted method bad (references_omitted via Bad)
   generator refusal of an invalid Contract graph — which a Contract compiled from Candid source never
   is, so no <code>.did</code> reaches it: what cannot be represented is omitted instead. A matrix of nine malformed requests — including
   <code>"not json"</code>, <code>"{}"</code>, and a request carrying both <code>source</code> and
-  <code>entry</code> — is pinned to return <code>invalid_request</code> rather than panicking.
+  <code>entry</code> — is pinned to return <code>invalid_request</code> rather than panicking. The codes
+  <code>projectDid</code> and <code>checkCompatible</code> add are listed with them below.
 </p>
 
 <h2>Projection and compatibility</h2>
@@ -542,11 +545,30 @@ const built = schemaFromContract(envelope);
 
 <p>
   Note the shapes there: importing the wasm module directly gives you the raw wasm-bindgen exports,
-  which are string in, string out. The whole wasm ABI is two functions wide —
-  <code>didToContract(request: string): string</code> and
-  <code>didToModule(request: string): string</code> — and every richer shape lives in the JSON
+  which are string in, string out. The whole wasm ABI is four functions wide —
+  <code>didToContract(request: string): string</code>,
+  <code>didToModule(request: string): string</code>,
+  <code>projectDid(request: string): string</code> and
+  <code>checkCompatible(request: string): string</code> — and every richer shape lives in the JSON
   documents, which is what keeps the boundary reviewable. Importing from the package instead gives you
   the wrapper that does the JSON encoding for you.
+</p>
+
+<p>
+  Each request is one JSON document. <code>didToContract</code> and <code>didToModule</code> take a
+  sources request: <code>{ "source": "&lt;did text&gt;" }</code>, or
+  <code>{ "entry": "&lt;name&gt;", "files": { "&lt;name&gt;": "&lt;did text&gt;" } }</code> for a
+  bundle. <code>projectDid</code> takes a sources request with <code>"methods": ["a", "b"]</code>
+  added. <code>checkCompatible</code> takes <code>{ "written": &lt;sources request&gt;, "live":
+  &lt;sources request&gt; }</code>. Each response is one JSON document too, the same documents the
+  wrapper returns parsed: the envelope from <code>didToContract</code>;
+  <code>{ ok: true, module, omitted }</code> from <code>didToModule</code>;
+  <code>{ ok: true, did, methods, input, projection }</code> from <code>projectDid</code>, where
+  <code>input</code> and <code>projection</code> each hold a <code>contract_id</code> and an
+  <code>interface_id</code>; and <code>{ ok: true, compatible, written, live, diagnostics }</code>
+  from <code>checkCompatible</code>. Every failure is <code>{ ok: false, diagnostics }</code>, and a
+  <code>checkCompatible</code> failure adds <code>input</code>, naming the side,
+  <code>"written"</code> or <code>"live"</code>, that did not compile.
 </p>
 
 <h2>Building it from a clone</h2>
