@@ -293,7 +293,11 @@ method whose check reached a bound, its depth (384 pairs on one path) or its
 work (1,000,000 steps, a step being one unit of work done: a pair of types
 visited, a field, arm, method or value examined or passed over,
 or one path segment a warning or a failure copies, or a warning
-re-examines). Past 1,000
+re-examines). A step reads no name: service methods are paired by ranks
+computed once per check, and a field's name is read by its position. So a
+step's cost does not grow with the length of the names: it does a bounded
+amount of work, and its lookups in the maps of type pairs the walk keeps take
+time logarithmic in their size. Past 1,000
 warnings a method reports the first 1,000 and one `resource_limit_exceeded`
 warning (`check_warnings`) saying the rest were dropped; its verdict stands.
 The check as a whole is bounded too, so a service with many methods cannot
@@ -309,7 +313,10 @@ its limit and the observed value, and nothing else, and the check exits `1`.
 Below these bounds a method's findings do not depend on the other methods;
 once one is reached, they do. Each method left adds its one diagnostic, 397
 bytes for a six-character name, so past a bound the response grows only with
-the method count.
+the method count. So the walk's time grows with its steps (times that
+logarithm) and the reported text's with its bytes; compiling both sides,
+within the compiler's own limits, and ranking the method names are done once
+per check, before the walk.
 `method_incompatible` and `special_opt_rule` carry the path
 into the method's type where the check failed: `$args[i]` or `$results[i]`,
 then `.name` per record field or variant arm (`["name"]` when it is not an

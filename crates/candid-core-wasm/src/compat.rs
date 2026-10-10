@@ -58,24 +58,23 @@
 //!
 //! The walk is recursive, so its depth is bounded ([`MAX_CHECK_DEPTH`] pairs
 //! on one path), and so is its work ([`MAX_CHECK_STEPS`] steps), each per
-//! method. A step is one unit of work done, so the bound bounds the walk's
-//! time: a pair visited, however it is answered (expanded, from a proof, at
-//! a pair in progress, or from a failed pair, which also costs one step per
-//! segment of the failure path it copies); a field, arm, method or value
-//! examined, or passed over because the other side lacks it; a proven
-//! pair's warning re-examined, one step per pair below the proven one on its path, at least
-//! one; a warning recorded or re-reported, one step per segment of the
-//! path it copies; and a failure recorded for a pair, one step per segment
-//! of its path, so the failures a method keeps are bounded by its steps too.
-//! Fields and arms are paired in one pass over the two
-//! id-ordered lists, and methods in one pass by id and name, so no step
-//! hides a scan. Reaching either bound fails the method closed with
-//! `resource_limit_exceeded`; the compiler's own limits keep every Contract
-//! it accepts well below both for interfaces of ordinary shape. The warnings
-//! a method reports are bounded too ([`MAX_CHECK_WARNINGS`]), but that bound
-//! does not touch the verdict: the decision is complete, so past it the
-//! method keeps its verdict, reports the first warnings, and ends with a
-//! `resource_limit_exceeded` *warning* saying the rest were not reported.
+//! method. A step is one unit of work done: a pair visited, however it is
+//! answered (expanded, from a proof, at a pair in progress, or from a failed
+//! pair, which also costs one step per segment of the failure path it
+//! copies); a field, arm, method or value examined, or passed over because
+//! the other side lacks it; a proven pair's warning re-examined, one step
+//! per pair below the proven one on its path, at least one; a warning
+//! recorded or re-reported, one step per segment of the path it copies; and
+//! a failure recorded for a pair, one step per segment of its path, so the
+//! failures a method keeps are bounded by its steps too. What a step costs
+//! is under [Cost](#cost). Reaching either bound fails the method closed
+//! with `resource_limit_exceeded`; the compiler's own limits keep every
+//! Contract it accepts well below both for interfaces of ordinary shape.
+//! The warnings a method reports are bounded too ([`MAX_CHECK_WARNINGS`]),
+//! but that bound does not touch the verdict: the decision is complete, so
+//! past it the method keeps its verdict, reports the first warnings, and
+//! ends with a `resource_limit_exceeded` *warning* saying the rest were not
+//! reported.
 //!
 //! Per-method bounds alone would let the written service multiply them: a
 //! compiler-accepted source can declare thousands of methods that each walk
@@ -88,22 +87,16 @@
 //! and `message` strings of every diagnostic a method reports, as the JSON
 //! response writes them, escapes included (`check_output_bytes`). Methods
 //! are checked in name order. The step bound is checked as the work is spent;
-//! the other two when a method is decided, against what it would report.
-//! That text is measured string by string (a name, a message, one segment
-//! of a path), and only up to the first string that passes the byte bound;
-//! a string longer than what is left of it is counted at its raw length,
-//! which JSON never shortens, without being measured. The step bounds do
-//! not count this measuring, so it is bounded by the bytes instead: at most
-//! the byte bound plus one string's bytes over the whole check, however
-//! long the names, paths and lists of diagnostics are. The method at which
-//! an aggregate bound is reached, and every method after it, fail closed:
-//! each gets exactly one diagnostic, an *error* `resource_limit_exceeded`
-//! naming the aggregate resource with its limit and the value observed when
-//! it was reached (for the bytes, the count at the string that passed the
-//! bound), and nothing else — not its `mode_changed`, nor a
-//! `method_missing`. Below these bounds a
-//! method's diagnostics do not depend on the other methods; once one is
-//! reached, which methods are reported depends on the methods before them.
+//! the other two when a method is decided, against what it would report,
+//! measured only up to the first string that passes the byte bound. The
+//! method at which an aggregate bound is reached, and every method after
+//! it, fail closed: each gets exactly one diagnostic, an *error*
+//! `resource_limit_exceeded` naming the aggregate resource with its limit
+//! and the value observed when it was reached (for the bytes, the count at
+//! the string that passed the bound), and nothing else — not its
+//! `mode_changed`, nor a `method_missing`. Below these bounds a method's
+//! diagnostics do not depend on the other methods; once one is reached,
+//! which methods are reported depends on the methods before them.
 //!
 //! So a response holds at most [`MAX_CHECK_OUTPUT_BYTES`] of reported text,
 //! at most [`MAX_CHECK_TOTAL_WARNINGS`] warnings, and per written method at
@@ -113,11 +106,58 @@
 //! method names, that is linearly with the input, 397 bytes each
 //! pretty-printed for a six-character name. Paths borrow their names from
 //! the two compiled sides, so the memory a walk holds does not grow with the
-//! length of a name either. Each method starts from fresh maps rather than
-//! cleared ones, whose cost would be the capacity an earlier method grew.
+//! length of a name either.
+//!
+//! # Cost
+//!
+//! The check's time has three parts, and each is paid for by something
+//! named here: the steps, the bytes of reported text, or the input itself.
+//!
+//! - **A step** pays for a bounded amount of work plus its operations on
+//!   the maps of the pairs of types the method has met. Those are ordered
+//!   maps, so an operation compares `O(log p)` pairs of integers, `p` the
+//!   pairs the map holds, at most one per step the method has spent. A hash
+//!   map would cost `O(1)` per operation only while its hash keys are
+//!   unpredictable, and a `wasm32-unknown-unknown` build derives them from
+//!   allocation addresses. No step reads a name, so no step's cost grows
+//!   with the length of one: fields and arms are paired in one pass over
+//!   the two id-ordered lists, and a field's name is read by its position;
+//!   service methods are paired in one pass over their ranks, integers
+//!   computed once per check. A message the walk formats is of bounded
+//!   length: it names kinds of types, never a name. Undoing a failed
+//!   probe, forgetting the proofs that depended on a finished walk, and
+//!   clearing a method's state for the next one cost what was put there,
+//!   which steps paid for. So the walk of a method takes `O(s log s)` time
+//!   for `s` steps.
+//! - **The byte bound** pays for the reported text. A decided method's
+//!   reports are measured string by string (a name, a message, one segment
+//!   of a path) and only up to the first string that passes
+//!   [`MAX_CHECK_OUTPUT_BYTES`]; a string longer than what is left of the
+//!   bound is counted at its raw length, which JSON never shortens, without
+//!   being read. Only text that fits is rendered. So measuring, rendering
+//!   and writing the reported text take time linear in at most the byte
+//!   bound plus one string, over the whole check.
+//! - **The input** pays for everything else, once per check or once per
+//!   written method, outside the walk. Before any method is walked, the
+//!   request is parsed and each side compiled, within the compiler's own
+//!   limits (on bytes, type nodes, fields, methods, name bytes and
+//!   canonicalization work), not this check's. Each Contract is then
+//!   indexed once: the methods of every service of both Contracts are
+//!   sorted by id and then by name, which gives each its rank, comparing
+//!   names only where ids are equal; each method takes one binary search
+//!   for its rank, and each named field label one in its record's fields;
+//!   and the written methods are sorted by name. Each written method is
+//!   then looked up once by name among the live ones. The ranking, the
+//!   sort and the lookups by name take `O((S + n) log n)` time together,
+//!   for `n` methods whose names hold `S` bytes in all (the compiler holds
+//!   `S` to 1 MiB a side), however often the walk meets them, and placing
+//!   a label `O(log f)` for a record of `f` fields. Outside the reported
+//!   text the byte bound pays for, a name is copied a bounded number of
+//!   times (into the list of a service's methods, a `method_missing`
+//!   message, a fail-closed diagnostic).
 
 use std::borrow::Cow;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 use std::ops::ControlFlow;
 
 use candid_core::{
@@ -139,7 +179,9 @@ pub const MAX_CHECK_DEPTH: usize = 384;
 /// The most work the check of one method may do, in steps: pairs visited,
 /// fields, arms, methods and values examined or passed over, and path
 /// segments warnings and failures copy or warnings re-examine (see the
-/// module's Bounds).
+/// module's Bounds). A step reads no name, and costs a bounded amount of
+/// work plus `O(log p)` for its operations on maps of `p` pairs, `p` at
+/// most this bound (see the module's Cost).
 pub const MAX_CHECK_STEPS: usize = 1_000_000;
 
 /// The most `special_opt_rule` warnings one method reports. Re-reporting a
@@ -169,7 +211,7 @@ pub const MAX_CHECK_TOTAL_WARNINGS: usize = 10_000;
 /// `max_input_bytes`, its bound on one document it parses. A method whose
 /// diagnostics would take the total past it, and every method after it,
 /// fail closed (`check_output_bytes`). The text is measured only up to the
-/// first string that passes the bound (see the module's Bounds).
+/// first string that passes the bound (see the module's Cost).
 pub const MAX_CHECK_OUTPUT_BYTES: usize = 4 * 1024 * 1024;
 
 /// How a check runs. [`CheckOptions::default`] is what `checkCompatible`
@@ -219,31 +261,116 @@ impl Side {
     }
 }
 
-/// One Contract's type arena plus the field names its source spelled.
+/// One Contract's type arena, indexed once before the walk so that the walk
+/// reads what it needs by position and never by name: the name the source
+/// spelled for each field of a record or variant, and the rank of each
+/// method of a service.
 struct Graph<'a> {
     types: &'a [TypeNode],
-    names: BTreeMap<(u32, u32), &'a str>,
+    /// Where each node's members begin: a record's or a variant's fields in
+    /// `labels`, a service's methods in `ranks`.
+    first: Vec<usize>,
+    /// The name the source spelled for each field, where it spelled one.
+    labels: Vec<Option<&'a str>>,
+    /// Each method's rank in [`method_order`].
+    ranks: Vec<usize>,
 }
 
 impl<'a> Graph<'a> {
-    fn new(contract: &'a Contract, source_info: Option<&'a SourceInfo>) -> Self {
-        let mut names = BTreeMap::new();
+    /// Index a Contract: one pass over its nodes, a binary search in `order`
+    /// per service method, and one in its container's fields per named
+    /// field label, later labels winning as the generator keeps them.
+    fn new(
+        contract: &'a Contract,
+        source_info: Option<&'a SourceInfo>,
+        order: &[(u32, &str)],
+    ) -> Self {
+        let types = contract.types();
+        let mut first = Vec::with_capacity(types.len());
+        let mut labels = Vec::new();
+        let mut ranks = Vec::new();
+        for node in types {
+            match node {
+                TypeNode::Record { fields } | TypeNode::Variant { fields } => {
+                    debug_assert!(in_id_order(fields));
+                    first.push(labels.len());
+                    labels.resize(labels.len() + fields.len(), None);
+                }
+                TypeNode::Service { methods } => {
+                    first.push(ranks.len());
+                    for method in methods {
+                        let rank = order
+                            .binary_search(&(method.id, method.name.as_str()))
+                            .expect("the order holds every method of both Contracts");
+                        ranks.push(rank);
+                    }
+                    debug_assert!(ranks[ranks.len() - methods.len()..]
+                        .windows(2)
+                        .all(|pair| pair[0] < pair[1]));
+                }
+                _ => first.push(0),
+            }
+        }
         if let Some(source_info) = source_info {
             for provenance in source_info.field_labels() {
-                if let SourceLabel::Named { name } = &provenance.label {
-                    names.insert((provenance.container, provenance.id), name.as_str());
+                let SourceLabel::Named { name } = &provenance.label else {
+                    continue;
+                };
+                let container = provenance.container as usize;
+                if let Some(TypeNode::Record { fields } | TypeNode::Variant { fields }) =
+                    types.get(container)
+                {
+                    if let Ok(position) =
+                        fields.binary_search_by_key(&provenance.id, |field| field.id)
+                    {
+                        labels[first[container] + position] = Some(name.as_str());
+                    }
                 }
             }
         }
         Self {
-            types: contract.types(),
-            names,
+            types,
+            first,
+            labels,
+            ranks,
         }
     }
 
     fn node(&self, reference: u32) -> &'a TypeNode {
         &self.types[reference as usize]
     }
+
+    /// The name the source spelled for the field at `position` of the
+    /// record or variant `node`.
+    fn label(&self, node: u32, position: usize) -> Option<&'a str> {
+        self.labels[self.first[node as usize] + position]
+    }
+
+    /// The rank of the method at `position` of the service `node`.
+    fn rank(&self, node: u32, position: usize) -> usize {
+        self.ranks[self.first[node as usize] + position]
+    }
+}
+
+/// Every method of every service type of both Contracts as `(id, name)`,
+/// sorted by the Contract's method order (by id, then by name) and without
+/// repeats. A method's rank is its position here, so two ranks compare as
+/// the methods do in that order, and are equal exactly when the names are,
+/// since a name has one id. Built once per check: the sort compares names
+/// only where ids are equal, and each method then takes one binary search.
+fn method_order<'a>(contracts: [&'a Contract; 2]) -> Vec<(u32, &'a str)> {
+    let mut order: Vec<(u32, &'a str)> = contracts
+        .into_iter()
+        .flat_map(Contract::types)
+        .flat_map(|node| match node {
+            TypeNode::Service { methods } => methods.as_slice(),
+            _ => &[],
+        })
+        .map(|method| (method.id, method.name.as_str()))
+        .collect();
+    order.sort();
+    order.dedup();
+    order
 }
 
 /// One step of a path into a method's type, innermost first while a failure
@@ -383,15 +510,21 @@ struct Frame {
     dependents: Vec<Pair>,
 }
 
+/// The walk's state. The maps of pairs are ordered maps, not hash maps: an
+/// operation on one compares at most `O(log p)` pairs of integers, `p` the
+/// pairs it holds, whatever the input, where a hash map's cost rests on its
+/// hash keys, which a `wasm32-unknown-unknown` build derives from
+/// allocation addresses rather than from a random source.
 struct Checker<'a> {
     live: Graph<'a>,
     written: Graph<'a>,
     options: CheckOptions,
-    /// The pairs whose walk is in progress, with their depth in `frames`.
-    active: HashMap<Pair, usize>,
+    /// The pairs whose walk is in progress, with their depth in `frames`:
+    /// at most [`MAX_CHECK_DEPTH`].
+    active: BTreeMap<Pair, usize>,
     frames: Vec<Frame>,
     /// The pairs whose walk finished, with the warnings it recorded.
-    proven: HashMap<Pair, Proven>,
+    proven: BTreeMap<Pair, Proven>,
     /// The pairs proven, in order, so a failed probe can forget exactly its
     /// own.
     log: Vec<Pair>,
@@ -411,6 +544,25 @@ struct Checker<'a> {
 }
 
 impl<'a> Checker<'a> {
+    fn new(written: Graph<'a>, live: Graph<'a>, options: CheckOptions) -> Self {
+        Self {
+            live,
+            written,
+            options,
+            active: BTreeMap::new(),
+            frames: Vec::new(),
+            proven: BTreeMap::new(),
+            log: Vec::new(),
+            failed: BTreeMap::new(),
+            warnings: Vec::new(),
+            truncated: false,
+            path: Vec::new(),
+            trail: Vec::new(),
+            steps: 0,
+            total_steps: 0,
+        }
+    }
+
     fn graph(&self, side: Side) -> &Graph<'a> {
         match side {
             Side::Live => &self.live,
@@ -418,19 +570,24 @@ impl<'a> Checker<'a> {
         }
     }
 
-    /// The name of field `id` of a record or variant: the written source's
-    /// spelling when the written side's node names it, else the live one's.
-    fn field_name(&self, sub: (Side, u32), sup: (Side, u32), id: u32) -> Option<&'a str> {
+    /// The name of a field or arm: the written source's spelling when the
+    /// written side's node has it and names it, else the live one's. Each
+    /// side is `(side, node, the field's position in the node)`, the
+    /// position `None` when the node lacks the field.
+    fn field_name(
+        &self,
+        sub: (Side, u32, Option<usize>),
+        sup: (Side, u32, Option<usize>),
+    ) -> Option<&'a str> {
         let (written, live) = if sub.0 == Side::Written {
-            (sub.1, sup.1)
+            (sub, sup)
         } else {
-            (sup.1, sub.1)
+            (sup, sub)
         };
-        self.written
-            .names
-            .get(&(written, id))
-            .or_else(|| self.live.names.get(&(live, id)))
-            .copied()
+        let label = |graph: &Graph<'a>, (_, node, position): (Side, u32, Option<usize>)| {
+            position.and_then(|position| graph.label(node, position))
+        };
+        label(&self.written, written).or_else(|| label(&self.live, live))
     }
 
     /// Resolve a node to whether it is `null`, `reserved` or an `opt` —
@@ -694,7 +851,7 @@ impl<'a> Checker<'a> {
             }
             (TypeNode::Func { .. }, TypeNode::Func { .. }) => self.func_rule(side, left, right),
             (TypeNode::Service { methods: have }, TypeNode::Service { methods: want }) => {
-                self.service_rule(side, have, want)
+                self.service_rule(side, sub, sup, have, want)
             }
             _ => mismatch(left, right),
         }
@@ -733,16 +890,18 @@ impl<'a> Checker<'a> {
         have: &'a [Field],
         want: &'a [Field],
     ) -> Outcome<'a> {
-        debug_assert!(in_id_order(have) && in_id_order(want));
         let mut next = 0;
-        for field in want {
+        for (position, field) in want.iter().enumerate() {
             self.spend(1)?;
             let found = self.same_id(have, &mut next, field.id)?;
-            let name = self.field_name((side, sub), (side.other(), sup), field.id);
+            let name = self.field_name((side, sub, found), (side.other(), sup, Some(position)));
             match found {
-                Some(found) => {
-                    self.child(Segment::Field(name, field.id), side, found.ty, field.ty)?
-                }
+                Some(found) => self.child(
+                    Segment::Field(name, field.id),
+                    side,
+                    have[found].ty,
+                    field.ty,
+                )?,
                 None if self.opt_like(side.other(), field.ty) => {}
                 None => {
                     let missing = self.graph(side.other()).node(field.ty);
@@ -764,29 +923,31 @@ impl<'a> Checker<'a> {
         have: &'a [Field],
         want: &'a [Field],
     ) -> Outcome<'a> {
-        debug_assert!(in_id_order(have) && in_id_order(want));
         let mut next = 0;
-        for arm in have {
+        for (position, arm) in have.iter().enumerate() {
             self.spend(1)?;
             let found = self.same_id(want, &mut next, arm.id)?;
-            let name = self.field_name((side, sub), (side.other(), sup), arm.id);
+            let name = self.field_name((side, sub, Some(position)), (side.other(), sup, found));
             match found {
-                Some(found) => self.child(Segment::Field(name, arm.id), side, arm.ty, found.ty)?,
+                Some(found) => {
+                    self.child(Segment::Field(name, arm.id), side, arm.ty, want[found].ty)?
+                }
                 None => return within(Segment::Field(name, arm.id), arm_unknown()),
             }
         }
         Ok(())
     }
 
-    /// The field of `fields`, from `*next` on, whose id is `id`: one step per
-    /// field passed over. `fields` is in strictly increasing id order and the
-    /// ids asked for increase, so `*next` only moves forward.
+    /// The position in `fields`, from `*next` on, of the field whose id is
+    /// `id`: one step per field passed over. `fields` is in strictly
+    /// increasing id order and the ids asked for increase, so `*next` only
+    /// moves forward.
     fn same_id(
         &mut self,
         fields: &'a [Field],
         next: &mut usize,
         id: u32,
-    ) -> Result<Option<&'a Field>, Stop<'a>> {
+    ) -> Result<Option<usize>, Stop<'a>> {
         while fields.get(*next).is_some_and(|field| field.id < id) {
             self.spend(1)?;
             *next += 1;
@@ -794,7 +955,7 @@ impl<'a> Checker<'a> {
         match fields.get(*next) {
             Some(field) if field.id == id => {
                 *next += 1;
-                Ok(Some(field))
+                Ok(Some(*next - 1))
             }
             _ => Ok(None),
         }
@@ -827,31 +988,34 @@ impl<'a> Checker<'a> {
 
     /// Every method of the super service present in the sub service, as a
     /// subtype. Both lists are in the Contract's canonical method order, by
-    /// id and then by name, so one pass pairs them, a step per method of the
-    /// super service and one per method of the sub service passed over.
+    /// id and then by name, which is the order of their ranks, so one pass
+    /// pairs them by rank, a step per method of the super service and one
+    /// per method of the sub service passed over. No name is compared: a
+    /// rank is compared in constant time, however long the name.
     #[inline(never)]
     fn service_rule(
         &mut self,
         side: Side,
+        sub: u32,
+        sup: u32,
         have: &'a [ServiceMethod],
         want: &'a [ServiceMethod],
     ) -> Outcome<'a> {
-        let key = |method: &'a ServiceMethod| (method.id, method.name.as_str());
-        debug_assert!(have.windows(2).all(|pair| key(&pair[0]) < key(&pair[1])));
         let mut next = 0;
-        for method in want {
+        for (position, method) in want.iter().enumerate() {
             self.spend(1)?;
-            while have.get(next).is_some_and(|found| key(found) < key(method)) {
+            let rank = self.graph(side.other()).rank(sup, position);
+            while next < have.len() && self.graph(side).rank(sub, next) < rank {
                 self.spend(1)?;
                 next += 1;
             }
             let segment = Segment::Method(method.name.as_str());
-            match have.get(next).filter(|found| found.name == method.name) {
-                Some(found) => {
-                    next += 1;
-                    self.child(segment, side, found.function, method.function)?
-                }
-                None => return within(segment, method_absent()),
+            if next < have.len() && self.graph(side).rank(sub, next) == rank {
+                let found = &have[next];
+                next += 1;
+                self.child(segment, side, found.function, method.function)?;
+            } else {
+                return within(segment, method_absent());
             }
         }
         Ok(())
@@ -1307,14 +1471,13 @@ impl<'a> Checker<'a> {
                 ),
             ));
         }
-        // Fresh maps rather than cleared ones: clearing a hash map costs its
-        // capacity, which an earlier method may have grown far past what
-        // this one uses. Dropping them costs only what this method spent.
-        self.active = HashMap::new();
+        // Clearing costs what the previous method put in these, which its
+        // steps paid for.
+        self.active.clear();
         self.frames.clear();
-        self.proven = HashMap::new();
+        self.proven.clear();
         self.log.clear();
-        self.failed = BTreeMap::new();
+        self.failed.clear();
         self.warnings.clear();
         self.truncated = false;
         self.path.clear();
@@ -1396,22 +1559,12 @@ pub fn check(written: &Input<'_>, live: &Input<'_>, options: CheckOptions) -> Ve
         .iter()
         .map(|(name, function)| (name.as_str(), *function))
         .collect();
-    let mut checker = Checker {
-        live: Graph::new(live.contract, live.source_info),
-        written: Graph::new(written.contract, written.source_info),
+    let order = method_order([written.contract, live.contract]);
+    let mut checker = Checker::new(
+        Graph::new(written.contract, written.source_info, &order),
+        Graph::new(live.contract, live.source_info, &order),
         options,
-        active: HashMap::new(),
-        frames: Vec::new(),
-        proven: HashMap::new(),
-        log: Vec::new(),
-        failed: BTreeMap::new(),
-        warnings: Vec::new(),
-        truncated: false,
-        path: Vec::new(),
-        trail: Vec::new(),
-        steps: 0,
-        total_steps: 0,
-    };
+    );
     let mut ordered = written_methods;
     ordered.sort_by(|left, right| left.0.cmp(&right.0));
     let mut diagnostics = Vec::new();
@@ -1571,5 +1724,118 @@ mod tests {
         assert_eq!(meter.counted, quotes.len());
         meter.text("more");
         assert_eq!(meter.counted, quotes.len());
+    }
+
+    /// The node of the service type whose only method is `name`.
+    fn service_named(contract: &Contract, name: &str) -> u32 {
+        let index = contract
+            .types()
+            .iter()
+            .position(|node| {
+                matches!(node, TypeNode::Service { methods }
+                    if methods.len() == 1 && methods[0].name == name)
+            })
+            .expect("the source declares the service");
+        u32::try_from(index).unwrap()
+    }
+
+    /// Decide method `f` of `written` against `live`, after `forge` has had
+    /// its way with the two indexed Contracts: each report's code and path.
+    fn decide_forged(
+        written: &str,
+        live: &str,
+        forge: impl FnOnce(&Contract, &Contract, &mut Graph<'_>, &mut Graph<'_>),
+    ) -> Vec<(&'static str, Option<String>)> {
+        let written = candid_core::compile_did(written).unwrap();
+        let live = candid_core::compile_did(live).unwrap();
+        let (written, live) = (
+            Input {
+                contract: written.contract(),
+                source_info: written.source_info(),
+            },
+            Input {
+                contract: live.contract(),
+                source_info: live.source_info(),
+            },
+        );
+        let order = method_order([written.contract, live.contract]);
+        let mut written_graph = Graph::new(written.contract, written.source_info, &order);
+        let mut live_graph = Graph::new(live.contract, live.source_info, &order);
+        forge(
+            written.contract,
+            live.contract,
+            &mut written_graph,
+            &mut live_graph,
+        );
+        let function = |contract: &Contract| {
+            let methods = actor_methods(contract).unwrap();
+            methods.iter().find(|(name, _)| name == "f").unwrap().1
+        };
+        let live_methods = BTreeMap::from([("f", function(live.contract))]);
+        let mut checker = Checker::new(written_graph, live_graph, CheckOptions::default());
+        let reports = checker
+            .method("f", function(written.contract), &live_methods)
+            .ok()
+            .unwrap();
+        reports
+            .iter()
+            .map(|report| (report.code, report.path.as_deref().map(render)))
+            .collect()
+    }
+
+    /// The walk pairs the methods of two services by their ranks alone, and
+    /// never compares their names: that is what keeps the cost of a step
+    /// the same however long the names it meets are, a name being read only
+    /// when the ranks are computed, once per check. Given ranks that make
+    /// two differently named methods one, the walk pairs them, which
+    /// comparing their names would not. (The ranks are forged here; real
+    /// ones are equal exactly when the names are.)
+    #[test]
+    fn methods_are_paired_by_rank_and_never_by_name() {
+        let written = "type S = service { a : () -> () }; service : { f : (S) -> () }";
+        let live = "type S = service { b : () -> () }; service : { f : (S) -> () }";
+        // As compiled: the live argument's `b` is missing from the written
+        // service, which must be a subtype of it.
+        assert_eq!(
+            decide_forged(written, live, |_, _, _, _| {}),
+            [("method_incompatible", Some("$args[0]::b".to_string()))]
+        );
+        // With `b` forged to `a`'s rank, the two are paired, and `() -> ()`
+        // is a subtype of itself.
+        let forged = decide_forged(written, live, |written, live, written_graph, live_graph| {
+            let a = written_graph.rank(service_named(written, "a"), 0);
+            let b = live_graph.first[service_named(live, "b") as usize];
+            live_graph.ranks[b] = a;
+        });
+        assert_eq!(forged, []);
+    }
+
+    /// The walk reads a field's name by the field's position in its node,
+    /// never by looking it up among the Contract's field names: a name
+    /// forged at that position is the one reported.
+    #[test]
+    fn field_names_are_read_by_position() {
+        let written = "type R = record { x : nat }; service : { f : () -> (R) }";
+        let live = "type R = record { x : text }; service : { f : () -> (R) }";
+        assert_eq!(
+            decide_forged(written, live, |_, _, _, _| {}),
+            [("method_incompatible", Some("$results[0].x".to_string()))]
+        );
+        let forged = decide_forged(written, live, |written, _, written_graph, _| {
+            let record = written
+                .types()
+                .iter()
+                .position(|node| matches!(node, TypeNode::Record { .. }))
+                .unwrap();
+            let first = written_graph.first[record];
+            written_graph.labels[first] = Some("forged");
+        });
+        assert_eq!(
+            forged,
+            [(
+                "method_incompatible",
+                Some("$results[0].forged".to_string())
+            )]
+        );
     }
 }

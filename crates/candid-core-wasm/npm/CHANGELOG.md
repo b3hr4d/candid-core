@@ -59,15 +59,22 @@ commit, as every entry does.
   A method whose check reaches its depth or work bound fails closed; work
   is counted in steps, each one unit of work done (a pair of types visited,
   a field, arm, method or value examined or passed over, a path segment a
-  warning or a failure copies or a warning re-examines), so the bound
-  bounds the walk's time. The
+  warning or a failure copies or a warning re-examines). A step reads no
+  name: service methods are paired by ranks computed once per check and a
+  field's name is read by its position, so a step's cost does not grow with
+  the length of the names: it does a bounded amount of work, and its
+  lookups in the maps of type pairs the walk keeps take time logarithmic in
+  their size. The
   check as a whole is bounded too, so many methods sharing one type cannot
   multiply the per-method bounds: 10,000,000 steps (one more per method),
   10,000 `special_opt_rule` warnings and 4 MiB of reported text as the JSON
   writes it, in all
   (`check_total_steps`, `check_total_warnings`, `check_output_bytes`); the
   text is measured only up to the first string that passes its bound, so
-  long names cannot make the measuring itself slow.
+  long names cannot make the measuring itself slow. So the walk's time
+  grows with its steps (times that logarithm) and the reported text's with
+  its bytes; compiling both sides, within the compiler's own limits, and
+  ranking the method names are done once per check, before the walk.
   Methods are checked in name order; when one of these is reached, that
   method and every method after it get one `resource_limit_exceeded` error
   each and nothing else, and the check exits 1. Below these bounds a

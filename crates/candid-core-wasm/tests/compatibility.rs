@@ -1436,6 +1436,160 @@ service : {{ {} }}
     }
 }
 
+/// `written` against `live` needs exactly `steps` steps of the whole check:
+/// under that bound no method fails closed, and one step under it the last
+/// method does, at exactly `steps`.
+fn assert_total_steps(written: &str, live: &str, steps: usize) {
+    let run = |total_step_limit: usize| {
+        let options = CheckOptions {
+            total_step_limit,
+            ..CheckOptions::default()
+        };
+        check_with(written, live, options)
+    };
+    let enough = run(steps);
+    assert_eq!(enough["ok"], json!(true), "{enough}");
+    assert!(
+        enough["diagnostics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|item| item["resource_limit"]["resource"] != "check_total_steps"),
+        "{enough}"
+    );
+    let short = run(steps - 1);
+    let last = short["diagnostics"].as_array().unwrap().last().unwrap();
+    assert_eq!(
+        last["resource_limit"],
+        json!({ "resource": "check_total_steps", "limit": steps - 1, "observed": steps })
+    );
+}
+
+/// Two method names that share an `idl_hash`, so every pair of strings that
+/// differ only by putting one for the other after a common prefix does too.
+const COLLIDING: [&str; 2] = ["jhwlzguu", "jsyrjsvk"];
+
+/// Pairing the methods of two services reads no name: it compares their
+/// ranks, integers computed once per check. So a method of a nested service
+/// costs the same steps whether its name is one byte or half a megabyte
+/// long, and whether or not its id collides with another method's, which
+/// orders the two by name; and the verdicts agree with upstream's. Before
+/// ranks, each pairing compared the two names in full, for one step. (Two
+/// colliding names share a 100,000-byte prefix, not a longer one: the
+/// compiler's canonicalization work, which charges every method name's bytes
+/// on each round of its refinement, refuses two of 500,000.)
+#[test]
+fn a_long_or_colliding_method_name_costs_what_a_short_one_does() {
+    let nested = |written: &[String], live: &[String]| {
+        let source = |names: &[String]| {
+            let methods: Vec<String> = names
+                .iter()
+                .map(|name| format!("{name} : () -> ()"))
+                .collect();
+            format!(
+                "type S = service {{ {} }};\nservice : {{ f : () -> (S, S); g : (S) -> () }}\n",
+                methods.join("; ")
+            )
+        };
+        (source(written), source(live))
+    };
+    let named = |prefix: &str, suffixes: &[&str]| -> Vec<String> {
+        suffixes
+            .iter()
+            .map(|suffix| format!("{prefix}{suffix}"))
+            .collect()
+    };
+    // One method, the same on both sides. `f`: the method, then per
+    // result the value and its pair, and the first time the service's
+    // method examined and its func pair visited; the second result is
+    // answered from the proof. `g`: the method, the value and its pair,
+    // the service's method and its func pair.
+    for name in ["a".to_string(), "a".repeat(500_000)] {
+        let one = [name];
+        let (written, live) = nested(&one, &one);
+        assert_total_steps(&written, &live, (1 + 4 + 2) + (1 + 4));
+        assert_eq!(check(&written, &live)["diagnostics"], json!([]));
+    }
+    let long = "p".repeat(100_000);
+    for prefix in ["", long.as_str()] {
+        // Two methods of one id, ordered by name: each examined and its
+        // func pair visited.
+        let both = named(prefix, &COLLIDING);
+        let (written, live) = nested(&both, &both);
+        assert_total_steps(&written, &live, (1 + 6 + 2) + (1 + 6));
+        assert_eq!(check(&written, &live)["diagnostics"], json!([]));
+        // The live service has both, the written one the second: `f`
+        // passes over the first to find the second, and `g` finds the
+        // first missing from the written service and fails there,
+        // recording a one-segment failure.
+        let second = named(prefix, &COLLIDING[1..]);
+        let (written, live) = nested(&second, &both);
+        assert_total_steps(&written, &live, (1 + 5 + 2) + (1 + 3 + 1));
+        let response = check(&written, &live);
+        assert_eq!(
+            summary(&response),
+            [(
+                "method_incompatible".to_string(),
+                "g".to_string(),
+                Some(format!("$args[0]::{prefix}{}", COLLIDING[0]))
+            )]
+        );
+        assert_eq!(disagreements(&written, &live, &response), []);
+    }
+}
+
+/// A long-named method of a service type, met again and again: each of
+/// many records holds the service type and a field that fails, so each
+/// probe of one proves the service pair and then forgets it, and each of
+/// several methods walks them all. Each pairing of the long-named method
+/// is one step, as it is with a one-byte name, and every method is decided.
+/// Before ranks, each pairing compared the two names in full: with 3,000
+/// records and 300 methods, a 500,000-byte name took a native release
+/// build 61 s, where a one-byte name took 3 s.
+#[test]
+fn a_long_named_method_met_again_and_again_is_decided() {
+    let (records, methods) = (100, 10);
+    let shape = |name: &str, leaf: &str, opt: &str| {
+        let mut source = format!("type S = service {{ {name} : () -> () }};\n");
+        let mut fields = Vec::new();
+        for index in 0..records {
+            source.push_str(&format!(
+                "type T{index} = record {{ 0 : S; {} : {leaf} }};\n",
+                index + 1
+            ));
+            fields.push(format!("{index} : {opt} T{index}"));
+        }
+        fields.push(format!("{} : {leaf}", records + 10));
+        source.push_str(&format!("type R = record {{ {} }};\n", fields.join("; ")));
+        let list: Vec<String> = (0..methods)
+            .map(|index| format!("m{index} : () -> ({opt} R);"))
+            .collect();
+        source.push_str(&format!("service : {{ {} }}\n", list.join(" ")));
+        source
+    };
+    let short = (shape("a", "nat", "opt"), shape("a", "text", ""));
+    let name = "a".repeat(500_000);
+    let long = (shape(&name, "nat", "opt"), shape(&name, "text", ""));
+    let response = check(&long.0, &long.1);
+    assert_eq!(response["compatible"], json!(true), "{response}");
+    assert_eq!(
+        summary(&response),
+        (0..methods)
+            .map(|index| (
+                "special_opt_rule".to_string(),
+                format!("m{index}"),
+                Some("$results[0]".to_string())
+            ))
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(
+        response["diagnostics"],
+        check(&short.0, &short.1)["diagnostics"]
+    );
+    let steps = total_steps_needed(&short.0, &short.1);
+    assert_total_steps(&long.0, &long.1, steps);
+}
+
 /// Below the aggregate bounds a method is reported exactly as it is when the
 /// written service declares it alone, at each bound included; one step, one
 /// warning or one byte under what the check needs, the method that would
