@@ -56,10 +56,14 @@ commit, as every entry does.
   decodes as `null` along which no pair of types repeats, a shared type
   under each path that reaches it. Past 1,000 warnings a method reports the
   first 1,000 and a `resource_limit_exceeded` warning; its verdict stands.
-  A method whose check reaches its depth or work bound fails closed. The
+  A method whose check reaches its depth or work bound fails closed; work
+  is counted in steps, each one unit of work done (a pair of types visited,
+  a field, arm, method or value examined or passed over, a path segment a
+  warning copies or re-examines), so the bound bounds the time. The
   check as a whole is bounded too, so many methods sharing one type cannot
-  multiply the per-method bounds: 10,000,000 steps, 10,000
-  `special_opt_rule` warnings and 4 MiB of reported text in all
+  multiply the per-method bounds: 10,000,000 steps (one more per method),
+  10,000 `special_opt_rule` warnings and 4 MiB of reported text as the JSON
+  writes it, in all
   (`check_total_steps`, `check_total_warnings`, `check_output_bytes`).
   Methods are checked in name order; when one of these is reached, that
   method and every method after it get one `resource_limit_exceeded` error

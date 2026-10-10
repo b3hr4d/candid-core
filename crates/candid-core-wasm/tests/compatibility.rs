@@ -755,8 +755,9 @@ fn warnings_are_bounded() {
 }
 
 /// The work bound fails a method closed, and each method starts again from
-/// nothing spent: `f` and `g` cost four steps each (the result's record pair
-/// and its three fields).
+/// nothing spent: `f` and `g` cost eight steps each (the result examined and
+/// its record pair visited, then each of the three fields examined and its
+/// pair visited).
 #[test]
 fn the_work_is_bounded_per_method() {
     assert_eq!(CheckOptions::default().step_limit, MAX_CHECK_STEPS);
@@ -771,18 +772,18 @@ service : { f : () -> (R); g : () -> (R) }";
         };
         serde_json::from_str(&check_compatible_with(&request, options)).unwrap()
     };
-    let response = run(4);
+    let response = run(8);
     assert_eq!(response["compatible"], json!(true), "{response}");
     assert_eq!(response["diagnostics"], json!([]));
-    let response = run(3);
+    let response = run(7);
     assert_eq!(response["compatible"], json!(false), "{response}");
     let bound = |method: &str| {
         json!({
             "code": "resource_limit_exceeded",
             "severity": "error",
             "method": method,
-            "message": "the check of this method stopped at its check_steps bound of 3",
-            "resource_limit": { "resource": "check_steps", "limit": 3, "observed": 4 },
+            "message": "the check of this method stopped at its check_steps bound of 7",
+            "resource_limit": { "resource": "check_steps", "limit": 7, "observed": 8 },
         })
     };
     assert_eq!(response["diagnostics"], json!([bound("f"), bound("g")]));
@@ -825,8 +826,9 @@ fn shared_doubling(content: &str, methods: usize) -> String {
 
 /// The whole check's work is bounded: the per-method bound alone would let a
 /// service multiply it by its method count. Each of `f`, `g`, `h` and `i`
-/// costs four steps; the method that takes the total past the bound, and
-/// every method after it, fail closed.
+/// costs nine steps of the total, one for the method and eight for its
+/// walk; the method that takes the total past the bound, and every method
+/// after it, fail closed.
 #[test]
 fn the_work_is_bounded_across_the_check() {
     assert_eq!(MAX_CHECK_TOTAL_STEPS, 10 * MAX_CHECK_STEPS);
@@ -843,33 +845,37 @@ service : { f : () -> (R); g : () -> (R); h : () -> (R); i : () -> (R) }";
         };
         check_with(source, source, options)
     };
-    // Exactly at the bound: 16 steps, all decided.
-    let response = run(16);
+    // Exactly at the bound: 36 steps, all decided.
+    let response = run(36);
     assert_eq!(response["compatible"], json!(true), "{response}");
     assert_eq!(response["diagnostics"], json!([]));
-    // One step under: `i` reaches it at its fourth step.
-    let response = run(15);
+    // One step under: `i` reaches it at its last step.
+    let response = run(35);
     assert_eq!(response["compatible"], json!(false), "{response}");
     assert_eq!(
         response["diagnostics"],
-        json!([stopped("i", "check_total_steps", 15, 16)])
+        json!([stopped("i", "check_total_steps", 35, 36)])
     );
-    // `h` reaches it at its third step; `i` is not walked.
-    let response = run(10);
+    // `h` reaches it at the third step of its walk; `i` is not walked.
+    let response = run(21);
     assert_eq!(
         response["diagnostics"],
         json!([
-            stopped("h", "check_total_steps", 10, 11),
-            stopped("i", "check_total_steps", 10, 11),
+            stopped("h", "check_total_steps", 21, 22),
+            stopped("i", "check_total_steps", 21, 22),
         ])
     );
 
-    // At the shipped bound: a 12-field, 100-level shared graph makes each
-    // method spend its whole per-method bound, re-examining warnings. Nine
+    // Methods that reach their own bound first: each result probes an `opt`
+    // whose content walks a 12-field, 100-level graph and then fails, so the
+    // probe forgets the pairs it proved and the next result walks them
+    // again, 2,408 steps a result. Under a bound of 20,000 a method, nine
     // methods fail closed at their own bound; the tenth takes the total past
-    // ten million, and it and every method after it are not decided.
-    let wide = |content: &str, methods: usize| {
-        let mut source = format!("type D0 = opt {content};\n");
+    // ten methods' worth, and it and every method after it are not decided.
+    // `a_wide_record_shared_by_many_methods_reaches_the_total_step_bound`
+    // reaches the shipped total bound.
+    let forgetting = |leaf: &str, methods: usize| {
+        let mut source = String::from("type D0 = nat;\n");
         for level in 1..=100 {
             let fields: Vec<String> = (0..12)
                 .map(|field| format!("f{field} : D{p}", p = level - 1))
@@ -879,27 +885,54 @@ service : { f : () -> (R); g : () -> (R); h : () -> (R); i : () -> (R) }";
                 fields.join("; ")
             ));
         }
+        let mut results = Vec::new();
+        for result in 0..10 {
+            source.push_str(&format!(
+                "type E{result} = record {{ g : D100; b{result} : {leaf} }};\n"
+            ));
+            results.push(format!("opt E{result}"));
+        }
         let list: Vec<String> = (0..methods)
-            .map(|index| format!("m{index:05} : () -> (D100);"))
+            .map(|index| format!("m{index:05} : () -> ({});", results.join(", ")))
             .collect();
         source.push_str(&format!("service : {{ {} }}\n", list.join(" ")));
         source
     };
-    let response = check(&wide("nat", 12), &wide("text", 12));
+    let (written, live) = (forgetting("nat", 12), forgetting("text", 12));
+    let options = |step_limit: usize, total_step_limit: usize| CheckOptions {
+        step_limit,
+        total_step_limit,
+        ..CheckOptions::default()
+    };
+    // Unbounded, each method is decided: ten warnings, one per result.
+    let response = check_with(&written, &live, options(usize::MAX, usize::MAX));
+    assert_eq!(response["compatible"], json!(true), "{response}");
+    assert_eq!(response["diagnostics"].as_array().unwrap().len(), 120);
+    // A method costs 24,080 steps of its own: decided at that bound, not
+    // one under.
+    let (one_written, one_live) = (forgetting("nat", 1), forgetting("text", 1));
+    let response = check_with(&one_written, &one_live, options(24_080, usize::MAX));
+    assert_eq!(response["compatible"], json!(true), "{response}");
+    let response = check_with(&one_written, &one_live, options(24_079, usize::MAX));
+    assert_eq!(
+        response["diagnostics"][0]["resource_limit"],
+        json!({ "resource": "check_steps", "limit": 24_079, "observed": 24_080 })
+    );
+    let response = check_with(&written, &live, options(20_000, 200_000));
     let items = response["diagnostics"].as_array().unwrap();
     assert_eq!(items.len(), 12, "{response}");
     for item in &items[..9] {
         assert_eq!(item["resource_limit"]["resource"], json!("check_steps"));
     }
     let observed = items[9]["resource_limit"]["observed"].as_u64().unwrap() as usize;
-    assert!(observed > MAX_CHECK_TOTAL_STEPS, "{observed}");
+    assert!(observed > 200_000, "{observed}");
     for (index, item) in items[9..].iter().enumerate() {
         assert_eq!(
             *item,
             stopped(
                 &format!("m{:05}", 9 + index),
                 "check_total_steps",
-                MAX_CHECK_TOTAL_STEPS,
+                200_000,
                 observed
             )
         );
@@ -971,8 +1004,12 @@ fn warnings_are_bounded_across_the_check() {
         assert!(per_method < 500, "{methods}: {per_method} bytes per method");
         sizes.push((methods, request_bytes, response_bytes));
     }
-    // The sizes the CLI page quotes: 100 methods, a 5.3 KB request, a 2.8 MB
-    // response (27.8 MB before this bound); 3,000 methods, 4.0 MB.
+    // The sizes the CLI page rounds: 100 methods, a 5.3 KB request, a 2.8 MB
+    // response (27.8 MB before this bound, measured on the earlier code, not
+    // pinned here); 3,000 methods, 4.0 MB; and 397 bytes for each method
+    // left past the bound, whose name has six characters.
+    assert_eq!((sizes[2].2 - sizes[1].2) / (3000 - 100), 397);
+    assert_eq!((sizes[2].2 - sizes[1].2) % (3000 - 100), 0);
     assert_eq!(
         sizes,
         [
@@ -1039,6 +1076,40 @@ fn the_output_is_bounded_across_the_check() {
         stopped("m00002", "check_output_bytes", 3 * each - 1, 3 * each)
     );
 
+    // The bytes are counted as the JSON response writes them, escapes
+    // included: a method name of five bytes, with a tab, a quote and a
+    // control character, takes twelve.
+    let escaped = |leaf: &str| {
+        format!(
+            "type R = record {{ x : {leaf} }};\nservice : {{ \"t\\tq\\\"\\u{{1}}\" : () -> (R); \"z\" : () -> (R) }}\n"
+        )
+    };
+    let unbounded = check(&escaped("nat"), &escaped("text"));
+    let items = unbounded["diagnostics"].as_array().unwrap();
+    assert_eq!(items[0]["method"], json!("t\tq\"\u{1}"));
+    let written_text = |item: &Value| -> usize {
+        ["method", "path", "message"]
+            .iter()
+            .map(|key| serde_json::to_string(&item[*key]).unwrap().len() - 2)
+            .sum()
+    };
+    let name = "t\\tq\\\"\\u0001".len();
+    assert_eq!(name, 12);
+    assert_eq!(written_text(&items[0]), name + text(&items[1]) - 1);
+    let both = written_text(&items[0]) + written_text(&items[1]);
+    let run = |output_byte_limit: usize| {
+        let options = CheckOptions {
+            output_byte_limit,
+            ..CheckOptions::default()
+        };
+        check_with(&escaped("nat"), &escaped("text"), options)
+    };
+    assert_eq!(run(both), unbounded);
+    assert_eq!(
+        run(both - 1)["diagnostics"][1],
+        stopped("z", "check_output_bytes", both - 1, both)
+    );
+
     // At the shipped bound: a 100,000-byte field name on every path. 41
     // methods' text fits in 4 MiB; the 42nd and the rest fail closed.
     let name = "x".repeat(100_000);
@@ -1096,17 +1167,192 @@ service : { a : () -> (R); b : () -> (R); d : () -> (R); e : () -> (S) }";
             ),
         ]
     );
-    // `a` costs four steps; `b` reaches a bound of 6 at its third, and `c`,
-    // `d` and `e` are not decided.
-    let response = summary_with(6);
+    // `a` costs nine steps; `b` reaches a bound of 12 at the third step of
+    // its walk, and `c`, `d` and `e` are not decided.
+    let response = summary_with(12);
     assert_eq!(response["compatible"], json!(false), "{response}");
     assert_eq!(
         response["diagnostics"],
         json!(["b", "c", "d", "e"]
             .iter()
-            .map(|method| stopped(method, "check_total_steps", 6, 7))
+            .map(|method| stopped(method, "check_total_steps", 12, 13))
             .collect::<Vec<_>>())
     );
+}
+
+/// The fewest steps of the whole check under which `written` against `live`
+/// reaches no `check_total_steps` bound, after checking that one step fewer
+/// fails the last method closed at exactly that many.
+fn total_steps_needed(written: &str, live: &str) -> usize {
+    let run = |total_step_limit: usize| {
+        let options = CheckOptions {
+            total_step_limit,
+            ..CheckOptions::default()
+        };
+        check_with(written, live, options)
+    };
+    let reached = |response: &Value| {
+        response["diagnostics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|item| item["resource_limit"]["resource"] == "check_total_steps")
+    };
+    // Reaching the bound is monotone in it: search for the edge.
+    let mut high = 1;
+    while reached(&run(high)) {
+        high *= 2;
+    }
+    let mut low = 0;
+    while low < high {
+        let middle = (low + high) / 2;
+        if reached(&run(middle)) {
+            low = middle + 1;
+        } else {
+            high = middle;
+        }
+    }
+    let needed = low;
+    assert!(needed > 0);
+    let short = run(needed - 1);
+    let last = short["diagnostics"].as_array().unwrap().last().unwrap();
+    assert_eq!(
+        last["resource_limit"],
+        json!({ "resource": "check_total_steps", "limit": needed - 1, "observed": needed })
+    );
+    needed
+}
+
+/// A step is a unit of work actually done, so the step bounds bound the
+/// work: deciding a method (one step of the whole check's bound), visiting a
+/// pair however it is answered (expanded, from a proof, at a pair in
+/// progress, or from a failed pair, which also costs the segments of the
+/// failure path it copies), examining a field, arm, method or value, passing
+/// over one the other side lacks, re-examining a proven pair's warning (the
+/// pairs below it, at least one), and copying a warning's path (its
+/// segments). Each case pins the total; dropping any one charge changes one
+/// of them.
+#[test]
+fn every_unit_of_work_is_a_step() {
+    let both = |source: &str| total_steps_needed(source, source);
+    // A method alone: one step, so the bound caps the method count too.
+    assert_eq!(both("service : { f : () -> () }"), 1);
+    assert_eq!(
+        both("service : { a : () -> (); b : () -> (); c : () -> () }"),
+        3
+    );
+    // The method; the result examined and its record pair visited; three
+    // fields examined and their pairs visited.
+    let record = "type R = record { a : nat; b : text; c : bool };
+";
+    assert_eq!(
+        both(&format!("{record}service : {{ f : () -> (R) }}")),
+        1 + 2 + 6
+    );
+    // The second `R` is answered from the first one's proof: still a visit.
+    assert_eq!(
+        both(&format!("{record}service : {{ f : () -> (R, R) }}")),
+        1 + 8 + 2
+    );
+    // `cons : L` meets `L` while its walk is in progress: still a visit. The
+    // result and its pair, then two arms and their pairs.
+    assert_eq!(
+        both(
+            "type L = variant { nil; cons : L };
+service : { f : () -> (L) }"
+        ),
+        1 + 2 + 4
+    );
+    // Fields, arms and methods the other side lacks: `a` is passed over
+    // before `b` is found (ids 97 < 98), `c` after it is not looked at. The
+    // method, the result and its pair, `b` examined, `a` passed over, `b`'s
+    // pair visited.
+    let wide = "service : { f : () -> (record { a : nat; b : nat; c : nat }) }";
+    let narrow = "service : { f : () -> (record { b : nat }) }";
+    assert_eq!(total_steps_needed(narrow, wide), 1 + 2 + 3);
+    let wide = "service : { f : () -> (variant { a; b; c }) }";
+    let narrow = "service : { f : () -> (variant { b }) }";
+    assert_eq!(total_steps_needed(wide, narrow), 1 + 2 + 3);
+    let wide = "service : { f : () -> (service { a : () -> (); b : () -> (); c : () -> () }) }";
+    let narrow = "service : { f : () -> (service { b : () -> () }) }";
+    assert_eq!(total_steps_needed(narrow, wide), 1 + 2 + 3);
+    // An absent field the written side may lack is examined.
+    assert_eq!(
+        total_steps_needed(
+            "service : { f : () -> (record { a : nat; o : opt nat }) }",
+            "service : { f : () -> (record { a : nat }) }"
+        ),
+        1 + 2 + 2 + 1
+    );
+    // A failed pair answers its second meeting, copying its one-segment
+    // path. `$results[0]`: the result and its opt pair, the content's pair
+    // visited in the probe, `v` examined and its pair visited (it fails),
+    // and the warning's one-segment path copied. `$results[1]`: the result
+    // and its opt pair, the record content's pair, `y` examined, `X`'s pair
+    // visited and answered from its failure (one segment), and the warning.
+    let failed = |leaf: &str| {
+        format!(
+            "type X = record {{ v : {leaf} }};
+service : {{ f : () -> (opt X, opt record {{ y : X }}) }}"
+        )
+    };
+    assert_eq!(
+        total_steps_needed(&failed("nat"), &failed("text")),
+        1 + (2 + 1 + 2 + 1) + (2 + 1 + 1 + 1 + 1 + 1)
+    );
+    // A proven pair's warning re-examined (one pair below it) and re-reported
+    // under the second result (a two-segment path). `$results[0]`: the
+    // result and its pair, `o` examined and its opt pair visited, the probe's
+    // pair, and the warning's two-segment path. `$results[1]`: the result and
+    // its pair, the warning re-examined and its path copied.
+    let repeated = |leaf: &str| {
+        format!(
+            "type O = record {{ o : opt {leaf} }};
+service : {{ f : () -> (O, O) }}"
+        )
+    };
+    assert_eq!(
+        total_steps_needed(&repeated("nat"), &repeated("text")),
+        1 + (2 + 2 + 1 + 2) + (2 + 1 + 2)
+    );
+}
+
+/// One wide record shared by many methods: each method walks every field
+/// again, from empty state, and pays for it. At the shipped bound, 1,000
+/// fields cost 2,003 steps a method, so the 4,993rd method takes the total
+/// past ten million and it and every method after it fail closed. Before
+/// each visit and field was a step, a method like these cost two.
+#[test]
+fn a_wide_record_shared_by_many_methods_reaches_the_total_step_bound() {
+    let fields: Vec<String> = (0..1000).map(|index| format!("f{index} : nat")).collect();
+    let list: Vec<String> = (0..5000)
+        .map(|index| format!("m{index:05} : () -> (R);"))
+        .collect();
+    let source = format!(
+        "type R = record {{ {} }};
+service : {{ {} }}
+",
+        fields.join("; "),
+        list.join(" ")
+    );
+    let per_method = 1 + 2 + 2 * 1000;
+    let decided = MAX_CHECK_TOTAL_STEPS / per_method;
+    assert_eq!(decided, 4992);
+    let response = check(&source, &source);
+    assert_eq!(response["compatible"], json!(false));
+    let items = response["diagnostics"].as_array().unwrap();
+    assert_eq!(items.len(), 5000 - decided);
+    for (index, item) in items.iter().enumerate() {
+        assert_eq!(
+            *item,
+            stopped(
+                &format!("m{:05}", decided + index),
+                "check_total_steps",
+                MAX_CHECK_TOTAL_STEPS,
+                MAX_CHECK_TOTAL_STEPS + 1
+            )
+        );
+    }
 }
 
 /// Below the aggregate bounds a method is reported exactly as it is when the

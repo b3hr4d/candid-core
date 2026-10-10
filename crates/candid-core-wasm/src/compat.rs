@@ -57,25 +57,35 @@
 //! # Bounds
 //!
 //! The walk is recursive, so its depth is bounded ([`MAX_CHECK_DEPTH`] pairs
-//! on one path), and so is its work ([`MAX_CHECK_STEPS`] pairs expanded and
-//! warnings re-examined), each per method. Reaching either fails the method
-//! closed with `resource_limit_exceeded`; the compiler's own limits keep
-//! every Contract it accepts well below both for interfaces of ordinary
-//! shape. The warnings a method reports are bounded too
-//! ([`MAX_CHECK_WARNINGS`]), but that bound does not touch the verdict: the
-//! decision is complete, so past it the method keeps its verdict, reports
-//! the first warnings, and ends with a `resource_limit_exceeded` *warning*
-//! saying the rest were not reported.
+//! on one path), and so is its work ([`MAX_CHECK_STEPS`] steps), each per
+//! method. A step is one unit of work done, so the bound bounds the time:
+//! a pair visited, however it is answered (expanded, from a proof, at a pair
+//! in progress, or from a failed pair, which also costs one step per segment
+//! of the failure path it copies); a field, arm, method or value examined,
+//! or passed over because the other side lacks it; a proven pair's warning
+//! re-examined, one step per pair below the proven one on its path, at least
+//! one; and a warning recorded or re-reported, one step per segment of the
+//! path it copies. Fields and arms are paired in one pass over the two
+//! id-ordered lists, and methods in one pass by id and name, so no step
+//! hides a scan. Reaching either bound fails the method closed with
+//! `resource_limit_exceeded`; the compiler's own limits keep every Contract
+//! it accepts well below both for interfaces of ordinary shape. The warnings
+//! a method reports are bounded too ([`MAX_CHECK_WARNINGS`]), but that bound
+//! does not touch the verdict: the decision is complete, so past it the
+//! method keeps its verdict, reports the first warnings, and ends with a
+//! `resource_limit_exceeded` *warning* saying the rest were not reported.
 //!
 //! Per-method bounds alone would let the written service multiply them: a
 //! compiler-accepted source can declare thousands of methods that each walk
 //! the same shared type. So the check as a whole is bounded too, by three
-//! aggregates: [`MAX_CHECK_TOTAL_STEPS`] steps across all methods
-//! (`check_total_steps`), [`MAX_CHECK_TOTAL_WARNINGS`] `special_opt_rule`
-//! warnings reported (`check_total_warnings`), and [`MAX_CHECK_OUTPUT_BYTES`]
-//! bytes of diagnostic text — the `method`, `path` and `message` strings of
-//! every diagnostic a method reports (`check_output_bytes`). Methods are
-//! checked in name order. The step bound is checked as the work is spent;
+//! aggregates: [`MAX_CHECK_TOTAL_STEPS`] steps across all methods, each
+//! method also costing one for being decided, so the bound caps the method
+//! count too (`check_total_steps`); [`MAX_CHECK_TOTAL_WARNINGS`]
+//! `special_opt_rule` warnings reported (`check_total_warnings`); and
+//! [`MAX_CHECK_OUTPUT_BYTES`] bytes of diagnostic text — the `method`, `path`
+//! and `message` strings of every diagnostic a method reports, as the JSON
+//! response writes them, escapes included (`check_output_bytes`). Methods
+//! are checked in name order. The step bound is checked as the work is spent;
 //! the other two when a method is decided, against everything it would
 //! report. The method at which an aggregate bound is reached, and every
 //! method after it, fail closed: each gets exactly one diagnostic, an
@@ -90,9 +100,11 @@
 //! most three other diagnostics (`mode_changed`, one error, and the
 //! warning-bound notice) or one fail-closed diagnostic, each of fixed shape
 //! apart from its strings: the fail-closed ones grow with the written
-//! method names, that is linearly with the input. Paths borrow their names
-//! from the two compiled sides, so the memory a walk holds does not grow
-//! with the length of a name either.
+//! method names, that is linearly with the input, 397 bytes each
+//! pretty-printed for a six-character name. Paths borrow their names from
+//! the two compiled sides, so the memory a walk holds does not grow with the
+//! length of a name either. Each method starts from fresh maps rather than
+//! cleared ones, whose cost would be the capacity an earlier method grew.
 
 use std::collections::{BTreeMap, HashMap};
 
@@ -112,8 +124,9 @@ use serde_json::{json, Value};
 /// the package's tests assert.
 pub const MAX_CHECK_DEPTH: usize = 384;
 
-/// The most work the check of one method may do: pairs expanded, plus
-/// warnings a proven pair re-examines when it is met again.
+/// The most work the check of one method may do, in steps: pairs visited,
+/// fields, arms, methods and values examined or passed over, and path
+/// segments warnings copy or re-examine (see the module's Bounds).
 pub const MAX_CHECK_STEPS: usize = 1_000_000;
 
 /// The most `special_opt_rule` warnings one method reports. Re-reporting a
@@ -124,9 +137,10 @@ pub const MAX_CHECK_STEPS: usize = 1_000_000;
 /// affected.
 pub const MAX_CHECK_WARNINGS: usize = 1_000;
 
-/// The most work the whole check may do, across every written method: ten
-/// methods at [`MAX_CHECK_STEPS`]. Past it the method being checked and
-/// every method after it fail closed (`check_total_steps`).
+/// The most work the whole check may do, across every written method, plus
+/// one step per method decided: ten methods at [`MAX_CHECK_STEPS`]. Past it
+/// the method being checked and every method after it fail closed
+/// (`check_total_steps`).
 pub const MAX_CHECK_TOTAL_STEPS: usize = 10_000_000;
 
 /// The most `special_opt_rule` warnings the whole check reports: ten
@@ -137,9 +151,11 @@ pub const MAX_CHECK_TOTAL_WARNINGS: usize = 10_000;
 
 /// The most diagnostic text the whole check reports, in bytes: the
 /// `method`, `path` and `message` strings of every diagnostic a method
-/// reports, the fail-closed ones aside. 4 MiB, the compiler's default
-/// `max_input_bytes`, its bound on one document it parses. A method whose diagnostics would take the total
-/// past it, and every method after it, fail closed (`check_output_bytes`).
+/// reports, the fail-closed ones aside, as the JSON response writes them
+/// (escapes included, quotes not). 4 MiB, the compiler's default
+/// `max_input_bytes`, its bound on one document it parses. A method whose
+/// diagnostics would take the total past it, and every method after it,
+/// fail closed (`check_output_bytes`).
 pub const MAX_CHECK_OUTPUT_BYTES: usize = 4 * 1024 * 1024;
 
 /// How a check runs. [`CheckOptions::default`] is what `checkCompatible`
@@ -420,8 +436,13 @@ impl<'a> Checker<'a> {
     #[inline(never)]
     fn sub(&mut self, side: Side, sub: u32, sup: u32) -> Outcome<'a> {
         let pair = (side, sub, sup);
-        if let Some(failure) = self.failed.get(&pair) {
-            return Err(Stop::Fails(failure.clone()));
+        // Every visit is a step, however it is answered: from the failed
+        // pairs, at a pair in progress, from a proof, or by expanding it.
+        self.spend(1)?;
+        if let Some(length) = self.failed.get(&pair).map(|failure| failure.segments.len()) {
+            // Answering from a failed pair copies its path.
+            self.spend(length)?;
+            return Err(Stop::Fails(self.failed[&pair].clone()));
         }
         if let Some(&depth) = self.active.get(&pair) {
             self.cut_at(depth);
@@ -430,7 +451,6 @@ impl<'a> Checker<'a> {
         if self.options.memo && self.proven.contains_key(&pair) {
             return self.repeat(pair);
         }
-        self.spend(1)?;
         if self.frames.len() >= MAX_CHECK_DEPTH {
             return Err(Stop::Exhausted(Exhausted {
                 resource: "check_depth",
@@ -522,12 +542,17 @@ impl<'a> Checker<'a> {
     /// still being in progress. Its range stays valid: a failed probe
     /// truncates only warnings recorded after it began, and forgets every
     /// pair proven in that time.
+    ///
+    /// Re-examining a warning costs one step per pair its path holds below
+    /// the proven pair, at least one; re-reporting it, one per segment of the
+    /// path it is reported at.
     #[inline(never)]
     fn repeat(&mut self, pair: Pair) -> Outcome<'a> {
         let proven = self.proven[&pair];
         self.depend(proven.cuts);
-        self.spend(proven.end - proven.start)?;
         for index in proven.start..proven.end {
+            let below = self.warnings[index].trail.len() - proven.prefix;
+            self.spend(below.max(1))?;
             let cut = self.warnings[index].trail[proven.prefix..]
                 .iter()
                 .filter_map(|pair| self.active.get(pair).copied())
@@ -540,6 +565,7 @@ impl<'a> Checker<'a> {
                 self.truncated = true;
                 break;
             }
+            self.spend(self.path.len() + below)?;
             let warning = &self.warnings[index];
             let mut path = self.path.clone();
             path.extend_from_slice(&warning.path[proven.prefix..]);
@@ -595,13 +621,16 @@ impl<'a> Checker<'a> {
         }
     }
 
-    /// Record a warning at the current path, or drop it past
-    /// [`MAX_CHECK_WARNINGS`].
-    fn warn(&mut self, message: String) {
+    /// Record a special-opt-rule warning at the current path, one step per
+    /// segment it copies, or drop it past [`MAX_CHECK_WARNINGS`] without
+    /// building its message.
+    fn warn(&mut self, left: &TypeNode) -> Outcome<'a> {
         if self.warnings.len() >= MAX_CHECK_WARNINGS {
             self.truncated = true;
-            return;
+            return Ok(());
         }
+        self.spend(self.path.len())?;
+        let message = special_opt_rule(left);
         let path = self.path.clone();
         let trail = self.trail.clone();
         self.warnings.push(Warning {
@@ -609,6 +638,7 @@ impl<'a> Checker<'a> {
             trail,
             message,
         });
+        Ok(())
     }
 
     /// Dispatch one pair to its rule. The recursion runs through here, so
@@ -666,14 +696,18 @@ impl<'a> Checker<'a> {
             _ if self.opt_like(side.other(), inner) => false,
             _ => self.probe(Segment::Opt, side, sub, inner)?,
         };
-        if !kept {
-            self.warn(special_opt_rule(left));
+        if kept {
+            Ok(())
+        } else {
+            self.warn(left)
         }
-        Ok(())
     }
 
     /// Every field of the super record present in the sub record as a
-    /// subtype, or opt-like where the sub record has none.
+    /// subtype, or opt-like where the sub record has none. Both lists are in
+    /// id order, the Contract's canonical field order, so one pass over them
+    /// pairs the fields: a step per field of the super record, and one per
+    /// field of the sub record passed over.
     #[inline(never)]
     fn record_rule(
         &mut self,
@@ -683,9 +717,13 @@ impl<'a> Checker<'a> {
         have: &'a [Field],
         want: &'a [Field],
     ) -> Outcome<'a> {
+        debug_assert!(in_id_order(have) && in_id_order(want));
+        let mut next = 0;
         for field in want {
+            self.spend(1)?;
+            let found = self.same_id(have, &mut next, field.id)?;
             let name = self.field_name((side, sub), (side.other(), sup), field.id);
-            match have.iter().find(|candidate| candidate.id == field.id) {
+            match found {
                 Some(found) => {
                     self.child(Segment::Field(name, field.id), side, found.ty, field.ty)?
                 }
@@ -710,14 +748,40 @@ impl<'a> Checker<'a> {
         have: &'a [Field],
         want: &'a [Field],
     ) -> Outcome<'a> {
+        debug_assert!(in_id_order(have) && in_id_order(want));
+        let mut next = 0;
         for arm in have {
+            self.spend(1)?;
+            let found = self.same_id(want, &mut next, arm.id)?;
             let name = self.field_name((side, sub), (side.other(), sup), arm.id);
-            match want.iter().find(|candidate| candidate.id == arm.id) {
+            match found {
                 Some(found) => self.child(Segment::Field(name, arm.id), side, arm.ty, found.ty)?,
                 None => return within(Segment::Field(name, arm.id), arm_unknown()),
             }
         }
         Ok(())
+    }
+
+    /// The field of `fields`, from `*next` on, whose id is `id`: one step per
+    /// field passed over. `fields` is in strictly increasing id order and the
+    /// ids asked for increase, so `*next` only moves forward.
+    fn same_id(
+        &mut self,
+        fields: &'a [Field],
+        next: &mut usize,
+        id: u32,
+    ) -> Result<Option<&'a Field>, Stop<'a>> {
+        while fields.get(*next).is_some_and(|field| field.id < id) {
+            self.spend(1)?;
+            *next += 1;
+        }
+        match fields.get(*next) {
+            Some(field) if field.id == id => {
+                *next += 1;
+                Ok(Some(field))
+            }
+            _ => Ok(None),
+        }
     }
 
     /// Equal modes, arguments contravariant, results covariant.
@@ -746,7 +810,9 @@ impl<'a> Checker<'a> {
     }
 
     /// Every method of the super service present in the sub service, as a
-    /// subtype.
+    /// subtype. Both lists are in the Contract's canonical method order, by
+    /// id and then by name, so one pass pairs them, a step per method of the
+    /// super service and one per method of the sub service passed over.
     #[inline(never)]
     fn service_rule(
         &mut self,
@@ -754,10 +820,21 @@ impl<'a> Checker<'a> {
         have: &'a [ServiceMethod],
         want: &'a [ServiceMethod],
     ) -> Outcome<'a> {
+        let key = |method: &'a ServiceMethod| (method.id, method.name.as_str());
+        debug_assert!(have.windows(2).all(|pair| key(&pair[0]) < key(&pair[1])));
+        let mut next = 0;
         for method in want {
+            self.spend(1)?;
+            while have.get(next).is_some_and(|found| key(found) < key(method)) {
+                self.spend(1)?;
+                next += 1;
+            }
             let segment = Segment::Method(method.name.as_str());
-            match have.iter().find(|candidate| candidate.name == method.name) {
-                Some(found) => self.child(segment, side, found.function, method.function)?,
+            match have.get(next).filter(|found| found.name == method.name) {
+                Some(found) => {
+                    next += 1;
+                    self.child(segment, side, found.function, method.function)?
+                }
                 None => return within(segment, method_absent()),
             }
         }
@@ -775,6 +852,7 @@ impl<'a> Checker<'a> {
         segment: fn(usize) -> Segment<'a>,
     ) -> Outcome<'a> {
         for (index, want) in sup.iter().enumerate() {
+            self.spend(1)?;
             match sub.get(index) {
                 Some(have) => self.child(segment(index), side, *have, *want)?,
                 None if self.opt_like(side.other(), *want) => {}
@@ -786,6 +864,12 @@ impl<'a> Checker<'a> {
         }
         Ok(())
     }
+}
+
+/// Whether fields are in strictly increasing id order, as a Contract keeps
+/// them.
+fn in_id_order(fields: &[Field]) -> bool {
+    fields.windows(2).all(|pair| pair[0].id < pair[1].id)
 }
 
 #[cold]
@@ -919,12 +1003,25 @@ fn render(path: &[Segment<'_>]) -> String {
     text
 }
 
-/// The length in bytes of [`render`]'s text, holding one segment's text at
-/// a time.
+/// The length in bytes of [`render`]'s text as a JSON string writes it,
+/// quotes aside, holding one segment's text at a time.
 fn rendered_len(path: &[Segment<'_>]) -> usize {
     let mut length = 0;
-    render_parts(path, |part| length += part.len());
+    render_parts(path, |part| length += json_len(part));
     length
+}
+
+/// The bytes `text` takes inside a JSON string, quotes aside: what
+/// `serde_json` writes for it, where `"`, `\` and the control characters
+/// are escaped (`\n` and the like in two bytes, the rest as `\u00XX`).
+fn json_len(text: &str) -> usize {
+    text.bytes()
+        .map(|byte| match byte {
+            b'"' | b'\\' | b'\n' | b'\r' | b'\t' | 0x08 | 0x0c => 2,
+            0x00..=0x1f => 6,
+            _ => 1,
+        })
+        .sum()
 }
 
 /// Hand [`render`]'s text to `each`, one segment at a time.
@@ -993,9 +1090,10 @@ impl Report<'_> {
         }
     }
 
-    /// The bytes of its `method`, `path` and `message` strings.
+    /// The bytes of its `method`, `path` and `message` strings, as the JSON
+    /// response writes them.
     fn text_len(&self, method: &str) -> usize {
-        method.len() + self.message.len() + self.path.as_deref().map_or(0, rendered_len)
+        json_len(method) + json_len(&self.message) + self.path.as_deref().map_or(0, rendered_len)
     }
 
     fn render(&self, method: &str) -> Value {
@@ -1033,10 +1131,19 @@ impl<'a> Checker<'a> {
         &mut self,
         name: &str,
         written_function: u32,
-        live_methods: &[(String, u32)],
+        live_methods: &BTreeMap<&str, u32>,
     ) -> Result<Vec<Report<'a>>, Exhausted> {
-        let Some((_, live_function)) = live_methods.iter().find(|(live_name, _)| live_name == name)
-        else {
+        // Deciding a method is one step of the whole check's bound, whatever
+        // it costs on its own: so the bound caps the method count too.
+        self.total_steps += 1;
+        if self.total_steps > self.options.total_step_limit {
+            return Err(Exhausted {
+                resource: TOTAL_STEPS,
+                limit: self.options.total_step_limit,
+                observed: self.total_steps,
+            });
+        }
+        let Some(live_function) = live_methods.get(name) else {
             return Ok(vec![Report::error(
                 "method_missing",
                 format!("the live service has no method {name:?}"),
@@ -1071,11 +1178,14 @@ impl<'a> Checker<'a> {
                 ),
             ));
         }
-        self.active.clear();
+        // Fresh maps rather than cleared ones: clearing a hash map costs its
+        // capacity, which an earlier method may have grown far past what
+        // this one uses. Dropping them costs only what this method spent.
+        self.active = HashMap::new();
         self.frames.clear();
-        self.proven.clear();
+        self.proven = HashMap::new();
         self.log.clear();
-        self.failed.clear();
+        self.failed = BTreeMap::new();
         self.warnings.clear();
         self.truncated = false;
         self.path.clear();
@@ -1153,6 +1263,10 @@ impl<'a> Checker<'a> {
 pub fn check(written: &Input<'_>, live: &Input<'_>, options: CheckOptions) -> Vec<Value> {
     let written_methods = actor_methods(written.contract).expect("the caller checked the actor");
     let live_methods = actor_methods(live.contract).expect("the caller checked the actor");
+    let live_methods: BTreeMap<&str, u32> = live_methods
+        .iter()
+        .map(|(name, function)| (name.as_str(), *function))
+        .collect();
     let mut checker = Checker {
         live: Graph::new(live.contract, live.source_info),
         written: Graph::new(written.contract, written.source_info),
@@ -1251,9 +1365,29 @@ mod tests {
         );
         assert_eq!(render(&[Segment::Argument(0)]), "$args[0]");
         assert_eq!(render(&[]), "$");
-        // The output bound measures exactly the rendered text.
+        // The output bound measures exactly the rendered text, as JSON
+        // writes it.
+        let written =
+            |path: &[Segment<'_>]| serde_json::to_string(&render(path)).unwrap().len() - 2;
         for prefix in 0..=path.len() {
-            assert_eq!(rendered_len(&path[..prefix]), render(&path[..prefix]).len());
+            assert_eq!(rendered_len(&path[..prefix]), written(&path[..prefix]));
         }
+        let escaped = [
+            Segment::Result(0),
+            Segment::Field(
+                Some("tab\there \"quoted\" back\\slash \u{1} \u{7f} \u{e9}"),
+                1,
+            ),
+            Segment::Method("line\nbreak"),
+        ];
+        assert_eq!(rendered_len(&escaped), written(&escaped));
+        let every_byte: String = (0..=0x7f_u8)
+            .map(char::from)
+            .chain(['\u{e9}', '\u{1F600}'])
+            .collect();
+        assert_eq!(
+            json_len(&every_byte),
+            serde_json::to_string(&every_byte).unwrap().len() - 2
+        );
     }
 }

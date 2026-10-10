@@ -247,15 +247,17 @@ export function projectDid(
  *   already passed through.
  * - `resource_limit_exceeded`: as an error, the check of this method
  *   stopped at one of its bounds (`resource_limit.resource` is
- *   `check_depth` or `check_steps`) and fails closed. As a warning
- *   (`check_warnings`), the method has more `special_opt_rule` warnings
- *   than the 1,000 reported; its verdict is complete and stands. As an
- *   error naming `check_total_steps`, `check_total_warnings` or
+ *   `check_depth` or `check_steps`; a step is one unit of work done, such
+ *   as a pair of types visited or a field examined) and fails closed. As a
+ *   warning (`check_warnings`), the method has more `special_opt_rule`
+ *   warnings than the 1,000 reported; its verdict is complete and stands.
+ *   As an error naming `check_total_steps`, `check_total_warnings` or
  *   `check_output_bytes`, the check as a whole reached one of its bounds
  *   (10,000,000 steps, 10,000 `special_opt_rule` warnings, or 4 MiB of
- *   `method`, `path` and `message` text): methods are checked in name
- *   order, and the method at which the bound was reached and every method
- *   after it get this one diagnostic and nothing else. Below these bounds a
+ *   `method`, `path` and `message` text as the JSON writes it): methods
+ *   are checked in name order, and the method at which the bound was
+ *   reached and every method after it get this one diagnostic and nothing
+ *   else. Below these bounds a
  *   method's findings do not depend on the other methods.
  */
 export interface CompatibilityDiagnostic {
