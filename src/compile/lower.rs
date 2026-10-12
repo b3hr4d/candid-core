@@ -330,6 +330,7 @@ fn check_type_depth(
         .collect();
 
     let mut visited = BTreeSet::new();
+    let mut node_ids = nesting::NodeIds::new();
     while let Some((ty, depth, active_names)) = pending.pop() {
         nesting::charge_type_preflight(
             budget,
@@ -351,9 +352,10 @@ fn check_type_depth(
         }
         // Every popped `Type` is an `Rc` clone of a node owned transitively
         // by `environment` or `actor_type`, both alive for the whole walk, so
-        // the address identifies its node for as long as `visited` holds it.
+        // the address identifies its node for as long as `node_ids` holds it;
+        // the memo keys on the id it maps to (see `nesting::NodeIds`).
         if !visited.insert((
-            ty.as_ref() as *const TypeInner as usize,
+            node_ids.id(ty.as_ref() as *const TypeInner),
             depth,
             active_names.clone(),
         )) {
