@@ -188,7 +188,7 @@ export function decode<T>(
   schema: Schema<T>,
   bytes: Uint8Array,
   options: CodecOptions = {},
-): { ok: true; value: unknown } | { ok: false; issues: readonly CodecIssue[] }</pre>
+): { ok: true; value: Decoded<T> } | { ok: false; issues: readonly CodecIssue[] }</pre>
     <p><code>encodeArgs</code> and <code>decodeArgs</code> take one schema and one value per argument of
     a call, which is what a message really carries.</p>
     <pre data-lang="ts" data-check="flow">import { decode, encode } from "@candid-core/schema/codec";
@@ -202,14 +202,15 @@ encoded.bytes; // Uint8Array, a complete one-argument Candid message
 
 const decoded = decode(Account, encoded.bytes);
 if (decoded.ok) {
-  const account = decoded.value as Account;
+  const account: Account = decoded.value;
   account.balance; // 5n
   account.owner; // "aaaaa-aa", the principal's canonical text
 }</pre>
-    <p>Two things to note. <code>decode</code> hands back
-    <code>value: unknown</code>, so the assertion above is yours to make — the
-    decoder checked the bytes against the schema, but the signature does not
-    pretend to have narrowed anything. And <code>encode</code> is stricter than
+    <p>Two things to note. <code>decode</code> hands back the schema&rsquo;s own
+    type (<code>Decoded&lt;T&gt;</code> is <code>T</code>, or <code>unknown</code>
+    for an erased schema), because the decoder checked the bytes against that
+    schema; <code>0.4.0</code> and earlier return <code>value: unknown</code>,
+    and there the annotation above needs <code>as Account</code>. And <code>encode</code> is stricter than
     <code>validate</code> in a few places on purpose: a <code>float32</code>
     that is not <code>Math.fround</code>-exact fails with
     <code>unrepresentable_float32</code> rather than being rounded, and a

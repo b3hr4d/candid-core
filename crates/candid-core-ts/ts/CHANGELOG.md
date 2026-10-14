@@ -13,6 +13,33 @@ entry here is [docs/releasing.md] in that repository.
 API, the inferred domain types, the codec's wire behaviour, and the codes and
 `$`-rooted paths validation reports. Pin an exact version.
 
+## Unreleased
+
+### Changed
+
+- **`decode` and `decodeArgs` type their values by their schemas.** After
+  `ok`, `decode(Account, bytes).value` is `Infer<typeof Account>`, where it
+  was `unknown`, and `decodeArgs([A, B], bytes).values` is
+  `readonly [Infer<typeof A>, Infer<typeof B>]` for an array literal, with no
+  `as const`. The decoder checks the bytes against the schema before it
+  returns `ok: true`, so the type is the schema's own domain, not a cast. A
+  schema whose own type is erased keeps `unknown`: `decode` with an
+  `AnySchema` gives `unknown`, and `decodeArgs` with a
+  `readonly AnyFieldSchema[]`, such as a `FuncSchema`'s `results`, gives
+  `readonly unknown[]`, not `any`. A concrete builder around an erased child
+  decodes to what `Infer` gives it: `decode(c.vec(erased), bytes).value` is
+  `any[]`, where it was `unknown`.
+  `DecodeResult` takes the value tuple as an optional type parameter whose
+  default is `readonly unknown[]`, so the name keeps its meaning. Nothing
+  changes at run time. **BREAKING** at the type level only, in three ways
+  that compiled against `unknown`: a cast or an annotation from a decoded
+  value to a type its schema does not describe now fails; one variable
+  reassigned from `decodeArgs` calls with different schemas now fails,
+  because each call has its own `DecodeResult<…>`; and a `typeof` or `in`
+  check that narrowed the old `unknown` may now narrow to `never`. A generic
+  wrapper `<T>(schema: Schema<T>) => T` still needs `as T` on the value. `encode` and
+  `encodeArgs` still take `unknown` values.
+
 ## 0.4.0 — 2026-10-10
 
 Pairs with `candid-core` 0.1.0-beta.3.

@@ -550,7 +550,7 @@ const request = encodeArgs([TransferArg], [arg]); // Candid bytes for your trans
 // … send request.bytes on the update path, then decode what came back:
 const reply = decodeArgs([TransferResult], replyBytes);
 if (reply.ok) {
-  const result = reply.values[0] as TransferResult;
+  const result: TransferResult = reply.values[0];
   if (result.tag === "ok") {
     console.log("block index", result.value);
   }

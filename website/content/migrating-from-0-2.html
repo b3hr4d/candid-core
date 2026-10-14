@@ -301,7 +301,7 @@ const request = encodeArgs(transfer.args, [arg]);
 if (!request.ok) throw new Error(request.issues[0].message);
 
 const reply = decodeArgs(transfer.results, await send(transfer.name, request.bytes));
-if (reply.ok) reply.values[0]; // the decoded TransferResult, as unknown until you narrow it
+if (reply.ok) reply.values[0]; // the decoded TransferResult, as unknown until you narrow it: `results` is an erased list
 </pre>
 
 <h2 id="strict-options">Strict options, and bytes that do not depend on the schema</h2>

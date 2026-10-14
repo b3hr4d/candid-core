@@ -134,7 +134,7 @@
 // engine and every call — the only exception being user code (a getter, a
 // rec thunk) that overflows the stack by itself.
 
-import type { AnyFieldSchema, AnySchema, Principal, Schema } from "./schema.ts";
+import type { AnyFieldSchema, AnySchema, Infer, Principal, Schema } from "./schema.ts";
 import { fieldIdOfKey, utf8BytesStrict, utf8Decode } from "./labels.ts";
 import { checkOptions } from "./options.ts";
 import { principalBytesFromText, principalTextFromBytes } from "./principal-text.ts";
@@ -217,10 +217,29 @@ export type EncodeResult =
   | { readonly ok: true; readonly bytes: Uint8Array }
   | { readonly ok: false; readonly issues: readonly CodecIssue[] };
 
-/** One decoded value per expected argument, or the issues that refused them. */
-export type DecodeResult =
-  | { readonly ok: true; readonly values: readonly unknown[] }
+/**
+ * One decoded value per expected argument, or the issues that refused them.
+ * `decodeArgs` fills `V` with the value tuple of the schemas it was given;
+ * the default, `readonly unknown[]`, is what an erased schema list decodes to.
+ */
+export type DecodeResult<V extends readonly unknown[] = readonly unknown[]> =
+  | { readonly ok: true; readonly values: V }
   | { readonly ok: false; readonly issues: readonly CodecIssue[] };
+
+/**
+ * The static type of a value decoded under `Schema<T>`: `T`, except that a
+ * schema whose own type is erased (`AnySchema` is `Schema<any>`) decodes to
+ * `unknown`, not `any`. The decoder checks the bytes against the schema
+ * before it returns `ok: true`, so the type is the schema's own domain, not a
+ * cast. The guard is at the top only: a concrete builder around an erased
+ * child, such as `c.vec(erased)`, decodes to what `Infer` gives it (`any[]`).
+ */
+type Decoded<T> = 0 extends 1 & T ? unknown : T;
+
+/** The value tuple of a schema list, each element as {@link Decoded} reads it. */
+type DecodedValues<S extends readonly AnyFieldSchema[]> = {
+  readonly [I in keyof S]: Decoded<Infer<S[I]>>;
+};
 
 /**
  * Explicit budgets for one codec call; each defaults to a `DEFAULT_MAX_*`.
@@ -2161,7 +2180,9 @@ class Encoder {
 // ---------------------------------------------------------------------------
 
 /**
- * Decode a one-argument message against one schema.
+ * Decode a one-argument message against one schema. On `ok`, `value` has the
+ * schema's own type (`Infer<typeof schema>`), because the decoder checked the
+ * bytes against that schema; an erased `AnySchema` gives `unknown`.
  *
  * Never throws on any bytes. Throws `TypeError` on an options object with an
  * unknown key or a limit that is not a non-negative safe integer, exactly as
@@ -2171,23 +2192,29 @@ export function decode<T>(
   schema: Schema<T>,
   bytes: Uint8Array,
   options: CodecOptions = {},
-): { ok: true; value: unknown } | { ok: false; issues: readonly CodecIssue[] } {
+): { ok: true; value: Decoded<T> } | { ok: false; issues: readonly CodecIssue[] } {
   const result = decodeWith(limitsOf("decode", options), [schema as AnyFieldSchema], bytes);
   return result.ok
-    ? { ok: true, value: result.values[0] }
+    ? { ok: true, value: result.values[0] as Decoded<T> }
     : { ok: false, issues: rerootIssues(result.issues) };
 }
 
 /**
  * Decode a Candid message against an expected argument schema sequence.
- * Options are checked as `decode` documents.
+ * Options are checked as `decode` documents. On `ok`, `values` is the value
+ * tuple of `schemas`: `decodeArgs([A, B], bytes)` gives
+ * `readonly [Infer<typeof A>, Infer<typeof B>]` for an array literal, with no
+ * `as const`. An erased list such as a `FuncSchema`'s `results`
+ * (`readonly AnyFieldSchema[]`) gives `readonly unknown[]`.
  */
-export function decodeArgs(
-  schemas: readonly AnyFieldSchema[],
+export function decodeArgs<const S extends readonly AnyFieldSchema[]>(
+  schemas: S,
   bytes: Uint8Array,
   options: CodecOptions = {},
-): DecodeResult {
-  return decodeWith(limitsOf("decodeArgs", options), schemas, bytes);
+): DecodeResult<DecodedValues<S>> {
+  return decodeWith(limitsOf("decodeArgs", options), schemas, bytes) as DecodeResult<
+    DecodedValues<S>
+  >;
 }
 
 function decodeWith(
