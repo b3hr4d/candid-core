@@ -286,8 +286,17 @@ wrote generated/basic.envelope.json
 
 <p>
   <code>--json</code> prints exactly one document on stdout, with stderr empty; combine it with
-  <code>--check</code>. The content-addressed identities are not in it. A usage error prints no document.
+  <code>--check</code>. Each compiled entry carries its content-addressed identities. A usage error
+  prints no document.
 </p>
+
+<callout type="note" title="identities in --json are not in 0.3.0">
+  <p>
+    <code>0.3.0</code> and earlier leave the identities out of the <code>--json</code> document; read them
+    from the envelope's <code>contract.identities</code> there. The next release adds each entry's
+    <code>identities</code>. Every other field below is the same in <code>0.3.0</code>.
+  </p>
+</callout>
 
 <pre data-lang="json">
 {
@@ -300,6 +309,10 @@ wrote generated/basic.envelope.json
       "status": "written",
       "module": "generated/service.ts",
       "envelope": "generated/service.envelope.json",
+      "identities": {
+        "contract_id": "candid-core:contract:v1:sha256:…",
+        "interface_id": "candid-core:interface:v1:sha256:…"
+      },
       "omitted": [],
       "diagnostics": []
     }
@@ -310,12 +323,15 @@ wrote generated/basic.envelope.json
 
 <p>
   <code>status</code> is <code>written</code>, <code>unchanged</code>, <code>drifted</code>
-  (<code>--check</code> only) or <code>failed</code>. <code>omitted</code> is the list
+  (<code>--check</code> only) or <code>failed</code>. <code>identities</code> is
+  <code>{ contract_id, interface_id }</code>, equal to the envelope's <code>contract.identities</code> under
+  the key names <code>project</code> and <code>check</code> use; <code>interface_id</code> is absent
+  when the source has no actor, and a failed entry has no <code>identities</code>. <code>omitted</code> is the list
   <code>didToModule</code> returns, and <code>diagnostics</code> is the compiler's own, unchanged in
   shape; <code>ok</code> is true exactly when the exit status is <code>0</code>; <code>drift</code> lists
   the paths <code>--check</code> found missing or different. <code>schemaVersion</code> changes only when
-  an existing field's meaning or shape does. The types ship as <code>CliReport</code> and
-  <code>CliEntryReport</code>.
+  an existing field's meaning or shape does. The types ship as <code>CliReport</code>,
+  <code>CliEntryReport</code> and <code>CliIdentities</code>.
 </p>
 
 <h2>The library API</h2>

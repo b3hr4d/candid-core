@@ -527,18 +527,92 @@ test("--json prints exactly one document on stdout, pinned for success", () => {
         status: "written",
         module: path.join("out", "basic.ts"),
         envelope: path.join("out", "basic.envelope.json"),
+        identities: envelopeIdentities(scratch, "out", "basic"),
         omitted: [],
         diagnostics: [],
       },
     ],
     drift: [],
   });
-  // Identities are not part of the document.
-  assert.doesNotMatch(result.stdout, /candid-core:(contract|interface):/);
+  // The documented key order: `identities` sits before `omitted`.
+  assert.deepStrictEqual(Object.keys(result.document.entries[0]), [
+    "entry",
+    "status",
+    "module",
+    "envelope",
+    "identities",
+    "omitted",
+    "diagnostics",
+  ]);
+  assert.deepStrictEqual(Object.keys(result.document.entries[0].identities), [
+    "contract_id",
+    "interface_id",
+  ]);
   // The same run again leaves the files alone and says so.
   const again = run(scratch, ["gen", "a/basic.did", "-o", "out", "--json"]);
   assert.strictEqual(again.document.entries[0].status, "unchanged");
   assert.strictEqual(again.document.ok, true);
+});
+
+/**
+ * The identities an entry's written envelope records, under the key names the
+ * `--json` document uses: `interface_id` only when there is an actor.
+ */
+function envelopeIdentities(scratch, outDir, stem) {
+  const envelope = JSON.parse(read(scratch, outDir, `${stem}.envelope.json`));
+  const { contract, interface: iface } = envelope.contract.identities;
+  return iface === undefined
+    ? { contract_id: contract }
+    : { contract_id: contract, interface_id: iface };
+}
+
+test("--json carries each compiled entry's own identities, under --check too", () => {
+  const scratch = scratchWith("json-identities", {
+    "a/ledger.did": fixture("ledger"),
+    "b/primitives.did": fixture("primitives"),
+    "c/actorless.did": "type Count = nat;\ntype Pair = record { a : Count; b : text };\n",
+    "d/broken.did": "service : {",
+  });
+  const entries = ["a/ledger.did", "b/primitives.did", "c/actorless.did", "d/broken.did"];
+  const written = run(scratch, ["gen", ...entries, "-o", "out", "--json"]);
+  assert.strictEqual(written.status, 1, "the broken entry fails the run");
+  const expected = [
+    envelopeIdentities(scratch, "out", "ledger"),
+    envelopeIdentities(scratch, "out", "primitives"),
+    envelopeIdentities(scratch, "out", "actorless"),
+    undefined,
+  ];
+  // Two different interfaces: an entry filled from another entry is caught.
+  assert.notDeepStrictEqual(expected[0], expected[1]);
+  // No actor: the contract identity alone, with no `interface_id` key at all.
+  assert.deepStrictEqual(Object.keys(expected[2]), ["contract_id"]);
+  assert.deepStrictEqual(
+    written.document.entries.map((entry) => entry.identities),
+    expected,
+  );
+  assert.deepStrictEqual(
+    written.document.entries.map((entry) => entry.status),
+    ["written", "written", "written", "failed"],
+  );
+
+  // The human report prints the same strings.
+  const human = run(scratch, ["gen", entries[0], "-o", "out"]);
+  assert.match(human.stdout, new RegExp(`^contract:  ${expected[0].contract_id}$`, "m"));
+  assert.match(human.stdout, new RegExp(`^interface: ${expected[0].interface_id}$`, "m"));
+
+  // `--check` reports them as well, on unchanged and on drifted entries.
+  const target = path.join(scratch, "out", "primitives.ts");
+  writeFileSync(target, `${read(target)} `);
+  const checked = run(scratch, ["gen", ...entries.slice(0, 3), "-o", "out", "--check", "--json"]);
+  assert.strictEqual(checked.status, 1);
+  assert.deepStrictEqual(
+    checked.document.entries.map((entry) => [entry.status, entry.identities]),
+    [
+      ["unchanged", expected[0]],
+      ["drifted", expected[1]],
+      ["unchanged", expected[2]],
+    ],
+  );
 });
 
 test("--json on a compile error: one document, failed entry, exit 1, nothing written", () => {
@@ -565,6 +639,7 @@ test("--json on a compile error: one document, failed entry, exit 1, nothing wri
     "diagnostics",
   ]);
   assert.strictEqual(entry.status, "failed");
+  assert.strictEqual("identities" in entry, false, "a failed entry carries no identities");
   assert.deepStrictEqual(entry.omitted, []);
   // The wasm's own diagnostics, unchanged in shape.
   assert.strictEqual(entry.diagnostics[0].code, "did_parse_error");

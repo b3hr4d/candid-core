@@ -361,6 +361,20 @@ export function checkCompatible(
  */
 export type CliEntryStatus = "written" | "unchanged" | "drifted" | "failed";
 
+/**
+ * The identities of one compiled `gen` entry, equal to its envelope's
+ * `contract.identities` under the key names {@link Identities} uses.
+ */
+export interface CliIdentities {
+  /** The Contract identity: the whole canonical graph, declarations included. */
+  contract_id: string;
+  /**
+   * The interface identity: only what the service reaches. Absent when the
+   * `.did` has no actor, as in the envelope.
+   */
+  interface_id?: string;
+}
+
 /** One entry's part of the `--json` document. */
 export interface CliEntryReport {
   /** The entry exactly as it was given on the command line. */
@@ -370,6 +384,12 @@ export interface CliEntryReport {
   module: string;
   /** The contract envelope's path: `-o` joined with `<stem>.envelope.json`. */
   envelope: string;
+  /**
+   * The entry's identities, the same the human report prints. Present on
+   * every entry that compiled (`written`, `unchanged`, `drifted`), with or
+   * without `--check`; absent on a `failed` entry.
+   */
+  identities?: CliIdentities;
   /**
    * What the module leaves out, exactly as `didToModule` returns it. Empty
    * for a `failed` entry and when nothing is omitted. Omissions never make an

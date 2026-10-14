@@ -26,6 +26,20 @@ declarations, so a large `.did` file compiles in time proportional to its size.
 Every other input compiles to the same Contract and identities; envelopes `gen`
 writes will name 0.1.0 as their producer.
 
+### Added
+
+- **`gen --json` reports each entry's identities.** Every entry that compiled
+  (`written`, `unchanged` or `drifted`, with or without `--check`) carries
+  `identities: { contract_id, interface_id }`, equal to its envelope's
+  `contract.identities` and to the lines the human report prints, under the
+  key names `project --json` and `check --json` already use. `interface_id`
+  is absent when the `.did` has no actor; a `failed` entry has no
+  `identities`. The declarations add `CliIdentities` and the optional
+  `CliEntryReport.identities`; `Identities` is unchanged, its `interface_id`
+  still required. `schemaVersion` stays `1`, since adding a field does not
+  change it. A build step no longer has to parse the envelope to learn the
+  interface identity.
+
 ## 0.3.0 — 2026-10-10
 
 Embeds `candid-core` 0.1.0-beta.3 and the `candid-core-ts` generator from the

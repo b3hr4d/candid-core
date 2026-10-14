@@ -56,7 +56,8 @@ That emits three things:
 - the printed **content-addressed identities** (`contract`, and `interface`
   when the service has an actor) — the same
   `candid-core:contract:v1:sha256:…` addresses the Rust toolchain computes,
-  usable to pin an interface and detect drift.
+  usable to pin an interface and detect drift. `--json` carries them as
+  each entry's `identities`.
 
 A declaration the generator cannot represent does not cost the whole
 module: it is left out, together with every declaration and actor method that
@@ -136,8 +137,8 @@ looked for.
 ### `--json`
 
 Prints exactly one JSON document on stdout and nothing else; stderr stays
-empty. The identities the human report prints are not part of it. Combine it
-with `--check`. A usage error (exit 64) prints no document.
+empty. Each compiled entry carries the identities the human report prints.
+Combine it with `--check`. A usage error (exit 64) prints no document.
 
 ```json
 {
@@ -150,6 +151,10 @@ with `--check`. A usage error (exit 64) prints no document.
       "status": "written",
       "module": "generated/service.ts",
       "envelope": "generated/service.envelope.json",
+      "identities": {
+        "contract_id": "candid-core:contract:v1:sha256:…",
+        "interface_id": "candid-core:interface:v1:sha256:…"
+      },
       "omitted": [],
       "diagnostics": []
     }
@@ -171,6 +176,11 @@ with `--check`. A usage error (exit 64) prints no document.
   - `status`: `written` (a file was created or changed), `unchanged` (both
     files already held these bytes), `drifted` (`--check` only: a file is
     missing or differs; nothing was written) or `failed`;
+  - `identities`: `{ contract_id, interface_id }`, equal to the envelope's
+    `contract.identities` and to what the human report prints, with the key
+    names `project --json` and `check --json` use. `interface_id` is absent
+    when the `.did` has no actor. Present on every entry that compiled,
+    `--check` included; absent on a failed entry;
   - `omitted`: what the module leaves out, exactly as `didToModule` returns it
     (see [Omissions](#omissions)), `[]` for a failed entry. Omissions never make
     an entry fail;
@@ -185,8 +195,8 @@ with `--check`. A usage error (exit 64) prints no document.
 - `drift` lists every path `--check` found missing or different, in entry
   order, module before envelope; always `[]` without `--check`.
 
-The same types ship as `CliReport` and `CliEntryReport` in the package's
-declarations. A run is deterministic: the same inputs give the same files and
+The same types ship as `CliReport`, `CliEntryReport` and `CliIdentities` in
+the package's declarations. A run is deterministic: the same inputs give the same files and
 the same document, byte for byte, from any working directory. There are no
 timestamps, and every path in the document and in the human report (including
 the messages of failures such as an unreadable or missing entry) is spelled as

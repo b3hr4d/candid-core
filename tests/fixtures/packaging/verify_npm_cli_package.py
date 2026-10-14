@@ -263,6 +263,23 @@ def main():
         ):
             raise SystemExit(f"--json document has the wrong shape: {gen_json.stdout}")
 
+        def expected_identities(entry):
+            stem = pathlib.Path(entry["entry"]).stem
+            written = json.loads((consumer / "out" / f"{stem}.envelope.json").read_text())
+            identities = written["contract"]["identities"]
+            expected = {"contract_id": identities["contract"]}
+            if "interface" in identities:
+                expected["interface_id"] = identities["interface"]
+            return expected
+
+        # Each compiled entry carries its own envelope's identities.
+        for entry in report["entries"]:
+            if entry.get("identities") != expected_identities(entry):
+                raise SystemExit(
+                    f"--json identities of {entry['entry']} differ from its envelope's: "
+                    f"{entry.get('identities')!r}"
+                )
+
         check_json = run(
             cli + ["gen", "./service.did", "./sub/second.did", "-o", "./out", "--check", "--json"],
             cwd=consumer,
@@ -272,6 +289,34 @@ def main():
         checked = json.loads(check_json.stdout)
         if checked["ok"] is not True or checked["check"] is not True or checked["drift"]:
             raise SystemExit(f"--check on a clean tree is not clean: {check_json.stdout}")
+        if [e.get("identities") for e in checked["entries"]] != [
+            expected_identities(e) for e in checked["entries"]
+        ]:
+            raise SystemExit(f"--check --json lost the identities: {check_json.stdout}")
+
+        # An actorless entry has no `interface_id`, and a failed entry no
+        # `identities` at all, from the tarball too.
+        (consumer / "types").mkdir()
+        (consumer / "types" / "shapes.did").write_text("type Count = nat;\n")
+        (consumer / "broken").mkdir()
+        (consumer / "broken" / "broken.did").write_text("service : {\n")
+        edges = subprocess.run(
+            cli + ["gen", "./types/shapes.did", "./broken/broken.did", "-o", "./edges", "--json"],
+            cwd=consumer,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        shapes, broken = json.loads(edges.stdout)["entries"]
+        shapes_envelope = json.loads((consumer / "edges" / "shapes.envelope.json").read_text())
+        if (
+            edges.returncode != 1
+            or shapes.get("identities")
+            != {"contract_id": shapes_envelope["contract"]["identities"]["contract"]}
+            or broken["status"] != "failed"
+            or "identities" in broken
+        ):
+            raise SystemExit(f"--json identities on an actorless or failed entry: {edges.stdout}")
 
         target = consumer / "out" / "second.ts"
         original = target.read_bytes()
@@ -382,7 +427,7 @@ def main():
         # package's own declarations.
         (consumer / "check.ts").write_text(
             'import { checkCompatible, didToContract, didToModule, projectDid } from "@candid-core/cli";\n'
-            'import type { CliReport, CompatibilityDiagnostic } from "@candid-core/cli";\n'
+            'import type { CliIdentities, CliReport, CompatibilityDiagnostic } from "@candid-core/cli";\n'
             'import { schemaFromContract } from "@candid-core/schema/contract";\n'
             "\n"
             "export async function main(): Promise<string[]> {\n"
@@ -415,8 +460,14 @@ def main():
             "}\n"
             "\n"
             "export function summarize(report: CliReport): string[] {\n"
+            "  const first: CliIdentities | undefined = report.entries[0]?.identities;\n"
+            "  // @ts-expect-error -- interface_id is absent for a .did without an actor.\n"
+            "  const pinned: string = first!.interface_id;\n"
+            "  void pinned;\n"
             "  return report.entries.map(\n"
-            "    (entry) => `${entry.entry} ${entry.status} ${entry.omitted.length} ${entry.diagnostics.length}`,\n"
+            "    (entry) =>\n"
+            "      `${entry.entry} ${entry.status} ${entry.omitted.length} ${entry.diagnostics.length} ` +\n"
+            "      `${entry.identities?.contract_id ?? \"failed\"} ${entry.identities?.interface_id ?? \"no actor\"}`,\n"
             "  ).concat(report.drift, String(report.schemaVersion), String(report.ok));\n"
             "}\n"
         )

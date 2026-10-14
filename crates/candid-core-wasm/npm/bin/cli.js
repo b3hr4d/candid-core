@@ -577,6 +577,18 @@ function describeOmission(entry) {
   return `${kind} ${listedName(entry.name)} (${entry.reason}${via})`;
 }
 
+/**
+ * The envelope's identities under the key names `project` and `check` use.
+ * `interface_id` is left out, not null, when the source has no actor.
+ */
+function cliIdentities(identities) {
+  const out = { contract_id: identities.contract };
+  if (identities.interface !== undefined) {
+    out.interface_id = identities.interface;
+  }
+  return out;
+}
+
 /** Run a generation twice and refuse on any byte mismatch. */
 async function deterministic(label, produce) {
   const first = await produce();
@@ -628,6 +640,10 @@ async function processEntry(entry, { outDir, check }) {
     status: "failed",
     module: modulePath,
     envelope: envelopePath,
+    // Set once the entry compiles. Until then it is undefined, which
+    // `JSON.stringify` leaves out, so a failed entry has no `identities`; the
+    // key is declared here so a compiled entry prints it before `omitted`.
+    identities: undefined,
     omitted: [],
     diagnostics: [],
   };
@@ -679,6 +695,7 @@ async function processEntry(entry, { outDir, check }) {
     for (const omission of generated.omitted) {
       human.err.push(`warning: omitted ${describeOmission(omission)}`);
     }
+    report.identities = cliIdentities(envelope.contract.identities);
     report.omitted = generated.omitted;
     report.status = drift.length > 0 ? "drifted" : wrote ? "written" : "unchanged";
   } catch (error) {
