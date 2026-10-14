@@ -1583,11 +1583,28 @@ function omissionAnalysis(
   readonly methods: ReadonlySet<string>;
   readonly omitted: readonly Omission[];
 } {
-  // The first declaration of each composite node: the name every later
-  // reference to the node renders as (the generator's `first_names`).
+  // The first declaration of each node without a fixed rendering: the name
+  // every later reference to the node renders as (the generator's
+  // `first_names`). A primitive, a `vec nat8`, an empty record and an empty
+  // variant render the same at every use, so no declaration names them.
+  const rendersStructurally = (node: ParsedNode): boolean => {
+    switch (node.kind) {
+      case "primitive":
+        return true;
+      case "vec": {
+        const inner = nodes[node.inner];
+        return inner?.kind === "primitive" && inner.primitive === "nat8";
+      }
+      case "record":
+      case "variant":
+        return node.fields.length === 0;
+      default:
+        return false;
+    }
+  };
   const declared = new Map<number, string>();
   for (const declaration of declarations) {
-    if (nodes[declaration.type].kind !== "primitive" && !declared.has(declaration.type)) {
+    if (!rendersStructurally(nodes[declaration.type]) && !declared.has(declaration.type)) {
       declared.set(declaration.type, declaration.name);
     }
   }

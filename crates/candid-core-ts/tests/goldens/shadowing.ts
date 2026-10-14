@@ -89,9 +89,9 @@ type $string = number;
 const $string: $.Schema<$string> = $.c.rec(() => $.c.nat16);
 export { $string as string };
 
-const $actor: $.Schema<$.Principal> = $.c.rec(() => $.c.service({ all: $.c.func([$Uses], [$.c.nat32, $Bytes, $Unit], "query"), get: $.c.func([$.c.nat16], [$.c.float64], "query"), ping: $.c.func([$.c.int8], [$Promise], "update") }));
+const $actor: $.Schema<$.Principal> = $.c.rec(() => $.c.service({ all: $.c.func([$Uses], [$.c.nat32, $.c.blob(), $.c.unit()], "query"), get: $.c.func([$.c.nat16], [$.c.float64], "query"), ping: $.c.func([$.c.int8], [$Promise], "update") }));
 export type Actor = {
-  all: ((arg0: Uses) => Promise<[number, Bytes, Unit]>) & $.WithMode<"query">;
+  all: ((arg0: Uses) => Promise<[number, Uint8Array, Record<string, never>]>) & $.WithMode<"query">;
   get: ((arg0: number) => Promise<number>) & $.WithMode<"query">;
   ping: ((arg0: number) => Promise<$Promise>) & $.WithMode<"update">;
 };

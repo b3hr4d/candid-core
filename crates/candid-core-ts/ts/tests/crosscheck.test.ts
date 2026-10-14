@@ -32,6 +32,8 @@ import * as empties from "../../tests/goldens/empties.ts";
 import * as arms from "../../tests/goldens/arms.ts";
 import * as options from "../../tests/goldens/options.ts";
 import * as fidelity from "../../tests/goldens/fidelity.ts";
+import * as fixedshapes from "../../tests/goldens/fixedshapes.ts";
+import * as fixedomitted from "../../tests/goldens/fixedomitted.ts";
 import * as omissions from "../../tests/goldens/omissions.ts";
 
 interface Fixture {
@@ -453,6 +455,109 @@ const FIXTURES: readonly Fixture[] = [
         { by: principal, alias: principal },
         { by: principal, alias: 5 },
         { by: carrier, alias: principal },
+      ],
+    },
+  },
+  {
+    // Issue #268: a declared `blob`, `record {}` or `variant {}` names only
+    // itself, so every use renders structurally. Generator and loader must
+    // agree position by position, with the bytes, units and uninhabited
+    // values each must refuse.
+    name: "fixedshapes",
+    module: fixedshapes,
+    samples: {
+      Subaccount: [new Uint8Array([1]), new Uint8Array(0), [1], "x"],
+      Hash: [new Uint8Array([2]), [2], null],
+      Zed: [new Uint8Array(0), 0],
+      Account: [
+        { owner: principal, subaccount: null },
+        { owner: principal, subaccount: new Uint8Array([1]) },
+        { owner: principal, subaccount: [1] },
+      ],
+      Args: [
+        {
+          to: { owner: principal, subaccount: null },
+          memo: null,
+          raw: new Uint8Array(0),
+          hash: new Uint8Array([3]),
+        },
+        {
+          to: { owner: principal, subaccount: null },
+          memo: new Uint8Array([4]),
+          raw: new Uint8Array(0),
+          hash: new Uint8Array([3]),
+        },
+        {
+          to: { owner: principal, subaccount: null },
+          memo: [4],
+          raw: new Uint8Array(0),
+          hash: new Uint8Array([3]),
+        },
+        {
+          to: { owner: principal, subaccount: null },
+          memo: null,
+          raw: [5],
+          hash: new Uint8Array([3]),
+        },
+      ],
+      Tokens: [0n, -1n, 5],
+      Timestamp: [0n, 2n ** 64n],
+      TransferArg: [
+        {
+          from_subaccount: null,
+          to: { owner: principal, subaccount: null },
+          amount: 1n,
+          fee: null,
+          memo: new Uint8Array([1]),
+          created_at_time: null,
+        },
+        {
+          from_subaccount: new Uint8Array([1]),
+          to: { owner: principal, subaccount: null },
+          amount: 1n,
+          fee: 2n,
+          memo: null,
+          created_at_time: 3n,
+        },
+        {
+          from_subaccount: null,
+          to: { owner: principal, subaccount: null },
+          amount: 1n,
+          fee: null,
+          memo: [1],
+          created_at_time: null,
+        },
+      ],
+      Unit: [{}, { a: 1 }, null],
+      Empty: [{}, []],
+      Holder: [
+        { nothing: {}, unit: {}, maybe: null },
+        { nothing: {}, unit: {}, maybe: {} },
+        { nothing: {}, unit: { a: 1 }, maybe: null },
+        { nothing: null, unit: {}, maybe: null },
+      ],
+      Abyss: [null, {}, { tag: "x" }],
+      Void: [undefined, 0],
+      Hole: [
+        { a: null, b: null, n: 1n },
+        { a: {}, b: null, n: 1n },
+        { a: null, b: { tag: "x" }, n: 1n },
+        { a: null, b: null, n: 1 },
+      ],
+    },
+  },
+  {
+    // Issue #268: a reserved-name declaration of a fixed shape is omitted
+    // alone, by the loader as by the generator; `X` and both methods, which
+    // use the same shapes, are kept.
+    name: "fixedomitted",
+    module: fixedomitted,
+    samples: {
+      X: [
+        { a: new Uint8Array([1]), b: {}, c: null, n: 1n },
+        { a: [1], b: {}, c: null, n: 1n },
+        { a: new Uint8Array(0), b: { x: 1 }, c: null, n: 1n },
+        { a: new Uint8Array(0), b: {}, c: {}, n: 1n },
       ],
     },
   },

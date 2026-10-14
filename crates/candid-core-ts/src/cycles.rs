@@ -24,9 +24,9 @@
 //! `omissions::children` — `opt`/`vec` inner, record fields and variant arms
 //! (tuples included), `func` arguments then results, `service` methods — and
 //! stops at every declared node (the generator's declared set,
-//! `first_names`: every composite node some declaration names), as the
-//! renderer does. A root's own structure is walked even when it is declared,
-//! as a declaration's right-hand side is.
+//! `first_names`: every node without a fixed rendering that some declaration
+//! names), as the renderer does. A root's own structure is walked even when
+//! it is declared, as a declaration's right-hand side is.
 //!
 //! It is a colour-marking depth-first search with an explicit stack (ADR
 //! 0005), linear in nodes plus edges: a node fully explored from one root is

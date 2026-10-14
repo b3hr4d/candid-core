@@ -1,0 +1,140 @@
+{
+  "contract": {
+    "actor": {
+      "kind": "service",
+      "service": 0
+    },
+    "canonicalization_profile": "candid-core-canon-1",
+    "declarations": [
+      {
+        "name": "Actor",
+        "type": 5
+      },
+      {
+        "name": "X",
+        "type": 2
+      },
+      {
+        "name": "actor",
+        "type": 3
+      }
+    ],
+    "format": "candid-core",
+    "format_version": 1,
+    "identities": {
+      "contract": "candid-core:contract:v1:sha256:e5fe65beae00293fbb1f8ebcd2179116c605dc18da695e0dfb023489adcb30d1",
+      "interface": "candid-core:interface:v1:sha256:0a425449838d4ebb8f8742ad2831750d525650122b2bcf5587675e9fc76a951c"
+    },
+    "producer": {
+      "candid_parser_version": "0.0.0-golden",
+      "candid_version": "0.0.0-golden",
+      "name": "candid-core",
+      "version": "0.0.0-golden"
+    },
+    "semantics_profile": "candid-1",
+    "types": [
+      {
+        "kind": "service",
+        "methods": [
+          {
+            "function": 1,
+            "id": 102,
+            "name": "f"
+          },
+          {
+            "function": 9,
+            "id": 103,
+            "name": "g"
+          }
+        ]
+      },
+      {
+        "args": [
+          2
+        ],
+        "kind": "func",
+        "mode": "update",
+        "results": []
+      },
+      {
+        "fields": [
+          {
+            "id": 97,
+            "type": 3
+          },
+          {
+            "id": 98,
+            "type": 5
+          },
+          {
+            "id": 99,
+            "type": 6
+          },
+          {
+            "id": 110,
+            "type": 8
+          }
+        ],
+        "kind": "record"
+      },
+      {
+        "inner": 4,
+        "kind": "vec"
+      },
+      {
+        "kind": "primitive",
+        "primitive": "nat8"
+      },
+      {
+        "fields": [],
+        "kind": "record"
+      },
+      {
+        "inner": 7,
+        "kind": "opt"
+      },
+      {
+        "fields": [],
+        "kind": "variant"
+      },
+      {
+        "kind": "primitive",
+        "primitive": "nat"
+      },
+      {
+        "args": [
+          3
+        ],
+        "kind": "func",
+        "mode": "update",
+        "results": [
+          5
+        ]
+      }
+    ]
+  },
+  "extensions": {
+    "org.candid-core.field-names/v1": [
+      [
+        2,
+        97,
+        "a"
+      ],
+      [
+        2,
+        98,
+        "b"
+      ],
+      [
+        2,
+        99,
+        "c"
+      ],
+      [
+        2,
+        110,
+        "n"
+      ]
+    ]
+  }
+}

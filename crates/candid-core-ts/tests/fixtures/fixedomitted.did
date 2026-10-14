@@ -1,0 +1,17 @@
+/*
+  Issue #268: a declaration of a shape with a fixed rendering (`blob`,
+  `record {}`, `variant {}`) names only itself, so one named after an export
+  of the module is omitted on its own and takes no other use of the shape
+  with it. The generator and `schemaFromContract` must agree: the loader
+  crosscheck holds the loader's omitted list equal to this fixture's
+  `omitted.json` golden. Block comments only, as in `omissions.did`.
+*/
+
+type actor = blob;
+type Actor = record {};
+type X = record { a : blob; b : record {}; c : opt variant {}; n : nat };
+
+service : {
+  f : (X) -> ();
+  g : (blob) -> (record {});
+}

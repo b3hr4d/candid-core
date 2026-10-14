@@ -41,6 +41,7 @@ fn modules_match_the_generator_goldens() {
         "options",
         "shadowing",
         "fidelity",
+        "fixedshapes",
         "docs",
         "omissions",
         "modes",

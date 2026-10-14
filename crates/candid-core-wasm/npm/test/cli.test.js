@@ -51,6 +51,7 @@ test("every golden fixture reproduces its reviewed module byte-for-byte", () => 
     "options",
     "shadowing",
     "fidelity",
+    "fixedshapes",
     "docs",
     "omissions",
     "modes",

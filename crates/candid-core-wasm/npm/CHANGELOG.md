@@ -26,6 +26,29 @@ declarations, so a large `.did` file compiles in time proportional to its size.
 Every other input compiles to the same Contract and identities; envelopes `gen`
 writes will name 0.1.0 as their producer.
 
+### Generated modules
+
+- **BREAKING**: a declared `blob`, `record {}` or `variant {}` names only
+  itself. Each of the three has one fixed rendering (`Uint8Array` /
+  `$.c.blob()`, `Record<string, never>` / `$.c.unit()`, `never` /
+  `$.c.variant({})`), and every use now renders it, as every use of a
+  primitive already did. Before, the alias of that shape whose name sorted
+  first, wherever it sat in the file, named every use of it: beside
+  `type Hash = blob`, a field written `memo : opt blob` read `Hash | null`
+  and its builder was `$.c.opt($Hash)`. Now it reads `Uint8Array | null`
+  with `$.c.opt($.c.blob())`, and `type Subaccount = blob` is emitted as
+  `export type Subaccount = Uint8Array`, so a field written
+  `subaccount : opt Subaccount` reads `Uint8Array | null` too. Value types,
+  wire bytes and envelopes do not change, and every declaration is still
+  exported under its name. A module with two aliases of one of these shapes,
+  or one alias and a plain use, changes text, so `gen --check` reports it as
+  drifted until `gen` runs again. Measured on the repository's 41 tracked
+  `.did` files: of the 34 that generate, one module changes. A declaration
+  of one of these shapes named after an export of the module (`actor`) is
+  omitted on its own and no longer takes the other uses of the shape with
+  it; `@candid-core/schema`'s `schemaFromContract` applies the same rule
+  from its next release.
+
 ## 0.3.0 — 2026-10-10
 
 Embeds `candid-core` 0.1.0-beta.3 and the `candid-core-ts` generator from the

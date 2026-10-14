@@ -13,6 +13,20 @@ entry here is [docs/releasing.md] in that repository.
 API, the inferred domain types, the codec's wire behaviour, and the codes and
 `$`-rooted paths validation reports. Pin an exact version.
 
+## Unreleased
+
+### Changed
+
+- **`schemaFromContract` omits a reserved-name `blob`, `record {}` or
+  `variant {}` declaration on its own.** The loader's omission analysis
+  follows the generator's rule that a declaration of one of these shapes
+  names only itself. Before, a declaration such as `actor = blob` or
+  `Actor = record {}` marked every other use of that shape as referencing
+  it, so the loader also left out each declaration and method that held a
+  plain blob, empty record or empty variant. Now only the reserved-name
+  declaration is omitted, and `omitted` lists it alone, as the generator's
+  list does. Every other Contract loads and omits as before.
+
 ## 0.4.0 — 2026-10-10
 
 Pairs with `candid-core` 0.1.0-beta.3.

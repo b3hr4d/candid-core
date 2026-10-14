@@ -152,7 +152,7 @@
       <td><code>{"kind":"vec","inner":&lt;nat8&gt;}</code></td>
       <td><code>Uint8Array</code></td>
       <td><code>c.blob()</code></td>
-      <td>Always, whatever the element is called: <code>type Byte = nat8; type Bytes = vec Byte;</code> is still <code>blob</code>, so <code>Bytes</code> is <code>Uint8Array</code> / <code>c.blob()</code>. A declaration of a primitive names only itself, so declaring <code>Byte</code> never changes another declaration&rsquo;s blobs (before issue #191 it turned every one into <code>number[]</code>).</td>
+      <td>Always, whatever the element is called: <code>type Byte = nat8; type Bytes = vec Byte;</code> is still <code>blob</code>, so <code>Bytes</code> is <code>Uint8Array</code> / <code>c.blob()</code>. A declaration of a primitive names only itself, so declaring <code>Byte</code> never changes another declaration&rsquo;s blobs (before issue #191 it turned every one into <code>number[]</code>). A declared <code>type Subaccount = blob</code> names only itself too: every blob, <code>opt Subaccount</code> included, renders <code>Uint8Array</code> / <code>c.blob()</code> (issue #268).</td>
     </tr>
     <tr>
       <td><code>record { a : T; b : U }</code></td>
@@ -166,7 +166,7 @@
       <td><code>{"kind":"record","fields":[]}</code></td>
       <td><code>Record&lt;string, never&gt;</code></td>
       <td><code>c.unit()</code></td>
-      <td><code>{}</code> means "anything non-nullish" in TypeScript; an empty Candid record is a unit value, and this is its honest type.</td>
+      <td><code>{}</code> means "anything non-nullish" in TypeScript; an empty Candid record is a unit value, and this is its honest type. A declared <code>type Unit = record {}</code> renders the same way at every use.</td>
     </tr>
     <tr>
       <td><code>record { nat; text }</code> (tuple syntax)</td>
@@ -187,7 +187,7 @@
       <td><code>{"kind":"variant","fields":[]}</code></td>
       <td><code>never</code></td>
       <td><code>c.variant({})</code></td>
-      <td>A variant with no arms is uninhabited.</td>
+      <td>A variant with no arms is uninhabited. A declared <code>type Abyss = variant {}</code> renders the same way at every use.</td>
     </tr>
     <tr>
       <td><code>func (nat) -&gt; (text) query</code></td>

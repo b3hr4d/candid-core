@@ -21,9 +21,9 @@
 //! surface's export names `actor` / `Actor` (`reserved_export_name`).
 //!
 //! A node is *tainted* when it has a direct cause, when it is rendered by the
-//! name of a declaration with a name cause (the first declaration of a
-//! composite node names it, see `first_names`), or when any node it has an
-//! edge to is tainted. Edges are every structural reference — `opt`/`vec`
+//! name of a declaration with a name cause (the first declaration of a node
+//! without a fixed rendering names it, see `first_names`), or when any node
+//! it has an edge to is tainted. Edges are every structural reference — `opt`/`vec`
 //! inner, record fields and variant arms, `func` arguments then results,
 //! `service` methods — so taint spreads through nested reference types to
 //! the containing declaration. Taint is computed as a multi-source

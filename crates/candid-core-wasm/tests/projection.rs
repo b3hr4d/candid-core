@@ -166,6 +166,7 @@ fn parsed(source: &str) -> (Vec<Binding>, Vec<String>, Vec<Binding>) {
 const FIXTURES_WITH_A_SERVICE: &[&str] = &[
     "deferred",
     "fidelity",
+    "fixedshapes",
     "docs",
     "ledger",
     "options",
@@ -188,6 +189,7 @@ const FIXTURES: &[&str] = &[
     "options",
     "shadowing",
     "fidelity",
+    "fixedshapes",
     "docs",
     "omissions",
 ];

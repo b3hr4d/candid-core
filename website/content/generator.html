@@ -212,6 +212,15 @@ turned every <code>blob</code> in the interface into <code>number[]</code>. A <c
 generated module and in <code>schemaFromContract</code> alike. The price is the source spelling:
 <code>amount : Tokens</code> reads <code>amount: bigint</code>, the same type.</p>
 
+<p>The same rule covers the three composite shapes with one fixed rendering: <code>blob</code>,
+<code>record {}</code> and <code>variant {}</code>. Since issue #268 a declaration of one of them names
+only itself: <code>type Subaccount = blob</code> is emitted as
+<code>export type Subaccount = Uint8Array</code>, and every blob in the interface, the ones written
+<code>opt Subaccount</code> included, reads <code>Uint8Array</code>. Before, the alias whose name sorted
+first named every use, so beside a <code>type Hash = blob</code> the ICRC ledger&rsquo;s
+<code>memo : opt blob</code> read <code>Hash | null</code>. The value types never changed; only the
+names in the text did.</p>
+
 <h3>Doc comments become JSDoc</h3>
 
 <p>The <code>.did</code>&rsquo;s doc comments and argument names travel in the provenance sidecar, and

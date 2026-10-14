@@ -228,6 +228,17 @@ fn golden_fidelity() {
     assert_golden("fidelity");
 }
 
+/// Issue #268: a node with a fixed rendering — `blob`, `record {}`, `variant
+/// {}` — names only itself. The fixture pins the capture cases: two `blob`
+/// aliases beside plain blobs, the ICRC ledger's `TransferArg`, and the empty
+/// record and empty variant beside their own aliases; the tsc equality gate
+/// compiles the golden, and its Contract, names and envelope goldens feed the
+/// loader crosscheck (`ts/tests/crosscheck.test.ts`).
+#[test]
+fn golden_fixedshapes() {
+    assert_golden("fixedshapes");
+}
+
 /// Issue #244: each `Actor` method carries its mode — `query`,
 /// `composite_query`, `update`, `oneway` — as `$.WithMode<...>` intersected
 /// with its call signature, whether the method is written inline, typed by a
@@ -301,6 +312,8 @@ fn golden_runtime_contract_documents() {
         "arms",
         "options",
         "fidelity",
+        "fixedshapes",
+        "fixedomitted",
         "omissions",
     ] {
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests");
@@ -1053,6 +1066,13 @@ fn declared_opt_empty_variant_arms_are_omitted() {
             "type Never = variant {}; type W = opt Never; type V = variant { a : W };",
             &["Never", "W"][..],
         ),
+        // Issue #268: the empty variant no longer names its other uses, but
+        // the arm's `opt` node is still declared, so the verdict stands.
+        (
+            "type Abyss = variant {}; type MaybeAbyss = opt Abyss; \
+             type V = variant { x : MaybeAbyss; y };",
+            &["Abyss", "MaybeAbyss"][..],
+        ),
         // Dedup alone declares the arm: an anonymous arm and a same-shape
         // declaration share one node, so the arm renders as the name.
         (
@@ -1116,6 +1136,26 @@ fn golden_omissions() {
         .expect("the omitted list serializes");
     text.push('\n');
     assert_golden_file("omissions.omitted.json", &text);
+}
+
+/// Issue #268: a reserved-name declaration of a fixed shape is omitted on its
+/// own; `X`, which uses the same shapes, and both methods are kept. The
+/// omitted list is a golden the loader crosscheck holds its own list equal to.
+#[test]
+fn golden_fixedomitted() {
+    let generated = generate_fixture_full("fixedomitted");
+    assert_golden_file("fixedomitted.ts", &generated.module);
+    assert_eq!(
+        generated.omitted,
+        vec![
+            declaration_omitted("Actor", OmissionReason::ReservedExportName),
+            declaration_omitted("actor", OmissionReason::ReservedExportName),
+        ],
+    );
+    let mut text = serde_json::to_string_pretty(&omitted_json(&generated.omitted))
+        .expect("the omitted list serializes");
+    text.push('\n');
+    assert_golden_file("fixedomitted.omitted.json", &text);
 }
 
 /// The closure proof: nothing the module emits references an omitted
@@ -1353,6 +1393,7 @@ fn modules_without_omissions_are_unchanged() {
         "options",
         "shadowing",
         "fidelity",
+        "fixedshapes",
         "docs",
     ] {
         let generated = generate_fixture_full(name);
@@ -1780,6 +1821,108 @@ fn a_declared_primitive_renders_structurally_everywhere() {
         assert!(
             !references_declaration(&rest.join("\n"), name),
             "{name} is referenced outside its own three lines:\n{output}"
+        );
+    }
+}
+
+/// Issue #268: a declared `blob`, `record {}` or `variant {}` names only
+/// itself. Adding an alias whose name sorts before every other declaration
+/// of the same node — `Aaa` — adds exactly its own three lines and changes no
+/// use site, wherever the alias sits in the file; and the plain uses render
+/// structurally beside a declared alias.
+#[test]
+fn a_declared_fixed_shape_names_only_itself() {
+    for (alias, ty, structure) in [
+        ("blob", "Uint8Array", "$.c.blob()"),
+        ("vec nat8", "Uint8Array", "$.c.blob()"),
+        ("record {}", "Record<string, never>", "$.c.unit()"),
+        ("variant {}", "never", "$.c.variant({})"),
+    ] {
+        let base = format!(
+            "type Subaccount = {alias};\n\
+             type Account = record {{ owner : principal; subaccount : opt Subaccount }};\n\
+             type Args = record {{ to : Account; plain : opt {alias}; raw : {alias}; \
+             list : vec {alias} }};\n\
+             service : {{ go : (Args, {alias}) -> (Subaccount) }}"
+        );
+        let without = generate_source(&base);
+        // Every use is structural, and `Subaccount` is its own declaration.
+        assert!(
+            without.contains(&format!("subaccount: {ty} | null")),
+            "{alias}: {without}"
+        );
+        assert!(
+            without.contains(&format!("plain: {ty} | null")),
+            "{alias}: {without}"
+        );
+        assert!(
+            without.contains(&format!("$.c.opt({structure})")),
+            "{alias}: {without}"
+        );
+        assert!(
+            without.contains(&format!("export type Subaccount = {ty};")),
+            "{alias}: {without}"
+        );
+        assert!(
+            without.contains(&format!(
+                "const $Subaccount: $.Schema<Subaccount> = $.c.rec(() => {structure});"
+            )),
+            "{alias}: {without}"
+        );
+
+        let own = [
+            format!("export type Aaa = {ty};"),
+            format!("const $Aaa: $.Schema<Aaa> = $.c.rec(() => {structure});"),
+            "export { $Aaa as Aaa };".to_string(),
+        ];
+        // Before or after the other alias: source order plays no part either.
+        let (first, rest) = base.split_once('\n').expect("the base has lines");
+        for with in [
+            generate_source(&format!("type Aaa = {alias};\n{base}")),
+            generate_source(&format!("{first}\ntype Aaa = {alias};\n{rest}")),
+        ] {
+            let added: Vec<&str> = with
+                .lines()
+                .filter(|line| !without.lines().any(|kept| kept == *line))
+                .filter(|line| !line.trim().is_empty())
+                .collect();
+            assert_eq!(added, own, "{alias}: the alias changed a use site:\n{with}");
+            let removed: Vec<&str> = without
+                .lines()
+                .filter(|line| !with.lines().any(|kept| kept == *line))
+                .collect();
+            assert!(removed.is_empty(), "{alias}: {removed:?}\n{with}");
+        }
+    }
+}
+
+/// Issue #268 with the #116 locality rule: an export-named declaration of a
+/// fixed shape is omitted on its own, and no longer takes every other use of
+/// that shape with it.
+#[test]
+fn an_omitted_fixed_shape_declaration_omits_only_itself() {
+    for (shape, ty) in [
+        ("blob", "Uint8Array"),
+        ("record {}", "Record<string, never>"),
+        ("variant {}", "never"),
+    ] {
+        let generated = generate_source_full(&format!(
+            "type actor = {shape}; type R = record {{ a : {shape}; n : nat }};"
+        ));
+        assert_eq!(
+            generated.omitted,
+            vec![declaration_omitted(
+                "actor",
+                OmissionReason::ReservedExportName
+            )],
+            "{shape}"
+        );
+        assert!(
+            generated
+                .module
+                .contains(&format!("export type R = {{ a: {ty}; n: bigint }};")),
+            "{shape}: {}",
+            generated.module
         );
     }
 }

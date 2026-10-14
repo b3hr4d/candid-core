@@ -73,10 +73,17 @@
 //! field as `BlockIndex`, and `type Byte = nat8` turned every `blob` into
 //! `Array<Byte>` — a value-domain change (`number[]` for `Uint8Array`) caused
 //! by an unrelated declaration. A `blob`, and any `vec` of a `nat8` however
-//! named, is always `Uint8Array` / `$.c.blob()`. The cost is the source
-//! spelling: a field written `amount : Tokens` reads `amount: bigint`, the
-//! same type. Composite nodes keep first-name rendering, as before; two
-//! structurally equal *records* still collapse to the first name.
+//! named, is always `Uint8Array` / `$.c.blob()` — at every use, a declared
+//! `type Subaccount = blob` included (issue #268): it is emitted as
+//! `export type Subaccount = Uint8Array` and names no other blob. The same
+//! holds for the two other nodes with a fixed rendering, `record {}`
+//! (`Record<string, never>` / `$.c.unit()`) and `variant {}` (`never` /
+//! `$.c.variant({})`). The cost is the source spelling: a field written
+//! `amount : Tokens` reads `amount: bigint`, and one written
+//! `subaccount : opt Subaccount` reads `subaccount: Uint8Array | null`, the
+//! same types. Other composite nodes keep first-name rendering, as before;
+//! two structurally equal non-empty *records* still collapse to the first
+//! name.
 //!
 //! # `.did` docs become JSDoc
 //!
@@ -769,27 +776,51 @@ const UNUSABLE_TYPE_NAMES: &[&str] = &[
 /// order. Later aliases of the same node render as references to the first
 /// name.
 ///
-/// A primitive node is never in the map. The Contract arena de-duplicates
-/// structurally identical nodes, so every `nat64` in an interface is one node
-/// whichever declaration spells it — and a name recorded for it would be
-/// rendered at *every* use of that primitive, including the ones that never
-/// wrote the name (issue #191): `type Memo = nat64` would turn an unrelated
-/// `nat64` field into `Memo`, and `type Byte = nat8` would turn every `blob`
-/// into `Array<Byte>`. A primitive declaration is still emitted, structurally
-/// (`export type Memo = bigint`); it just names nothing but itself.
+/// A node with a fixed rendering is never in the map (see
+/// [`renders_structurally`]). The Contract arena de-duplicates structurally
+/// identical nodes, so every `nat64` in an interface is one node whichever
+/// declaration spells it — and a name recorded for it would be rendered at
+/// *every* use of that node, including the ones that never wrote the name
+/// (issue #191): `type Memo = nat64` would turn an unrelated `nat64` field
+/// into `Memo`, and `type Byte = nat8` would turn every `blob` into
+/// `Array<Byte>`. The same holds for every `blob`, every `record {}` and every
+/// `variant {}` (issue #268): `type Hash = blob` would type an unrelated
+/// `memo : opt blob` as `Hash`, whichever alias's name sorts first. Such a
+/// declaration is still emitted, structurally (`export type Memo = bigint`,
+/// `export type Hash = Uint8Array`); it just names nothing but itself.
 fn first_names(contract: &Contract) -> BTreeMap<TypeRef, String> {
     let mut map = BTreeMap::new();
     for declaration in contract.declarations() {
-        if matches!(
-            contract.types().get(declaration.ty as usize),
-            Some(TypeNode::Primitive { .. })
-        ) {
+        if renders_structurally(contract, declaration.ty) {
             continue;
         }
         map.entry(declaration.ty)
             .or_insert_with(|| declaration.name.clone());
     }
     map
+}
+
+/// Whether every use of the node renders as one fixed text, whatever
+/// declaration names it: a primitive (`bigint`, `$.c.nat64`), `vec nat8`
+/// (`Uint8Array`, `$.c.blob()`), the empty record (`Record<string, never>`,
+/// `$.c.unit()`) and the empty variant (`never`, `$.c.variant({})`). These are
+/// the nodes [`Generator::enter`] renders to one fixed text in both targets,
+/// with no child to visit, so none can sit on a cycle.
+/// `schemaFromContract`'s omission analysis (`ts/contract.ts`) applies the
+/// same rule.
+fn renders_structurally(contract: &Contract, reference: TypeRef) -> bool {
+    let types = contract.types();
+    match types.get(reference as usize) {
+        Some(TypeNode::Primitive { .. }) => true,
+        Some(TypeNode::Vec { inner }) => matches!(
+            types.get(*inner as usize),
+            Some(TypeNode::Primitive {
+                primitive: PrimitiveType::Nat8,
+            })
+        ),
+        Some(TypeNode::Record { fields } | TypeNode::Variant { fields }) => fields.is_empty(),
+        _ => false,
+    }
 }
 
 /// One traversal, two syntaxes. `Alias` renders the static type expression;

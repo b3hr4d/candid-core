@@ -1,0 +1,12 @@
+[
+  {
+    "kind": "declaration",
+    "name": "Actor",
+    "reason": "reserved_export_name"
+  },
+  {
+    "kind": "declaration",
+    "name": "actor",
+    "reason": "reserved_export_name"
+  }
+]

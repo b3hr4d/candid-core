@@ -1,0 +1,45 @@
+// Issue #268: a node with a fixed rendering names only itself. Every `blob`
+// in an interface is one `vec nat8` node, every `record {}` one empty record
+// and every `variant {}` one empty variant, whichever declaration spells it.
+// Before the fix the first declaration's name, in name order and wherever it
+// sat in the file, was rendered at every use: `type Hash = blob` typed the
+// ledger's `memo : opt blob` and `subaccount : opt Subaccount` as `Hash`.
+
+// Two aliases of `blob`, one sorting before the other, beside plain uses.
+
+type Subaccount = blob;
+type Hash = blob;
+type Zed = blob;
+type Account = record { owner : principal; subaccount : opt Subaccount };
+type Args = record { to : Account; memo : opt blob; raw : vec nat8; hash : Hash };
+
+// The DFINITY ICRC ledger's transfer argument, which surfaced it.
+
+type Tokens = nat;
+type Timestamp = nat64;
+type TransferArg = record {
+  from_subaccount : opt Subaccount;
+  to : Account;
+  amount : Tokens;
+  fee : opt Tokens;
+  memo : opt blob;
+  created_at_time : opt Timestamp;
+};
+
+// The empty record: a declared unit names no other one.
+
+type Unit = record {};
+type Empty = record {};
+type Holder = record { nothing : record {}; unit : Unit; maybe : opt record {} };
+
+// The empty variant: uninhabited, and still `never` at every use.
+
+type Abyss = variant {};
+type Void = variant {};
+type Hole = record { a : opt variant {}; b : opt Abyss; n : nat };
+
+service : {
+  transfer : (TransferArg) -> (variant { Ok : nat; Err : text });
+  go : (Args, Unit) -> (Holder, Hole);
+  bytes : (blob, Subaccount) -> (Hash) query;
+}

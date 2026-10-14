@@ -74,6 +74,15 @@ however named — is always `Uint8Array`, in the generated module and in
 `schemaFromContract` alike. The cost is the source spelling: `amount :
 Tokens` reads `amount: bigint`.
 
+**So does a declared `blob`, `record {}` or `variant {}` (issue #268).**
+These three nodes also have one fixed rendering (`Uint8Array` / `$.c.blob()`,
+`Record<string, never>` / `$.c.unit()`, `never` / `$.c.variant({})`), and
+every use renders it. Before, the alias whose name sorted first named every
+use: beside `type Hash = blob`, the ICRC ledger's `memo : opt blob` and
+`subaccount : opt Subaccount` both read `Hash | null`. `type Subaccount =
+blob` is now emitted as `export type Subaccount = Uint8Array` and names
+nothing else, so `subaccount : opt Subaccount` reads `Uint8Array | null`.
+
 **`.did` docs are JSDoc (issue #191).** `TsNames::from_source_info` also
 carries the sidecar's doc comments and argument names. A `///` run (or plain
 `//` lines) above a declaration, field, variant arm, method or the service
