@@ -9,6 +9,23 @@ and therefore the identities computed over them. Pin an exact version.
 
 ## Unreleased
 
+### Resource bounds
+
+- **The type-depth walks allocate the same way for the same input**
+  ([issue #263]). Both walks that enforce `max_type_depth` memoized their
+  states in an ordered set keyed by each type node's memory address, so how
+  the set's nodes split, and therefore what a compile allocated, followed the
+  heap layout: the same `.did` allocated a few more or fewer times depending
+  on the process's arguments and working directory, and an unrelated change
+  moved the counts. The memo now keys on a dense id each node receives on its
+  first visit. A walk's visit order is fixed by its input, so its allocations
+  are too. What a walk refuses and returns is unchanged. The id map holds one
+  entry per distinct node, which moves the measured exchange rate of
+  `max_type_preflight_work` from about 19 to about **21 bytes of peak live
+  heap per unit** (20.8–21.5 across bundle sizes, release profile); its
+  documented guidance moves with it, to roughly 210 MB at the default and
+  ~21 MB at 1 000 000.
+
 ### Verification
 
 - **Every compile stage after parsing is held to linear allocation** ([issue #256]).
@@ -756,3 +773,4 @@ have seen them:
 [issue #251]: https://github.com/b3hr4d/candid-core/issues/251
 [issue #252]: https://github.com/b3hr4d/candid-core/issues/252
 [issue #256]: https://github.com/b3hr4d/candid-core/issues/256
+[issue #263]: https://github.com/b3hr4d/candid-core/issues/263

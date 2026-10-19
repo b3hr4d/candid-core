@@ -351,6 +351,30 @@ pub(super) fn charge_type_preflight(
 /// The set is rebuilt only by [`ActiveNames::with`], on the one transition
 /// that changes it — entering a recursive name — and that copy is bounded by
 /// the charge already paid for the state making it.
+/// Dense ids for the nodes a depth walk reaches, handed out in visit order.
+///
+/// The walks memoize states in a `BTreeSet`, whose node splits depend on the
+/// order of its keys. Keyed by a node's address, that order followed the heap
+/// layout, so the walks' allocations, and every allocation measurement taken
+/// across them, moved with unrelated code and even with how the process was
+/// invoked. A walk visits nodes in an order fixed by its input, so an id from
+/// that order makes the memo, and what it allocates, a function of the input
+/// alone. The map holds one entry per distinct node, never per state, and a
+/// `HashMap` grows with its length, not its keys.
+pub(super) struct NodeIds<T>(HashMap<*const T, usize>);
+
+impl<T> NodeIds<T> {
+    pub(super) fn new() -> Self {
+        Self(HashMap::new())
+    }
+
+    /// The id of `node`, assigning the next one on its first visit.
+    pub(super) fn id(&mut self, node: *const T) -> usize {
+        let next = self.0.len();
+        *self.0.entry(node).or_insert(next)
+    }
+}
+
 #[derive(Clone, Default, PartialEq, Eq, PartialOrd, Ord)]
 pub(super) struct ActiveNames(std::rc::Rc<BTreeSet<usize>>);
 
@@ -557,6 +581,7 @@ pub(super) fn check_programs_type_depth<'a>(
         .collect();
 
     let mut visited = BTreeSet::new();
+    let mut node_ids = NodeIds::new();
     while let Some((ty, depth, active_names)) = pending.pop() {
         // One unit per state plus one per tracked recursive name: cloning and
         // comparing the path set below is what the extra units pay for.
@@ -578,7 +603,7 @@ pub(super) fn check_programs_type_depth<'a>(
                 ),
             ));
         }
-        if !visited.insert((ty as *const IDLType as usize, depth, active_names.clone())) {
+        if !visited.insert((node_ids.id(ty), depth, active_names.clone())) {
             continue;
         }
         let next_depth = depth.saturating_add(1);

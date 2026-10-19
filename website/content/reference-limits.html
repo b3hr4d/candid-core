@@ -476,11 +476,11 @@ let limits = Limits::try_from(config).map_err(|error| {
 <p>
   The type-depth guard walks deduplicate expansion states into a memo retained for the duration of
   the walk, where the tree walks they replaced held only a stack. So the counter bounds heap as well
-  as work, at a measured rate of about 19 bytes of peak live heap per unit. The 10 000 000 default
-  therefore authorizes roughly 190 MB before the counter refuses, which is more than a small 32-bit
+  as work, at a measured rate of about 21 bytes of peak live heap per unit. The 10 000 000 default
+  therefore authorizes roughly 210 MB before the counter refuses, which is more than a small 32-bit
   <code>wasm32</code> heap can serve; a host whose allocator gives out before the counter does gets
   an allocation abort instead of the clean structured refusal. A browser or other constrained host
-  should lower this to around 1 000 000 (about 19 MB), which still clears every realistic contract
+  should lower this to around 1 000 000 (about 21 MB), which still clears every realistic contract
   by a wide margin. Rejecting costs no memory, so no input can force an abort by being
   <em>larger</em> than the configured bound, only by being accepted under a bound the host cannot
   honour.
